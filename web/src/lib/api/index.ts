@@ -1,8 +1,7 @@
 import { browser } from '$app/environment';
 import { auth } from '$stores/auth';
 import { get } from 'svelte/store';
-
-const API_BASE = import.meta.env.PUBLIC_API_URL || 'http://localhost:8080';
+import { API_BASE } from '$lib/config';
 
 interface ApiError {
 	status: number;

@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
 import { browser } from '$app/environment';
+import { API_BASE } from '$lib/config';
 
 interface User {
 	id: string;
@@ -17,7 +18,6 @@ interface AuthState {
 	lastChecked: number | null;
 }
 
-const API_BASE = import.meta.env.PUBLIC_API_URL || 'http://localhost:8080';
 const AUTH_CHECK_INTERVAL = 60000; // Re-check auth every 60 seconds max
 const MAX_RETRIES = 2;
 const RETRY_DELAY = 1000;

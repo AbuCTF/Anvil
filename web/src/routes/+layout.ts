@@ -1,8 +1,6 @@
 import { browser } from '$app/environment';
 import type { LayoutLoad } from './$types';
-
-// Use environment variable, fallback to localhost for local dev
-const API_BASE = import.meta.env.PUBLIC_API_URL || 'http://localhost:8080';
+import { API_BASE } from '$lib/config';
 
 export const load: LayoutLoad = async ({ fetch }) => {
 	if (browser) {
