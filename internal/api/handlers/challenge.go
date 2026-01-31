@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +16,12 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+// hashFlagForComparison creates a SHA256 hash of the flag for comparison
+func hashFlagForComparison(flag string) string {
+	hash := sha256.Sum256([]byte(flag))
+	return hex.EncodeToString(hash[:])
+}
 
 // ChallengeService handles challenge-related operations
 type ChallengeService struct {
@@ -387,7 +395,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 
 	// Find matching flag
 	query := `
-		SELECT f.id, f.flag, f.name, f.points, f.is_case_sensitive
+		SELECT f.id, f.flag_hash, f.name, f.points, f.case_sensitive
 		FROM flags f
 		WHERE f.challenge_id = $1
 	`
@@ -401,7 +409,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 
 	var matchedFlag struct {
 		ID            string
-		Flag          string
+		FlagHash      string
 		Name          string
 		Points        int
 		CaseSensitive bool
@@ -411,25 +419,24 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	for rows.Next() {
 		var f struct {
 			ID            string
-			Flag          string
+			FlagHash      string
 			Name          string
 			Points        int
 			CaseSensitive bool
 		}
-		if err := rows.Scan(&f.ID, &f.Flag, &f.Name, &f.Points, &f.CaseSensitive); err != nil {
+		if err := rows.Scan(&f.ID, &f.FlagHash, &f.Name, &f.Points, &f.CaseSensitive); err != nil {
 			continue
 		}
 
-		// Compare flags
-		var match bool
+		// Compare flags by hashing submitted flag and comparing hashes
+		var submittedHash string
 		if f.CaseSensitive {
-			match = subtle.ConstantTimeCompare([]byte(submittedFlag), []byte(f.Flag)) == 1
+			submittedHash = hashFlagForComparison(submittedFlag)
 		} else {
-			match = subtle.ConstantTimeCompare(
-				[]byte(strings.ToLower(submittedFlag)),
-				[]byte(strings.ToLower(f.Flag)),
-			) == 1
+			submittedHash = hashFlagForComparison(strings.ToLower(submittedFlag))
 		}
+		
+		match := subtle.ConstantTimeCompare([]byte(submittedHash), []byte(f.FlagHash)) == 1
 
 		if match {
 			matchedFlag = f

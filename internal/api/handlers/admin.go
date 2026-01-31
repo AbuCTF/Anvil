@@ -840,10 +840,11 @@ func (h *AdminChallengeHandler) CreateFlag(c *gin.Context) {
 	}
 
 	flagID := uuid.New()
+	flagHash := hashFlag(req.Flag)
 	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`INSERT INTO flags (id, challenge_id, name, flag, points, sort_order, is_case_sensitive, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-		flagID, challengeID, req.Name, req.Flag, req.Points, req.Order, req.CaseSensitive)
+		`INSERT INTO flags (id, challenge_id, name, flag_hash, points, sort_order, case_sensitive, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())`,
+		flagID, challengeID, req.Name, flagHash, req.Points, req.Order, req.CaseSensitive)
 	if err != nil {
 		h.logger.Error("failed to create flag", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create flag"})
@@ -868,13 +869,26 @@ func (h *AdminChallengeHandler) UpdateFlag(c *gin.Context) {
 		return
 	}
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE flags SET name = $1, flag = $2, points = $3, sort_order = $4, is_case_sensitive = $5
-		 WHERE id = $6`,
-		req.Name, req.Flag, req.Points, req.Order, req.CaseSensitive, flagID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
-		return
+	// Only update flag_hash if a new flag value is provided
+	if req.Flag != "" {
+		flagHash := hashFlag(req.Flag)
+		_, err := h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE flags SET name = $1, flag_hash = $2, points = $3, sort_order = $4, case_sensitive = $5, updated_at = NOW()
+			 WHERE id = $6`,
+			req.Name, flagHash, req.Points, req.Order, req.CaseSensitive, flagID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
+			return
+		}
+	} else {
+		_, err := h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE flags SET name = $1, points = $2, sort_order = $3, case_sensitive = $4, updated_at = NOW()
+			 WHERE id = $5`,
+			req.Name, req.Points, req.Order, req.CaseSensitive, flagID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "flag updated"})

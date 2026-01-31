@@ -156,23 +156,22 @@
 
 		try {
 			if (newChallenge.type === 'ova' && ovaFile) {
-				// OVA upload
-				const result = await api.uploadOva(ovaFile, (progress) => {
-					uploadProgress = progress;
-				});
+				// OVA upload using FormData
+				const formData = new FormData();
+				formData.append('file', ovaFile);
+				formData.append('name', newChallenge.name);
+				formData.append('description', newChallenge.description);
+				formData.append('difficulty', newChallenge.difficulty);
+				formData.append('base_points', String(newChallenge.base_points));
+				formData.append('category', newChallenge.category);
+				formData.append('flags', JSON.stringify(newChallenge.flags));
 
-				await api.createOvaChallenge({
-					name: newChallenge.name,
-					description: newChallenge.description,
-					difficulty: newChallenge.difficulty,
-					base_points: newChallenge.base_points,
-					category: newChallenge.category,
-					upload_id: result.upload_id,
-					flags: newChallenge.flags
+				await api.uploadOvaChallenge(formData, (progress) => {
+					uploadProgress = progress;
 				});
 			} else {
 				// Container challenge
-				await api.createChallenge({
+				await api.createAdminChallenge({
 					name: newChallenge.name,
 					description: newChallenge.description,
 					difficulty: newChallenge.difficulty,
@@ -613,7 +612,7 @@
 							type="text"
 							bind:value={newChallenge.flag}
 							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm font-mono focus:outline-none focus:border-stone-700"
-							placeholder="flag{...}"
+							placeholder="flag&#123;...&#125;"
 						/>
 					</div>
 				{:else}
@@ -659,7 +658,7 @@
 									<input
 										type="text"
 										bind:value={flag.flag}
-										placeholder="flag{...}"
+										placeholder="flag&#123;...&#125;"
 										class="flex-1 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs font-mono focus:outline-none focus:border-stone-700"
 									/>
 									<input
