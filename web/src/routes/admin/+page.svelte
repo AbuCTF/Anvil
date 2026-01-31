@@ -143,6 +143,34 @@
       { name: 'Root Flag', flag: '', points: 50 }
     ];
   }
+
+  async function publishChallenge(challenge: any) {
+    try {
+      await api.publishChallenge(challenge.id);
+      await loadDashboard();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to publish challenge');
+    }
+  }
+
+  async function unpublishChallenge(challenge: any) {
+    try {
+      await api.unpublishChallenge(challenge.id);
+      await loadDashboard();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to unpublish challenge');
+    }
+  }
+
+  async function deleteChallenge(id: string) {
+    if (!confirm('Are you sure you want to delete this challenge?')) return;
+    try {
+      await api.deleteChallenge(id);
+      await loadDashboard();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Failed to delete challenge');
+    }
+  }
 </script>
 
 <svelte:head>
@@ -276,16 +304,37 @@
               <div class="p-4 flex items-center justify-between hover:bg-stone-800/30">
                 <div class="flex items-center gap-4">
                   <div class="w-10 h-10 bg-stone-800 rounded-lg flex items-center justify-center">
-                    <Icon icon={challenge.challenge_type === 'ova' ? 'mdi:server' : 'mdi:docker'} class="w-5 h-5 text-stone-400" />
+                    <Icon icon={challenge.resource_type === 'vm' ? 'mdi:server' : 'mdi:docker'} class="w-5 h-5 text-stone-400" />
                   </div>
                   <div>
-                    <p class="text-white font-medium">{challenge.name}</p>
-                    <p class="text-stone-500 text-xs">{challenge.difficulty} • {challenge.total_flags || 1} flag(s)</p>
+                    <div class="flex items-center gap-2">
+                      <p class="text-white font-medium">{challenge.name}</p>
+                      {#if challenge.status === 'published'}
+                        <span class="px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded-full">Published</span>
+                      {:else}
+                        <span class="px-2 py-0.5 bg-yellow-500/20 text-yellow-400 text-xs rounded-full">Draft</span>
+                      {/if}
+                    </div>
+                    <p class="text-stone-500 text-xs">{challenge.difficulty} • {challenge.total_flags || 1} flag(s) • {challenge.resource_type === 'vm' ? 'VM' : 'Docker'}</p>
                   </div>
                 </div>
                 <div class="flex items-center gap-4">
                   <span class="text-stone-400">{challenge.base_points} pts</span>
                   <span class="text-stone-500">{challenge.total_solves || 0} solves</span>
+                  <div class="flex items-center gap-1">
+                    {#if challenge.status === 'published'}
+                      <button on:click={() => unpublishChallenge(challenge)} class="p-2 text-yellow-400 hover:bg-yellow-500/10 rounded-lg transition" title="Unpublish">
+                        <Icon icon="mdi:eye-off" class="w-4 h-4" />
+                      </button>
+                    {:else}
+                      <button on:click={() => publishChallenge(challenge)} class="p-2 text-green-400 hover:bg-green-500/10 rounded-lg transition" title="Publish">
+                        <Icon icon="mdi:eye" class="w-4 h-4" />
+                      </button>
+                    {/if}
+                    <button on:click={() => deleteChallenge(challenge.id)} class="p-2 text-red-400 hover:bg-red-500/10 rounded-lg transition" title="Delete">
+                      <Icon icon="mdi:trash-can" class="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             {/each}
