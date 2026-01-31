@@ -371,6 +371,12 @@ class ApiClient {
 	async uploadOvaChallenge(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {
 		const token = this.getAuthToken();
 		
+		// Use direct upload URL to bypass Cloudflare's 100MB limit
+		// In production, this goes through upload.h7tex.com (DNS-only, no Cloudflare proxy)
+		const uploadBaseUrl = browser && window.location.hostname !== 'localhost' 
+			? `http://upload.${window.location.hostname.split('.').slice(-2).join('.')}`
+			: this.baseUrl;
+		
 		return new Promise((resolve, reject) => {
 			const xhr = new XMLHttpRequest();
 			
@@ -402,7 +408,7 @@ class ApiClient {
 				reject(new Error('Network error during upload'));
 			});
 			
-			xhr.open('POST', `${this.baseUrl}/api/v1/admin/challenges/ova`);
+			xhr.open('POST', `${uploadBaseUrl}/api/v1/admin/challenges/ova`);
 			if (token) {
 				xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 			}
