@@ -372,9 +372,9 @@ class ApiClient {
 		const token = this.getAuthToken();
 		
 		// Use direct upload URL to bypass Cloudflare's 100MB limit
-		// In production, this goes through upload.h7tex.com (DNS-only, no Cloudflare proxy)
+		// In production, this goes through upload.h7tex.com (DNS-only, no Cloudflare proxy, with Let's Encrypt SSL)
 		const uploadBaseUrl = browser && window.location.hostname !== 'localhost' 
-			? `http://upload.${window.location.hostname.split('.').slice(-2).join('.')}`
+			? `https://upload.${window.location.hostname.split('.').slice(-2).join('.')}`
 			: this.baseUrl;
 		
 		return new Promise((resolve, reject) => {
