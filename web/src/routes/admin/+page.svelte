@@ -213,34 +213,6 @@ async function handleCreateChallenge() {
     uploadLoading = false;
   }
 }
-
-async function publishChallenge(challenge: any) {
-  try {
-    await api.publishChallenge(challenge.id);
-    await loadDashboard();
-  } catch (e) {
-    alert(e instanceof Error ? e.message : 'Failed to publish challenge');
-  }
-}
-
-async function unpublishChallenge(challenge: any) {
-  try {
-    await api.unpublishChallenge(challenge.id);
-    await loadDashboard();
-  } catch (e) {
-    alert(e instanceof Error ? e.message : 'Failed to unpublish challenge');
-  }
-}
-
-async function deleteChallenge(id: string) {
-  if (!confirm('Are you sure you want to delete this challenge? This cannot be undone.')) return;
-  try {
-    await api.deleteChallenge(id);
-    await loadDashboard();
-  } catch (e) {
-    alert(e instanceof Error ? e.message : 'Failed to delete challenge');
-  }
-}
 </script>
 
 <svelte:head>
