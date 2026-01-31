@@ -21,7 +21,7 @@
 	onMount(async () => {
 		try {
 			const response = await api.getScoreboard();
-			entries = response.entries || [];
+			entries = response.leaderboard || [];
 			totalUsers = response.total_users || 0;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load scoreboard';

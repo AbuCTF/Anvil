@@ -29,7 +29,7 @@
 
 	async function loadChallenge() {
 		try {
-			challenge = await api.getChallenge(slug);
+			challenge = await api.getChallenge(slug!);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load challenge';
 		} finally {
@@ -55,7 +55,7 @@
 		submitResult = null;
 
 		try {
-			const result = await api.submitFlag(slug, flagInput.trim());
+			const result = await api.submitFlag(slug!, flagInput.trim());
 			submitResult = result;
 			if (result.correct) {
 				flagInput = '';
@@ -74,7 +74,7 @@
 	async function startInstance() {
 		creatingInstance = true;
 		try {
-			const result = await api.createInstance(slug);
+			const result = await api.createInstance(slug!);
 			instance = result.instance;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to start instance';

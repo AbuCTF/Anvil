@@ -17,7 +17,7 @@ interface AuthState {
 	lastChecked: number | null;
 }
 
-const API_BASE = 'http://localhost:8080';
+const API_BASE = import.meta.env.PUBLIC_API_URL || 'http://localhost:8080';
 const AUTH_CHECK_INTERVAL = 60000; // Re-check auth every 60 seconds max
 const MAX_RETRIES = 2;
 const RETRY_DELAY = 1000;

@@ -1,13 +1,16 @@
 import { browser } from '$app/environment';
 import type { LayoutLoad } from './$types';
 
+// Use environment variable, fallback to localhost for local dev
+const API_BASE = import.meta.env.PUBLIC_API_URL || 'http://localhost:8080';
+
 export const load: LayoutLoad = async ({ fetch }) => {
 	if (browser) {
 		const token = localStorage.getItem('accessToken');
 		
 		if (token) {
 			try {
-				const response = await fetch('http://localhost:8080/api/v1/user/me', {
+				const response = await fetch(`${API_BASE}/api/v1/user/me`, {
 					headers: {
 						'Authorization': `Bearer ${token}`
 					}
@@ -21,7 +24,7 @@ export const load: LayoutLoad = async ({ fetch }) => {
 					const refreshToken = localStorage.getItem('refreshToken');
 					if (refreshToken) {
 						try {
-							const refreshResponse = await fetch('http://localhost:8080/api/v1/auth/refresh', {
+							const refreshResponse = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
 								method: 'POST',
 								headers: { 'Content-Type': 'application/json' },
 								body: JSON.stringify({ refresh_token: refreshToken })
