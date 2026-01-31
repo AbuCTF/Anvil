@@ -316,6 +316,27 @@ class ApiClient {
 		});
 	}
 
+	async publishChallenge(challengeId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}/publish`, {
+			method: 'POST'
+		});
+	}
+
+	async unpublishChallenge(challengeId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}`, {
+			method: 'PUT',
+			body: JSON.stringify({ status: 'draft' })
+		});
+	}
+
+	async getAdminChallenge(challengeId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}`);
+	}
+
+	async getChallengeFlags(challengeId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}/flags`);
+	}
+
 	// VM Templates
 	async getVMTemplates() {
 		return this.request<{ templates: any[] }>('/admin/vm-templates');

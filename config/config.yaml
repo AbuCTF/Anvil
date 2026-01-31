@@ -83,8 +83,8 @@ platform:
 
 rate_limit:
   enabled: true
-  requests_per_minute: 60
-  burst_size: 10
+  requests_per_minute: 300
+  burst_size: 50
   
   login:
     requests: 5

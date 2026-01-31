@@ -85,13 +85,13 @@ func main() {
 	// Initialize API server
 	server := api.NewServer(cfg, db, containerSvc, vmSvc, uploadSvc, vpnSvc, logger)
 
-	// Create HTTP server
+	// Create HTTP server with extended timeouts for large file uploads
 	httpServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler:      server.Router(),
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  30 * time.Minute, // Extended for OVA uploads
+		WriteTimeout: 30 * time.Minute, // Extended for large responses
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Start server in goroutine

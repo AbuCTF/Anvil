@@ -244,7 +244,7 @@ type CreateChallengeRequest struct {
 func (h *AdminChallengeHandler) List(c *gin.Context) {
 	query := `
 		SELECT id, name, slug, description, difficulty, status, base_points,
-		       total_solves, total_flags, created_at
+		       total_solves, total_flags, resource_type, created_at
 		FROM challenges
 		ORDER BY created_at DESC
 	`
@@ -260,34 +260,36 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 	var challenges []gin.H
 	for rows.Next() {
 		var ch struct {
-			ID          string
-			Name        string
-			Slug        string
-			Description *string
-			Difficulty  string
-			Status      string
-			BasePoints  int
-			TotalSolves int
-			TotalFlags  int
-			CreatedAt   time.Time
+			ID           string
+			Name         string
+			Slug         string
+			Description  *string
+			Difficulty   string
+			Status       string
+			BasePoints   int
+			TotalSolves  int
+			TotalFlags   int
+			ResourceType string
+			CreatedAt    time.Time
 		}
 
 		if err := rows.Scan(&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
-			&ch.Status, &ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.CreatedAt); err != nil {
+			&ch.Status, &ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.ResourceType, &ch.CreatedAt); err != nil {
 			continue
 		}
 
 		challenges = append(challenges, gin.H{
-			"id":           ch.ID,
-			"name":         ch.Name,
-			"slug":         ch.Slug,
-			"description":  ch.Description,
-			"difficulty":   ch.Difficulty,
-			"status":       ch.Status,
-			"base_points":  ch.BasePoints,
-			"total_solves": ch.TotalSolves,
-			"total_flags":  ch.TotalFlags,
-			"created_at":   ch.CreatedAt.Unix(),
+			"id":            ch.ID,
+			"name":          ch.Name,
+			"slug":          ch.Slug,
+			"description":   ch.Description,
+			"difficulty":    ch.Difficulty,
+			"status":        ch.Status,
+			"base_points":   ch.BasePoints,
+			"total_solves":  ch.TotalSolves,
+			"total_flags":   ch.TotalFlags,
+			"resource_type": ch.ResourceType,
+			"created_at":    ch.CreatedAt.Unix(),
 		})
 	}
 
@@ -551,13 +553,13 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	}
 	defer tx.Rollback(c.Request.Context())
 
-	// Insert challenge
+	// Insert challenge (include container_image as empty string to satisfy NOT NULL constraint)
 	_, err = tx.Exec(c.Request.Context(),
 		`INSERT INTO challenges (
 			id, name, slug, description, difficulty, status,
 			base_points, resource_type, supports_docker, supports_vm,
-			total_flags, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, 'draft', $6, 'vm', false, true, $7, NOW(), NOW())`,
+			total_flags, container_image, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, 'draft', $6, 'vm', false, true, $7, '', NOW(), NOW())`,
 		challengeID, name, challengeSlug, description, difficulty, basePoints, len(flags),
 	)
 	if err != nil {
