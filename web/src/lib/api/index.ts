@@ -328,6 +328,12 @@ class ApiClient {
 		});
 	}
 
+	async deleteChallenge(challengeId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}`, {
+			method: 'DELETE'
+		});
+	}
+
 	async getAdminChallenge(challengeId: string) {
 		return this.request<any>(`/admin/challenges/${challengeId}`);
 	}

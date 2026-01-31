@@ -993,18 +993,30 @@ func (h *AdminChallengeHandler) DeleteHint(c *gin.Context) {
 // GetStats returns platform statistics
 func (h *StatsHandler) Get(c *gin.Context) {
 	var stats struct {
-		TotalUsers      int
-		TotalChallenges int
-		TotalSolves     int
-		TotalInstances  int
-		ActiveInstances int
+		TotalUsers          int
+		TotalChallenges     int
+		PublishedChallenges int
+		DraftChallenges     int
+		TotalSolves         int
+		TotalInstances      int
+		ActiveInstances     int
 	}
 
+	// Count all users (excluding admins)
 	h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT COUNT(*) FROM users WHERE role != 'admin'`).Scan(&stats.TotalUsers)
 
+	// Count ALL challenges (for admin view)
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM challenges WHERE status = 'published'`).Scan(&stats.TotalChallenges)
+		`SELECT COUNT(*) FROM challenges`).Scan(&stats.TotalChallenges)
+
+	// Count published challenges
+	h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT COUNT(*) FROM challenges WHERE status = 'published'`).Scan(&stats.PublishedChallenges)
+
+	// Count draft challenges
+	h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT COUNT(*) FROM challenges WHERE status = 'draft'`).Scan(&stats.DraftChallenges)
 
 	h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT COUNT(*) FROM solved_flags`).Scan(&stats.TotalSolves)
@@ -1016,10 +1028,12 @@ func (h *StatsHandler) Get(c *gin.Context) {
 		`SELECT COUNT(*) FROM instances WHERE status = 'running'`).Scan(&stats.ActiveInstances)
 
 	c.JSON(http.StatusOK, gin.H{
-		"total_users":      stats.TotalUsers,
-		"total_challenges": stats.TotalChallenges,
-		"total_solves":     stats.TotalSolves,
-		"total_instances":  stats.TotalInstances,
-		"active_instances": stats.ActiveInstances,
+		"total_users":          stats.TotalUsers,
+		"total_challenges":     stats.TotalChallenges,
+		"published_challenges": stats.PublishedChallenges,
+		"draft_challenges":     stats.DraftChallenges,
+		"total_solves":         stats.TotalSolves,
+		"total_instances":      stats.TotalInstances,
+		"active_instances":     stats.ActiveInstances,
 	})
 }
