@@ -435,7 +435,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		} else {
 			submittedHash = hashFlagForComparison(strings.ToLower(submittedFlag))
 		}
-		
+
 		match := subtle.ConstantTimeCompare([]byte(submittedHash), []byte(f.FlagHash)) == 1
 
 		if match {

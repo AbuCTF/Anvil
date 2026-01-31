@@ -334,7 +334,79 @@
 
 			<!-- Challenges Tab -->
 			{#if activeTab === 'challenges'}
-				<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+				<!-- Mobile: Card view -->
+				<div class="lg:hidden space-y-3">
+					{#each challenges as challenge}
+						<div class="bg-stone-950 border border-stone-800 rounded-lg p-4">
+							<div class="flex items-start justify-between mb-3">
+								<div>
+									<a href="/challenges/{challenge.slug}" class="text-sm font-medium text-white hover:text-stone-300 transition">{challenge.name}</a>
+									<div class="flex items-center gap-2 mt-1">
+										<span class="text-xs capitalize {difficultyConfig[challenge.difficulty]?.color}">{challenge.difficulty}</span>
+										<span class="text-xs text-stone-600">•</span>
+										<span class="text-xs text-stone-400">{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}</span>
+									</div>
+								</div>
+								{#if challenge.status === 'published'}
+									<span class="text-xs text-green-400">Published</span>
+								{:else}
+									<span class="text-xs text-yellow-400">Draft</span>
+								{/if}
+							</div>
+							<div class="flex items-center justify-between text-xs text-stone-500 mb-3">
+								<span>{challenge.base_points} pts</span>
+								<span>{challenge.total_solves || 0} solves</span>
+							</div>
+							<div class="flex items-center gap-3 pt-3 border-t border-stone-800">
+								<button
+									on:click={() => openEditModal(challenge)}
+									class="text-xs text-stone-400 hover:text-white transition"
+									disabled={actionLoading === challenge.id}
+								>
+									Edit
+								</button>
+								{#if challenge.status === 'draft'}
+									<button
+										on:click={() => publishChallenge(challenge)}
+										class="text-xs text-green-400 hover:text-green-300 transition"
+										disabled={actionLoading === challenge.id}
+									>
+										Publish
+									</button>
+								{:else}
+									<button
+										on:click={() => unpublishChallenge(challenge)}
+										class="text-xs text-yellow-400 hover:text-yellow-300 transition"
+										disabled={actionLoading === challenge.id}
+									>
+										Unpublish
+									</button>
+								{/if}
+								<button
+									on:click={() => deleteChallenge(challenge)}
+									class="text-xs text-red-400 hover:text-red-300 transition ml-auto"
+									disabled={actionLoading === challenge.id}
+								>
+									Delete
+								</button>
+							</div>
+						</div>
+					{/each}
+					{#if challenges.length === 0}
+						<div class="bg-stone-950 border border-stone-800 rounded-lg p-8 text-center">
+							<p class="text-sm text-stone-500">No challenges yet</p>
+							<button
+								on:click={() => showCreateModal = true}
+								class="mt-3 text-sm text-white hover:text-stone-300 transition"
+							>
+								Create your first challenge →
+							</button>
+						</div>
+					{/if}
+				</div>
+
+				<!-- Desktop: Table view -->
+				<div class="hidden lg:block bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
 					<table class="w-full">
 						<thead>
 							<tr class="border-b border-stone-800">
@@ -429,7 +501,35 @@
 
 			<!-- Users Tab -->
 			{#if activeTab === 'users'}
-				<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+				<!-- Mobile: Card view -->
+				<div class="lg:hidden space-y-3">
+					{#each users as user}
+						<div class="bg-stone-950 border border-stone-800 rounded-lg p-4">
+							<div class="flex items-center gap-3 mb-3">
+								<div class="w-10 h-10 bg-stone-800 rounded-full flex items-center justify-center">
+									<span class="text-sm font-medium text-stone-400">{user.username.charAt(0).toUpperCase()}</span>
+								</div>
+								<div class="flex-1 min-w-0">
+									<p class="text-sm font-medium text-white truncate">{user.username}</p>
+									<p class="text-xs text-stone-500 truncate">{user.email}</p>
+								</div>
+								<span class="text-xs {user.role === 'admin' ? 'text-amber-400' : 'text-stone-400'}">{user.role}</span>
+							</div>
+							<div class="flex items-center justify-between text-xs text-stone-500 pt-3 border-t border-stone-800">
+								<span>{user.total_score || 0} points</span>
+								<span>Joined {formatDate(user.created_at)}</span>
+							</div>
+						</div>
+					{/each}
+					{#if users.length === 0}
+						<div class="bg-stone-950 border border-stone-800 rounded-lg p-8 text-center">
+							<p class="text-sm text-stone-500">No users yet</p>
+						</div>
+					{/if}
+				</div>
+
+				<!-- Desktop: Table view -->
+				<div class="hidden lg:block bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
 					<table class="w-full">
 						<thead>
 							<tr class="border-b border-stone-800">
