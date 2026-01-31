@@ -464,10 +464,10 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 
 	// Update instance
 	_, err = h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE instances SET status = 'terminated', terminated_at = NOW() WHERE id = $1`, instanceID)
+		`UPDATE instances SET status = 'stopped', stopped_at = NOW() WHERE id = $1`, instanceID)
 	if err != nil {
 		h.logger.Error("failed to update instance", zap.Error(err))
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Instance terminated successfully"})
+	c.JSON(http.StatusOK, gin.H{"message": "Instance stopped successfully"})
 }
