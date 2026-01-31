@@ -357,37 +357,44 @@
 								<span>{challenge.base_points} pts</span>
 								<span>{challenge.total_solves || 0} solves</span>
 							</div>
-							<div class="flex items-center gap-3 pt-3 border-t border-stone-800">
+							<div class="flex items-center gap-2 pt-3 border-t border-stone-800">
 								<button
 									on:click={() => openEditModal(challenge)}
-									class="text-xs text-stone-400 hover:text-white transition"
+									class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-300 bg-stone-800 hover:bg-stone-700 rounded-lg transition disabled:opacity-50"
 									disabled={actionLoading === challenge.id}
+									title="Edit challenge"
 								>
+									<Icon icon="mdi:pencil" class="w-3.5 h-3.5" />
 									Edit
 								</button>
 								{#if challenge.status === 'draft'}
 									<button
 										on:click={() => publishChallenge(challenge)}
-										class="text-xs text-green-400 hover:text-green-300 transition"
+										class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-green-400 bg-green-500/10 hover:bg-green-500/20 border border-green-500/20 rounded-lg transition disabled:opacity-50"
 										disabled={actionLoading === challenge.id}
+										title="Publish challenge"
 									>
+										<Icon icon="mdi:rocket-launch" class="w-3.5 h-3.5" />
 										Publish
 									</button>
 								{:else}
 									<button
 										on:click={() => unpublishChallenge(challenge)}
-										class="text-xs text-yellow-400 hover:text-yellow-300 transition"
+										class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-yellow-400 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/20 rounded-lg transition disabled:opacity-50"
 										disabled={actionLoading === challenge.id}
+										title="Unpublish challenge"
 									>
+										<Icon icon="mdi:eye-off" class="w-3.5 h-3.5" />
 										Unpublish
 									</button>
 								{/if}
 								<button
 									on:click={() => deleteChallenge(challenge)}
-									class="text-xs text-red-400 hover:text-red-300 transition ml-auto"
+									class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-lg transition disabled:opacity-50 ml-auto"
 									disabled={actionLoading === challenge.id}
+									title="Delete challenge"
 								>
-									Delete
+									<Icon icon="mdi:trash-can" class="w-3.5 h-3.5" />
 								</button>
 							</div>
 						</div>
@@ -445,37 +452,41 @@
 										{/if}
 									</td>
 									<td class="px-4 py-3 text-right">
-										<div class="flex items-center justify-end gap-2">
+										<div class="flex items-center justify-end gap-1.5">
 											<button
 												on:click={() => openEditModal(challenge)}
-												class="text-xs text-stone-400 hover:text-white transition"
+												class="p-2 text-stone-400 hover:text-white hover:bg-stone-800 rounded-lg transition disabled:opacity-50"
 												disabled={actionLoading === challenge.id}
+												title="Edit"
 											>
-												Edit
+												<Icon icon="mdi:pencil" class="w-4 h-4" />
 											</button>
 											{#if challenge.status === 'draft'}
 												<button
 													on:click={() => publishChallenge(challenge)}
-													class="text-xs text-green-400 hover:text-green-300 transition"
+													class="p-2 text-green-400 hover:text-green-300 hover:bg-green-500/10 rounded-lg transition disabled:opacity-50"
 													disabled={actionLoading === challenge.id}
+													title="Publish"
 												>
-													Publish
+													<Icon icon="mdi:rocket-launch" class="w-4 h-4" />
 												</button>
 											{:else}
 												<button
 													on:click={() => unpublishChallenge(challenge)}
-													class="text-xs text-yellow-400 hover:text-yellow-300 transition"
+													class="p-2 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10 rounded-lg transition disabled:opacity-50"
 													disabled={actionLoading === challenge.id}
+													title="Unpublish"
 												>
-													Unpublish
+													<Icon icon="mdi:eye-off" class="w-4 h-4" />
 												</button>
 											{/if}
 											<button
 												on:click={() => deleteChallenge(challenge)}
-												class="text-xs text-red-400 hover:text-red-300 transition"
+												class="p-2 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg transition disabled:opacity-50"
 												disabled={actionLoading === challenge.id}
+												title="Delete"
 											>
-												Delete
+												<Icon icon="mdi:trash-can" class="w-4 h-4" />
 											</button>
 										</div>
 									</td>
@@ -582,224 +593,262 @@
 
 <!-- Create Challenge Modal -->
 {#if showCreateModal}
+	<!-- svelte-ignore a11y-click-events-have-key-events -->
+	<!-- svelte-ignore a11y-no-static-element-interactions -->
 	<div 
 		class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
 		on:click={() => showCreateModal = false}
-		on:keydown={(e) => e.key === 'Escape' && (showCreateModal = false)}
 		role="dialog"
 		aria-modal="true"
 	>
+		<!-- svelte-ignore a11y-click-events-have-key-events -->
+		<!-- svelte-ignore a11y-no-static-element-interactions -->
 		<div 
-			class="bg-stone-950 border border-stone-800 rounded-lg w-full max-w-lg max-h-[90vh] overflow-y-auto"
+			class="bg-stone-950 border border-stone-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl"
 			on:click|stopPropagation
-			on:keydown|stopPropagation
-			role="document"
 		>
-			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between">
-				<h2 class="text-lg font-medium text-white">New Challenge</h2>
-				<button on:click={() => showCreateModal = false} class="text-stone-400 hover:text-white transition">
-					<Icon icon="mdi:close" class="w-5 h-5" />
-				</button>
-			</div>
-
-			<form on:submit|preventDefault={handleCreateChallenge} class="p-6 space-y-4">
-				{#if uploadError}
-					<div class="py-2 px-3 bg-red-500/10 border border-red-500/20 rounded text-red-400 text-sm">
-						{uploadError}
-					</div>
-				{/if}
-
-				{#if uploadLoading && uploadProgress > 0}
-					<div>
-						<div class="flex justify-between text-xs text-stone-400 mb-1">
-							<span>Uploading...</span>
-							<span>{uploadProgress}%</span>
-						</div>
-						<div class="w-full bg-stone-800 rounded-full h-1.5">
-							<div class="bg-white h-full rounded-full transition-all" style="width: {uploadProgress}%"></div>
-						</div>
-					</div>
-				{/if}
-
-				<div>
-					<label class="block text-xs text-stone-500 mb-1.5">Name</label>
-					<input
-						type="text"
-						bind:value={newChallenge.name}
-						required
-						class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
-						placeholder="Challenge name"
-					/>
+			<!-- Header with Type Tabs -->
+			<div class="p-6 border-b border-stone-800 flex-shrink-0">
+				<div class="flex items-center justify-between mb-4">
+					<h2 class="text-xl font-bold text-white flex items-center gap-2">
+						<Icon icon="mdi:plus-circle" class="w-6 h-6" />
+						Create Challenge
+					</h2>
+					<button on:click={() => showCreateModal = false} class="text-stone-400 hover:text-white transition p-1">
+						<Icon icon="mdi:close" class="w-5 h-5" />
+					</button>
 				</div>
-
-				<div>
-					<label class="block text-xs text-stone-500 mb-1.5">Description</label>
-					<textarea
-						bind:value={newChallenge.description}
-						rows="3"
-						class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700 resize-none"
-						placeholder="Challenge description"
-					></textarea>
-				</div>
-
-				<div class="grid grid-cols-2 gap-4">
-					<div>
-						<label class="block text-xs text-stone-500 mb-1.5">Difficulty</label>
-						<select
-							bind:value={newChallenge.difficulty}
-							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
-						>
-							<option value="easy">Easy</option>
-							<option value="medium">Medium</option>
-							<option value="hard">Hard</option>
-							<option value="insane">Insane</option>
-						</select>
-					</div>
-					<div>
-						<label class="block text-xs text-stone-500 mb-1.5">Points</label>
-						<input
-							type="number"
-							bind:value={newChallenge.base_points}
-							required
-							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
-						/>
-					</div>
-				</div>
-
-				<div>
-					<label class="block text-xs text-stone-500 mb-1.5">Category</label>
-					<input
-						type="text"
-						bind:value={newChallenge.category}
-						class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
-						placeholder="e.g., Web, Pwn, Crypto"
-					/>
-				</div>
-
-				<div>
-					<label class="block text-xs text-stone-500 mb-1.5">Type</label>
-					<div class="flex gap-2">
-						<button
-							type="button"
-							on:click={() => newChallenge.type = 'container'}
-							class="flex-1 py-2 text-sm rounded border transition {newChallenge.type === 'container' ? 'bg-white text-black border-white' : 'bg-transparent text-stone-400 border-stone-800 hover:border-stone-700'}"
-						>
-							Docker
-						</button>
-						<button
-							type="button"
-							on:click={() => newChallenge.type = 'ova'}
-							class="flex-1 py-2 text-sm rounded border transition {newChallenge.type === 'ova' ? 'bg-white text-black border-white' : 'bg-transparent text-stone-400 border-stone-800 hover:border-stone-700'}"
-						>
-							VM (OVA)
-						</button>
-					</div>
-				</div>
-
-				{#if newChallenge.type === 'container'}
-					<div>
-						<label class="block text-xs text-stone-500 mb-1.5">Docker Image</label>
-						<input
-							type="text"
-							bind:value={newChallenge.docker_image}
-							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm font-mono focus:outline-none focus:border-stone-700"
-							placeholder="e.g., nginx:latest"
-						/>
-					</div>
-					<div>
-						<label class="block text-xs text-stone-500 mb-1.5">Flag</label>
-						<input
-							type="text"
-							bind:value={newChallenge.flag}
-							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm font-mono focus:outline-none focus:border-stone-700"
-							placeholder="flag&#123;...&#125;"
-						/>
-					</div>
-				{:else}
-					<div>
-						<label class="block text-xs text-stone-500 mb-1.5">OVA File</label>
-						<div class="border border-dashed border-stone-800 rounded p-4 text-center">
-							<input
-								type="file"
-								accept=".ova"
-								on:change={handleOvaUpload}
-								class="hidden"
-								id="ova-upload"
-							/>
-							<label for="ova-upload" class="cursor-pointer">
-								{#if ovaFile}
-									<p class="text-sm text-white">{ovaFile.name}</p>
-									<p class="text-xs text-stone-500 mt-1">{(ovaFile.size / 1024 / 1024).toFixed(2)} MB</p>
-								{:else}
-									<Icon icon="mdi:upload" class="w-8 h-8 text-stone-600 mx-auto mb-2" />
-									<p class="text-sm text-stone-400">Click to upload OVA</p>
-								{/if}
-							</label>
-						</div>
-					</div>
-
-					<!-- Flags for OVA -->
-					<div>
-						<div class="flex items-center justify-between mb-2">
-							<label class="text-xs text-stone-500">Flags</label>
-							<button type="button" on:click={addFlag} class="text-xs text-stone-400 hover:text-white transition">
-								+ Add Flag
-							</button>
-						</div>
-						<div class="space-y-2">
-							{#each newChallenge.flags as flag, i}
-								<div class="flex gap-2">
-									<input
-										type="text"
-										bind:value={flag.name}
-										placeholder="Name"
-										class="w-24 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs focus:outline-none focus:border-stone-700"
-									/>
-									<input
-										type="text"
-										bind:value={flag.flag}
-										placeholder="flag&#123;...&#125;"
-										class="flex-1 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs font-mono focus:outline-none focus:border-stone-700"
-									/>
-									<input
-										type="number"
-										bind:value={flag.points}
-										placeholder="Pts"
-										class="w-16 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs focus:outline-none focus:border-stone-700"
-									/>
-									{#if newChallenge.flags.length > 1}
-										<button type="button" on:click={() => removeFlag(i)} class="text-red-400 hover:text-red-300 transition">
-											<Icon icon="mdi:close" class="w-4 h-4" />
-										</button>
-									{/if}
-								</div>
-							{/each}
-						</div>
-					</div>
-				{/if}
-
-				<div class="flex gap-3 pt-2">
+				
+				<!-- Type Tabs at Top -->
+				<div class="flex gap-2 p-1 bg-black rounded-xl">
 					<button
-						type="submit"
-						disabled={uploadLoading}
-						class="flex-1 py-2.5 bg-white text-black text-sm font-medium rounded hover:bg-stone-200 transition disabled:opacity-50"
+						type="button"
+						on:click={() => newChallenge.type = 'container'}
+						class="flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-medium transition-all {newChallenge.type === 'container' ? 'bg-white text-black shadow-lg' : 'text-stone-400 hover:text-white'}"
 					>
-						{#if uploadLoading}
-							{uploadProgress > 0 ? `Uploading ${uploadProgress}%` : 'Creating...'}
-						{:else}
-							Create
-						{/if}
+						<Icon icon="mdi:docker" class="w-5 h-5" />
+						Docker Container
 					</button>
 					<button
 						type="button"
-						on:click={() => showCreateModal = false}
-						disabled={uploadLoading}
-						class="px-4 py-2.5 text-stone-400 text-sm hover:text-white transition disabled:opacity-50"
+						on:click={() => newChallenge.type = 'ova'}
+						class="flex-1 flex items-center justify-center gap-2 py-3 rounded-lg text-sm font-medium transition-all {newChallenge.type === 'ova' ? 'bg-white text-black shadow-lg' : 'text-stone-400 hover:text-white'}"
 					>
-						Cancel
+						<Icon icon="mdi:desktop-classic" class="w-5 h-5" />
+						VM (OVA)
 					</button>
 				</div>
-			</form>
+			</div>
+
+			<!-- Scrollable Form Content -->
+			<div class="overflow-y-auto flex-1 min-h-0">
+				{#if uploadLoading && uploadProgress > 0}
+					<div class="px-6 py-3 bg-stone-900/50 border-b border-stone-800">
+						<div class="flex items-center justify-between mb-2">
+							<span class="text-sm text-stone-300 font-medium">Uploading OVA...</span>
+							<span class="text-sm text-stone-400">{uploadProgress}%</span>
+						</div>
+						<div class="w-full bg-stone-800 rounded-full h-2 overflow-hidden">
+							<div class="bg-gradient-to-r from-green-500 to-emerald-400 h-full transition-all duration-300" style="width: {uploadProgress}%"></div>
+						</div>
+					</div>
+				{/if}
+
+				<form on:submit|preventDefault={handleCreateChallenge} class="p-6 space-y-5">
+					{#if uploadError}
+						<div class="flex items-center gap-2 py-3 px-4 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-sm">
+							<Icon icon="mdi:alert-circle" class="w-5 h-5 flex-shrink-0" />
+							{uploadError}
+						</div>
+					{/if}
+
+					<!-- Basic Info -->
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+						<div class="md:col-span-2">
+							<label class="block text-sm font-medium text-stone-300 mb-2">Challenge Name *</label>
+							<input
+								type="text"
+								bind:value={newChallenge.name}
+								required
+								class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+								placeholder="Enter challenge name"
+							/>
+						</div>
+
+						<div>
+							<label class="block text-sm font-medium text-stone-300 mb-2">Category *</label>
+							<input
+								type="text"
+								bind:value={newChallenge.category}
+								required
+								class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+								placeholder="Web, Crypto, Pwn..."
+							/>
+						</div>
+
+						<div>
+							<label class="block text-sm font-medium text-stone-300 mb-2">Difficulty *</label>
+							<select
+								bind:value={newChallenge.difficulty}
+								class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+							>
+								<option value="easy">Easy</option>
+								<option value="medium">Medium</option>
+								<option value="hard">Hard</option>
+								<option value="insane">Insane</option>
+							</select>
+						</div>
+
+						<div>
+							<label class="block text-sm font-medium text-stone-300 mb-2">Base Points *</label>
+							<input
+								type="number"
+								bind:value={newChallenge.base_points}
+								required
+								min="1"
+								class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+							/>
+						</div>
+
+						<div class="md:col-span-2">
+							<label class="block text-sm font-medium text-stone-300 mb-2">Description *</label>
+							<textarea
+								bind:value={newChallenge.description}
+								required
+								rows="3"
+								class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all resize-none"
+								placeholder="Challenge description..."
+							></textarea>
+						</div>
+					</div>
+
+					<!-- Type-specific fields -->
+					{#if newChallenge.type === 'container'}
+						<div class="pt-4 border-t border-stone-800 space-y-5">
+							<div>
+								<label class="block text-sm font-medium text-stone-300 mb-2">Docker Image *</label>
+								<input
+									type="text"
+									bind:value={newChallenge.docker_image}
+									required
+									class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white font-mono placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+									placeholder="registry.example.com/challenge:latest"
+								/>
+								<p class="text-stone-500 text-xs mt-2">Image should be pre-built and pushed to a registry</p>
+							</div>
+							<div>
+								<label class="block text-sm font-medium text-stone-300 mb-2">Flag *</label>
+								<input
+									type="text"
+									bind:value={newChallenge.flag}
+									required
+									class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white font-mono placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+									placeholder="flag&#123;example_flag_here&#125;"
+								/>
+							</div>
+						</div>
+					{:else}
+						<div class="pt-4 border-t border-stone-800 space-y-5">
+							<!-- OVA Upload -->
+							<div>
+								<label class="block text-sm font-medium text-stone-300 mb-2">OVA File *</label>
+								<div class="border-2 border-dashed border-stone-700 rounded-xl p-6 text-center hover:border-stone-500 transition-colors">
+									{#if ovaFile}
+										<div class="flex items-center justify-center gap-3">
+											<Icon icon="mdi:file-check" class="w-8 h-8 text-green-400" />
+											<div class="text-left">
+												<p class="text-white font-medium">{ovaFile.name}</p>
+												<p class="text-stone-500 text-sm">{(ovaFile.size / 1024 / 1024 / 1024).toFixed(2)} GB</p>
+											</div>
+											<button type="button" on:click={() => ovaFile = null} class="text-red-400 hover:text-red-300 p-2">
+												<Icon icon="mdi:close" class="w-5 h-5" />
+											</button>
+										</div>
+									{:else}
+										<Icon icon="mdi:cloud-upload" class="w-12 h-12 text-stone-500 mx-auto mb-3" />
+										<p class="text-stone-400 mb-2">Drop your OVA file here or click to browse</p>
+										<input type="file" accept=".ova,.qcow2,.vmdk" on:change={handleOvaUpload} class="hidden" id="ova-upload" />
+										<label for="ova-upload" class="inline-block px-4 py-2 bg-stone-800 text-white rounded-lg cursor-pointer hover:bg-stone-700 transition-colors text-sm">
+											Select File
+										</label>
+									{/if}
+								</div>
+								<p class="text-stone-500 text-xs mt-2">Supported: .ova, .qcow2, .vmdk (max 20GB)</p>
+							</div>
+
+							<!-- Multiple Flags -->
+							<div>
+								<div class="flex items-center justify-between mb-3">
+									<label class="text-sm font-medium text-stone-300">Flags ({newChallenge.flags.length})</label>
+									<button type="button" on:click={addFlag} class="text-sm text-stone-400 hover:text-white flex items-center gap-1 transition">
+										<Icon icon="mdi:plus" class="w-4 h-4" />
+										Add Flag
+									</button>
+								</div>
+								<div class="space-y-3">
+									{#each newChallenge.flags as flag, i}
+										<div class="bg-black border border-stone-700 rounded-xl p-4">
+											<div class="flex items-center gap-3 mb-3">
+												<input
+													type="text"
+													bind:value={flag.name}
+													class="flex-1 px-3 py-2 bg-stone-900 border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
+													placeholder="Flag name (e.g., User Flag)"
+												/>
+												<input
+													type="number"
+													bind:value={flag.points}
+													min="1"
+													class="w-24 px-3 py-2 bg-stone-900 border border-stone-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-stone-500"
+													placeholder="Points"
+												/>
+												{#if newChallenge.flags.length > 1}
+													<button type="button" on:click={() => removeFlag(i)} class="text-red-400 hover:text-red-300 p-2 transition">
+														<Icon icon="mdi:trash-can" class="w-5 h-5" />
+													</button>
+												{/if}
+											</div>
+											<input
+												type="text"
+												bind:value={flag.flag}
+												required
+												class="w-full px-3 py-2 bg-stone-900 border border-stone-700 rounded-lg text-white font-mono text-sm focus:outline-none focus:border-stone-500"
+												placeholder="flag&#123;...&#125;"
+											/>
+										</div>
+									{/each}
+								</div>
+								<p class="text-stone-500 text-xs mt-2">Total points: {newChallenge.flags.reduce((sum, f) => sum + (f.points || 0), 0)}</p>
+							</div>
+						</div>
+					{/if}
+
+					<!-- Actions -->
+					<div class="flex gap-3 pt-4">
+						<button
+							type="submit"
+							disabled={uploadLoading}
+							class="flex-1 py-3 bg-white text-black text-sm font-bold rounded-xl hover:bg-stone-200 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+						>
+							{#if uploadLoading}
+								<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />
+								{uploadProgress > 0 ? `Uploading ${uploadProgress}%` : 'Creating...'}
+							{:else}
+								<Icon icon="mdi:plus" class="w-5 h-5" />
+								Create Challenge
+							{/if}
+						</button>
+						<button
+							type="button"
+							on:click={() => showCreateModal = false}
+							disabled={uploadLoading}
+							class="px-6 py-3 text-stone-400 text-sm font-medium hover:text-white transition disabled:opacity-50"
+						>
+							Cancel
+						</button>
+					</div>
+				</form>
+			</div>
 		</div>
 	</div>
 {/if}
