@@ -332,7 +332,6 @@ Popular Challenges
 </div>
 </div>
 </div>
-</div>
 {/if}
 
 <!-- Challenges Tab -->
