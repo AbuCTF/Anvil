@@ -54,6 +54,7 @@ type ChallengeDetailResponse struct {
 	ReleaseDate     *time.Time           `json:"release_date,omitempty"`
 	InstanceTimeout *int                 `json:"instance_timeout,omitempty"`
 	MaxExtensions   *int                 `json:"max_extensions,omitempty"`
+	Status          string               `json:"status"` // draft, published, archived
 }
 
 // FlagResponse represents a flag in the response
@@ -154,22 +155,33 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 
 	// Get user ID if authenticated
 	var userID *uuid.UUID
+	var userRole string
 	if id, exists := c.Get("user_id"); exists {
 		uid, _ := uuid.Parse(id.(string))
 		userID = &uid
 	}
+	if role, exists := c.Get("user_role"); exists {
+		userRole = role.(string)
+	}
 
-	// Query challenge
+	// Query challenge - allow admins to see all challenges, others only published
+	var statusCondition string
+	if userRole == "admin" {
+		statusCondition = "(c.status = 'published' OR c.status = 'draft')"
+	} else {
+		statusCondition = "c.status = 'published'"
+	}
+
 	query := `
 		SELECT 
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
 			c.exposed_ports, c.instance_timeout, c.max_extensions, c.release_date,
+			c.resource_type, c.status,
 			cat.id as category_id, cat.name as category_name
 		FROM challenges c
 		LEFT JOIN categories cat ON c.category_id = cat.id
-		WHERE c.slug = $1 AND c.status = 'published'
-	`
+		WHERE c.slug = $1 AND ` + statusCondition
 
 	var ch ChallengeDetailResponse
 	var categoryID, categoryName *string
@@ -179,6 +191,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 		&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
 		&exposedPortsJSON, &ch.InstanceTimeout, &ch.MaxExtensions, &ch.ReleaseDate,
+		&ch.ResourceType, &ch.Status,
 		&categoryID, &categoryName,
 	)
 
