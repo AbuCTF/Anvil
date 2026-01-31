@@ -222,15 +222,15 @@ async function handleCreateChallenge() {
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
 <!-- Header -->
 <div class="mb-10">
-\t<div class="flex items-center gap-4 mb-3">
-\t\t<div class="w-14 h-14 bg-gradient-to-br from-yellow-500 to-orange-600 rounded-2xl flex items-center justify-center shadow-lg">
-\t\t\t<Icon icon="mdi:shield-crown" class="w-8 h-8 text-white" />
-\t\t</div>
-\t\t<div>
-\t\t\t<h1 class="text-4xl font-bold text-white tracking-tight">Admin Dashboard</h1>
-\t\t\t<p class="text-stone-400 text-sm mt-1">Manage challenges, users, and platform settings</p>
-\t\t</div>
-\t</div>
+	<div class="flex items-center gap-4 mb-3">
+		<div class="w-14 h-14 bg-gradient-to-br from-amber-500 to-orange-600 rounded-2xl flex items-center justify-center shadow-lg">
+			<Icon icon="mdi:shield-crown" class="w-8 h-8 text-white" />
+		</div>
+		<div>
+			<h1 class="text-4xl font-bold text-white tracking-tight">Admin Dashboard</h1>
+			<p class="text-stone-400 text-sm mt-1">Manage challenges, users, and platform settings</p>
+		</div>
+	</div>
 </div>
 
 {#if loading}

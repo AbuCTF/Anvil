@@ -229,6 +229,7 @@ func (s *Server) setupRouter() {
 				challenges.PUT("/:id", adminChallengeHandler.Update)
 				challenges.DELETE("/:id", adminChallengeHandler.Delete)
 				challenges.POST("/:id/publish", adminChallengeHandler.Publish)
+				challenges.POST("/:id/unpublish", adminChallengeHandler.Unpublish)
 				challenges.POST("/:id/archive", adminChallengeHandler.Archive)
 
 				// Flag management

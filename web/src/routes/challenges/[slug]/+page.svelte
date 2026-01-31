@@ -1,616 +1,741 @@
 <script lang="ts">
-import Icon from '@iconify/svelte';
-import { onMount } from 'svelte';
-import { page } from '$app/stores';
-import { api } from '$api';
-import { auth } from '$stores/auth';
+	import Icon from '@iconify/svelte';
+	import { onMount } from 'svelte';
+	import { page } from '$app/stores';
+	import { api } from '$api';
+	import { auth } from '$stores/auth';
 
-let challenge: any = null;
-let instance: any = null;
-let loading = true;
-let error = '';
+	let challenge: any = null;
+	let instance: any = null;
+	let loading = true;
+	let error = '';
 
-// Flag submission
-let flagInput = '';
-let submitting = false;
-let submitResult: { correct: boolean; message: string } | null = null;
+	// Flag submission
+	let flagInput = '';
+	let submitting = false;
+	let submitResult: { correct: boolean; message: string } | null = null;
 
-// Instance management
-let creatingInstance = false;
-let instanceAction = '';
+	// Instance management
+	let creatingInstance = false;
+	let instanceAction = '';
 
-// Admin editing
-let isEditing = false;
-let editForm: any = null;
-let saving = false;
-let showEditSuccess = false;
+	// Admin editing
+	let isEditing = false;
+	let editForm: any = null;
+	let saving = false;
+	let showEditSuccess = false;
 
-const slug = $page.params.slug;
+	// Flag editing
+	let editingFlags: any[] = [];
+	let showFlagModal = false;
+	let newFlag = { name: '', flag: '', points: 100 };
+	let savingFlag = false;
 
-$: if (!slug) {
-error = 'Invalid challenge';
-}
+	const slug = $page.params.slug;
+	
+	$: if (!slug) {
+		error = 'Invalid challenge';
+	}
 
-$: isAdmin = $auth.isAuthenticated && $auth.user?.role === 'admin';
+	$: isAdmin = $auth.isAuthenticated && $auth.user?.role === 'admin';
 
-const difficultyColors: Record<string, string> = {
-easy: 'bg-green-500/20 text-green-400 border-green-500/30',
-medium: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30',
-hard: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
-insane: 'bg-red-500/20 text-red-400 border-red-500/30'
-};
+	const difficultyConfig: Record<string, { color: string; bg: string; border: string }> = {
+		easy: { color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20' },
+		medium: { color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' },
+		hard: { color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20' },
+		insane: { color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/20' }
+	};
 
-const difficultyGradients: Record<string, string> = {
-easy: 'from-green-500 to-emerald-600',
-medium: 'from-yellow-500 to-amber-600',
-hard: 'from-orange-500 to-red-600',
-insane: 'from-red-500 to-purple-600'
-};
+	onMount(async () => {
+		await loadChallenge();
+		if ($auth.isAuthenticated) {
+			await loadUserInstance();
+		}
+	});
 
-onMount(async () => {
-await loadChallenge();
-if ($auth.isAuthenticated) {
-await loadUserInstance();
-}
-});
+	async function loadChallenge() {
+		if (!slug) return;
+		try {
+			challenge = await api.getChallenge(slug as string);
+			editForm = {
+				name: challenge.name,
+				description: challenge.description || '',
+				difficulty: challenge.difficulty,
+				base_points: challenge.base_points
+			};
+			// Load editable flags for admin
+			if (challenge.flags) {
+				editingFlags = challenge.flags.map((f: any) => ({ ...f, editing: false, newFlag: '' }));
+			}
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to load challenge';
+		} finally {
+			loading = false;
+		}
+	}
 
-async function loadChallenge() {
-if (!slug) return;
-try {
-challenge = await api.getChallenge(slug as string);
-editForm = {
-name: challenge.name,
-description: challenge.description || '',
-difficulty: challenge.difficulty,
-base_points: challenge.base_points,
-category: challenge.category || ''
-};
-} catch (e) {
-error = e instanceof Error ? e.message : 'Failed to load challenge';
-} finally {
-loading = false;
-}
-}
+	async function loadUserInstance() {
+		try {
+			const response = await api.getInstances();
+			instance = response.instances?.find((i: any) => 
+				i.challenge_slug === slug && i.status === 'running'
+			);
+		} catch (e) {
+			console.error('Failed to load instances', e);
+		}
+	}
 
-async function loadUserInstance() {
-try {
-const response = await api.getInstances();
-instance = response.instances?.find((i: any) => 
-i.challenge_slug === slug && i.status === 'running'
-);
-} catch (e) {
-console.error('Failed to load instances', e);
-}
-}
+	async function submitFlag() {
+		if (!slug || !flagInput.trim()) return;
+		submitting = true;
+		submitResult = null;
 
-async function submitFlag() {
-if (!slug || !flagInput.trim()) return;
+		try {
+			const result = await api.submitFlag(slug as string, flagInput.trim());
+			submitResult = result;
+			if (result.correct) {
+				flagInput = '';
+				await loadChallenge();
+			}
+		} catch (e) {
+			submitResult = {
+				correct: false,
+				message: e instanceof Error ? e.message : 'Submission failed'
+			};
+		} finally {
+			submitting = false;
+		}
+	}
 
-submitting = true;
-submitResult = null;
+	async function startInstance() {
+		if (!slug) return;
+		creatingInstance = true;
+		try {
+			const result = await api.createInstance(slug as string);
+			instance = result.instance;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to start instance';
+		} finally {
+			creatingInstance = false;
+		}
+	}
 
-try {
-const result = await api.submitFlag(slug as string, flagInput.trim());
-submitResult = result;
-if (result.correct) {
-flagInput = '';
-await loadChallenge();
-}
-} catch (e) {
-submitResult = {
-correct: false,
-message: e instanceof Error ? e.message : 'Submission failed'
-};
-} finally {
-submitting = false;
-}
-}
+	async function extendInstance() {
+		if (!instance) return;
+		instanceAction = 'extending';
+		try {
+			const result = await api.extendInstance(instance.id);
+			instance = { ...instance, expires_at: result.new_expires_at };
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to extend';
+		} finally {
+			instanceAction = '';
+		}
+	}
 
-async function startInstance() {
-if (!slug) return;
-creatingInstance = true;
-try {
-const result = await api.createInstance(slug as string);
-instance = result.instance;
-} catch (e) {
-error = e instanceof Error ? e.message : 'Failed to start instance';
-} finally {
-creatingInstance = false;
-}
-}
+	async function stopInstance() {
+		if (!instance) return;
+		instanceAction = 'stopping';
+		try {
+			await api.stopInstance(instance.id);
+			instance = null;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to stop';
+		} finally {
+			instanceAction = '';
+		}
+	}
 
-async function extendInstance() {
-if (!instance) return;
-instanceAction = 'extending';
-try {
-const result = await api.extendInstance(instance.id);
-instance = { ...instance, expires_at: result.new_expires_at };
-} catch (e) {
-error = e instanceof Error ? e.message : 'Failed to extend instance';
-} finally {
-instanceAction = '';
-}
-}
+	async function handleSaveEdit() {
+		if (!challenge || !editForm) return;
+		saving = true;
+		try {
+			await api.updateAdminChallenge(challenge.id, {
+				name: editForm.name,
+				description: editForm.description,
+				difficulty: editForm.difficulty,
+				base_points: parseInt(editForm.base_points)
+			});
+			await loadChallenge();
+			isEditing = false;
+			showEditSuccess = true;
+			setTimeout(() => showEditSuccess = false, 3000);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to save');
+		} finally {
+			saving = false;
+		}
+	}
 
-async function stopInstance() {
-if (!instance) return;
-instanceAction = 'stopping';
-try {
-await api.stopInstance(instance.id);
-instance = null;
-} catch (e) {
-error = e instanceof Error ? e.message : 'Failed to stop instance';
-} finally {
-instanceAction = '';
-}
-}
+	async function handlePublish() {
+		if (!challenge) return;
+		saving = true;
+		try {
+			await api.publishChallenge(challenge.id);
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to publish');
+		} finally {
+			saving = false;
+		}
+	}
 
-async function handleSaveEdit() {
-if (!challenge || !editForm) return;
-saving = true;
-try {
-await api.updateAdminChallenge(challenge.id, {
-name: editForm.name,
-description: editForm.description,
-difficulty: editForm.difficulty,
-base_points: parseInt(editForm.base_points)
-});
-await loadChallenge();
-isEditing = false;
-showEditSuccess = true;
-setTimeout(() => showEditSuccess = false, 3000);
-} catch (e) {
-alert(e instanceof Error ? e.message : 'Failed to save changes');
-} finally {
-saving = false;
-}
-}
+	async function handleUnpublish() {
+		if (!challenge) return;
+		saving = true;
+		try {
+			await api.unpublishChallenge(challenge.id);
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to unpublish');
+		} finally {
+			saving = false;
+		}
+	}
 
-async function handlePublish() {
-if (!challenge) return;
-saving = true;
-try {
-await api.publishChallenge(challenge.id);
-await loadChallenge();
-} catch (e) {
-alert(e instanceof Error ? e.message : 'Failed to publish challenge');
-} finally {
-saving = false;
-}
-}
+	function cancelEdit() {
+		isEditing = false;
+		editForm = {
+			name: challenge.name,
+			description: challenge.description || '',
+			difficulty: challenge.difficulty,
+			base_points: challenge.base_points
+		};
+	}
 
-async function handleUnpublish() {
-if (!challenge) return;
-saving = true;
-try {
-await api.unpublishChallenge(challenge.id);
-await loadChallenge();
-} catch (e) {
-alert(e instanceof Error ? e.message : 'Failed to unpublish challenge');
-} finally {
-saving = false;
-}
-}
+	function formatTimeRemaining(expiresAt: number): string {
+		const now = Math.floor(Date.now() / 1000);
+		const remaining = expiresAt - now;
+		if (remaining <= 0) return 'Expired';
+		const hours = Math.floor(remaining / 3600);
+		const minutes = Math.floor((remaining % 3600) / 60);
+		return `${hours}h ${minutes}m`;
+	}
 
-function cancelEdit() {
-isEditing = false;
-editForm = {
-name: challenge.name,
-description: challenge.description || '',
-difficulty: challenge.difficulty,
-base_points: challenge.base_points,
-category: challenge.category || ''
-};
-}
+	function copyToClipboard(text: string) {
+		navigator.clipboard.writeText(text);
+	}
 
-function formatTimeRemaining(expiresAt: number): string {
-const now = Math.floor(Date.now() / 1000);
-const remaining = expiresAt - now;
-if (remaining <= 0) return 'Expired';
+	// Flag management functions
+	async function saveFlag(flag: any) {
+		if (!challenge) return;
+		savingFlag = true;
+		try {
+			await api.updateFlag(challenge.id, flag.id, {
+				name: flag.name,
+				flag: flag.newFlag || flag.flag,
+				points: flag.points
+			});
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to update flag');
+		} finally {
+			savingFlag = false;
+		}
+	}
 
-const hours = Math.floor(remaining / 3600);
-const minutes = Math.floor((remaining % 3600) / 60);
-return `${hours}h ${minutes}m`;
-}
+	async function createNewFlag() {
+		if (!challenge) return;
+		savingFlag = true;
+		try {
+			await api.createFlag(challenge.id, newFlag);
+			newFlag = { name: '', flag: '', points: 100 };
+			showFlagModal = false;
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to create flag');
+		} finally {
+			savingFlag = false;
+		}
+	}
 
-function copyToClipboard(text: string) {
-navigator.clipboard.writeText(text);
-}
+	async function deleteFlag(flagId: string) {
+		if (!challenge || !confirm('Delete this flag?')) return;
+		savingFlag = true;
+		try {
+			await api.deleteFlag(challenge.id, flagId);
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to delete flag');
+		} finally {
+			savingFlag = false;
+		}
+	}
 </script>
 
 <svelte:head>
-<title>{challenge?.name || 'Challenge'} - Anvil</title>
+	<title>{challenge?.name || 'Challenge'} - Anvil</title>
 </svelte:head>
 
 <div class="min-h-screen bg-black">
-{#if loading}
-<div class="flex items-center justify-center min-h-[60vh]">
-<div class="text-center">
-<Icon icon="mdi:loading" class="w-12 h-12 text-stone-500 animate-spin mx-auto mb-4" />
-<p class="text-stone-500">Loading challenge...</p>
-</div>
-</div>
-{:else if error && !challenge}
-<div class="max-w-4xl mx-auto px-4 py-16">
-<div class="bg-red-950/30 border border-red-900 rounded-2xl p-8 text-center">
-<Icon icon="mdi:alert-circle" class="w-16 h-16 text-red-500 mx-auto mb-4" />
-<h2 class="text-xl font-bold text-white mb-2">Challenge Not Found</h2>
-<p class="text-red-400 mb-6">{error}</p>
-<a href="/challenges" class="inline-flex items-center gap-2 px-6 py-3 bg-stone-900 text-white rounded-xl hover:bg-stone-800 transition">
-<Icon icon="mdi:arrow-left" class="w-5 h-5" />
-Back to challenges
-</a>
-</div>
-</div>
-{:else if challenge}
-<!-- Hero Section -->
-<div class="relative overflow-hidden border-b border-stone-800">
-<div class="absolute inset-0 bg-gradient-to-br {difficultyGradients[challenge.difficulty] || difficultyGradients.easy} opacity-5"></div>
-<div class="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent"></div>
+	{#if loading}
+		<div class="flex items-center justify-center min-h-[60vh]">
+			<Icon icon="mdi:loading" class="w-8 h-8 text-stone-600 animate-spin" />
+		</div>
+	{:else if error && !challenge}
+		<div class="max-w-2xl mx-auto px-4 py-20 text-center">
+			<Icon icon="mdi:alert-circle-outline" class="w-12 h-12 text-red-500/50 mx-auto mb-4" />
+			<h2 class="text-lg font-medium text-white mb-2">Challenge Not Found</h2>
+			<p class="text-stone-500 text-sm mb-6">{error}</p>
+			<a href="/challenges" class="text-stone-400 hover:text-white text-sm transition">
+				← Back to challenges
+			</a>
+		</div>
+	{:else if challenge}
+		<!-- Success Toast -->
+		{#if showEditSuccess}
+			<div class="fixed top-4 right-4 z-50 bg-green-500/10 border border-green-500/20 text-green-400 px-4 py-2 rounded-lg text-sm flex items-center gap-2">
+				<Icon icon="mdi:check" class="w-4 h-4" />
+				Saved
+			</div>
+		{/if}
 
-<div class="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-<nav class="mb-6">
-<a href="/challenges" class="inline-flex items-center gap-2 text-stone-400 hover:text-white transition group">
-<Icon icon="mdi:arrow-left" class="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
-<span>Back to challenges</span>
-</a>
-</nav>
+		<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+			<!-- Back Link -->
+			<a href="/challenges" class="inline-flex items-center gap-1.5 text-stone-500 hover:text-stone-300 text-sm mb-8 transition">
+				<Icon icon="mdi:chevron-left" class="w-4 h-4" />
+				Challenges
+			</a>
 
-{#if showEditSuccess}
-<div class="fixed top-4 right-4 z-50 bg-green-500/20 border border-green-500/30 text-green-400 px-4 py-3 rounded-xl flex items-center gap-2">
-<Icon icon="mdi:check-circle" class="w-5 h-5" />
-<span>Changes saved successfully</span>
-</div>
-{/if}
+			<div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+				<!-- Main Content -->
+				<div class="lg:col-span-2 space-y-6">
+					<!-- Header -->
+					<div class="flex items-start justify-between gap-4">
+						<div class="flex-1">
+							{#if isEditing}
+								<input
+									type="text"
+									bind:value={editForm.name}
+									class="text-2xl font-semibold bg-transparent border-b border-stone-700 text-white w-full focus:outline-none focus:border-stone-500 pb-1"
+								/>
+							{:else}
+								<h1 class="text-2xl font-semibold text-white">{challenge.name}</h1>
+							{/if}
+							
+							<div class="flex items-center gap-3 mt-3">
+								{#if isEditing}
+									<select bind:value={editForm.difficulty} class="text-xs px-2 py-1 rounded bg-stone-900 border border-stone-700 text-stone-300 focus:outline-none">
+										<option value="easy">Easy</option>
+										<option value="medium">Medium</option>
+										<option value="hard">Hard</option>
+										<option value="insane">Insane</option>
+									</select>
+								{:else}
+									<span class="text-xs font-medium px-2 py-0.5 rounded {difficultyConfig[challenge.difficulty]?.bg} {difficultyConfig[challenge.difficulty]?.border} {difficultyConfig[challenge.difficulty]?.color} border">
+										{challenge.difficulty}
+									</span>
+								{/if}
+								
+								<span class="text-xs text-stone-500">
+									{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}
+								</span>
+								
+								{#if challenge.category}
+									<span class="text-xs text-stone-500">• {challenge.category}</span>
+								{/if}
 
-<div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-6">
-<div class="flex-1">
-<div class="flex items-center gap-4 mb-3">
-<div class="w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg {challenge.resource_type === 'vm' ? 'bg-gradient-to-br from-purple-500 to-indigo-600' : 'bg-gradient-to-br from-blue-500 to-cyan-600'}">
-<Icon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} class="w-7 h-7 text-white" />
+								{#if challenge.status === 'draft'}
+									<span class="text-xs font-medium px-2 py-0.5 rounded bg-yellow-500/10 border border-yellow-500/20 text-yellow-400">
+										Draft
+									</span>
+								{/if}
+
+								{#if challenge.is_solved}
+									<span class="text-xs font-medium px-2 py-0.5 rounded bg-green-500/10 border border-green-500/20 text-green-400 flex items-center gap-1">
+										<Icon icon="mdi:check" class="w-3 h-3" />
+										Solved
+									</span>
+								{/if}
+							</div>
+						</div>
+
+						<div class="text-right">
+							{#if isEditing}
+								<input
+									type="number"
+									bind:value={editForm.base_points}
+									class="w-16 text-xl font-bold bg-transparent border-b border-stone-700 text-white text-right focus:outline-none focus:border-stone-500"
+								/>
+								<p class="text-xs text-stone-500 mt-1">points</p>
+							{:else}
+								<p class="text-xl font-bold text-white">{challenge.base_points}</p>
+								<p class="text-xs text-stone-500">points</p>
+							{/if}
+						</div>
+					</div>
+
+					<!-- Admin Controls -->
+					{#if isAdmin}
+						<div class="flex items-center gap-2 py-3 border-y border-stone-800/50">
+							{#if isEditing}
+								<button on:click={handleSaveEdit} disabled={saving} class="text-xs px-3 py-1.5 bg-white text-black rounded font-medium hover:bg-stone-200 disabled:opacity-50 transition flex items-center gap-1.5">
+									{#if saving}<Icon icon="mdi:loading" class="w-3 h-3 animate-spin" />{/if}
+									Save
+								</button>
+								<button on:click={cancelEdit} class="text-xs px-3 py-1.5 text-stone-400 hover:text-white transition">
+									Cancel
+								</button>
+							{:else}
+								<button on:click={() => isEditing = true} class="text-xs px-3 py-1.5 text-stone-400 hover:text-white transition flex items-center gap-1.5">
+									<Icon icon="mdi:pencil" class="w-3 h-3" />
+									Edit
+								</button>
+								{#if challenge.status === 'draft'}
+									<button on:click={handlePublish} disabled={saving} class="text-xs px-3 py-1.5 text-green-400 hover:text-green-300 transition flex items-center gap-1.5 disabled:opacity-50">
+										<Icon icon="mdi:eye" class="w-3 h-3" />
+										Publish
+									</button>
+								{:else}
+									<button on:click={handleUnpublish} disabled={saving} class="text-xs px-3 py-1.5 text-yellow-400 hover:text-yellow-300 transition flex items-center gap-1.5 disabled:opacity-50">
+										<Icon icon="mdi:eye-off" class="w-3 h-3" />
+										Unpublish
+									</button>
+								{/if}
+								<a href="/admin" class="text-xs px-3 py-1.5 text-stone-500 hover:text-stone-300 transition ml-auto">
+									Admin Panel →
+								</a>
+							{/if}
+						</div>
+					{/if}
+
+					<!-- Description -->
+					<div>
+						<h2 class="text-xs font-medium text-stone-500 uppercase tracking-wider mb-3">Description</h2>
+						{#if isEditing}
+							<textarea
+								bind:value={editForm.description}
+								rows="6"
+								class="w-full px-4 py-3 bg-stone-950 border border-stone-800 rounded-lg text-stone-300 text-sm leading-relaxed focus:outline-none focus:border-stone-700 resize-none"
+								placeholder="Challenge description..."
+							></textarea>
+						{:else if challenge.description}
+							<p class="text-stone-400 text-sm leading-relaxed whitespace-pre-wrap">{challenge.description}</p>
+						{:else}
+							<p class="text-stone-600 text-sm italic">No description provided.</p>
+						{/if}
+					</div>
+
+					<!-- Objectives -->
+					{#if (challenge.flags && challenge.flags.length > 0) || (isEditing && isAdmin)}
+						<div>
+							<div class="flex items-center justify-between mb-3">
+								<h2 class="text-xs font-medium text-stone-500 uppercase tracking-wider">Objectives</h2>
+								{#if isEditing && isAdmin}
+									<button 
+										on:click={() => showFlagModal = true}
+										class="text-xs text-emerald-400 hover:text-emerald-300 transition flex items-center gap-1"
+									>
+										<Icon icon="mdi:plus" class="w-3.5 h-3.5" />
+										Add Flag
+									</button>
+								{:else}
+									<span class="text-xs text-stone-600">{challenge.user_solves || 0}/{challenge.total_flags}</span>
+								{/if}
+							</div>
+							
+							<div class="space-y-2">
+								{#if isEditing && isAdmin}
+									<!-- Admin flag editing mode -->
+									{#each editingFlags as flag, i}
+										<div class="py-3 px-4 bg-stone-950 border border-stone-800 rounded-lg">
+											{#if flag.editing}
+												<div class="space-y-3">
+													<div class="grid grid-cols-2 gap-3">
+														<input
+															type="text"
+															bind:value={flag.name}
+															placeholder="Flag name"
+															class="px-3 py-2 bg-stone-900 border border-stone-700 rounded text-sm text-stone-200 focus:outline-none focus:border-stone-600"
+														/>
+														<input
+															type="number"
+															bind:value={flag.points}
+															placeholder="Points"
+															class="px-3 py-2 bg-stone-900 border border-stone-700 rounded text-sm text-stone-200 focus:outline-none focus:border-stone-600"
+														/>
+													</div>
+													<input
+														type="text"
+														bind:value={flag.newFlag}
+														placeholder="New flag value (leave empty to keep current)"
+														class="w-full px-3 py-2 bg-stone-900 border border-stone-700 rounded text-sm text-stone-200 focus:outline-none focus:border-stone-600 font-mono"
+													/>
+													<div class="flex items-center gap-2 pt-1">
+														<button
+															on:click={() => { saveFlag(flag); flag.editing = false; }}
+															disabled={savingFlag}
+															class="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs rounded transition disabled:opacity-50"
+														>
+															{savingFlag ? 'Saving...' : 'Save'}
+														</button>
+														<button
+															on:click={() => { flag.editing = false; }}
+															class="px-3 py-1.5 bg-stone-700 hover:bg-stone-600 text-stone-300 text-xs rounded transition"
+														>
+															Cancel
+														</button>
+														<button
+															on:click={() => deleteFlag(flag.id)}
+															disabled={savingFlag}
+															class="ml-auto px-3 py-1.5 text-red-400 hover:text-red-300 text-xs transition disabled:opacity-50"
+														>
+															Delete
+														</button>
+													</div>
+												</div>
+											{:else}
+												<div class="flex items-center justify-between">
+													<div class="flex items-center gap-3">
+														<div class="w-6 h-6 rounded flex items-center justify-center bg-stone-800 text-stone-500 text-xs font-medium">
+															{i + 1}
+														</div>
+														<span class="text-sm text-stone-300">{flag.name}</span>
+													</div>
+													<div class="flex items-center gap-3">
+														<span class="text-xs text-stone-500">{flag.points} pts</span>
+														<button
+															on:click={() => { flag.editing = true; flag.newFlag = ''; }}
+															class="text-xs text-stone-400 hover:text-stone-200 transition"
+														>
+															<Icon icon="mdi:pencil" class="w-4 h-4" />
+														</button>
+													</div>
+												</div>
+											{/if}
+										</div>
+									{/each}
+									{#if editingFlags.length === 0}
+										<p class="text-stone-600 text-sm py-4 text-center">No flags. Click "Add Flag" to create one.</p>
+									{/if}
+								{:else}
+									<!-- Normal user view -->
+									{#each challenge.flags as flag, i}
+										<div class="flex items-center justify-between py-3 px-4 rounded-lg {flag.is_solved ? 'bg-green-500/5 border border-green-500/10' : 'bg-stone-950 border border-stone-800'}">
+											<div class="flex items-center gap-3">
+												<div class="w-6 h-6 rounded flex items-center justify-center {flag.is_solved ? 'bg-green-500/20 text-green-400' : 'bg-stone-800 text-stone-500'} text-xs font-medium">
+													{#if flag.is_solved}
+														<Icon icon="mdi:check" class="w-3.5 h-3.5" />
+													{:else}
+														{i + 1}
+													{/if}
+												</div>
+												<span class="text-sm {flag.is_solved ? 'text-green-400' : 'text-stone-300'}">{flag.name}</span>
+											</div>
+											<span class="text-xs {flag.is_solved ? 'text-green-400/60' : 'text-stone-500'}">{flag.points} pts</span>
+										</div>
+									{/each}
+								{/if}
+							</div>
+						</div>
+					{/if}
+
+					<!-- Hints -->
+					{#if challenge.hints && challenge.hints.length > 0}
+						<div>
+							<h2 class="text-xs font-medium text-stone-500 uppercase tracking-wider mb-3">Hints</h2>
+							<div class="space-y-2">
+								{#each challenge.hints as hint, i}
+									<div class="py-3 px-4 bg-stone-950 border border-stone-800 rounded-lg">
+										{#if hint.is_unlocked}
+											<p class="text-stone-400 text-sm">{hint.content}</p>
+										{:else}
+											<div class="flex items-center justify-between">
+												<span class="text-stone-500 text-sm">Hint #{i + 1}</span>
+												<button class="text-xs text-yellow-500 hover:text-yellow-400 transition">
+													Unlock ({hint.cost} pts)
+												</button>
+											</div>
+										{/if}
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				<!-- Sidebar -->
+				<div class="space-y-6">
+					<!-- Instance Panel -->
+					{#if $auth.isAuthenticated}
+						<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+							<div class="px-4 py-3 border-b border-stone-800">
+								<h3 class="text-xs font-medium text-stone-500 uppercase tracking-wider">Instance</h3>
+							</div>
+							<div class="p-4">
+								{#if instance}
+									<div class="space-y-4">
+										<div class="flex items-center gap-2">
+											<span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+											<span class="text-green-400 text-sm font-medium">Running</span>
+										</div>
+										
+										<div>
+											<p class="text-xs text-stone-500 mb-1">IP Address</p>
+											<div class="flex items-center justify-between bg-black rounded px-3 py-2">
+												<code class="text-sm text-white font-mono">{instance.ip_address}</code>
+												<button on:click={() => copyToClipboard(instance.ip_address)} class="text-stone-500 hover:text-white transition">
+													<Icon icon="mdi:content-copy" class="w-4 h-4" />
+												</button>
+											</div>
+										</div>
+
+										<div>
+											<p class="text-xs text-stone-500 mb-1">Time Remaining</p>
+											<p class="text-sm text-stone-300">{formatTimeRemaining(instance.expires_at)}</p>
+										</div>
+
+										<div class="flex gap-2">
+											<button on:click={extendInstance} disabled={instanceAction === 'extending'} class="flex-1 text-xs py-2 bg-stone-900 text-stone-300 rounded hover:bg-stone-800 transition disabled:opacity-50">
+												{instanceAction === 'extending' ? 'Extending...' : 'Extend'}
+											</button>
+											<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs py-2 bg-red-500/10 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50">
+												{instanceAction === 'stopping' ? 'Stopping...' : 'Stop'}
+											</button>
+										</div>
+									</div>
+								{:else}
+									<div class="text-center py-4">
+										<p class="text-stone-500 text-sm mb-4">No active instance</p>
+										<button on:click={startInstance} disabled={creatingInstance} class="w-full py-2.5 bg-white text-black text-sm font-medium rounded hover:bg-stone-200 transition disabled:opacity-50 flex items-center justify-center gap-2">
+											{#if creatingInstance}
+												<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+												Starting...
+											{:else}
+												<Icon icon="mdi:play" class="w-4 h-4" />
+												Start Instance
+											{/if}
+										</button>
+									</div>
+								{/if}
+							</div>
+						</div>
+					{/if}
+
+					<!-- Submit Flag -->
+					{#if $auth.isAuthenticated}
+						<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+							<div class="px-4 py-3 border-b border-stone-800">
+								<h3 class="text-xs font-medium text-stone-500 uppercase tracking-wider">Submit Flag</h3>
+							</div>
+							<div class="p-4">
+								<form on:submit|preventDefault={submitFlag} class="space-y-3">
+									<input
+										type="text"
+										bind:value={flagInput}
+										placeholder="flag&#123;...&#125;"
+										class="w-full px-3 py-2.5 bg-black border border-stone-800 rounded text-white text-sm font-mono placeholder-stone-600 focus:outline-none focus:border-stone-700"
+									/>
+									<button type="submit" disabled={submitting || !flagInput.trim()} class="w-full py-2.5 bg-stone-900 text-white text-sm font-medium rounded hover:bg-stone-800 transition disabled:opacity-50 disabled:cursor-not-allowed">
+										{submitting ? 'Checking...' : 'Submit'}
+									</button>
+								</form>
+								
+								{#if submitResult}
+									<div class="mt-3 py-2 px-3 rounded text-sm {submitResult.correct ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}">
+										{submitResult.message}
+									</div>
+								{/if}
+							</div>
+						</div>
+					{:else}
+						<div class="bg-stone-950 border border-stone-800 rounded-lg p-6 text-center">
+							<p class="text-stone-500 text-sm mb-4">Login to start this challenge</p>
+							<a href="/login" class="inline-block w-full py-2.5 bg-white text-black text-sm font-medium rounded hover:bg-stone-200 transition">
+								Login
+							</a>
+						</div>
+					{/if}
+
+					<!-- Stats -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800">
+							<h3 class="text-xs font-medium text-stone-500 uppercase tracking-wider">Statistics</h3>
+						</div>
+						<div class="p-4 space-y-3">
+							<div class="flex justify-between text-sm">
+								<span class="text-stone-500">Solves</span>
+								<span class="text-stone-300">{challenge.total_solves}</span>
+							</div>
+							<div class="flex justify-between text-sm">
+								<span class="text-stone-500">Flags</span>
+								<span class="text-stone-300">{challenge.total_flags}</span>
+							</div>
+							<div class="flex justify-between text-sm">
+								<span class="text-stone-500">Type</span>
+								<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'}</span>
+							</div>
+							{#if challenge.author_name}
+								<div class="flex justify-between text-sm">
+									<span class="text-stone-500">Author</span>
+									<span class="text-stone-300">{challenge.author_name}</span>
+								</div>
+							{/if}
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	{/if}
 </div>
 
-<div class="flex-1">
-<div class="flex items-center gap-3">
-{#if isEditing}
-<input type="text" bind:value={editForm.name} class="text-3xl font-bold bg-stone-900 border border-stone-700 rounded-lg px-3 py-1 text-white focus:outline-none focus:border-stone-500" />
-{:else}
-<h1 class="text-3xl font-bold text-white">{challenge.name}</h1>
+<!-- Add Flag Modal -->
+{#if showFlagModal}
+	<div class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+		<div class="bg-stone-900 border border-stone-800 rounded-lg w-full max-w-md">
+			<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between">
+				<h3 class="text-sm font-medium text-stone-200">Add New Flag</h3>
+				<button on:click={() => showFlagModal = false} class="text-stone-500 hover:text-stone-300 transition">
+					<Icon icon="mdi:close" class="w-5 h-5" />
+				</button>
+			</div>
+			<form on:submit|preventDefault={createNewFlag} class="p-4 space-y-4">
+				<div>
+					<label class="block text-xs text-stone-500 mb-1.5">Name</label>
+					<input
+						type="text"
+						bind:value={newFlag.name}
+						placeholder="e.g., User Flag"
+						required
+						class="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded text-sm text-stone-200 focus:outline-none focus:border-stone-600"
+					/>
+				</div>
+				<div>
+					<label class="block text-xs text-stone-500 mb-1.5">Flag Value</label>
+					<input
+						type="text"
+						bind:value={newFlag.flag}
+						placeholder="flag&#123;...&#125;"
+						required
+						class="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded text-sm text-stone-200 font-mono focus:outline-none focus:border-stone-600"
+					/>
+				</div>
+				<div>
+					<label class="block text-xs text-stone-500 mb-1.5">Points</label>
+					<input
+						type="number"
+						bind:value={newFlag.points}
+						required
+						class="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded text-sm text-stone-200 focus:outline-none focus:border-stone-600"
+					/>
+				</div>
+				<div class="flex items-center gap-3 pt-2">
+					<button
+						type="submit"
+						disabled={savingFlag}
+						class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded transition disabled:opacity-50"
+					>
+						{savingFlag ? 'Creating...' : 'Create Flag'}
+					</button>
+					<button
+						type="button"
+						on:click={() => showFlagModal = false}
+						class="flex-1 py-2 bg-stone-700 hover:bg-stone-600 text-stone-300 text-sm font-medium rounded transition"
+					>
+						Cancel
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
 {/if}
-{#if challenge.is_solved}
-<div class="flex items-center gap-1.5 px-3 py-1 bg-green-500/20 border border-green-500/30 rounded-full">
-<Icon icon="mdi:check-circle" class="w-4 h-4 text-green-500" />
-<span class="text-green-400 text-sm font-medium">Solved</span>
-</div>
-{/if}
-</div>
-{#if challenge.author_name}
-<p class="text-stone-400 text-sm mt-1">Created by <span class="text-stone-300">{challenge.author_name}</span></p>
-{/if}
-</div>
-</div>
-
-<div class="flex flex-wrap items-center gap-2 mt-4">
-{#if isEditing}
-<select bind:value={editForm.difficulty} class="px-3 py-1.5 rounded-full text-sm font-medium border bg-stone-900 border-stone-700 text-white focus:outline-none">
-<option value="easy">Easy</option>
-<option value="medium">Medium</option>
-<option value="hard">Hard</option>
-<option value="insane">Insane</option>
-</select>
-{:else}
-<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border {difficultyColors[challenge.difficulty] || difficultyColors.easy}">
-{challenge.difficulty.charAt(0).toUpperCase() + challenge.difficulty.slice(1)}
-</span>
-{/if}
-
-{#if challenge.category}
-<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-stone-900 text-stone-300 border border-stone-800">
-<Icon icon="mdi:folder" class="w-3.5 h-3.5 mr-1.5" />
-{challenge.category}
-</span>
-{/if}
-
-<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium {challenge.resource_type === 'vm' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'}">
-<Icon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} class="w-3.5 h-3.5 mr-1.5" />
-{challenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker Container'}
-</span>
-
-{#if challenge.status === 'draft'}
-<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
-<Icon icon="mdi:pencil" class="w-3.5 h-3.5 mr-1.5" />
-Draft
-</span>
-{/if}
-</div>
-</div>
-
-<div class="flex gap-4">
-<div class="text-center px-6 py-4 bg-stone-950 border border-stone-800 rounded-xl">
-{#if isEditing}
-<input type="number" bind:value={editForm.base_points} class="w-20 text-2xl font-bold bg-stone-900 border border-stone-700 rounded-lg px-2 py-1 text-amber-500 text-center focus:outline-none" />
-{:else}
-<div class="text-2xl font-bold text-amber-500">{challenge.base_points}</div>
-{/if}
-<div class="text-xs text-stone-500 uppercase tracking-wider mt-1">Points</div>
-</div>
-<div class="text-center px-6 py-4 bg-stone-950 border border-stone-800 rounded-xl">
-<div class="text-2xl font-bold text-white">{challenge.total_solves}</div>
-<div class="text-xs text-stone-500 uppercase tracking-wider mt-1">Solves</div>
-</div>
-<div class="text-center px-6 py-4 bg-stone-950 border border-stone-800 rounded-xl">
-<div class="text-2xl font-bold text-white">{challenge.total_flags}</div>
-<div class="text-xs text-stone-500 uppercase tracking-wider mt-1">Flags</div>
-</div>
-</div>
-</div>
-</div>
-</div>
-
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-<div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-<div class="lg:col-span-2 space-y-6">
-{#if isAdmin}
-<div class="bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20 rounded-xl p-4">
-<div class="flex items-center justify-between">
-<div class="flex items-center gap-3">
-<div class="w-10 h-10 bg-amber-500/20 rounded-lg flex items-center justify-center">
-<Icon icon="mdi:shield-crown" class="w-5 h-5 text-amber-500" />
-</div>
-<div>
-<h3 class="text-white font-semibold">Admin Controls</h3>
-<p class="text-stone-400 text-sm">Manage this challenge</p>
-</div>
-</div>
-<div class="flex items-center gap-2">
-{#if isEditing}
-<button on:click={handleSaveEdit} disabled={saving} class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-400 transition flex items-center gap-2 disabled:opacity-50">
-{#if saving}<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />{:else}<Icon icon="mdi:check" class="w-4 h-4" />{/if}
-Save
-</button>
-<button on:click={cancelEdit} class="px-4 py-2 bg-stone-800 text-stone-300 rounded-lg hover:bg-stone-700 transition">Cancel</button>
-{:else}
-<button on:click={() => isEditing = true} class="px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-700 transition flex items-center gap-2">
-<Icon icon="mdi:pencil" class="w-4 h-4" />
-Edit
-</button>
-{#if challenge.status === 'draft'}
-<button on:click={handlePublish} disabled={saving} class="px-4 py-2 bg-green-500/20 text-green-400 rounded-lg hover:bg-green-500/30 transition flex items-center gap-2 disabled:opacity-50">
-{#if saving}<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />{:else}<Icon icon="mdi:eye" class="w-4 h-4" />{/if}
-Publish
-</button>
-{:else}
-<button on:click={handleUnpublish} disabled={saving} class="px-4 py-2 bg-yellow-500/20 text-yellow-400 rounded-lg hover:bg-yellow-500/30 transition flex items-center gap-2 disabled:opacity-50">
-{#if saving}<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />{:else}<Icon icon="mdi:eye-off" class="w-4 h-4" />{/if}
-Unpublish
-</button>
-{/if}
-{/if}
-</div>
-</div>
-</div>
-{/if}
-
-<div class="bg-stone-950 border border-stone-800 rounded-xl p-6">
-<h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-4">
-<Icon icon="mdi:text" class="w-5 h-5 text-stone-500" />
-Description
-</h2>
-{#if isEditing}
-<textarea bind:value={editForm.description} rows="6" class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 resize-none" placeholder="Challenge description..."></textarea>
-{:else if challenge.description}
-<p class="text-stone-300 leading-relaxed whitespace-pre-wrap">{challenge.description}</p>
-{:else}
-<p class="text-stone-500 italic">No description provided.</p>
-{/if}
-</div>
-
-{#if challenge.flags && challenge.flags.length > 0}
-<div class="bg-stone-950 border border-stone-800 rounded-xl p-6">
-<h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-4">
-<Icon icon="mdi:flag" class="w-5 h-5 text-amber-500" />
-Objectives
-<span class="ml-auto text-sm font-normal text-stone-400">{challenge.user_solves || 0} / {challenge.total_flags} completed</span>
-</h2>
-
-<div class="mb-6">
-<div class="w-full bg-stone-900 rounded-full h-2 overflow-hidden">
-<div class="h-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-500" style="width: {((challenge.user_solves || 0) / challenge.total_flags) * 100}%"></div>
-</div>
-</div>
-
-<div class="space-y-3">
-{#each challenge.flags as flag, i}
-<div class="flex items-center justify-between p-4 rounded-xl transition {flag.is_solved ? 'bg-green-500/10 border border-green-500/20' : 'bg-stone-900 border border-stone-800 hover:border-stone-700'}">
-<div class="flex items-center gap-4">
-<div class="w-10 h-10 rounded-lg flex items-center justify-center {flag.is_solved ? 'bg-green-500/20' : 'bg-stone-800'}">
-{#if flag.is_solved}
-<Icon icon="mdi:check" class="w-5 h-5 text-green-500" />
-{:else}
-<span class="text-stone-500 font-bold">{i + 1}</span>
-{/if}
-</div>
-<div>
-<span class="text-white font-medium">{flag.name}</span>
-{#if flag.is_solved}<p class="text-green-400 text-sm">Captured!</p>{/if}
-</div>
-</div>
-<div class="flex items-center gap-3">
-<span class="text-amber-500 font-bold">{flag.points}</span>
-<span class="text-stone-500 text-sm">pts</span>
-</div>
-</div>
-{/each}
-</div>
-</div>
-{/if}
-
-{#if challenge.hints && challenge.hints.length > 0}
-<div class="bg-stone-950 border border-stone-800 rounded-xl p-6">
-<h2 class="text-lg font-semibold text-white flex items-center gap-2 mb-4">
-<Icon icon="mdi:lightbulb" class="w-5 h-5 text-yellow-500" />
-Hints
-</h2>
-<div class="space-y-3">
-{#each challenge.hints as hint, i}
-<div class="p-4 bg-stone-900 border border-stone-800 rounded-xl">
-{#if hint.is_unlocked}
-<p class="text-stone-300">{hint.content}</p>
-{:else}
-<div class="flex items-center justify-between">
-<div class="flex items-center gap-3">
-<Icon icon="mdi:lock" class="w-5 h-5 text-stone-600" />
-<span class="text-stone-500">Hint #{i + 1}</span>
-</div>
-<button class="px-4 py-2 bg-yellow-500/20 text-yellow-500 rounded-lg text-sm hover:bg-yellow-500/30 transition flex items-center gap-2">
-<Icon icon="mdi:lock-open" class="w-4 h-4" />
-Unlock ({hint.cost} pts)
-</button>
-</div>
-{/if}
-</div>
-{/each}
-</div>
-</div>
-{/if}
-</div>
-
-<div class="space-y-6">
-{#if $auth.isAuthenticated}
-<div class="bg-stone-950 border border-stone-800 rounded-xl overflow-hidden">
-<div class="p-4 border-b border-stone-800 bg-stone-900/50">
-<h2 class="text-lg font-semibold text-white flex items-center gap-2">
-<Icon icon="mdi:server" class="w-5 h-5 text-amber-500" />
-Instance
-</h2>
-</div>
-<div class="p-4">
-{#if instance}
-<div class="space-y-4">
-<div class="flex items-center gap-2 p-3 bg-green-500/10 border border-green-500/20 rounded-lg">
-<span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-<span class="text-green-400 font-medium">Running</span>
-</div>
-<div class="space-y-3">
-<div class="p-3 bg-stone-900 rounded-lg">
-<div class="text-xs text-stone-500 uppercase tracking-wider mb-1">IP Address</div>
-<div class="flex items-center justify-between">
-<code class="text-amber-500 font-mono text-lg">{instance.ip_address}</code>
-<button on:click={() => copyToClipboard(instance.ip_address)} class="p-2 text-stone-400 hover:text-white transition" title="Copy IP">
-<Icon icon="mdi:content-copy" class="w-4 h-4" />
-</button>
-</div>
-</div>
-<div class="p-3 bg-stone-900 rounded-lg">
-<div class="text-xs text-stone-500 uppercase tracking-wider mb-1">Time Remaining</div>
-<div class="flex items-center gap-2">
-<Icon icon="mdi:clock-outline" class="w-5 h-5 text-stone-400" />
-<span class="text-white font-medium">{formatTimeRemaining(instance.expires_at)}</span>
-</div>
-</div>
-</div>
-<div class="grid grid-cols-2 gap-2">
-<button on:click={extendInstance} disabled={instanceAction === 'extending'} class="px-4 py-3 bg-stone-900 text-white rounded-lg hover:bg-stone-800 transition flex items-center justify-center gap-2 disabled:opacity-50">
-{#if instanceAction === 'extending'}<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />{:else}<Icon icon="mdi:clock-plus" class="w-5 h-5" />{/if}
-<span>Extend</span>
-</button>
-<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="px-4 py-3 bg-red-500/20 text-red-400 rounded-lg hover:bg-red-500/30 transition flex items-center justify-center gap-2 disabled:opacity-50">
-{#if instanceAction === 'stopping'}<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />{:else}<Icon icon="mdi:stop" class="w-5 h-5" />{/if}
-<span>Stop</span>
-</button>
-</div>
-</div>
-{:else}
-<div class="text-center py-4">
-<div class="w-16 h-16 bg-stone-900 rounded-full flex items-center justify-center mx-auto mb-4">
-<Icon icon="mdi:server-off" class="w-8 h-8 text-stone-600" />
-</div>
-<p class="text-stone-400 text-sm mb-4">Start an instance to begin hacking this {challenge.resource_type === 'vm' ? 'machine' : 'container'}.</p>
-<button on:click={startInstance} disabled={creatingInstance} class="w-full px-4 py-4 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-bold rounded-xl hover:from-amber-400 hover:to-orange-400 transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25">
-{#if creatingInstance}
-<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />
-<span>Starting...</span>
-{:else}
-<Icon icon="mdi:play" class="w-5 h-5" />
-<span>Start Instance</span>
-{/if}
-</button>
-</div>
-{/if}
-</div>
-</div>
-{/if}
-
-{#if $auth.isAuthenticated}
-<div class="bg-stone-950 border border-stone-800 rounded-xl overflow-hidden">
-<div class="p-4 border-b border-stone-800 bg-stone-900/50">
-<h2 class="text-lg font-semibold text-white flex items-center gap-2">
-<Icon icon="mdi:flag-checkered" class="w-5 h-5 text-amber-500" />
-Submit Flag
-</h2>
-</div>
-<div class="p-4">
-<form on:submit|preventDefault={submitFlag} class="space-y-4">
-<input type="text" bind:value={flagInput} placeholder="flag..." class="w-full px-4 py-4 bg-black border border-stone-700 rounded-xl text-white placeholder-stone-600 focus:outline-none focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 font-mono transition" />
-<button type="submit" disabled={submitting || !flagInput.trim()} class="w-full px-4 py-4 bg-white text-black font-bold rounded-xl hover:bg-stone-200 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-{#if submitting}
-<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />
-<span>Checking...</span>
-{:else}
-<Icon icon="mdi:send" class="w-5 h-5" />
-<span>Submit</span>
-{/if}
-</button>
-</form>
-{#if submitResult}
-<div class="mt-4 p-4 rounded-xl flex items-center gap-3 {submitResult.correct ? 'bg-green-500/10 border border-green-500/20' : 'bg-red-500/10 border border-red-500/20'}">
-<Icon icon={submitResult.correct ? 'mdi:check-circle' : 'mdi:close-circle'} class="w-6 h-6 flex-shrink-0 {submitResult.correct ? 'text-green-500' : 'text-red-500'}" />
-<span class="{submitResult.correct ? 'text-green-400' : 'text-red-400'}">{submitResult.message}</span>
-</div>
-{/if}
-</div>
-</div>
-{:else}
-<div class="bg-stone-950 border border-stone-800 rounded-xl p-6 text-center">
-<div class="w-16 h-16 bg-stone-900 rounded-full flex items-center justify-center mx-auto mb-4">
-<Icon icon="mdi:lock" class="w-8 h-8 text-stone-600" />
-</div>
-<h3 class="text-white font-semibold mb-2">Authentication Required</h3>
-<p class="text-stone-400 text-sm mb-4">Login to start this challenge and submit flags.</p>
-<a href="/login" class="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-black font-bold rounded-xl hover:from-amber-400 hover:to-orange-400 transition shadow-lg shadow-amber-500/25">
-<Icon icon="mdi:login" class="w-5 h-5" />
-Login
-</a>
-</div>
-{/if}
-
-<div class="bg-stone-950 border border-stone-800 rounded-xl p-4">
-<h3 class="text-sm font-semibold text-stone-400 uppercase tracking-wider mb-4">Quick Info</h3>
-<div class="space-y-3">
-<div class="flex items-center justify-between">
-<span class="text-stone-500">Type</span>
-<span class="text-white">{challenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker Container'}</span>
-</div>
-<div class="flex items-center justify-between">
-<span class="text-stone-500">Difficulty</span>
-<span class="capitalize {challenge.difficulty === 'easy' ? 'text-green-400' : challenge.difficulty === 'medium' ? 'text-yellow-400' : challenge.difficulty === 'hard' ? 'text-orange-400' : 'text-red-400'}">{challenge.difficulty}</span>
-</div>
-<div class="flex items-center justify-between">
-<span class="text-stone-500">Points</span>
-<span class="text-amber-500 font-bold">{challenge.base_points}</span>
-</div>
-<div class="flex items-center justify-between">
-<span class="text-stone-500">Solves</span>
-<span class="text-white">{challenge.total_solves}</span>
-</div>
-<div class="flex items-center justify-between">
-<span class="text-stone-500">Flags</span>
-<span class="text-white">{challenge.total_flags}</span>
-</div>
-</div>
-</div>
-</div>
-</div>
-</div>
-{/if}
-</div>

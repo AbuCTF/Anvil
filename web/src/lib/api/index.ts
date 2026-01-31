@@ -322,9 +322,8 @@ class ApiClient {
 	}
 
 	async unpublishChallenge(challengeId: string) {
-		return this.request<any>(`/admin/challenges/${challengeId}`, {
-			method: 'PUT',
-			body: JSON.stringify({ status: 'draft' })
+		return this.request<any>(`/admin/challenges/${challengeId}/unpublish`, {
+			method: 'POST'
 		});
 	}
 
@@ -340,6 +339,26 @@ class ApiClient {
 
 	async getChallengeFlags(challengeId: string) {
 		return this.request<any>(`/admin/challenges/${challengeId}/flags`);
+	}
+
+	async createFlag(challengeId: string, data: { name: string; flag: string; points: number }) {
+		return this.request<any>(`/admin/challenges/${challengeId}/flags`, {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async updateFlag(challengeId: string, flagId: string, data: { name: string; flag: string; points: number }) {
+		return this.request<any>(`/admin/challenges/${challengeId}/flags/${flagId}`, {
+			method: 'PUT',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async deleteFlag(challengeId: string, flagId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}/flags/${flagId}`, {
+			method: 'DELETE'
+		});
 	}
 
 	// VM Templates

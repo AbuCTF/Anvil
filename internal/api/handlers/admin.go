@@ -748,6 +748,20 @@ func (h *AdminChallengeHandler) Publish(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "challenge published"})
 }
 
+// UnpublishChallenge sets a challenge back to draft status
+func (h *AdminChallengeHandler) Unpublish(c *gin.Context) {
+	challengeID := c.Param("id")
+
+	_, err := h.db.Pool.Exec(c.Request.Context(),
+		`UPDATE challenges SET status = 'draft', updated_at = NOW() WHERE id = $1`, challengeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unpublish challenge"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "challenge unpublished"})
+}
+
 // ArchiveChallenge archives a challenge
 func (h *AdminChallengeHandler) Archive(c *gin.Context) {
 	challengeID := c.Param("id")
