@@ -1,0 +1,64 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+anvil
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+.env.*.local
+config/config.local.yaml
+
+# Dependencies
+vendor/
+
+# Build
+/build/
+/dist/
+
+# Frontend
+web/node_modules/
+web/.svelte-kit/
+web/build/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes (local dev)
+postgres_data/
+redis_data/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Secrets - NEVER COMMIT THESE
+*.pem
+*.key
+secrets/

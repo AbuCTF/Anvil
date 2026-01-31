@@ -1,0 +1,103 @@
+# Anvil Platform Configuration
+# Override these values with environment variables prefixed with ANVIL_
+# e.g., ANVIL_SERVER_PORT=9000
+
+environment: development
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+  read_timeout: 15s
+  write_timeout: 15s
+  shutdown_timeout: 30s
+  trusted_proxies: []
+
+database:
+  host: localhost
+  port: 5432
+  user: anvil
+  password: anvil
+  database: anvil
+  ssl_mode: disable
+  max_open_conns: 25
+  max_idle_conns: 5
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+
+jwt:
+  # CHANGE THIS IN PRODUCTION!
+  secret: "change-me-in-production-please"
+  access_expiry: 15m
+  refresh_expiry: 168h  # 7 days
+  issuer: anvil
+
+container:
+  runtime: docker  # docker or podman
+  network_name: anvil-challenges
+  network_subnet: "172.20.0.0/16"
+  default_timeout: 2h
+  max_per_user: 2
+  cleanup_interval: 5m
+  health_check_interval: 30s
+  labels:
+    managed-by: anvil
+
+vpn:
+  enabled: true
+  interface: wg0
+  listen_port: 51820
+  public_endpoint: ""  # Set to your server's public IP/domain
+  private_key: ""      # Generate with: wg genkey
+  public_key: ""       # Generate with: echo $PRIVATE_KEY | wg pubkey
+  address_range: "10.10.0.0/16"
+  dns: "1.1.1.1"
+  mtu: 1420
+
+platform:
+  name: "Anvil"
+  
+  # Registration modes: open, invite, token, disabled
+  registration_mode: open
+  require_email_verify: false
+  
+  # Scoring configuration
+  scoring_enabled: true
+  scoreboard_enabled: true
+  scoreboard_public: true
+  # Scoring modes: static, dynamic, time_decay
+  scoring_mode: static
+  
+  # Challenge settings
+  flag_submission_enabled: true
+  hints_enabled: true
+  writeup_submission: false
+  
+  # Instance settings
+  default_instance_timeout: 2h
+  max_instance_extensions: 3
+  extension_duration: 30m
+
+rate_limit:
+  enabled: true
+  requests_per_minute: 60
+  burst_size: 10
+  
+  login:
+    requests: 5
+    window: 15m
+  
+  flag_submission:
+    requests: 10
+    window: 1m
+  
+  instance_start:
+    requests: 3
+    window: 10m
+  
+  vpn_config_gen:
+    requests: 2
+    window: 1h
