@@ -888,5 +888,4 @@ Cancel
 </div>
 </div>
 </div>
-</div>
 {/if}
