@@ -17,6 +17,7 @@
 		user_solves: number;
 		is_solved: boolean;
 		author_name?: string;
+		resource_type?: string;
 	}
 
 	let challenges: Challenge[] = [];
@@ -189,6 +190,12 @@
 										{challenge.category}
 									</span>
 								{/if}
+
+								<!-- VM or Docker badge -->
+								<span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium border {challenge.resource_type === 'vm' ? 'bg-purple-950/50 text-purple-400 border-purple-800' : 'bg-blue-950/50 text-blue-400 border-blue-800'}">
+									<Icon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} class="w-3.5 h-3.5 mr-1" />
+									{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}
+								</span>
 							</div>
 
 							<div class="flex items-center justify-between text-sm text-stone-400 mb-4">

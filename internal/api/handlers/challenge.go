@@ -29,19 +29,20 @@ func NewChallengeService(cfg *config.Config, db *database.DB, logger *zap.Logger
 
 // ChallengeListResponse represents the challenge list response
 type ChallengeListResponse struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Slug        string  `json:"slug"`
-	Description *string `json:"description,omitempty"`
-	Difficulty  string  `json:"difficulty"`
-	Category    *string `json:"category,omitempty"`
-	CategoryID  *string `json:"category_id,omitempty"`
-	BasePoints  int     `json:"base_points"`
-	TotalSolves int     `json:"total_solves"`
-	TotalFlags  int     `json:"total_flags"`
-	AuthorName  *string `json:"author_name,omitempty"`
-	IsSolved    bool    `json:"is_solved"`
-	UserSolves  int     `json:"user_solves"` // Flags solved by this user
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	Slug         string  `json:"slug"`
+	Description  *string `json:"description,omitempty"`
+	Difficulty   string  `json:"difficulty"`
+	Category     *string `json:"category,omitempty"`
+	CategoryID   *string `json:"category_id,omitempty"`
+	BasePoints   int     `json:"base_points"`
+	TotalSolves  int     `json:"total_solves"`
+	TotalFlags   int     `json:"total_flags"`
+	AuthorName   *string `json:"author_name,omitempty"`
+	IsSolved     bool    `json:"is_solved"`
+	UserSolves   int     `json:"user_solves"`   // Flags solved by this user
+	ResourceType string  `json:"resource_type"` // docker or vm
 }
 
 // ChallengeDetailResponse includes more details for single challenge view
@@ -89,7 +90,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		SELECT 
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
-			cat.id as category_id, cat.name as category_name
+			c.resource_type, cat.id as category_id, cat.name as category_name
 		FROM challenges c
 		LEFT JOIN categories cat ON c.category_id = cat.id
 		WHERE c.status = 'published'
@@ -112,7 +113,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		if err := rows.Scan(
 			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 			&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
-			&categoryID, &categoryName,
+			&ch.ResourceType, &categoryID, &categoryName,
 		); err != nil {
 			h.logger.Error("failed to scan challenge", zap.Error(err))
 			continue
