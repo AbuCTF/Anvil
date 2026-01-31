@@ -74,10 +74,11 @@ services:
       context: ./web
       dockerfile: ../deployments/docker/Dockerfile.web
       target: development
+      args:
+        PUBLIC_API_URL: http://localhost:8080  # Change for production
     container_name: anvil-web
     environment:
       - NODE_ENV=development
-      - PUBLIC_API_URL=http://34.134.238.153:8080
     ports:
       - "3000:3000"
     volumes:

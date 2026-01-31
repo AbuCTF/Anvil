@@ -144,7 +144,7 @@ func (s *Server) setupRouter() {
 			// Instance management
 			instances := protected.Group("/instances")
 			{
-				instanceHandler := handlers.NewInstanceHandler(s.config, s.db, s.containerSvc, s.logger)
+				instanceHandler := handlers.NewInstanceHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
 				instances.GET("", instanceHandler.List)
 				instances.POST("", middleware.RateLimitEndpoint(
 					s.config.RateLimit.InstanceStart,

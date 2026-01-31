@@ -22,16 +22,16 @@ import (
 type VMState string
 
 const (
-	VMStateNoState     VMState = "nostate"
-	VMStateRunning     VMState = "running"
-	VMStateBlocked     VMState = "blocked"
-	VMStatePaused      VMState = "paused"
-	VMStateShutdown    VMState = "shutdown"
-	VMStateShutoff     VMState = "shutoff"
-	VMStateCrashed     VMState = "crashed"
-	VMStatePMSuspended VMState = "pmsuspended"
+	VMStateNoState      VMState = "nostate"
+	VMStateRunning      VMState = "running"
+	VMStateBlocked      VMState = "blocked"
+	VMStatePaused       VMState = "paused"
+	VMStateShutdown     VMState = "shutdown"
+	VMStateShutoff      VMState = "shutoff"
+	VMStateCrashed      VMState = "crashed"
+	VMStatePMSuspended  VMState = "pmsuspended"
 	VMStateProvisioning VMState = "provisioning"
-	VMStateError       VMState = "error"
+	VMStateError        VMState = "error"
 )
 
 // ImageFormat represents supported disk image formats
@@ -64,26 +64,26 @@ type VMTemplate struct {
 
 // VMInstance represents a running VM instance
 type VMInstance struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	TemplateID    string            `json:"template_id"`
-	ChallengeID   string            `json:"challenge_id"`
-	UserID        string            `json:"user_id"`
-	State         VMState           `json:"state"`
-	VCPU          int               `json:"vcpu"`
-	MemoryMB      int               `json:"memory_mb"`
-	DiskPath      string            `json:"disk_path"` // Path to CoW overlay
-	NetworkID     string            `json:"network_id"`
-	IPAddress     string            `json:"ip_address"`
-	MACAddress    string            `json:"mac_address"`
-	VNCPort       int               `json:"vnc_port,omitempty"`
-	SSHPort       int               `json:"ssh_port,omitempty"`
-	ExposedPorts  map[int]int       `json:"exposed_ports"` // guest:host mapping
-	Metadata      map[string]string `json:"metadata"`
-	Error         string            `json:"error,omitempty"`
-	CreatedAt     time.Time         `json:"created_at"`
-	StartedAt     *time.Time        `json:"started_at,omitempty"`
-	ExpiresAt     time.Time         `json:"expires_at"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	TemplateID   string            `json:"template_id"`
+	ChallengeID  string            `json:"challenge_id"`
+	UserID       string            `json:"user_id"`
+	State        VMState           `json:"state"`
+	VCPU         int               `json:"vcpu"`
+	MemoryMB     int               `json:"memory_mb"`
+	DiskPath     string            `json:"disk_path"` // Path to CoW overlay
+	NetworkID    string            `json:"network_id"`
+	IPAddress    string            `json:"ip_address"`
+	MACAddress   string            `json:"mac_address"`
+	VNCPort      int               `json:"vnc_port,omitempty"`
+	SSHPort      int               `json:"ssh_port,omitempty"`
+	ExposedPorts map[int]int       `json:"exposed_ports"` // guest:host mapping
+	Metadata     map[string]string `json:"metadata"`
+	Error        string            `json:"error,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	StartedAt    *time.Time        `json:"started_at,omitempty"`
+	ExpiresAt    time.Time         `json:"expires_at"`
 }
 
 // CreateVMRequest contains parameters for creating a new VM
@@ -92,8 +92,8 @@ type CreateVMRequest struct {
 	TemplateID  string            `json:"template_id"`
 	ChallengeID string            `json:"challenge_id"`
 	UserID      string            `json:"user_id"`
-	VCPU        int               `json:"vcpu,omitempty"`        // Override template
-	MemoryMB    int               `json:"memory_mb,omitempty"`   // Override template
+	VCPU        int               `json:"vcpu,omitempty"`      // Override template
+	MemoryMB    int               `json:"memory_mb,omitempty"` // Override template
 	NetworkID   string            `json:"network_id,omitempty"`
 	Duration    time.Duration     `json:"duration"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
@@ -112,35 +112,35 @@ type Service struct {
 
 // Config contains VM service configuration
 type Config struct {
-	ImageStorePath    string        // Where VM images are stored
-	InstanceStorePath string        // Where instance overlays are stored
-	LibvirtURI        string        // libvirt connection URI (qemu:///system)
-	NetworkName       string        // libvirt network name
-	NetworkSubnet     string        // e.g., "10.100.0.0/16"
-	VNCPortStart      int           // Starting port for VNC
-	VNCPortEnd        int           // Ending port for VNC
+	ImageStorePath      string // Where VM images are stored
+	InstanceStorePath   string // Where instance overlays are stored
+	LibvirtURI          string // libvirt connection URI (qemu:///system)
+	NetworkName         string // libvirt network name
+	NetworkSubnet       string // e.g., "10.100.0.0/16"
+	VNCPortStart        int    // Starting port for VNC
+	VNCPortEnd          int    // Ending port for VNC
 	MaxInstancesPerUser int
-	DefaultVCPU       int
-	DefaultMemoryMB   int
-	DefaultDuration   time.Duration
-	MaxDuration       time.Duration
+	DefaultVCPU         int
+	DefaultMemoryMB     int
+	DefaultDuration     time.Duration
+	MaxDuration         time.Duration
 }
 
 // DefaultConfig returns sensible default configuration
 func DefaultConfig() Config {
 	return Config{
-		ImageStorePath:    "/var/lib/anvil/images",
-		InstanceStorePath: "/var/lib/anvil/instances",
-		LibvirtURI:        "qemu:///system",
-		NetworkName:       "anvil-lab",
-		NetworkSubnet:     "10.100.0.0/16",
-		VNCPortStart:      5900,
-		VNCPortEnd:        6100,
+		ImageStorePath:      "/var/lib/anvil/images",
+		InstanceStorePath:   "/var/lib/anvil/instances",
+		LibvirtURI:          "qemu:///system",
+		NetworkName:         "anvil-lab",
+		NetworkSubnet:       "10.100.0.0/16",
+		VNCPortStart:        5900,
+		VNCPortEnd:          6100,
 		MaxInstancesPerUser: 2,
-		DefaultVCPU:       2,
-		DefaultMemoryMB:   2048,
-		DefaultDuration:   2 * time.Hour,
-		MaxDuration:       8 * time.Hour,
+		DefaultVCPU:         2,
+		DefaultMemoryMB:     2048,
+		DefaultDuration:     2 * time.Hour,
+		MaxDuration:         8 * time.Hour,
 	}
 }
 
@@ -171,6 +171,50 @@ func NewService(logger *zap.Logger, config Config) (*Service, error) {
 		usedVNCPorts: make(map[int]bool),
 		usedIPs:      make(map[string]bool),
 	}, nil
+}
+
+// IsAvailable checks if the VM service can create VMs
+func (s *Service) IsAvailable() bool {
+	return verifyLibvirtAvailable() == nil
+}
+
+// CreateInstanceForChallenge creates a VM instance for a specific challenge
+// This is a simplified wrapper for the instance handler
+func (s *Service) CreateInstanceForChallenge(ctx context.Context, challengeID, instanceID string, templateID string) (*VMInstanceInfo, error) {
+	// Look up the template by ID
+	s.mu.RLock()
+	template, exists := s.templates[templateID]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("no VM template found with ID %s for challenge %s", templateID, challengeID)
+	}
+
+	req := CreateVMRequest{
+		TemplateID:  template.ID,
+		ChallengeID: challengeID,
+		UserID:      "", // Will be set from context
+		VCPU:        template.VCPU,
+		MemoryMB:    template.MemoryMB,
+	}
+
+	instance, err := s.CreateInstance(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &VMInstanceInfo{
+		VMID:      instance.ID,
+		IPAddress: instance.IPAddress,
+		VNCPort:   instance.VNCPort,
+	}, nil
+}
+
+// VMInstanceInfo contains basic info returned to the instance handler
+type VMInstanceInfo struct {
+	VMID      string
+	IPAddress string
+	VNCPort   int
 }
 
 // RegisterTemplate registers a new VM template from an uploaded image
@@ -664,15 +708,15 @@ const domainXMLTemplate = `
 
 // VMDomainXML represents the XML structure for libvirt domain
 type VMDomainXML struct {
-	XMLName  xml.Name `xml:"domain"`
-	Name     string
-	ID       string
-	MemoryMB int
-	VCPU     int
-	DiskPath string
-	MACAddress string
+	XMLName     xml.Name `xml:"domain"`
+	Name        string
+	ID          string
+	MemoryMB    int
+	VCPU        int
+	DiskPath    string
+	MACAddress  string
 	NetworkName string
-	VNCPort  int
+	VNCPort     int
 }
 
 // defineAndStartVM defines and starts a VM using virsh

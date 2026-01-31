@@ -176,10 +176,11 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Get challenge details
+	// Get challenge details with resource_type
 	var challenge struct {
 		ID              string
 		Name            string
+		ResourceType    string // 'docker' or 'vm'
 		ContainerImage  string
 		ContainerTag    string
 		CPULimit        string
@@ -190,11 +191,12 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	}
 
 	err = h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, name, container_image, container_tag, cpu_limit, memory_limit,
+		`SELECT id, name, resource_type, COALESCE(container_image, ''), COALESCE(container_tag, 'latest'),
+		        COALESCE(cpu_limit, '1'), COALESCE(memory_limit, '512m'),
 		        exposed_ports, instance_timeout, max_extensions
 		 FROM challenges WHERE slug = $1 AND status = 'published'`,
 		req.ChallengeSlug).Scan(
-		&challenge.ID, &challenge.Name, &challenge.ContainerImage, &challenge.ContainerTag,
+		&challenge.ID, &challenge.Name, &challenge.ResourceType, &challenge.ContainerImage, &challenge.ContainerTag,
 		&challenge.CPULimit, &challenge.MemoryLimit, &challenge.ExposedPorts,
 		&challenge.InstanceTimeout, &challenge.MaxExtensions,
 	)
@@ -228,38 +230,80 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Start container
-	containerReq := container.CreateInstanceRequest{
-		InstanceID:    instanceID,
-		ChallengeSlug: req.ChallengeSlug,
-		Image:         challenge.ContainerImage,
-		Tag:           challenge.ContainerTag,
-		CPULimit:      challenge.CPULimit,
-		MemoryLimit:   challenge.MemoryLimit,
-		Labels: map[string]string{
-			"anvil.instance_id":  instanceID.String(),
-			"anvil.user_id":      uid.String(),
-			"anvil.challenge_id": challenge.ID,
-		},
-	}
+	var instanceIP string
+	var resourceID string // container_id or vm_id
 
-	containerInfo, err := h.containerSvc.CreateInstance(c.Request.Context(), containerReq)
-	if err != nil {
-		h.logger.Error("failed to create container", zap.Error(err))
-		// Update instance status to failed
-		h.db.Pool.Exec(c.Request.Context(),
-			`UPDATE instances SET status = 'failed' WHERE id = $1`, instanceID)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start container"})
-		return
-	}
+	// Start instance based on resource type
+	if challenge.ResourceType == "vm" {
+		// VM-based challenge
+		if h.vmSvc == nil || !h.vmSvc.IsAvailable() {
+			h.db.Pool.Exec(c.Request.Context(),
+				`UPDATE instances SET status = 'failed', error_message = 'VM service unavailable' WHERE id = $1`, instanceID)
+			c.JSON(http.StatusServiceUnavailable, gin.H{
+				"error": "VM service is not available on this server",
+				"hint":  "This challenge requires VM infrastructure which is not configured",
+			})
+			return
+		}
 
-	// Container is already started by CreateInstance
-	containerIP := containerInfo.IPAddress
+		// Look up VM template from challenge_resources
+		var vmTemplateID string
+		err = h.db.Pool.QueryRow(c.Request.Context(),
+			`SELECT vm_template_id FROM challenge_resources 
+			 WHERE challenge_id = $1 AND resource_type = 'vm' AND is_active = TRUE
+			 ORDER BY sort_order LIMIT 1`,
+			challenge.ID).Scan(&vmTemplateID)
+		if err != nil {
+			h.logger.Error("failed to find VM template for challenge", zap.Error(err))
+			h.db.Pool.Exec(c.Request.Context(),
+				`UPDATE instances SET status = 'failed', error_message = 'No VM template configured' WHERE id = $1`, instanceID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "VM template not configured for this challenge"})
+			return
+		}
+
+		// Create VM instance
+		vmInfo, err := h.vmSvc.CreateInstanceForChallenge(c.Request.Context(), challenge.ID, instanceID.String(), vmTemplateID)
+		if err != nil {
+			h.logger.Error("failed to create VM", zap.Error(err))
+			h.db.Pool.Exec(c.Request.Context(),
+				`UPDATE instances SET status = 'failed', error_message = $2 WHERE id = $1`, instanceID, err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start VM: " + err.Error()})
+			return
+		}
+		instanceIP = vmInfo.IPAddress
+		resourceID = vmInfo.VMID
+	} else {
+		// Docker container challenge
+		containerReq := container.CreateInstanceRequest{
+			InstanceID:    instanceID,
+			ChallengeSlug: req.ChallengeSlug,
+			Image:         challenge.ContainerImage,
+			Tag:           challenge.ContainerTag,
+			CPULimit:      challenge.CPULimit,
+			MemoryLimit:   challenge.MemoryLimit,
+			Labels: map[string]string{
+				"anvil.instance_id":  instanceID.String(),
+				"anvil.user_id":      uid.String(),
+				"anvil.challenge_id": challenge.ID,
+			},
+		}
+
+		containerInfo, err := h.containerSvc.CreateInstance(c.Request.Context(), containerReq)
+		if err != nil {
+			h.logger.Error("failed to create container", zap.Error(err))
+			h.db.Pool.Exec(c.Request.Context(),
+				`UPDATE instances SET status = 'failed', error_message = $2 WHERE id = $1`, instanceID, err.Error())
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start container"})
+			return
+		}
+		instanceIP = containerInfo.IPAddress
+		resourceID = containerInfo.ContainerID
+	}
 
 	// Update instance record
 	_, err = h.db.Pool.Exec(c.Request.Context(),
 		`UPDATE instances SET container_id = $1, ip_address = $2, status = 'running' WHERE id = $3`,
-		containerInfo.ContainerID, containerIP, instanceID)
+		resourceID, instanceIP, instanceID)
 	if err != nil {
 		h.logger.Error("failed to update instance", zap.Error(err))
 	}
@@ -270,9 +314,9 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			ChallengeID:   challenge.ID,
 			ChallengeName: challenge.Name,
 			ChallengeSlug: req.ChallengeSlug,
-			ContainerID:   containerInfo.ContainerID,
+			ContainerID:   resourceID,
 			Status:        "running",
-			IPAddress:     containerIP,
+			IPAddress:     instanceIP,
 			CreatedAt:     time.Now().Unix(),
 			ExpiresAt:     expiresAt.Unix(),
 			MaxExtensions: maxExts,

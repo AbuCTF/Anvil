@@ -382,7 +382,7 @@
 <!-- Create Challenge Modal -->
 {#if showCreateModal}
   <div class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 overflow-y-auto">
-    <div class="bg-stone-900 border border-stone-800 rounded-xl max-w-2xl w-full my-8">
+    <div class="bg-stone-900 border border-stone-800 rounded-xl max-w-2xl w-full my-8 max-h-[90vh] overflow-y-auto">
       <div class="p-5 border-b border-stone-800 flex items-center justify-between">
         <h2 class="text-xl font-bold text-white">Create Challenge</h2>
         <button on:click={() => { showCreateModal = false; resetForm(); }} class="text-stone-400 hover:text-white">

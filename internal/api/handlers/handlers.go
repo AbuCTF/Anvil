@@ -6,6 +6,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -78,11 +79,12 @@ type InstanceHandler struct {
 	config       *config.Config
 	db           *database.DB
 	containerSvc *container.Service
+	vmSvc        *vm.Service
 	logger       *zap.Logger
 }
 
-func NewInstanceHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, logger *zap.Logger) *InstanceHandler {
-	return &InstanceHandler{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
+func NewInstanceHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, vmSvc *vm.Service, logger *zap.Logger) *InstanceHandler {
+	return &InstanceHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger}
 }
 
 // VPNHandler - methods implemented in vpn.go
