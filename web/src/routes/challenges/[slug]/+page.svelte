@@ -210,7 +210,7 @@ if (remaining <= 0) return 'Expired';
 
 const hours = Math.floor(remaining / 3600);
 const minutes = Math.floor((remaining % 3600) / 60);
-return \`\${hours}h \${minutes}m\`;
+return `${hours}h ${minutes}m`;
 }
 
 function copyToClipboard(text: string) {
