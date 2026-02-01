@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -437,9 +438,10 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	if challengeType == "vm" && req.VMTemplateID != nil {
 		resourceID := uuid.New()
 		_, err = tx.Exec(c.Request.Context(),
-			`INSERT INTO challenge_resources (id, challenge_id, resource_type, vm_template_id, is_primary, vcpu, memory_mb, created_at)
-			 VALUES ($1, $2, 'vm', $3, true, $4, $5, NOW())`,
-			resourceID, challengeID, req.VMTemplateID, req.VCPU, req.MemoryMB,
+			`INSERT INTO challenge_resources (id, challenge_id, resource_type, vm_template_id, cpu_limit, memory_limit, sort_order, is_active, created_at)
+			 VALUES ($1, $2, 'vm', $3, $4, $5, 0, true, NOW())`,
+			resourceID, challengeID, req.VMTemplateID,
+			fmt.Sprintf("%d", req.VCPU), fmt.Sprintf("%dMB", req.MemoryMB),
 		)
 		if err != nil {
 			h.logger.Error("failed to link VM template", zap.Error(err))
