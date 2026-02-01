@@ -470,7 +470,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// Check if already solved
 	var alreadySolved bool
 	err = h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT EXISTS(SELECT 1 FROM solved_flags WHERE user_id = $1 AND flag_id = $2)`,
+		`SELECT EXISTS(SELECT 1 FROM solves WHERE user_id = $1 AND flag_id = $2)`,
 		uid, matchedFlag.ID).Scan(&alreadySolved)
 
 	if alreadySolved {
