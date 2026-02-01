@@ -564,7 +564,7 @@ func (h *VMTemplateHandler) Register(c *gin.Context) {
 // GET /api/v1/admin/vm-instances
 func (h *VMTemplateHandler) ListActiveInstances(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
-		SELECT i.id, i.user_id, u.username, i.challenge_id, ch.title,
+		SELECT i.id, i.user_id, u.username, i.challenge_id, ch.name,
 		       i.name, i.status::text, i.ip_address, i.created_at, i.expires_at
 		FROM vm_instances i
 		JOIN users u ON i.user_id = u.id
