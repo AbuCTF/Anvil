@@ -478,8 +478,9 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		uid, matchedFlag.ID).Scan(&alreadySolved)
 
 	if err != nil {
-		h.logger.Error("failed to check solve status", zap.Error(err))
-		// Continue anyway, INSERT will catch duplicate
+		h.logger.Warn("failed to check solve status", zap.Error(err))
+		// Continue anyway, ON CONFLICT will handle it
+		alreadySolved = false
 	}
 
 	if alreadySolved {
@@ -488,27 +489,35 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			"already_solved": true,
 			"message":        "Correct! But you've already solved this flag.",
 			"flag_name":      matchedFlag.Name,
+			"points":         0,
 		})
 		return
 	}
 
 	// Record solve (with ON CONFLICT to handle race conditions)
 	solveID := uuid.New()
-	_, err = h.db.Pool.Exec(c.Request.Context(),
+	result, err := h.db.Pool.Exec(c.Request.Context(),
 		`INSERT INTO solves (id, user_id, flag_id, points_awarded, solved_at)
 		 VALUES ($1, $2, $3, $4, NOW())
 		 ON CONFLICT (user_id, flag_id) DO NOTHING`,
 		solveID, uid, matchedFlag.ID, matchedFlag.Points)
+	
 	if err != nil {
 		h.logger.Error("failed to record solve", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 		return
 	}
 
-	// Update user's total score
-	h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE users SET total_score = total_score + $1, updated_at = NOW() WHERE id = $2`,
-		matchedFlag.Points, uid)
+	// Check if row was actually inserted (RowsAffected=0 means conflict/already existed)
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"correct":        true,
+			"already_solved": true,
+			"message":        "Correct! But you've already solved this flag.",
+			"flag_name":      matchedFlag.Name,
+			"points":         0,
+		})
 
 	// Update challenge solve count
 	h.db.Pool.Exec(c.Request.Context(),
