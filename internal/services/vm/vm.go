@@ -360,9 +360,13 @@ func (s *Service) defineAndStartVMOnNode(ctx context.Context, domainXML, vmName 
 	// Escape the XML for shell
 	escapedXML := strings.ReplaceAll(domainXML, "'", "'\\''")
 
+	// Use virsh with explicit system connection URI
+	// This is needed because SSH user session defaults to qemu:///session
+	virshCmd := "virsh -c qemu:///system"
+
 	// Write XML, define, start, cleanup
-	cmd := fmt.Sprintf("echo '%s' > %s && virsh define %s && virsh start %s && rm -f %s",
-		escapedXML, xmlPath, xmlPath, vmName, xmlPath)
+	cmd := fmt.Sprintf("echo '%s' > %s && %s define %s && %s start %s && rm -f %s",
+		escapedXML, xmlPath, virshCmd, xmlPath, virshCmd, vmName, xmlPath)
 
 	output, err := s.runSSHCommand(ctx, node, cmd)
 	if err != nil {
