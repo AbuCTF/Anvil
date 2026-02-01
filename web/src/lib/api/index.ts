@@ -198,10 +198,10 @@ class ApiClient {
 		return this.request<{ instances: any[] }>('/instances');
 	}
 
-	async createInstance(challengeId: string) {
+	async createInstance(challengeSlug: string) {
 		return this.request<any>('/instances', {
 			method: 'POST',
-			body: JSON.stringify({ challenge_id: challengeId })
+			body: JSON.stringify({ challenge_slug: challengeSlug })
 		});
 	}
 
