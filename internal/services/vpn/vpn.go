@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"go.uber.org/zap"
+	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
@@ -113,10 +115,10 @@ func (s *Service) AllocateIP() (string, error) {
 		// Check if IP is already used
 		if !s.usedIPs[ipStr] {
 			s.usedIPs[ipStr] = true
-			
+
 			// Prepare next IP
 			incrementIP(s.nextIP)
-			
+
 			return ipStr, nil
 		}
 
@@ -199,19 +201,58 @@ func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 
 // GetPeerStatus gets the status of a VPN peer
 type PeerStatus struct {
-	Connected       bool
-	LastHandshake   int64 // Unix timestamp
-	TransferRx      int64 // Bytes received
-	TransferTx      int64 // Bytes transmitted
-	Endpoint        string
+	Connected     bool
+	LastHandshake int64 // Unix timestamp
+	TransferRx    int64 // Bytes received
+	TransferTx    int64 // Bytes transmitted
+	Endpoint      string
 }
 
 func (s *Service) GetPeerStatus(publicKey string) (*PeerStatus, error) {
-	// This would query wgctrl for peer status
-	// For now, return a placeholder
-	return &PeerStatus{
-		Connected: false,
-	}, nil
+	// Parse the public key
+	key, err := wgtypes.ParseKey(publicKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid public key: %w", err)
+	}
+
+	// Connect to WireGuard via wgctrl
+	client, err := wgctrl.New()
+	if err != nil {
+		s.logger.Warn("failed to connect to wgctrl, returning disconnected", zap.Error(err))
+		return &PeerStatus{Connected: false}, nil
+	}
+	defer client.Close()
+
+	// Get device info
+	device, err := client.Device(s.config.Interface)
+	if err != nil {
+		s.logger.Warn("failed to get WireGuard device", zap.String("interface", s.config.Interface), zap.Error(err))
+		return &PeerStatus{Connected: false}, nil
+	}
+
+	// Find the peer
+	for _, peer := range device.Peers {
+		if peer.PublicKey == key {
+			var endpoint string
+			if peer.Endpoint != nil {
+				endpoint = peer.Endpoint.String()
+			}
+
+			lastHandshake := peer.LastHandshakeTime.Unix()
+			// Consider connected if handshake was within last 3 minutes
+			connected := !peer.LastHandshakeTime.IsZero() && time.Since(peer.LastHandshakeTime) < 3*time.Minute
+
+			return &PeerStatus{
+				Connected:     connected,
+				LastHandshake: lastHandshake,
+				TransferRx:    peer.ReceiveBytes,
+				TransferTx:    peer.TransmitBytes,
+				Endpoint:      endpoint,
+			}, nil
+		}
+	}
+
+	return &PeerStatus{Connected: false}, nil
 }
 
 // GetServerPublicKey returns the server's public key
@@ -236,11 +277,11 @@ func incrementIP(ip net.IP) {
 
 // VPNStats returns VPN statistics
 type VPNStats struct {
-	Enabled         bool
-	TotalPeers      int
-	ConnectedPeers  int
-	AllocatedIPs    int
-	AvailableIPs    int
+	Enabled        bool
+	TotalPeers     int
+	ConnectedPeers int
+	AllocatedIPs   int
+	AvailableIPs   int
 }
 
 func (s *Service) Stats() *VPNStats {
@@ -250,7 +291,7 @@ func (s *Service) Stats() *VPNStats {
 
 	// Calculate total available IPs (rough estimate)
 	ones, bits := s.ipNetwork.Mask.Size()
-	totalIPs := 1 << (bits - ones) - 2 // Subtract network and broadcast
+	totalIPs := 1<<(bits-ones) - 2 // Subtract network and broadcast
 
 	return &VPNStats{
 		Enabled:      s.config.Enabled,

@@ -235,11 +235,16 @@ func (h *VPNHandler) generateWireGuardConfig(privateKey, ipAddress string) strin
 		endpoint = fmt.Sprintf("%s:%d", endpoint, h.config.VPN.ListenPort)
 	}
 
+	// DNS is optional - only include if configured
+	dnsLine := ""
+	if h.config.VPN.DNS != "" {
+		dnsLine = fmt.Sprintf("DNS = %s\n", h.config.VPN.DNS)
+	}
+
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/24
-DNS = %s
-
+%s
 [Peer]
 PublicKey = %s
 AllowedIPs = %s
@@ -248,7 +253,7 @@ PersistentKeepalive = 25
 `,
 		privateKey,
 		ipAddress,
-		h.config.VPN.DNS,
+		dnsLine,
 		h.config.VPN.PublicKey,
 		h.config.VPN.AddressRange,
 		endpoint,
