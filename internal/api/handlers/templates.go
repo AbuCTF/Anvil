@@ -385,6 +385,16 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, descriptio
 		return
 	}
 
+	// Update node capacity stats - increment used resources for this template
+	h.db.Pool.Exec(ctx, `
+		UPDATE vm_nodes SET 
+			used_vcpu = used_vcpu + $1,
+			used_memory_mb = used_memory_mb + $2,
+			updated_at = NOW()
+		WHERE status = 'online'
+		LIMIT 1
+	`, vcpuInt, memoryInt)
+
 	// Update upload status
 	h.db.Pool.Exec(ctx, `UPDATE uploads SET status = 'completed' WHERE id = $1`, uploadID)
 
