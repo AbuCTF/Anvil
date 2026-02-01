@@ -230,6 +230,21 @@
 		settingsChanged = true;
 	}
 
+	function handleNumberInput(e: Event, key: string) {
+		const target = e.target as HTMLInputElement;
+		updateSetting(key, parseInt(target.value) || 0);
+	}
+
+	function handleTextInput(e: Event, key: string) {
+		const target = e.target as HTMLInputElement;
+		updateSetting(key, target.value);
+	}
+
+	function handleSelectChange(e: Event, key: string) {
+		const target = e.target as HTMLSelectElement;
+		updateSetting(key, target.value);
+	}
+
 	async function createNode() {
 		actionLoading = 'create-node';
 		try {
@@ -1003,7 +1018,7 @@
 											<input
 												type="number"
 												value={platformSettings[setting.key] || setting.default}
-												on:input={(e) => updateSetting(setting.key, parseInt((e.target as HTMLInputElement).value))}
+												on:input={(e) => handleNumberInput(e, setting.key)}
 												min="30"
 												max="480"
 												class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
@@ -1039,7 +1054,7 @@
 											<input
 												type="number"
 												value={platformSettings[setting.key] || setting.default}
-												on:input={(e) => updateSetting(setting.key, parseInt((e.target as HTMLInputElement).value))}
+												on:input={(e) => handleNumberInput(e, setting.key)}
 												min="0"
 												max="120"
 												class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
@@ -1068,7 +1083,7 @@
 									<input
 										type="number"
 										value={platformSettings.max_extensions || 3}
-										on:input={(e) => updateSetting('max_extensions', parseInt((e.target as HTMLInputElement).value))}
+										on:input={(e) => handleNumberInput(e, 'max_extensions')}
 										min="0"
 										max="10"
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
@@ -1080,7 +1095,7 @@
 										<input
 											type="number"
 											value={platformSettings.extension_minutes || 30}
-											on:input={(e) => updateSetting('extension_minutes', parseInt((e.target as HTMLInputElement).value))}
+											on:input={(e) => handleNumberInput(e, 'extension_minutes')}
 											min="15"
 											max="120"
 											class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
@@ -1108,7 +1123,7 @@
 									<input
 										type="number"
 										value={platformSettings.max_instances_per_user || 1}
-										on:input={(e) => updateSetting('max_instances_per_user', parseInt((e.target as HTMLInputElement).value))}
+										on:input={(e) => handleNumberInput(e, 'max_instances_per_user')}
 										min="1"
 										max="5"
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
@@ -1119,7 +1134,7 @@
 									<input
 										type="number"
 										value={platformSettings.max_daily_submissions || 100}
-										on:input={(e) => updateSetting('max_daily_submissions', parseInt((e.target as HTMLInputElement).value))}
+										on:input={(e) => handleNumberInput(e, 'max_daily_submissions')}
 										min="10"
 										max="1000"
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
@@ -1145,7 +1160,7 @@
 									<input
 										type="text"
 										value={platformSettings.vpn_endpoint || 'play.h7tex.com:51820'}
-										on:input={(e) => updateSetting('vpn_endpoint', (e.target as HTMLInputElement).value)}
+										on:input={(e) => handleTextInput(e, 'vpn_endpoint')}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									/>
 								</div>
@@ -1153,7 +1168,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Require VPN for Instances</label>
 									<select
 										value={platformSettings.require_vpn || 'true'}
-										on:change={(e) => updateSetting('require_vpn', (e.target as HTMLSelectElement).value)}
+										on:change={(e) => handleSelectChange(e, 'require_vpn')}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Yes</option>
@@ -1179,7 +1194,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Allow Registration</label>
 									<select
 										value={platformSettings.registration_enabled || 'true'}
-										on:change={(e) => updateSetting('registration_enabled', (e.target as HTMLSelectElement).value)}
+										on:change={(e) => handleSelectChange(e, 'registration_enabled')}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Open</option>
@@ -1190,7 +1205,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Scoreboard</label>
 									<select
 										value={platformSettings.scoreboard_enabled || 'true'}
-										on:change={(e) => updateSetting('scoreboard_enabled', (e.target as HTMLSelectElement).value)}
+										on:change={(e) => handleSelectChange(e, 'scoreboard_enabled')}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Public</option>
