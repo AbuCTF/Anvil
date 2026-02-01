@@ -235,10 +235,10 @@ type CreateChallengeRequest struct {
 	CooldownMinutes    *int `json:"cooldown_minutes"`     // default 10
 
 	// Common fields
-	BasePoints      int    `json:"base_points"`
-	InstanceTimeout *int   `json:"instance_timeout"`
-	MaxExtensions   *int   `json:"max_extensions"`
-	AuthorName      string `json:"author_name"`
+	BasePoints      int     `json:"base_points"`
+	InstanceTimeout *int    `json:"instance_timeout"`
+	MaxExtensions   *int    `json:"max_extensions"`
+	AuthorName      string  `json:"author_name"`
 	ResourceType    *string `json:"resource_type"` // "docker" or "vm"
 
 	// Multiple flags support
@@ -721,10 +721,9 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 
 			// Add new resource
 			_, err = h.db.Pool.Exec(c.Request.Context(),
-				`INSERT INTO challenge_resources (challenge_id, resource_type, vm_template_id, min_vcpu, min_memory_mb, timeout_minutes, created_at, updated_at)
-				 SELECT $1, 'vm', $2, vcpu, memory_mb, $3, NOW(), NOW()
-				 FROM vm_templates WHERE id = $2`,
-				challengeID, req.VMTemplateID, req.InstanceTimeout,
+				`INSERT INTO challenge_resources (challenge_id, resource_type, vm_template_id, created_at, updated_at)
+				 VALUES ($1, 'vm', $2, NOW(), NOW())`,
+				challengeID, req.VMTemplateID,
 			)
 		}
 	} else {
