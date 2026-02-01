@@ -191,39 +191,36 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 	}
 	uid := userID.(uuid.UUID)
 
-	// Get user's VPN config
-	var publicKey, ipAddress string
+	// Get user's VPN config with status from database
+	// Status is updated by wg-status-sync.sh script running on host
+	var ipAddress string
+	var lastHandshake *time.Time
+	var bytesSent, bytesReceived int64
+
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT public_key, assigned_ip FROM vpn_configs WHERE user_id = $1`, uid).Scan(&publicKey, &ipAddress)
+		`SELECT assigned_ip, last_handshake, COALESCE(bytes_sent, 0), COALESCE(bytes_received, 0) 
+		 FROM vpn_configs WHERE user_id = $1`, uid).Scan(&ipAddress, &lastHandshake, &bytesSent, &bytesReceived)
 	if err != nil {
 		c.JSON(http.StatusOK, VPNStatusResponse{Connected: false})
 		return
 	}
 
-	// Check peer status
-	status, err := h.vpnSvc.GetPeerStatus(publicKey)
-	if err != nil {
-		c.JSON(http.StatusOK, VPNStatusResponse{
-			Connected: false,
-			IPAddress: ipAddress,
-		})
-		return
-	}
+	var lastHandshakeUnix *int64
+	connected := false
 
-	var lastHandshake *int64
-	if status.LastHandshake > 0 {
-		lastHandshake = &status.LastHandshake
+	if lastHandshake != nil && !lastHandshake.IsZero() {
+		ts := lastHandshake.Unix()
+		lastHandshakeUnix = &ts
+		// Consider connected if handshake within last 3 minutes
+		connected = time.Since(*lastHandshake) < 3*time.Minute
 	}
-
-	// Consider connected if handshake within last 3 minutes
-	connected := status.LastHandshake > 0 && time.Now().Unix()-status.LastHandshake < 180
 
 	c.JSON(http.StatusOK, VPNStatusResponse{
 		Connected:     connected,
 		IPAddress:     ipAddress,
-		LastHandshake: lastHandshake,
-		BytesSent:     status.TransferTx,
-		BytesReceived: status.TransferRx,
+		LastHandshake: lastHandshakeUnix,
+		BytesSent:     bytesSent,
+		BytesReceived: bytesReceived,
 	})
 }
 

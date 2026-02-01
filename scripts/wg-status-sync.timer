@@ -1,0 +1,11 @@
+[Unit]
+Description=WireGuard VPN Status Sync Timer
+Requires=wg-status-sync.service
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
