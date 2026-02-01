@@ -145,12 +145,20 @@
 		if (!editingChallenge) return;
 		actionLoading = editingChallenge.id;
 		try {
-			await api.updateAdminChallenge(editingChallenge.id, {
+			const payload: any = {
 				name: editingChallenge.name,
 				description: editingChallenge.description,
 				difficulty: editingChallenge.difficulty,
-				base_points: editingChallenge.base_points
-			});
+				base_points: editingChallenge.base_points,
+				resource_type: editingChallenge.resource_type
+			};
+
+			// Add VM template if it's a VM challenge and template is selected
+			if (editingChallenge.resource_type === 'vm' && editingChallenge.vm_template_id) {
+				payload.vm_template_id = editingChallenge.vm_template_id;
+			}
+
+			await api.updateAdminChallenge(editingChallenge.id, payload);
 			await loadDashboard();
 			showEditModal = false;
 			editingChallenge = null;
@@ -1645,6 +1653,22 @@
 						</span>
 					</div>
 				</div>
+
+				{#if editingChallenge.resource_type === 'vm'}
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">VM Template</label>
+						<select
+							bind:value={editingChallenge.vm_template_id}
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						>
+							<option value="">Select a template...</option>
+							{#each templates as template}
+								<option value={template.id}>{template.name} ({template.vcpu}vCPU / {template.memory_mb}MB)</option>
+							{/each}
+						</select>
+						<p class="text-xs text-stone-500 mt-1">Change the VM template for this challenge</p>
+					</div>
+				{/if}
 
 				<div class="flex gap-3 pt-2">
 					<button

@@ -239,6 +239,7 @@ type CreateChallengeRequest struct {
 	InstanceTimeout *int   `json:"instance_timeout"`
 	MaxExtensions   *int   `json:"max_extensions"`
 	AuthorName      string `json:"author_name"`
+	ResourceType    *string `json:"resource_type"` // "docker" or "vm"
 
 	// Multiple flags support
 	Flags []FlagInput `json:"flags"`
@@ -697,19 +698,50 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// Update challenge
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE challenges SET
-			name = $1, description = $2, difficulty = $3, category_id = $4,
-			container_image = $5, container_tag = $6, cpu_limit = $7, memory_limit = $8,
-			base_points = $9, instance_timeout = $10, max_extensions = $11,
-			author_name = $12, updated_at = NOW()
-		WHERE id = $13`,
-		req.Name, req.Description, req.Difficulty, req.CategoryID,
-		req.ContainerImage, req.ContainerTag, req.CPULimit, req.MemoryLimit,
-		req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
-		req.AuthorName, challengeID,
-	)
+	// Update challenge - handle both container and VM fields
+	var err error
+	if req.ResourceType != nil && *req.ResourceType == "vm" {
+		// VM challenge - update VM-specific fields
+		_, err = h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE challenges SET
+				name = $1, description = $2, difficulty = $3, category_id = $4,
+				base_points = $5, instance_timeout = $6, max_extensions = $7,
+				author_name = $8, resource_type = $9, updated_at = NOW()
+			WHERE id = $10`,
+			req.Name, req.Description, req.Difficulty, req.CategoryID,
+			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
+			req.AuthorName, req.ResourceType, challengeID,
+		)
+
+		// Update VM template association if provided
+		if req.VMTemplateID != nil {
+			// First, remove old resource if exists
+			_, _ = h.db.Pool.Exec(c.Request.Context(),
+				`DELETE FROM challenge_resources WHERE challenge_id = $1`, challengeID)
+
+			// Add new resource
+			_, err = h.db.Pool.Exec(c.Request.Context(),
+				`INSERT INTO challenge_resources (challenge_id, resource_type, vm_template_id, min_vcpu, min_memory_mb, timeout_minutes, created_at, updated_at)
+				 SELECT $1, 'vm', $2, vcpu, memory_mb, $3, NOW(), NOW()
+				 FROM vm_templates WHERE id = $2`,
+				challengeID, req.VMTemplateID, req.InstanceTimeout,
+			)
+		}
+	} else {
+		// Docker challenge - update container fields
+		_, err = h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE challenges SET
+				name = $1, description = $2, difficulty = $3, category_id = $4,
+				container_image = $5, container_tag = $6, cpu_limit = $7, memory_limit = $8,
+				base_points = $9, instance_timeout = $10, max_extensions = $11,
+				author_name = $12, updated_at = NOW()
+			WHERE id = $13`,
+			req.Name, req.Description, req.Difficulty, req.CategoryID,
+			req.ContainerImage, req.ContainerTag, req.CPULimit, req.MemoryLimit,
+			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
+			req.AuthorName, challengeID,
+		)
+	}
 	if err != nil {
 		h.logger.Error("failed to update challenge", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
@@ -723,9 +755,20 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 func (h *AdminChallengeHandler) Delete(c *gin.Context) {
 	challengeID := c.Param("id")
 
+	// First, delete all instances for this challenge
 	_, err := h.db.Pool.Exec(c.Request.Context(),
+		`DELETE FROM instances WHERE challenge_id = $1`, challengeID)
+	if err != nil {
+		h.logger.Error("failed to delete instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge instances"})
+		return
+	}
+
+	// Then delete the challenge
+	_, err = h.db.Pool.Exec(c.Request.Context(),
 		`DELETE FROM challenges WHERE id = $1`, challengeID)
 	if err != nil {
+		h.logger.Error("failed to delete challenge", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge"})
 		return
 	}
