@@ -459,7 +459,7 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 	var challengeCount int
 	h.db.Pool.QueryRow(c.Request.Context(), `
 		SELECT COUNT(*) FROM challenge_resources 
-		WHERE resource_type = 'vm_template' AND resource_reference = $1
+		WHERE resource_type = 'vm' AND vm_template_id = $1
 	`, templateID).Scan(&challengeCount)
 
 	if challengeCount > 0 {
@@ -470,6 +470,11 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// Get template specs before deleting
+	var vcpu, memoryMB int
+	h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT vcpu, memory_mb FROM vm_templates WHERE id = $1`, templateID).Scan(&vcpu, &memoryMB)
+
 	// Delete template record
 	_, err = h.db.Pool.Exec(c.Request.Context(),
 		`DELETE FROM vm_templates WHERE id = $1`, templateID)
@@ -478,6 +483,15 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete template"})
 		return
 	}
+
+	// Decrement node capacity counters
+	h.db.Pool.Exec(c.Request.Context(), `
+		UPDATE vm_nodes SET 
+			used_vcpu = GREATEST(0, used_vcpu - $1),
+			used_memory_mb = GREATEST(0, used_memory_mb - $2),
+			updated_at = NOW()
+		WHERE status = 'online'
+	`, vcpu, memoryMB)
 
 	// Remove file (optional - could keep for recovery)
 	if imagePath != "" {
