@@ -373,18 +373,86 @@ class ApiClient {
 		});
 	}
 
-	async uploadVMTemplate(formData: FormData) {
+	async uploadVMTemplate(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {
 		const token = this.getAuthToken();
-		const response = await fetch(`${this.baseUrl}/api/v1/admin/vm-templates/upload`, {
-			method: 'POST',
-			headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-			body: formData
+		
+		return new Promise((resolve, reject) => {
+			const xhr = new XMLHttpRequest();
+			
+			xhr.upload.addEventListener('progress', (e) => {
+				if (e.lengthComputable && onProgress) {
+					const progress = Math.round((e.loaded / e.total) * 100);
+					onProgress(progress);
+				}
+			});
+			
+			xhr.addEventListener('load', () => {
+				if (xhr.status >= 200 && xhr.status < 300) {
+					try {
+						resolve(JSON.parse(xhr.responseText));
+					} catch {
+						resolve({});
+					}
+				} else {
+					try {
+						const error = JSON.parse(xhr.responseText);
+						reject(new Error(error.error || 'Upload failed'));
+					} catch {
+						reject(new Error('Upload failed'));
+					}
+				}
+			});
+			
+			xhr.addEventListener('error', () => {
+				reject(new Error('Network error during upload'));
+			});
+			
+			xhr.open('POST', `${this.baseUrl}/api/v1/admin/vm-templates/upload`);
+			if (token) {
+				xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+			}
+			xhr.send(formData);
 		});
-		if (!response.ok) {
-			const error = await response.json().catch(() => ({ error: 'Upload failed' }));
-			throw new Error(error.error || 'Upload failed');
-		}
-		return response.json();
+	}
+
+	async deleteVMTemplate(templateId: string) {
+		return this.request<any>(`/admin/vm-templates/${templateId}`, {
+			method: 'DELETE'
+		});
+	}
+
+	// VM Nodes
+	async getNodes() {
+		return this.request<{ nodes: any[] }>('/admin/nodes');
+	}
+
+	async createNode(data: any) {
+		return this.request<any>('/admin/nodes', {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async updateNode(nodeId: string, data: any) {
+		return this.request<any>(`/admin/nodes/${nodeId}`, {
+			method: 'PUT',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async deleteNode(nodeId: string) {
+		return this.request<any>(`/admin/nodes/${nodeId}`, {
+			method: 'DELETE'
+		});
+	}
+
+	// Infrastructure Stats
+	async getInfrastructureStats() {
+		return this.request<any>('/admin/infrastructure/stats');
+	}
+
+	async getActiveInstances() {
+		return this.request<{ instances: any[] }>('/admin/infrastructure/instances');
 	}
 
 	async uploadOvaChallenge(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {

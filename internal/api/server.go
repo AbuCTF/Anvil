@@ -295,21 +295,34 @@ func (s *Server) setupRouter() {
 			// VM Template management (admin)
 			vmTemplates := admin.Group("/vm-templates")
 			{
-				// Note: vmTemplateHandler needs to be created in main.go and passed to server
-				// For now, using a placeholder that will be properly initialized later
-				vmTemplates.GET("", func(c *gin.Context) {
-					// List templates - delegated to vmSvc
-					c.JSON(http.StatusOK, gin.H{"templates": []interface{}{}})
-				})
-				vmTemplates.POST("/upload", func(c *gin.Context) {
-					c.JSON(http.StatusNotImplemented, gin.H{"error": "VM template upload requires VM service"})
-				})
-				vmTemplates.GET("/:id", func(c *gin.Context) {
-					c.JSON(http.StatusNotImplemented, gin.H{"error": "VM template management requires VM service"})
-				})
-				vmTemplates.DELETE("/:id", func(c *gin.Context) {
-					c.JSON(http.StatusNotImplemented, gin.H{"error": "VM template management requires VM service"})
-				})
+				templateHandler := handlers.NewVMTemplateHandler(s.config, s.db, s.logger)
+				vmTemplates.GET("", templateHandler.List)
+				vmTemplates.POST("/upload", templateHandler.Upload)
+				vmTemplates.GET("/upload/:id/status", templateHandler.GetUploadStatus)
+				vmTemplates.GET("/:id", templateHandler.Get)
+				vmTemplates.PUT("/:id", templateHandler.Update)
+				vmTemplates.DELETE("/:id", templateHandler.Delete)
+			}
+
+			// VM Node management (admin)
+			nodes := admin.Group("/nodes")
+			{
+				nodeHandler := handlers.NewNodeHandler(s.config, s.db, s.logger)
+				nodes.GET("", nodeHandler.List)
+				nodes.POST("", nodeHandler.Create)
+				nodes.GET("/:id", nodeHandler.Get)
+				nodes.PUT("/:id", nodeHandler.Update)
+				nodes.DELETE("/:id", nodeHandler.Delete)
+			}
+
+			// Infrastructure stats
+			infrastructure := admin.Group("/infrastructure")
+			{
+				nodeHandler := handlers.NewNodeHandler(s.config, s.db, s.logger)
+				infrastructure.GET("/stats", nodeHandler.GetInfrastructureStats)
+
+				templateHandler := handlers.NewVMTemplateHandler(s.config, s.db, s.logger)
+				infrastructure.GET("/instances", templateHandler.ListActiveInstances)
 			}
 		}
 	}

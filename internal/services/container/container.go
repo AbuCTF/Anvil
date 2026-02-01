@@ -22,15 +22,15 @@ import (
 
 // Service handles container lifecycle management
 type Service struct {
-	config  config.ContainerConfig
-	client  *client.Client
-	logger  *zap.Logger
-	
+	config config.ContainerConfig
+	client *client.Client
+	logger *zap.Logger
+
 	// Port allocation
 	portMu    sync.Mutex
 	usedPorts map[int]bool
 	portRange [2]int // [start, end]
-	
+
 	// Network management
 	networkID string
 }
@@ -46,7 +46,7 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	
+
 	_, err = cli.Ping(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Docker: %w", err)
@@ -75,7 +75,7 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 func (s *Service) Status() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	
+
 	_, err := s.client.Ping(ctx)
 	if err != nil {
 		return "disconnected"
@@ -258,6 +258,11 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 func (s *Service) StopInstance(ctx context.Context, containerID string) error {
 	timeout := 10 // seconds
 	return s.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout})
+}
+
+// StartInstance starts a stopped container
+func (s *Service) StartInstance(ctx context.Context, containerID string) error {
+	return s.client.ContainerStart(ctx, containerID, container.StartOptions{})
 }
 
 // RemoveInstance removes a container
@@ -466,11 +471,11 @@ func parseMemoryLimit(limit string) (int64, error) {
 	if limit == "" {
 		return 0, nil
 	}
-	
+
 	limit = strings.ToLower(limit)
 	var value int64
 	var unit string
-	
+
 	_, err := fmt.Sscanf(limit, "%d%s", &value, &unit)
 	if err != nil {
 		return 0, err
@@ -494,7 +499,7 @@ func (s *Service) HealthCheck(ctx context.Context, containerID string) (bool, er
 	if err != nil {
 		return false, err
 	}
-	
+
 	return inspect.State.Running, nil
 }
 
@@ -532,11 +537,11 @@ func (s *Service) GetNetworkInfo() (string, string) {
 
 // Stats returns container statistics
 type ContainerStats struct {
-	TotalContainers  int
+	TotalContainers   int
 	RunningContainers int
 	StoppedContainers int
-	UsedPorts        int
-	AvailablePorts   int
+	UsedPorts         int
+	AvailablePorts    int
 }
 
 func (s *Service) Stats(ctx context.Context) (*ContainerStats, error) {

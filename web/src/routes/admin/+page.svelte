@@ -16,6 +16,36 @@
 	let editingChallenge: any = null;
 	let actionLoading = '';
 
+	// Infrastructure data
+	let infraStats: any = null;
+	let nodes: any[] = [];
+	let templates: any[] = [];
+	let activeInstances: any[] = [];
+	let showNodeModal = false;
+	let showTemplateUploadModal = false;
+
+	// New node form
+	let newNode = {
+		name: '',
+		hostname: '',
+		ip_address: '',
+		total_vcpu: 16,
+		total_memory_mb: 61440,
+		total_disk_gb: 100,
+		max_vms: 10,
+		region: '',
+		provider: 'gcp'
+	};
+
+	// Template upload
+	let templateFile: File | null = null;
+	let templateName = '';
+	let templateDescription = '';
+	let templateMinVcpu = 2;
+	let templateMinMemory = 2048;
+	let templateUploadProgress = 0;
+	let templateUploading = false;
+
 	// Challenge creation
 	let newChallenge = {
 		name: '',
@@ -28,7 +58,12 @@
 		type: 'container',
 		docker_image: '',
 		ova_url: '',
-		files: []
+		files: [],
+		// Timer settings
+		vm_timeout_minutes: 60,
+		vm_max_extensions: 2,
+		vm_extension_minutes: 30,
+		cooldown_minutes: 15
 	};
 	let uploadLoading = false;
 	let uploadError = '';
@@ -138,10 +173,99 @@
 			stats = statsRes;
 			users = usersRes.users || [];
 			challenges = challengesRes.challenges || [];
+
+			// Load infrastructure data in parallel
+			try {
+				const [infraRes, nodesRes, templatesRes, instancesRes] = await Promise.all([
+					api.getInfrastructureStats(),
+					api.getNodes(),
+					api.getVMTemplates(),
+					api.getActiveInstances()
+				]);
+				infraStats = infraRes;
+				nodes = nodesRes.nodes || [];
+				templates = templatesRes.templates || [];
+				activeInstances = instancesRes.instances || [];
+			} catch {
+				// Infrastructure endpoints may not be available yet
+				infraStats = null;
+				nodes = [];
+				templates = [];
+				activeInstances = [];
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load dashboard';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function createNode() {
+		actionLoading = 'create-node';
+		try {
+			await api.createNode(newNode);
+			showNodeModal = false;
+			newNode = { name: '', hostname: '', ip_address: '', total_vcpu: 16, total_memory_mb: 61440, total_disk_gb: 100, max_vms: 10, region: '', provider: 'gcp' };
+			await loadDashboard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to create node');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
+	async function deleteNode(nodeId: string) {
+		if (!confirm('Delete this node? This cannot be undone.')) return;
+		actionLoading = nodeId;
+		try {
+			await api.deleteNode(nodeId);
+			await loadDashboard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to delete node');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
+	async function uploadTemplate() {
+		if (!templateFile || !templateName) return;
+		templateUploading = true;
+		templateUploadProgress = 0;
+		try {
+			const formData = new FormData();
+			formData.append('file', templateFile);
+			formData.append('name', templateName);
+			formData.append('description', templateDescription);
+			formData.append('min_vcpu', String(templateMinVcpu));
+			formData.append('min_memory_mb', String(templateMinMemory));
+			formData.append('os_type', 'linux');
+
+			await api.uploadVMTemplate(formData, (progress) => {
+				templateUploadProgress = progress;
+			});
+
+			showTemplateUploadModal = false;
+			templateFile = null;
+			templateName = '';
+			templateDescription = '';
+			await loadDashboard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to upload template');
+		} finally {
+			templateUploading = false;
+		}
+	}
+
+	async function deleteTemplate(templateId: string) {
+		if (!confirm('Delete this template? Challenges using it will break.')) return;
+		actionLoading = templateId;
+		try {
+			await api.deleteVMTemplate(templateId);
+			await loadDashboard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to delete template');
+		} finally {
+			actionLoading = '';
 		}
 	}
 
@@ -228,6 +352,23 @@
 					<Icon icon="mdi:plus" class="w-4 h-4" />
 					New Challenge
 				</button>
+			{:else if activeTab === 'infrastructure'}
+				<div class="flex gap-2">
+					<button
+						on:click={() => showTemplateUploadModal = true}
+						class="px-4 py-2 bg-stone-800 text-white text-sm font-medium rounded hover:bg-stone-700 transition flex items-center gap-2"
+					>
+						<Icon icon="mdi:upload" class="w-4 h-4" />
+						Upload Template
+					</button>
+					<button
+						on:click={() => showNodeModal = true}
+						class="px-4 py-2 bg-white text-black text-sm font-medium rounded hover:bg-stone-200 transition flex items-center gap-2"
+					>
+						<Icon icon="mdi:plus" class="w-4 h-4" />
+						Add Node
+					</button>
+				</div>
 			{/if}
 		</div>
 
@@ -245,7 +386,8 @@
 				{#each [
 					{ id: 'overview', label: 'Overview' },
 					{ id: 'challenges', label: 'Challenges' },
-					{ id: 'users', label: 'Users' }
+					{ id: 'users', label: 'Users' },
+					{ id: 'infrastructure', label: 'Infrastructure' }
 				] as tab}
 					<button
 						type="button"
@@ -585,6 +727,203 @@
 							{/if}
 						</tbody>
 					</table>
+				</div>
+			{/if}
+
+			<!-- Infrastructure Tab -->
+			{#if activeTab === 'infrastructure'}
+				<!-- Stats Cards -->
+				<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+					<div class="bg-stone-950 border border-stone-800 rounded-lg p-4">
+						<p class="text-xs text-stone-500 uppercase tracking-wider">Nodes</p>
+						<p class="text-2xl font-semibold text-white mt-1">
+							{infraStats?.nodes?.online || 0}/{infraStats?.nodes?.total || 0}
+						</p>
+						<p class="text-xs text-green-400 mt-1">online</p>
+					</div>
+					<div class="bg-stone-950 border border-stone-800 rounded-lg p-4">
+						<p class="text-xs text-stone-500 uppercase tracking-wider">vCPU</p>
+						<p class="text-2xl font-semibold text-white mt-1">
+							{infraStats?.resources?.vcpu?.used || 0}/{infraStats?.resources?.vcpu?.total || 0}
+						</p>
+						<p class="text-xs text-stone-400 mt-1">{infraStats?.resources?.vcpu?.available || 0} available</p>
+					</div>
+					<div class="bg-stone-950 border border-stone-800 rounded-lg p-4">
+						<p class="text-xs text-stone-500 uppercase tracking-wider">Memory</p>
+						<p class="text-2xl font-semibold text-white mt-1">
+							{infraStats?.resources?.memory_gb?.used || 0}/{infraStats?.resources?.memory_gb?.total || 0} GB
+						</p>
+						<p class="text-xs text-stone-400 mt-1">{infraStats?.resources?.memory_gb?.available || 0} GB free</p>
+					</div>
+					<div class="bg-stone-950 border border-stone-800 rounded-lg p-4">
+						<p class="text-xs text-stone-500 uppercase tracking-wider">Running VMs</p>
+						<p class="text-2xl font-semibold text-white mt-1">{infraStats?.vms?.running || 0}</p>
+						<p class="text-xs text-stone-400 mt-1">of {infraStats?.vms?.total || 0} total</p>
+					</div>
+				</div>
+
+				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+					<!-- Nodes Section -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between">
+							<h3 class="text-xs font-medium text-stone-500 uppercase tracking-wider">VM Nodes</h3>
+							<span class="text-xs text-stone-400">{nodes.length} nodes</span>
+						</div>
+						<div class="divide-y divide-stone-800">
+							{#each nodes as node}
+								<div class="px-4 py-3">
+									<div class="flex items-center justify-between mb-2">
+										<div class="flex items-center gap-2">
+											<div class="w-2 h-2 rounded-full {node.status === 'online' ? 'bg-green-400' : 'bg-red-400'}"></div>
+											<span class="text-sm text-white font-medium">{node.name}</span>
+											{#if node.is_primary}
+												<span class="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">primary</span>
+											{/if}
+										</div>
+										<button
+											on:click={() => deleteNode(node.id)}
+											disabled={actionLoading === node.id}
+											class="text-stone-500 hover:text-red-400 transition disabled:opacity-50"
+										>
+											<Icon icon="mdi:trash-can" class="w-4 h-4" />
+										</button>
+									</div>
+									<div class="text-xs text-stone-500">
+										<span>{node.ip_address}</span>
+										<span class="mx-2">•</span>
+										<span>{node.active_vms}/{node.max_vms} VMs</span>
+										<span class="mx-2">•</span>
+										<span>{node.used_vcpu}/{node.total_vcpu} vCPU</span>
+									</div>
+									<!-- Resource bars -->
+									<div class="mt-2 space-y-1">
+										<div class="flex items-center gap-2">
+											<span class="text-xs text-stone-600 w-12">CPU</span>
+											<div class="flex-1 h-1.5 bg-stone-800 rounded-full overflow-hidden">
+												<div 
+													class="h-full bg-blue-500 transition-all"
+													style="width: {node.total_vcpu ? (node.used_vcpu / node.total_vcpu * 100) : 0}%"
+												></div>
+											</div>
+										</div>
+										<div class="flex items-center gap-2">
+											<span class="text-xs text-stone-600 w-12">RAM</span>
+											<div class="flex-1 h-1.5 bg-stone-800 rounded-full overflow-hidden">
+												<div 
+													class="h-full bg-purple-500 transition-all"
+													style="width: {node.total_memory_mb ? (node.used_memory_mb / node.total_memory_mb * 100) : 0}%"
+												></div>
+											</div>
+										</div>
+									</div>
+								</div>
+							{/each}
+							{#if nodes.length === 0}
+								<div class="px-4 py-8 text-center">
+									<Icon icon="mdi:server-off" class="w-8 h-8 text-stone-700 mx-auto mb-2" />
+									<p class="text-sm text-stone-500">No nodes configured</p>
+									<button
+										on:click={() => showNodeModal = true}
+										class="mt-2 text-sm text-white hover:text-stone-300 transition"
+									>
+										Add your first node →
+									</button>
+								</div>
+							{/if}
+						</div>
+					</div>
+
+					<!-- VM Templates Section -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between">
+							<h3 class="text-xs font-medium text-stone-500 uppercase tracking-wider">VM Templates</h3>
+							<span class="text-xs text-stone-400">{templates.length} templates</span>
+						</div>
+						<div class="divide-y divide-stone-800">
+							{#each templates as template}
+								<div class="px-4 py-3">
+									<div class="flex items-center justify-between mb-1">
+										<span class="text-sm text-white font-medium">{template.name}</span>
+										<div class="flex items-center gap-2">
+											{#if template.is_active}
+												<span class="text-xs text-green-400">Active</span>
+											{:else}
+												<span class="text-xs text-stone-500">Inactive</span>
+											{/if}
+											<button
+												on:click={() => deleteTemplate(template.id)}
+												disabled={actionLoading === template.id}
+												class="text-stone-500 hover:text-red-400 transition disabled:opacity-50"
+											>
+												<Icon icon="mdi:trash-can" class="w-4 h-4" />
+											</button>
+										</div>
+									</div>
+									<div class="text-xs text-stone-500">
+										<span>{template.disk_size_gb?.toFixed(1) || '?'} GB</span>
+										<span class="mx-2">•</span>
+										<span>Min: {template.min_vcpu} vCPU / {template.min_memory_mb} MB</span>
+									</div>
+									{#if template.description}
+										<p class="text-xs text-stone-600 mt-1 truncate">{template.description}</p>
+									{/if}
+								</div>
+							{/each}
+							{#if templates.length === 0}
+								<div class="px-4 py-8 text-center">
+									<Icon icon="mdi:harddisk" class="w-8 h-8 text-stone-700 mx-auto mb-2" />
+									<p class="text-sm text-stone-500">No VM templates</p>
+									<button
+										on:click={() => showTemplateUploadModal = true}
+										class="mt-2 text-sm text-white hover:text-stone-300 transition"
+									>
+										Upload your first template →
+									</button>
+								</div>
+							{/if}
+						</div>
+					</div>
+				</div>
+
+				<!-- Active Instances -->
+				<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+					<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between">
+						<h3 class="text-xs font-medium text-stone-500 uppercase tracking-wider">Active VM Instances</h3>
+						<span class="text-xs text-stone-400">{activeInstances.length} running</span>
+					</div>
+					{#if activeInstances.length > 0}
+						<table class="w-full">
+							<thead>
+								<tr class="border-b border-stone-800">
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">User</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Challenge</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">IP</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Status</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Expires</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-stone-800">
+								{#each activeInstances as instance}
+									<tr class="hover:bg-stone-900/50">
+										<td class="px-4 py-2 text-sm text-white">{instance.username}</td>
+										<td class="px-4 py-2 text-sm text-stone-300">{instance.challenge_name}</td>
+										<td class="px-4 py-2 text-sm text-stone-400 font-mono">{instance.ip_address || '-'}</td>
+										<td class="px-4 py-2">
+											<span class="text-xs {instance.status === 'running' ? 'text-green-400' : 'text-yellow-400'}">{instance.status}</span>
+										</td>
+										<td class="px-4 py-2 text-xs text-stone-500">
+											{instance.expires_at ? new Date(instance.expires_at * 1000).toLocaleTimeString() : '-'}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					{:else}
+						<div class="px-4 py-8 text-center">
+							<Icon icon="mdi:desktop-mac-dashboard" class="w-8 h-8 text-stone-700 mx-auto mb-2" />
+							<p class="text-sm text-stone-500">No active VM instances</p>
+						</div>
+					{/if}
 				</div>
 			{/if}
 		{/if}
@@ -943,6 +1282,271 @@
 						type="button"
 						on:click={() => { showEditModal = false; editingChallenge = null; }}
 						class="px-4 py-2.5 text-stone-400 text-sm hover:text-white transition"
+					>
+						Cancel
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
+{/if}
+
+<!-- Add Node Modal -->
+{#if showNodeModal}
+	<div 
+		class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+		on:click={() => showNodeModal = false}
+		on:keydown={(e) => e.key === 'Escape' && (showNodeModal = false)}
+		role="dialog"
+		aria-modal="true"
+	>
+		<div 
+			class="bg-stone-950 border border-stone-800 rounded-lg w-full max-w-lg"
+			on:click|stopPropagation
+			on:keydown|stopPropagation
+			role="document"
+		>
+			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between">
+				<h2 class="text-lg font-medium text-white">Add VM Node</h2>
+				<button on:click={() => showNodeModal = false} class="text-stone-400 hover:text-white transition">
+					<Icon icon="mdi:close" class="w-5 h-5" />
+				</button>
+			</div>
+
+			<form on:submit|preventDefault={createNode} class="p-6 space-y-4">
+				<div class="grid grid-cols-2 gap-4">
+					<div class="col-span-2">
+						<label class="block text-xs text-stone-500 mb-1.5">Node Name</label>
+						<input
+							type="text"
+							bind:value={newNode.name}
+							required
+							placeholder="prod-node-01"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Hostname</label>
+						<input
+							type="text"
+							bind:value={newNode.hostname}
+							required
+							placeholder="vm-node.example.com"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">IP Address</label>
+						<input
+							type="text"
+							bind:value={newNode.ip_address}
+							required
+							placeholder="10.0.0.1"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+				</div>
+
+				<div class="grid grid-cols-3 gap-4">
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Total vCPU</label>
+						<input
+							type="number"
+							bind:value={newNode.total_vcpu}
+							required
+							min="1"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Memory (MB)</label>
+						<input
+							type="number"
+							bind:value={newNode.total_memory_mb}
+							required
+							min="1024"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Disk (GB)</label>
+						<input
+							type="number"
+							bind:value={newNode.total_disk_gb}
+							required
+							min="10"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+				</div>
+
+				<div class="grid grid-cols-2 gap-4">
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Max VMs</label>
+						<input
+							type="number"
+							bind:value={newNode.max_vms}
+							required
+							min="1"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Provider</label>
+						<select
+							bind:value={newNode.provider}
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						>
+							<option value="gcp">Google Cloud</option>
+							<option value="aws">AWS</option>
+							<option value="azure">Azure</option>
+							<option value="bare-metal">Bare Metal</option>
+						</select>
+					</div>
+				</div>
+
+				<div class="flex gap-3 pt-2">
+					<button
+						type="submit"
+						disabled={actionLoading === 'create-node'}
+						class="flex-1 py-2.5 bg-white text-black text-sm font-medium rounded hover:bg-stone-200 transition disabled:opacity-50"
+					>
+						{actionLoading === 'create-node' ? 'Creating...' : 'Add Node'}
+					</button>
+					<button
+						type="button"
+						on:click={() => showNodeModal = false}
+						class="px-4 py-2.5 text-stone-400 text-sm hover:text-white transition"
+					>
+						Cancel
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
+{/if}
+
+<!-- Upload Template Modal -->
+{#if showTemplateUploadModal}
+	<div 
+		class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+		on:click={() => showTemplateUploadModal = false}
+		on:keydown={(e) => e.key === 'Escape' && (showTemplateUploadModal = false)}
+		role="dialog"
+		aria-modal="true"
+	>
+		<div 
+			class="bg-stone-950 border border-stone-800 rounded-lg w-full max-w-lg"
+			on:click|stopPropagation
+			on:keydown|stopPropagation
+			role="document"
+		>
+			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between">
+				<h2 class="text-lg font-medium text-white">Upload VM Template</h2>
+				<button on:click={() => showTemplateUploadModal = false} class="text-stone-400 hover:text-white transition">
+					<Icon icon="mdi:close" class="w-5 h-5" />
+				</button>
+			</div>
+
+			<form on:submit|preventDefault={uploadTemplate} class="p-6 space-y-4">
+				{#if templateUploading && templateUploadProgress > 0}
+					<div class="py-3 px-4 bg-stone-900/50 rounded border border-stone-800">
+						<div class="flex items-center justify-between mb-2">
+							<span class="text-sm text-stone-300">Uploading...</span>
+							<span class="text-sm text-stone-400">{templateUploadProgress}%</span>
+						</div>
+						<div class="w-full bg-stone-800 rounded-full h-2 overflow-hidden">
+							<div class="bg-green-500 h-full transition-all" style="width: {templateUploadProgress}%"></div>
+						</div>
+					</div>
+				{/if}
+
+				<div>
+					<label class="block text-xs text-stone-500 mb-1.5">Template Name</label>
+					<input
+						type="text"
+						bind:value={templateName}
+						required
+						placeholder="moby-dock"
+						class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+					/>
+				</div>
+
+				<div>
+					<label class="block text-xs text-stone-500 mb-1.5">Description</label>
+					<textarea
+						bind:value={templateDescription}
+						rows="2"
+						placeholder="Docker escape challenge..."
+						class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700 resize-none"
+					></textarea>
+				</div>
+
+				<div class="grid grid-cols-2 gap-4">
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Min vCPU</label>
+						<input
+							type="number"
+							bind:value={templateMinVcpu}
+							min="1"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Min Memory (MB)</label>
+						<input
+							type="number"
+							bind:value={templateMinMemory}
+							min="512"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+				</div>
+
+				<div>
+					<label class="block text-xs text-stone-500 mb-1.5">OVA/QCOW2/VMDK File</label>
+					<div class="border-2 border-dashed border-stone-700 rounded-lg p-6 text-center hover:border-stone-500 transition-colors">
+						{#if templateFile}
+							<div class="flex items-center justify-center gap-3">
+								<Icon icon="mdi:file-check" class="w-6 h-6 text-green-400" />
+								<div class="text-left">
+									<p class="text-white text-sm">{templateFile.name}</p>
+									<p class="text-stone-500 text-xs">{(templateFile.size / 1024 / 1024 / 1024).toFixed(2)} GB</p>
+								</div>
+								<button type="button" on:click={() => templateFile = null} class="text-red-400 hover:text-red-300 p-1">
+									<Icon icon="mdi:close" class="w-4 h-4" />
+								</button>
+							</div>
+						{:else}
+							<Icon icon="mdi:cloud-upload" class="w-10 h-10 text-stone-600 mx-auto mb-2" />
+							<p class="text-stone-400 text-sm mb-2">Drop file or click to browse</p>
+							<input 
+								type="file" 
+								accept=".ova,.qcow2,.vmdk" 
+								on:change={(e) => templateFile = e.target.files?.[0] || null} 
+								class="hidden" 
+								id="template-upload" 
+							/>
+							<label for="template-upload" class="inline-block px-3 py-1.5 bg-stone-800 text-white rounded text-xs cursor-pointer hover:bg-stone-700 transition">
+								Select File
+							</label>
+						{/if}
+					</div>
+				</div>
+
+				<div class="flex gap-3 pt-2">
+					<button
+						type="submit"
+						disabled={templateUploading || !templateFile || !templateName}
+						class="flex-1 py-2.5 bg-white text-black text-sm font-medium rounded hover:bg-stone-200 transition disabled:opacity-50"
+					>
+						{templateUploading ? 'Uploading...' : 'Upload Template'}
+					</button>
+					<button
+						type="button"
+						on:click={() => showTemplateUploadModal = false}
+						disabled={templateUploading}
+						class="px-4 py-2.5 text-stone-400 text-sm hover:text-white transition disabled:opacity-50"
 					>
 						Cancel
 					</button>

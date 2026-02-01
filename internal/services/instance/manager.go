@@ -10,6 +10,7 @@ import (
 
 	"github.com/anvil-lab/anvil/internal/services/container"
 	"github.com/anvil-lab/anvil/internal/services/vm"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -38,63 +39,63 @@ const (
 
 // Instance represents a unified instance (Docker or VM)
 type Instance struct {
-	ID           string            `json:"id"`
-	Type         InstanceType      `json:"type"`
-	ChallengeID  string            `json:"challenge_id"`
-	ResourceID   string            `json:"resource_id"`
-	UserID       string            `json:"user_id"`
-	Name         string            `json:"name"`
-	State        InstanceState     `json:"state"`
-	
+	ID          string        `json:"id"`
+	Type        InstanceType  `json:"type"`
+	ChallengeID string        `json:"challenge_id"`
+	ResourceID  string        `json:"resource_id"`
+	UserID      string        `json:"user_id"`
+	Name        string        `json:"name"`
+	State       InstanceState `json:"state"`
+
 	// Network info
-	IPAddress    string            `json:"ip_address,omitempty"`
-	ExposedPorts map[int]int       `json:"exposed_ports,omitempty"` // guest:host mapping
-	
+	IPAddress    string         `json:"ip_address,omitempty"`
+	ExposedPorts map[string]int `json:"exposed_ports,omitempty"` // "80/tcp":32001 mapping
+
 	// Resource allocation
-	CPU          string            `json:"cpu,omitempty"`
-	MemoryMB     int               `json:"memory_mb,omitempty"`
-	
+	CPU      string `json:"cpu,omitempty"`
+	MemoryMB int    `json:"memory_mb,omitempty"`
+
 	// Access methods
-	VNCPort      int               `json:"vnc_port,omitempty"`  // For VMs
-	SSHPort      int               `json:"ssh_port,omitempty"`
-	
+	VNCPort int `json:"vnc_port,omitempty"` // For VMs
+	SSHPort int `json:"ssh_port,omitempty"`
+
 	// Timing
-	CreatedAt    time.Time         `json:"created_at"`
-	StartedAt    *time.Time        `json:"started_at,omitempty"`
-	ExpiresAt    time.Time         `json:"expires_at"`
-	
+	CreatedAt time.Time  `json:"created_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
+	ExpiresAt time.Time  `json:"expires_at"`
+
 	// Extensions
-	ExtensionsUsed int             `json:"extensions_used"`
-	MaxExtensions  int             `json:"max_extensions"`
-	
+	ExtensionsUsed int `json:"extensions_used"`
+	MaxExtensions  int `json:"max_extensions"`
+
 	// Error info
-	Error        string            `json:"error,omitempty"`
-	
+	Error string `json:"error,omitempty"`
+
 	// Metadata
-	Metadata     map[string]string `json:"metadata,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // CreateInstanceRequest contains parameters for creating an instance
 type CreateInstanceRequest struct {
-	ChallengeID string            `json:"challenge_id"`
-	ResourceID  string            `json:"resource_id"`
-	UserID      string            `json:"user_id"`
-	Type        InstanceType      `json:"type"`
-	
+	ChallengeID string       `json:"challenge_id"`
+	ResourceID  string       `json:"resource_id"`
+	UserID      string       `json:"user_id"`
+	Type        InstanceType `json:"type"`
+
 	// For Docker
-	Image       string            `json:"image,omitempty"`
-	CPULimit    string            `json:"cpu_limit,omitempty"`
-	MemoryLimit string            `json:"memory_limit,omitempty"`
-	Ports       []int             `json:"ports,omitempty"`
-	
+	Image       string `json:"image,omitempty"`
+	CPULimit    string `json:"cpu_limit,omitempty"`
+	MemoryLimit string `json:"memory_limit,omitempty"`
+	Ports       []int  `json:"ports,omitempty"`
+
 	// For VM
-	TemplateID  string            `json:"template_id,omitempty"`
-	VCPU        int               `json:"vcpu,omitempty"`
-	MemoryMB    int               `json:"memory_mb,omitempty"`
-	
+	TemplateID string `json:"template_id,omitempty"`
+	VCPU       int    `json:"vcpu,omitempty"`
+	MemoryMB   int    `json:"memory_mb,omitempty"`
+
 	// Common
-	Duration    time.Duration     `json:"duration"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
+	Duration time.Duration     `json:"duration"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // Manager provides unified instance management across Docker and VMs
@@ -103,9 +104,9 @@ type Manager struct {
 	vmSvc        *vm.Service
 	logger       *zap.Logger
 	config       Config
-	
-	mu           sync.RWMutex
-	instances    map[string]*Instance // Cached instances
+
+	mu        sync.RWMutex
+	instances map[string]*Instance // Cached instances
 }
 
 // Config contains instance manager configuration
@@ -204,13 +205,12 @@ func (m *Manager) createDockerInstance(ctx context.Context, req CreateInstanceRe
 	}
 
 	// Create container
-	containerReq := container.CreateContainerRequest{
-		Image:       req.Image,
-		CPULimit:    req.CPULimit,
-		MemoryLimit: req.MemoryLimit,
-		ExposePorts: req.Ports,
-		UserID:      req.UserID,
-		ChallengeID: req.ChallengeID,
+	containerReq := container.CreateInstanceRequest{
+		InstanceID:    uuid.New(),
+		ChallengeSlug: req.ChallengeID,
+		Image:         req.Image,
+		CPULimit:      req.CPULimit,
+		MemoryLimit:   req.MemoryLimit,
 		Labels: map[string]string{
 			"anvil.resource_id":  req.ResourceID,
 			"anvil.challenge_id": req.ChallengeID,
@@ -218,19 +218,19 @@ func (m *Manager) createDockerInstance(ctx context.Context, req CreateInstanceRe
 		},
 	}
 
-	cont, err := m.containerSvc.CreateContainer(ctx, containerReq)
+	cont, err := m.containerSvc.CreateInstance(ctx, containerReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
 
 	now := time.Now()
 	instance := &Instance{
-		ID:            cont.ID,
+		ID:            cont.ContainerID,
 		Type:          InstanceTypeDocker,
 		ChallengeID:   req.ChallengeID,
 		ResourceID:    req.ResourceID,
 		UserID:        req.UserID,
-		Name:          cont.Name,
+		Name:          cont.ContainerName,
 		State:         StateRunning,
 		IPAddress:     cont.IPAddress,
 		ExposedPorts:  cont.PortMappings,
@@ -268,6 +268,12 @@ func (m *Manager) createVMInstance(ctx context.Context, req CreateInstanceReques
 		return nil, fmt.Errorf("failed to create VM: %w", err)
 	}
 
+	// Convert VM port mappings from map[int]int to map[string]int
+	exposedPorts := make(map[string]int)
+	for guestPort, hostPort := range vmInst.ExposedPorts {
+		exposedPorts[fmt.Sprintf("%d/tcp", guestPort)] = hostPort
+	}
+
 	instance := &Instance{
 		ID:            vmInst.ID,
 		Type:          InstanceTypeVM,
@@ -277,7 +283,7 @@ func (m *Manager) createVMInstance(ctx context.Context, req CreateInstanceReques
 		Name:          vmInst.Name,
 		State:         stateFromVMState(vmInst.State),
 		IPAddress:     vmInst.IPAddress,
-		ExposedPorts:  vmInst.ExposedPorts,
+		ExposedPorts:  exposedPorts,
 		MemoryMB:      vmInst.MemoryMB,
 		VNCPort:       vmInst.VNCPort,
 		SSHPort:       vmInst.SSHPort,
@@ -304,9 +310,9 @@ func (m *Manager) GetInstance(ctx context.Context, instanceID string) (*Instance
 	// Refresh state
 	switch instance.Type {
 	case InstanceTypeDocker:
-		cont, err := m.containerSvc.GetContainer(ctx, instanceID)
+		status, err := m.containerSvc.GetInstanceStatus(ctx, instanceID)
 		if err == nil {
-			instance.State = stateFromContainerStatus(cont.Status)
+			instance.State = stateFromContainerStatus(status)
 		}
 	case InstanceTypeVM:
 		vmInst, err := m.vmSvc.GetInstance(ctx, instanceID)
@@ -327,7 +333,7 @@ func (m *Manager) StopInstance(ctx context.Context, instanceID string) error {
 
 	switch instance.Type {
 	case InstanceTypeDocker:
-		return m.containerSvc.StopContainer(ctx, instanceID)
+		return m.containerSvc.StopInstance(ctx, instanceID)
 	case InstanceTypeVM:
 		return m.vmSvc.StopInstance(ctx, instanceID)
 	}
@@ -344,7 +350,7 @@ func (m *Manager) StartInstance(ctx context.Context, instanceID string) error {
 
 	switch instance.Type {
 	case InstanceTypeDocker:
-		return m.containerSvc.StartContainer(ctx, instanceID)
+		return m.containerSvc.StartInstance(ctx, instanceID)
 	case InstanceTypeVM:
 		return m.vmSvc.StartInstance(ctx, instanceID)
 	}
@@ -381,7 +387,7 @@ func (m *Manager) DestroyInstance(ctx context.Context, instanceID string) error 
 	var destroyErr error
 	switch instance.Type {
 	case InstanceTypeDocker:
-		destroyErr = m.containerSvc.RemoveContainer(ctx, instanceID)
+		destroyErr = m.containerSvc.RemoveInstance(ctx, instanceID)
 	case InstanceTypeVM:
 		destroyErr = m.vmSvc.DestroyInstance(ctx, instanceID)
 	}
@@ -569,7 +575,7 @@ func parseMemoryMB(memLimit string) int {
 	var value int
 	var unit string
 	fmt.Sscanf(memLimit, "%d%s", &value, &unit)
-	
+
 	switch unit {
 	case "g", "G":
 		return value * 1024
