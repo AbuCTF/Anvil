@@ -339,18 +339,38 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, descriptio
 
 	// Get disk size
 	info, err := os.Stat(qcow2Path)
+	var imageSizeBytes int64
 	if err == nil {
-		diskSizeGB = float64(info.Size()) / (1024 * 1024 * 1024)
+		imageSizeBytes = info.Size()
+		diskSizeGB = float64(imageSizeBytes) / (1024 * 1024 * 1024)
 	}
 
-	// Create template record
+	// Generate slug from name
+	slug := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+	slug = strings.ReplaceAll(slug, "_", "-")
+
+	// Determine original format
+	originalFormat := "qcow2"
+	if strings.HasSuffix(strings.ToLower(originalName), ".ova") {
+		originalFormat = "ova"
+	} else if strings.HasSuffix(strings.ToLower(originalName), ".vmdk") {
+		originalFormat = "vmdk"
+	}
+
+	// Parse vcpu and memory
+	vcpuInt := 2
+	memoryInt := 2048
+	fmt.Sscanf(minVCPU, "%d", &vcpuInt)
+	fmt.Sscanf(minMemoryMB, "%d", &memoryInt)
+
+	// Create template record with correct column names
 	_, err = h.db.Pool.Exec(ctx, `
 		INSERT INTO vm_templates (
-			id, name, description, original_name, format, disk_size_gb,
-			min_vcpu, min_memory_mb, os_type, storage_path, checksum,
-			is_active, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, 'qcow2', $5, $6, $7, $8, $9, $10, true, NOW(), NOW())
-	`, templateID, name, description, originalName, diskSizeGB, minVCPU, minMemoryMB, osType, qcow2Path, checksum)
+			id, upload_id, name, slug, description, image_path, original_format, original_path,
+			image_size, vcpu, memory_mb, disk_gb, os_type, is_active, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7::vm_image_format, $8, $9, $10, $11, $12, $13, true, NOW(), NOW())
+	`, templateID, uploadID, name, slug, description, qcow2Path, originalFormat, uploadPath,
+		imageSizeBytes, vcpuInt, memoryInt, int(diskSizeGB)+1, osType)
 
 	if err != nil {
 		h.logger.Error("failed to create template record", zap.Error(err))

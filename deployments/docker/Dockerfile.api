@@ -19,8 +19,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o anvil ./cmd/serve
 # Final stage
 FROM alpine:3.19
 
-# openssh-client needed for remote VM node operations
-RUN apk add --no-cache ca-certificates tzdata openssh-client
+# openssh-client for remote VM node operations
+# tar for extracting OVA files
+# qemu-img for converting VMDK to QCOW2
+RUN apk add --no-cache ca-certificates tzdata openssh-client tar qemu-img
 
 WORKDIR /app
 
@@ -28,9 +30,8 @@ WORKDIR /app
 COPY --from=builder /app/anvil .
 COPY --from=builder /app/config/config.yaml ./config/
 
-# Create non-root user
-RUN adduser -D -g '' anvil
-USER anvil
+# Create directories for uploads and templates
+RUN mkdir -p /var/lib/anvil/images/uploads /var/lib/anvil/images/templates
 
 EXPOSE 8080
 
