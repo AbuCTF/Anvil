@@ -518,6 +518,13 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			"flag_name":      matchedFlag.Name,
 			"points":         0,
 		})
+		return
+	}
+
+	// Update user's total score (only if actually inserted)
+	h.db.Pool.Exec(c.Request.Context(),
+		`UPDATE users SET total_score = total_score + $1, updated_at = NOW() WHERE id = $2`,
+		matchedFlag.Points, uid)
 
 	// Update challenge solve count
 	h.db.Pool.Exec(c.Request.Context(),
