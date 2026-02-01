@@ -270,6 +270,17 @@
 		return `${mins}:${secs.toString().padStart(2, '0')}`;
 	}
 
+	function getSecondsRemaining(expiresAt: number): number {
+		return expiresAt - Math.floor(Date.now() / 1000);
+	}
+
+	function getTimeColorClass(expiresAt: number): string {
+		const seconds = getSecondsRemaining(expiresAt);
+		if (seconds < 300) return 'text-red-400 animate-pulse';
+		if (seconds < 600) return 'text-yellow-400';
+		return 'text-white';
+	}
+
 	function copyToClipboard(text: string) {
 		navigator.clipboard.writeText(text);
 	}
@@ -640,9 +651,8 @@
 
 										<div>
 											<p class="text-xs text-stone-500 mb-1">Time Remaining</p>
-											{@const seconds = instance.expires_at - Math.floor(Date.now() / 1000)}
-											<p class="text-lg font-mono {seconds < 300 ? 'text-red-400 animate-pulse' : seconds < 600 ? 'text-yellow-400' : 'text-white'}">{timeRemaining}</p>
-											{#if seconds < 300}
+											<p class="text-lg font-mono {getTimeColorClass(instance.expires_at)}">{timeRemaining}</p>
+											{#if getSecondsRemaining(instance.expires_at) < 300}
 												<p class="text-xs text-red-400 mt-1">Instance will shut down soon!</p>
 											{/if}
 										</div>
