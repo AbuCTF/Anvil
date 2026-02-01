@@ -288,8 +288,8 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		// Fetch template details from database
 		var vmTemplate vm.VMTemplate
 		err = h.db.Pool.QueryRow(c.Request.Context(),
-			`SELECT id, name, COALESCE(description, ''), image_path, image_format,
-			        COALESCE(image_size_bytes, 0), vcpu, memory_mb, COALESCE(disk_gb, 0),
+			`SELECT id, name, COALESCE(description, ''), image_path, original_format,
+			        COALESCE(image_size, 0), vcpu, memory_mb, COALESCE(disk_gb, 0),
 			        COALESCE(os_type, 'linux'), created_at, updated_at
 			 FROM vm_templates WHERE id = $1`,
 			vmTemplateID).Scan(
