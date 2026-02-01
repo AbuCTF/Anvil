@@ -301,6 +301,7 @@ func (s *Server) setupRouter() {
 				templateHandler := handlers.NewVMTemplateHandler(s.config, s.db, s.logger)
 				vmTemplates.GET("", templateHandler.List)
 				vmTemplates.POST("/upload", templateHandler.Upload)
+				vmTemplates.POST("/register", templateHandler.Register)
 				vmTemplates.GET("/upload/:id/status", templateHandler.GetUploadStatus)
 				vmTemplates.GET("/:id", templateHandler.Get)
 				vmTemplates.PUT("/:id", templateHandler.Update)

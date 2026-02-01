@@ -452,6 +452,42 @@ class ApiClient {
 		});
 	}
 
+	// VM Templates
+	async getTemplates() {
+		return this.request<{ templates: any[] }>('/admin/vm-templates');
+	}
+
+	async registerTemplate(data: {
+		name: string;
+		image_path: string;
+		description?: string;
+		disk_gb: number;
+		vcpu?: number;
+		memory_mb?: number;
+		os_type?: string;
+		os_variant?: string;
+		os_name?: string;
+		network_mode?: string;
+	}) {
+		return this.request<{ id: string; message: string }>('/admin/vm-templates/register', {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async updateTemplate(templateId: string, data: any) {
+		return this.request<any>(`/admin/vm-templates/${templateId}`, {
+			method: 'PUT',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async deleteTemplate(templateId: string) {
+		return this.request<any>(`/admin/vm-templates/${templateId}`, {
+			method: 'DELETE'
+		});
+	}
+
 	// Infrastructure Stats
 	async getInfrastructureStats() {
 		return this.request<any>('/admin/infrastructure/stats');

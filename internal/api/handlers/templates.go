@@ -34,29 +34,33 @@ func NewVMTemplateHandler(cfg *config.Config, db *database.DB, logger *zap.Logge
 
 // TemplateResponse represents a VM template in API responses
 type TemplateResponse struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	Description  string            `json:"description"`
-	OriginalName string            `json:"original_name"`
-	Format       string            `json:"format"`
-	DiskSizeGB   float64           `json:"disk_size_gb"`
-	MinVCPU      int               `json:"min_vcpu"`
-	MinMemoryMB  int               `json:"min_memory_mb"`
-	OSType       string            `json:"os_type"`
-	StoragePath  string            `json:"storage_path"`
-	Checksum     string            `json:"checksum"`
-	IsActive     bool              `json:"is_active"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
-	CreatedAt    int64             `json:"created_at"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Slug           string            `json:"slug"`
+	Description    string            `json:"description"`
+	ImagePath      string            `json:"image_path"`
+	OriginalFormat string            `json:"original_format"`
+	ImageSizeBytes int64             `json:"image_size_bytes"`
+	DiskGB         int               `json:"disk_gb"`
+	VCPU           int               `json:"vcpu"`
+	MemoryMB       int               `json:"memory_mb"`
+	OSType         string            `json:"os_type"`
+	OSVariant      string            `json:"os_variant,omitempty"`
+	OSName         string            `json:"os_name,omitempty"`
+	NetworkMode    string            `json:"network_mode"`
+	IsActive       bool              `json:"is_active"`
+	IsPublic       bool              `json:"is_public"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	CreatedAt      int64             `json:"created_at"`
 }
 
 // List returns all VM templates
 // GET /api/v1/admin/vm-templates
 func (h *VMTemplateHandler) List(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
-		SELECT id, name, description, original_name, format, disk_size_gb,
-		       min_vcpu, min_memory_mb, os_type, storage_path, checksum,
-		       is_active, created_at
+		SELECT id, name, slug, description, image_path, original_format::text, image_size,
+		       disk_gb, vcpu, memory_mb, os_type, os_variant, os_name, network_mode,
+		       is_active, is_public, created_at
 		FROM vm_templates
 		ORDER BY created_at DESC
 	`)
@@ -70,13 +74,13 @@ func (h *VMTemplateHandler) List(c *gin.Context) {
 	var templates []TemplateResponse
 	for rows.Next() {
 		var t TemplateResponse
-		var description *string
+		var description, osVariant, osName *string
 		var createdAt time.Time
 
 		if err := rows.Scan(
-			&t.ID, &t.Name, &description, &t.OriginalName, &t.Format,
-			&t.DiskSizeGB, &t.MinVCPU, &t.MinMemoryMB, &t.OSType,
-			&t.StoragePath, &t.Checksum, &t.IsActive, &createdAt,
+			&t.ID, &t.Name, &t.Slug, &description, &t.ImagePath, &t.OriginalFormat,
+			&t.ImageSizeBytes, &t.DiskGB, &t.VCPU, &t.MemoryMB, &t.OSType,
+			&osVariant, &osName, &t.NetworkMode, &t.IsActive, &t.IsPublic, &createdAt,
 		); err != nil {
 			h.logger.Error("failed to scan template", zap.Error(err))
 			continue
@@ -84,6 +88,12 @@ func (h *VMTemplateHandler) List(c *gin.Context) {
 
 		if description != nil {
 			t.Description = *description
+		}
+		if osVariant != nil {
+			t.OSVariant = *osVariant
+		}
+		if osName != nil {
+			t.OSName = *osName
 		}
 		t.CreatedAt = createdAt.Unix()
 		templates = append(templates, t)
@@ -105,18 +115,18 @@ func (h *VMTemplateHandler) Get(c *gin.Context) {
 	templateID := c.Param("id")
 
 	var t TemplateResponse
-	var description *string
+	var description, osVariant, osName *string
 	var createdAt time.Time
 
 	err := h.db.Pool.QueryRow(c.Request.Context(), `
-		SELECT id, name, description, original_name, format, disk_size_gb,
-		       min_vcpu, min_memory_mb, os_type, storage_path, checksum,
-		       is_active, created_at
+		SELECT id, name, slug, description, image_path, original_format::text, image_size,
+		       disk_gb, vcpu, memory_mb, os_type, os_variant, os_name, network_mode,
+		       is_active, is_public, created_at
 		FROM vm_templates WHERE id = $1
 	`, templateID).Scan(
-		&t.ID, &t.Name, &description, &t.OriginalName, &t.Format,
-		&t.DiskSizeGB, &t.MinVCPU, &t.MinMemoryMB, &t.OSType,
-		&t.StoragePath, &t.Checksum, &t.IsActive, &createdAt,
+		&t.ID, &t.Name, &t.Slug, &description, &t.ImagePath, &t.OriginalFormat,
+		&t.ImageSizeBytes, &t.DiskGB, &t.VCPU, &t.MemoryMB, &t.OSType,
+		&osVariant, &osName, &t.NetworkMode, &t.IsActive, &t.IsPublic, &createdAt,
 	)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "template not found"})
@@ -125,6 +135,12 @@ func (h *VMTemplateHandler) Get(c *gin.Context) {
 
 	if description != nil {
 		t.Description = *description
+	}
+	if osVariant != nil {
+		t.OSVariant = *osVariant
+	}
+	if osName != nil {
+		t.OSName = *osName
 	}
 	t.CreatedAt = createdAt.Unix()
 
@@ -393,10 +409,10 @@ func (h *VMTemplateHandler) GetUploadStatus(c *gin.Context) {
 func (h *VMTemplateHandler) Delete(c *gin.Context) {
 	templateID := c.Param("id")
 
-	// Get storage path
-	var storagePath string
+	// Get image path
+	var imagePath string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT storage_path FROM vm_templates WHERE id = $1`, templateID).Scan(&storagePath)
+		`SELECT image_path FROM vm_templates WHERE id = $1`, templateID).Scan(&imagePath)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "template not found"})
 		return
@@ -427,8 +443,8 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 	}
 
 	// Remove file (optional - could keep for recovery)
-	if storagePath != "" {
-		os.Remove(storagePath)
+	if imagePath != "" {
+		os.Remove(imagePath)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "template deleted"})
@@ -442,9 +458,10 @@ func (h *VMTemplateHandler) Update(c *gin.Context) {
 	var req struct {
 		Name        *string `json:"name"`
 		Description *string `json:"description"`
-		MinVCPU     *int    `json:"min_vcpu"`
-		MinMemoryMB *int    `json:"min_memory_mb"`
+		VCPU        *int    `json:"vcpu"`
+		MemoryMB    *int    `json:"memory_mb"`
 		IsActive    *bool   `json:"is_active"`
+		IsPublic    *bool   `json:"is_public"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -455,12 +472,13 @@ func (h *VMTemplateHandler) Update(c *gin.Context) {
 		UPDATE vm_templates SET
 			name = COALESCE($1, name),
 			description = COALESCE($2, description),
-			min_vcpu = COALESCE($3, min_vcpu),
-			min_memory_mb = COALESCE($4, min_memory_mb),
+			vcpu = COALESCE($3, vcpu),
+			memory_mb = COALESCE($4, memory_mb),
 			is_active = COALESCE($5, is_active),
+			is_public = COALESCE($6, is_public),
 			updated_at = NOW()
-		WHERE id = $6
-	`, req.Name, req.Description, req.MinVCPU, req.MinMemoryMB, req.IsActive, templateID)
+		WHERE id = $7
+	`, req.Name, req.Description, req.VCPU, req.MemoryMB, req.IsActive, req.IsPublic, templateID)
 
 	if err != nil {
 		h.logger.Error("failed to update template", zap.Error(err))
@@ -469,6 +487,77 @@ func (h *VMTemplateHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "template updated"})
+}
+
+// TemplateRegisterRequest represents a request to register an existing QCOW2 file
+type TemplateRegisterRequest struct {
+	Name        string `json:"name" binding:"required"`
+	ImagePath   string `json:"image_path" binding:"required"`
+	Description string `json:"description"`
+	DiskGB      int    `json:"disk_gb" binding:"required"`
+	VCPU        int    `json:"vcpu"`
+	MemoryMB    int    `json:"memory_mb"`
+	OSType      string `json:"os_type"`
+	OSVariant   string `json:"os_variant"`
+	OSName      string `json:"os_name"`
+	NetworkMode string `json:"network_mode"`
+}
+
+// Register adds an existing QCOW2 file as a template
+// POST /api/v1/admin/vm-templates/register
+func (h *VMTemplateHandler) Register(c *gin.Context) {
+	var req TemplateRegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Validate file exists
+	info, err := os.Stat(req.ImagePath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file not found: " + req.ImagePath})
+		return
+	}
+
+	// Set defaults
+	if req.VCPU == 0 {
+		req.VCPU = 2
+	}
+	if req.MemoryMB == 0 {
+		req.MemoryMB = 2048
+	}
+	if req.OSType == "" {
+		req.OSType = "linux"
+	}
+	if req.NetworkMode == "" {
+		req.NetworkMode = "nat"
+	}
+
+	// Generate slug from name
+	slug := strings.ToLower(strings.ReplaceAll(req.Name, " ", "-"))
+	slug = strings.ReplaceAll(slug, "_", "-")
+
+	templateID := uuid.New()
+
+	_, err = h.db.Pool.Exec(c.Request.Context(), `
+		INSERT INTO vm_templates (
+			id, name, slug, description, image_path, original_format, image_size,
+			disk_gb, vcpu, memory_mb, os_type, os_variant, os_name, network_mode,
+			is_active, is_public, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, 'qcow2', $6, $7, $8, $9, $10, $11, $12, $13, true, false, NOW(), NOW())
+	`, templateID, req.Name, slug, req.Description, req.ImagePath, info.Size(),
+		req.DiskGB, req.VCPU, req.MemoryMB, req.OSType, req.OSVariant, req.OSName, req.NetworkMode)
+
+	if err != nil {
+		h.logger.Error("failed to register template", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register template: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":      templateID.String(),
+		"message": "template registered",
+	})
 }
 
 // ListActiveInstances returns all running VM instances
