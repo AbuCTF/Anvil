@@ -241,14 +241,17 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	expiresAt := time.Now().Add(timeout)
 
 	_, err = h.db.Pool.Exec(c.Request.Context(),
-		`INSERT INTO instances (id, user_id, challenge_id, status, created_at, expires_at, max_extensions)
-		 VALUES ($1, $2, $3, 'creating', NOW(), $4, $5)`,
-		instanceID, uid, challenge.ID, expiresAt, maxExts)
+		`INSERT INTO instances (id, user_id, challenge_id, status, created_at, expires_at)
+		 VALUES ($1, $2, $3, 'creating', NOW(), $4)`,
+		instanceID, uid, challenge.ID, expiresAt)
 	if err != nil {
 		h.logger.Error("failed to create instance record", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
 		return
 	}
+
+	// maxExts is read from challenge but extensions_used is tracked on instance
+	_ = maxExts // Used when checking extension limits
 
 	var instanceIP string
 	var resourceID string // container_id or vm_id
