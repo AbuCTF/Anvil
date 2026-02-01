@@ -195,8 +195,6 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		})
 		return
 	}
-		return
-	}
 
 	// Get challenge details with resource_type
 	var challenge struct {
