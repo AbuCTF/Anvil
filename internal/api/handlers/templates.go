@@ -192,11 +192,18 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 	uploadID := uuid.New()
 	templateID := uuid.New()
 
+	// Get user ID from context
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not authenticated"})
+		return
+	}
+
 	// Create upload record in database
 	_, err = h.db.Pool.Exec(c.Request.Context(), `
 		INSERT INTO uploads (id, user_id, filename, total_size, content_type, file_type, chunk_size, total_chunks, storage_key, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, 'vm_template', 1, 1, $6, 'uploading', NOW(), NOW())
-	`, uploadID, c.GetString("user_id"), originalName, header.Size, header.Header.Get("Content-Type"), uploadID.String())
+	`, uploadID, userID, originalName, header.Size, header.Header.Get("Content-Type"), uploadID.String())
 	if err != nil {
 		h.logger.Error("failed to create upload record", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initiate upload"})
