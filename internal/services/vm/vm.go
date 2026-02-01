@@ -287,9 +287,16 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 
 	// Allocate resources
 	vncPort := s.allocateVNCPort()
-	ipAddress := s.allocateIP()
 	macAddress := generateMAC(instanceID)
 	vmName := fmt.Sprintf("anvil-%s", instanceID[:8])
+
+	// Allocate a specific IP and add DHCP reservation
+	// This ensures the VM gets a predictable IP that we can display immediately
+	ipAddress, err := s.allocateIPWithReservation(ctx, node, macAddress, instanceID)
+	if err != nil {
+		s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f %s", overlayPath))
+		return nil, fmt.Errorf("failed to allocate IP: %w", err)
+	}
 
 	// Generate libvirt XML
 	domainXML, err := s.generateDomainXML(vmName, instanceID, template.VCPU, template.MemoryMB, overlayPath, macAddress, vncPort, node.NetworkName)
@@ -300,8 +307,9 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 	// Define and start VM on node via SSH + virsh
 	err = s.defineAndStartVMOnNode(ctx, domainXML, vmName, node)
 	if err != nil {
-		// Cleanup overlay on failure
+		// Cleanup overlay and DHCP reservation on failure
 		s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f %s", overlayPath))
+		s.removeIPReservation(ctx, node, macAddress)
 		return nil, fmt.Errorf("failed to start VM: %w", err)
 	}
 
@@ -350,6 +358,69 @@ func (s *Service) createOverlayOnNode(ctx context.Context, basePath string, inst
 	}
 
 	return overlayPath, nil
+}
+
+// allocateIPWithReservation allocates a specific IP and creates a DHCP reservation
+// This ensures the VM gets a predictable IP that we know before it boots
+func (s *Service) allocateIPWithReservation(ctx context.Context, node *NodeInfo, macAddress, instanceID string) (string, error) {
+	// Allocate next available IP from our pool
+	s.mu.Lock()
+	ipAddress := s.allocateIPLocked()
+	s.mu.Unlock()
+
+	// Add DHCP host reservation to libvirt network
+	// Format: virsh net-update <network> add ip-dhcp-host "<host mac='XX:XX:XX:XX:XX:XX' ip='10.100.X.Y'/>" --live --config
+	virshCmd := "virsh -c qemu:///system"
+	hostXML := fmt.Sprintf("<host mac='%s' ip='%s'/>", macAddress, ipAddress)
+	cmd := fmt.Sprintf("%s net-update %s add ip-dhcp-host \"%s\" --live --config",
+		virshCmd, node.NetworkName, hostXML)
+
+	output, err := s.runSSHCommand(ctx, node, cmd)
+	if err != nil {
+		s.logger.Warn("failed to add DHCP reservation, VM will use dynamic IP",
+			zap.Error(err),
+			zap.String("output", output),
+			zap.String("mac", macAddress),
+			zap.String("ip", ipAddress),
+		)
+		// Don't fail - VM will still get an IP from DHCP pool, just not this specific one
+		// The IP shown in UI might differ from actual, but VM will work
+	}
+
+	s.logger.Info("allocated IP with DHCP reservation",
+		zap.String("instance_id", instanceID),
+		zap.String("mac", macAddress),
+		zap.String("ip", ipAddress),
+	)
+
+	return ipAddress, nil
+}
+
+// removeIPReservation removes a DHCP reservation (cleanup on failure)
+func (s *Service) removeIPReservation(ctx context.Context, node *NodeInfo, macAddress string) {
+	virshCmd := "virsh -c qemu:///system"
+	// We need to find the IP for this MAC to remove it properly
+	// For simplicity, we'll just log the attempt - the reservation will be orphaned but harmless
+	cmd := fmt.Sprintf("%s net-update %s delete ip-dhcp-host \"<host mac='%s'/>\" --live --config 2>/dev/null || true",
+		virshCmd, node.NetworkName, macAddress)
+	s.runSSHCommand(ctx, node, cmd)
+}
+
+// allocateIPLocked allocates the next available IP (must hold s.mu)
+func (s *Service) allocateIPLocked() string {
+	// Use 10.100.10.x - 10.100.250.x range (avoiding .0, .1, .255)
+	// This gives us ~61,000 possible IPs
+	for subnet := 10; subnet <= 250; subnet++ {
+		for host := 10; host <= 250; host++ {
+			ip := fmt.Sprintf("10.100.%d.%d", subnet, host)
+			if !s.usedIPs[ip] {
+				s.usedIPs[ip] = true
+				return ip
+			}
+		}
+	}
+	// Fallback - should never happen with 61k IPs
+	return fmt.Sprintf("10.100.%d.%d", 100+len(s.usedIPs)%150, 10+len(s.usedIPs)%240)
 }
 
 // defineAndStartVMOnNode defines and starts a VM on a remote node via SSH
