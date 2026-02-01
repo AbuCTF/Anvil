@@ -24,13 +24,15 @@ func NewScoreboardService(cfg *config.Config, db *database.DB, logger *zap.Logge
 
 // ScoreboardEntry represents an entry in the scoreboard
 type ScoreboardEntry struct {
-	Rank        int     `json:"rank"`
-	UserID      string  `json:"user_id"`
-	Username    string  `json:"username"`
-	TotalScore  int     `json:"total_score"`
-	TotalSolves int     `json:"total_solves"`
-	LastSolveAt *int64  `json:"last_solve_at,omitempty"`
-	Country     *string `json:"country,omitempty"`
+	Rank             int     `json:"rank"`
+	UserID           string  `json:"user_id"`
+	Username         string  `json:"username"`
+	DisplayName      *string `json:"display_name,omitempty"`
+	TotalScore       int     `json:"total_score"`
+	ChallengesSolved int     `json:"challenges_solved"`
+	FlagsSolved      int     `json:"flags_solved"`
+	LastSolveAt      *string `json:"last_solve_at,omitempty"`
+	Country          *string `json:"country,omitempty"`
 }
 
 // Get returns the scoreboard
@@ -40,17 +42,23 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		return
 	}
 
-	// Get top users by score
+	// Get top users by score with challenge and flag counts
 	query := `
 		SELECT 
-			u.id, u.username, u.total_score, u.country,
-			COUNT(DISTINCT s.id) as total_solves,
+			u.id, 
+			u.username, 
+			u.display_name,
+			u.total_score, 
+			u.country,
+			COUNT(DISTINCT s.challenge_id) as challenges_solved,
+			COUNT(DISTINCT s.flag_id) as flags_solved,
 			MAX(s.solved_at) as last_solve
 		FROM users u
 		LEFT JOIN solves s ON u.id = s.user_id
 		WHERE u.role != 'admin' AND u.is_banned = false
-		GROUP BY u.id, u.username, u.total_score, u.country
-		ORDER BY u.total_score DESC, last_solve ASC
+		GROUP BY u.id, u.username, u.display_name, u.total_score, u.country
+		HAVING u.total_score > 0 OR COUNT(s.id) > 0
+		ORDER BY u.total_score DESC, last_solve ASC NULLS LAST
 		LIMIT 100
 	`
 
@@ -68,15 +76,16 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		var entry ScoreboardEntry
 		var lastSolve *time.Time
 
-		if err := rows.Scan(&entry.UserID, &entry.Username, &entry.TotalScore,
-			&entry.Country, &entry.TotalSolves, &lastSolve); err != nil {
+		if err := rows.Scan(&entry.UserID, &entry.Username, &entry.DisplayName, &entry.TotalScore,
+			&entry.Country, &entry.ChallengesSolved, &entry.FlagsSolved, &lastSolve); err != nil {
+			h.logger.Warn("failed to scan scoreboard row", zap.Error(err))
 			continue
 		}
 
 		entry.Rank = rank
 		if lastSolve != nil {
-			ts := lastSolve.Unix()
-			entry.LastSolveAt = &ts
+			formatted := lastSolve.Format(time.RFC3339)
+			entry.LastSolveAt = &formatted
 		}
 
 		entries = append(entries, entry)
@@ -87,13 +96,13 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		entries = []ScoreboardEntry{}
 	}
 
-	// Get total user count
+	// Get total user count (only users with scores or activity)
 	var totalUsers int
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM users WHERE role != 'admin' AND is_banned = false`).Scan(&totalUsers)
+		`SELECT COUNT(*) FROM users WHERE role != 'admin' AND is_banned = false AND total_score > 0`).Scan(&totalUsers)
 
 	c.JSON(http.StatusOK, gin.H{
-		"entries":     entries,
+		"leaderboard": entries,
 		"total_users": totalUsers,
 	})
 }

@@ -48,14 +48,16 @@
 				{#each navigation as item}
 					<a
 						href={item.href}
-						class="px-4 py-2 text-base font-mono font-medium transition-colors
+						class="flex items-center gap-2 px-4 py-2 text-sm font-medium transition-colors rounded-lg
                      {$page.url.pathname.startsWith(item.href)
-							? 'text-white'
-							: 'text-stone-400 hover:text-white'}"
+							? 'text-white bg-stone-800/50'
+							: 'text-stone-400 hover:text-white hover:bg-stone-900/50'}"
 					>
-						</a>
-					{/each}
-				</div>
+						<Icon icon={item.icon} class="w-4 h-4" />
+						{item.name}
+					</a>
+				{/each}
+			</div>
 
 				<!-- User Menu -->
 				<div class="hidden md:flex items-center space-x-2">
