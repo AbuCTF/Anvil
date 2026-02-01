@@ -143,7 +143,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	// Check existing instances count
 	var activeCount int
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM instances WHERE user_id = $1 AND status IN ('running', 'starting')`,
+		`SELECT COUNT(*) FROM instances WHERE user_id = $1 AND status IN ('running', 'creating', 'pending')`,
 		uid).Scan(&activeCount)
 	if err != nil {
 		h.logger.Error("failed to count instances", zap.Error(err))
@@ -166,7 +166,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	err = h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT i.id FROM instances i
 		 JOIN challenges c ON i.challenge_id = c.id
-		 WHERE i.user_id = $1 AND c.slug = $2 AND i.status IN ('running', 'starting')`,
+		 WHERE i.user_id = $1 AND c.slug = $2 AND i.status IN ('running', 'creating', 'pending')`,
 		uid, req.ChallengeSlug).Scan(&existingID)
 	if existingID != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -242,7 +242,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 
 	_, err = h.db.Pool.Exec(c.Request.Context(),
 		`INSERT INTO instances (id, user_id, challenge_id, status, created_at, expires_at, max_extensions)
-		 VALUES ($1, $2, $3, 'starting', NOW(), $4, $5)`,
+		 VALUES ($1, $2, $3, 'creating', NOW(), $4, $5)`,
 		instanceID, uid, challenge.ID, expiresAt, maxExts)
 	if err != nil {
 		h.logger.Error("failed to create instance record", zap.Error(err))
