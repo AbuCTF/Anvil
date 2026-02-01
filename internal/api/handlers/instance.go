@@ -306,8 +306,32 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			return
 		}
 
-		// Create VM instance using template data
-		vmInfo, err := h.vmSvc.CreateInstanceWithTemplate(c.Request.Context(), challenge.ID, instanceID.String(), &vmTemplate)
+		// Select an available VM node with capacity
+		var node vm.NodeInfo
+		err = h.db.Pool.QueryRow(c.Request.Context(),
+			`SELECT id, name, hostname, ip_address, ssh_port, ssh_user, COALESCE(ssh_key_path, ''),
+			        libvirt_uri, COALESCE(vm_network_name, 'anvil-lab')
+			 FROM vm_nodes 
+			 WHERE status = 'online' 
+			   AND (total_vcpu - used_vcpu - reserved_vcpu) >= $1
+			   AND (total_memory_mb - used_memory_mb - reserved_memory_mb) >= $2
+			   AND active_vms < max_vms
+			 ORDER BY priority DESC, active_vms ASC
+			 LIMIT 1`,
+			vmTemplate.VCPU, vmTemplate.MemoryMB).Scan(
+			&node.ID, &node.Name, &node.Hostname, &node.IPAddress, &node.SSHPort,
+			&node.SSHUser, &node.SSHKeyPath, &node.LibvirtURI, &node.NetworkName,
+		)
+		if err != nil {
+			h.logger.Error("no available VM node with capacity", zap.Error(err))
+			h.db.Pool.Exec(c.Request.Context(),
+				`UPDATE instances SET status = 'failed', error_message = 'No VM node available' WHERE id = $1`, instanceID)
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No VM node available with sufficient capacity"})
+			return
+		}
+
+		// Create VM instance using template data on the selected node
+		vmInfo, err := h.vmSvc.CreateInstanceOnNode(c.Request.Context(), challenge.ID, instanceID.String(), &vmTemplate, &node)
 		if err != nil {
 			h.logger.Error("failed to create VM", zap.Error(err))
 			h.db.Pool.Exec(c.Request.Context(),
@@ -315,6 +339,17 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start VM: " + err.Error()})
 			return
 		}
+
+		// Update node resource usage
+		h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE vm_nodes SET 
+			 used_vcpu = used_vcpu + $1, 
+			 used_memory_mb = used_memory_mb + $2,
+			 active_vms = active_vms + 1,
+			 updated_at = NOW()
+			 WHERE id = $3`,
+			vmTemplate.VCPU, vmTemplate.MemoryMB, node.ID)
+
 		instanceIP = vmInfo.IPAddress
 		resourceID = vmInfo.VMID
 	} else {

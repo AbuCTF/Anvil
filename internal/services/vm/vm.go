@@ -45,6 +45,19 @@ const (
 	ImageFormatRAW   ImageFormat = "raw"
 )
 
+// NodeInfo contains connection details for a VM node
+type NodeInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Hostname    string `json:"hostname"`
+	IPAddress   string `json:"ip_address"`
+	SSHPort     int    `json:"ssh_port"`
+	SSHUser     string `json:"ssh_user"`
+	SSHKeyPath  string `json:"ssh_key_path"`
+	LibvirtURI  string `json:"libvirt_uri"`
+	NetworkName string `json:"network_name"`
+}
+
 // VMTemplate represents a VM template from an uploaded image
 type VMTemplate struct {
 	ID          string            `json:"id"`
@@ -247,6 +260,187 @@ type VMInstanceInfo struct {
 	VMID      string
 	IPAddress string
 	VNCPort   int
+	NodeID    string
+}
+
+// CreateInstanceOnNode creates a VM instance on a specific node via SSH
+func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanceID string, template *VMTemplate, node *NodeInfo) (*VMInstanceInfo, error) {
+	if template == nil {
+		return nil, fmt.Errorf("template cannot be nil")
+	}
+	if node == nil {
+		return nil, fmt.Errorf("node cannot be nil")
+	}
+
+	s.logger.Info("creating VM instance on node",
+		zap.String("instance_id", instanceID),
+		zap.String("template_id", template.ID),
+		zap.String("node", node.Name),
+		zap.String("node_ip", node.IPAddress),
+	)
+
+	// Create overlay disk on the remote node via SSH
+	overlayPath, err := s.createOverlayOnNode(ctx, template.ImagePath, instanceID, node)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create disk overlay: %w", err)
+	}
+
+	// Allocate resources
+	vncPort := s.allocateVNCPort()
+	ipAddress := s.allocateIP()
+	macAddress := generateMAC(instanceID)
+	vmName := fmt.Sprintf("anvil-%s", instanceID[:8])
+
+	// Generate libvirt XML
+	domainXML, err := s.generateDomainXML(vmName, instanceID, template.VCPU, template.MemoryMB, overlayPath, macAddress, vncPort, node.NetworkName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate domain XML: %w", err)
+	}
+
+	// Define and start VM on node via SSH + virsh
+	err = s.defineAndStartVMOnNode(ctx, domainXML, vmName, node)
+	if err != nil {
+		// Cleanup overlay on failure
+		s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f %s", overlayPath))
+		return nil, fmt.Errorf("failed to start VM: %w", err)
+	}
+
+	// Store instance info
+	instance := &VMInstance{
+		ID:          instanceID,
+		Name:        vmName,
+		TemplateID:  template.ID,
+		ChallengeID: challengeID,
+		State:       VMStateRunning,
+		VCPU:        template.VCPU,
+		MemoryMB:    template.MemoryMB,
+		DiskPath:    overlayPath,
+		NetworkID:   node.NetworkName,
+		IPAddress:   ipAddress,
+		MACAddress:  macAddress,
+		VNCPort:     vncPort,
+		CreatedAt:   time.Now(),
+		ExpiresAt:   time.Now().Add(s.config.DefaultDuration),
+	}
+
+	s.mu.Lock()
+	s.instances[instanceID] = instance
+	s.mu.Unlock()
+
+	return &VMInstanceInfo{
+		VMID:      instanceID,
+		IPAddress: ipAddress,
+		VNCPort:   vncPort,
+		NodeID:    node.ID,
+	}, nil
+}
+
+// createOverlayOnNode creates a CoW overlay disk on a remote node via SSH
+func (s *Service) createOverlayOnNode(ctx context.Context, basePath string, instanceID string, node *NodeInfo) (string, error) {
+	overlayDir := "/var/lib/anvil/storage/vms/overlays"
+	overlayPath := fmt.Sprintf("%s/%s.qcow2", overlayDir, instanceID)
+
+	// Ensure overlay directory exists and create the overlay
+	cmd := fmt.Sprintf("mkdir -p %s && qemu-img create -f qcow2 -F qcow2 -b %s %s",
+		overlayDir, basePath, overlayPath)
+
+	output, err := s.runSSHCommand(ctx, node, cmd)
+	if err != nil {
+		return "", fmt.Errorf("failed to create overlay: %s: %w", output, err)
+	}
+
+	return overlayPath, nil
+}
+
+// defineAndStartVMOnNode defines and starts a VM on a remote node via SSH
+func (s *Service) defineAndStartVMOnNode(ctx context.Context, domainXML, vmName string, node *NodeInfo) error {
+	// Write XML to temp file on node, define VM, then start it
+	xmlPath := fmt.Sprintf("/tmp/anvil-vm-%s.xml", vmName)
+
+	// Escape the XML for shell
+	escapedXML := strings.ReplaceAll(domainXML, "'", "'\\''")
+
+	// Write XML, define, start, cleanup
+	cmd := fmt.Sprintf("echo '%s' > %s && virsh define %s && virsh start %s && rm -f %s",
+		escapedXML, xmlPath, xmlPath, vmName, xmlPath)
+
+	output, err := s.runSSHCommand(ctx, node, cmd)
+	if err != nil {
+		return fmt.Errorf("virsh command failed: %s: %w", output, err)
+	}
+
+	return nil
+}
+
+// runSSHCommand executes a command on a remote node via SSH
+func (s *Service) runSSHCommand(ctx context.Context, node *NodeInfo, command string) (string, error) {
+	sshArgs := []string{
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "ConnectTimeout=10",
+		"-p", fmt.Sprintf("%d", node.SSHPort),
+	}
+
+	// Add SSH key if specified
+	if node.SSHKeyPath != "" {
+		sshArgs = append(sshArgs, "-i", node.SSHKeyPath)
+	}
+
+	target := fmt.Sprintf("%s@%s", node.SSHUser, node.IPAddress)
+	sshArgs = append(sshArgs, target, command)
+
+	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
+// generateDomainXML creates libvirt domain XML for a VM
+func (s *Service) generateDomainXML(name, uuid string, vcpu, memoryMB int, diskPath, macAddress string, vncPort int, networkName string) (string, error) {
+	xml := fmt.Sprintf(`<domain type='kvm'>
+  <name>%s</name>
+  <uuid>%s</uuid>
+  <memory unit='MiB'>%d</memory>
+  <vcpu>%d</vcpu>
+  <os>
+    <type arch='x86_64'>hvm</type>
+    <boot dev='hd'/>
+  </os>
+  <features>
+    <acpi/>
+    <apic/>
+  </features>
+  <cpu mode='host-passthrough'/>
+  <clock offset='utc'/>
+  <on_poweroff>destroy</on_poweroff>
+  <on_reboot>restart</on_reboot>
+  <on_crash>destroy</on_crash>
+  <devices>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='%s'/>
+      <target dev='vda' bus='virtio'/>
+    </disk>
+    <interface type='network'>
+      <mac address='%s'/>
+      <source network='%s'/>
+      <model type='virtio'/>
+    </interface>
+    <graphics type='vnc' port='%d' autoport='no' listen='0.0.0.0'>
+      <listen type='address' address='0.0.0.0'/>
+    </graphics>
+    <video>
+      <model type='virtio'/>
+    </video>
+    <serial type='pty'>
+      <target port='0'/>
+    </serial>
+    <console type='pty'>
+      <target type='serial' port='0'/>
+    </console>
+  </devices>
+</domain>`, name, uuid, memoryMB, vcpu, diskPath, macAddress, networkName, vncPort)
+
+	return xml, nil
 }
 
 // RegisterTemplate registers a new VM template from an uploaded image
