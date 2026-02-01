@@ -194,9 +194,9 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 
 	// Create upload record in database
 	_, err = h.db.Pool.Exec(c.Request.Context(), `
-		INSERT INTO uploads (id, user_id, filename, size_bytes, content_type, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 'uploading', NOW(), NOW())
-	`, uploadID, c.GetString("user_id"), originalName, header.Size, header.Header.Get("Content-Type"))
+		INSERT INTO uploads (id, user_id, filename, total_size, content_type, file_type, chunk_size, total_chunks, storage_key, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, 'vm_template', 1, 1, $6, 'uploading', NOW(), NOW())
+	`, uploadID, c.GetString("user_id"), originalName, header.Size, header.Header.Get("Content-Type"), uploadID.String())
 	if err != nil {
 		h.logger.Error("failed to create upload record", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to initiate upload"})
