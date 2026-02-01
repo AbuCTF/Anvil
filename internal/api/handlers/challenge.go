@@ -165,10 +165,14 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	var userID *uuid.UUID
 	var userRole string
 	if id, exists := c.Get("user_id"); exists {
-		uid, _ := uuid.Parse(id.(string))
-		userID = &uid
+		if uid, ok := id.(uuid.UUID); ok {
+			userID = &uid
+		} else if uidStr, ok := id.(string); ok {
+			uid, _ := uuid.Parse(uidStr)
+			userID = &uid
+		}
 	}
-	if role, exists := c.Get("user_role"); exists {
+	if role, exists := c.Get("role"); exists {
 		userRole = role.(string)
 	}
 
@@ -472,7 +476,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	err = h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT EXISTS(SELECT 1 FROM solves WHERE user_id = $1 AND flag_id = $2)`,
 		uid, matchedFlag.ID).Scan(&alreadySolved)
-	
+
 	if err != nil {
 		h.logger.Error("failed to check solve status", zap.Error(err))
 		// Continue anyway, INSERT will catch duplicate
