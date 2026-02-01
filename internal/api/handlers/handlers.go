@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -9,6 +11,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -211,10 +214,87 @@ func NewSettingsHandler(cfg *config.Config, db *database.DB, logger *zap.Logger)
 }
 
 func (h *SettingsHandler) List(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"settings": []interface{}{}})
+	settings := make(map[string]interface{})
+
+	rows, err := h.db.Pool.Query(c.Request.Context(), `
+		SELECT key, value FROM platform_settings
+	`)
+	if err != nil {
+		h.logger.Error("Failed to load settings", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load settings"})
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			continue
+		}
+		settings[key] = value
+	}
+
+	c.JSON(http.StatusOK, gin.H{"settings": settings})
 }
+
 func (h *SettingsHandler) Update(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	var req struct {
+		Settings map[string]interface{} `json:"settings"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	// Start transaction
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+
+	// Upsert each setting
+	for key, value := range req.Settings {
+		valueStr, ok := value.(string)
+		if !ok {
+			// Convert numbers to string
+			switch v := value.(type) {
+			case float64:
+				valueStr = fmt.Sprintf("%.0f", v)
+			case int:
+				valueStr = fmt.Sprintf("%d", v)
+			default:
+				valueStr = fmt.Sprintf("%v", v)
+			}
+		}
+
+		_, err := tx.Exec(c.Request.Context(), `
+			INSERT INTO platform_settings (key, value, updated_at)
+			VALUES ($1, $2, NOW())
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+		`, key, valueStr)
+		if err != nil {
+			h.logger.Error("Failed to update setting", zap.String("key", key), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update setting: " + key})
+			return
+		}
+	}
+
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit settings"})
+		return
+	}
+
+	// Log the action
+	userID, _ := c.Get("userID")
+	uid := userID.(uuid.UUID)
+	logAdminAction(h.db, c, uid.String(), "settings_updated", "platform_settings", "", map[string]interface{}{
+		"settings_count": len(req.Settings),
+	})
+
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // AuditHandler for audit logs
@@ -240,3 +320,12 @@ func NewStatsHandler(db *database.DB, logger *zap.Logger) *StatsHandler {
 }
 
 // Get method is implemented in admin.go
+
+// logAdminAction logs an admin action to the audit log
+func logAdminAction(db *database.DB, c *gin.Context, userID, action, resourceType, resourceID string, metadata map[string]interface{}) {
+	metadataJSON, _ := json.Marshal(metadata)
+	_, _ = db.Pool.Exec(c.Request.Context(), `
+		INSERT INTO audit_log (user_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, userID, action, resourceType, resourceID, string(metadataJSON), c.ClientIP(), c.Request.UserAgent())
+}

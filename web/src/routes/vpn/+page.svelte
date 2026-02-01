@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
@@ -11,6 +11,7 @@
 	let generating = false;
 	let error = '';
 	let copied = false;
+	let statusInterval: ReturnType<typeof setInterval>;
 
 	onMount(async () => {
 		if (!$auth.isAuthenticated) {
@@ -18,6 +19,19 @@
 			return;
 		}
 		await loadVPNData();
+		
+		// Poll status every 10 seconds
+		statusInterval = setInterval(async () => {
+			try {
+				vpnStatus = await api.getVPNStatus();
+			} catch (e) {
+				// Silently fail status checks
+			}
+		}, 10000);
+	});
+
+	onDestroy(() => {
+		if (statusInterval) clearInterval(statusInterval);
 	});
 
 	async function loadVPNData() {
@@ -27,7 +41,11 @@
 				api.getVPNStatus().catch(() => null)
 			]);
 
-			vpnConfig = configRes?.config || null;
+			if (configRes?.config_file) {
+				vpnConfig = configRes.config_file;
+			} else if (configRes?.has_config === false) {
+				vpnConfig = null;
+			}
 			vpnStatus = statusRes || null;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load VPN data';
@@ -42,7 +60,9 @@
 
 		try {
 			const response = await api.generateVPNConfig();
-			vpnConfig = response.config;
+			if (response.config_file) {
+				vpnConfig = response.config_file;
+			}
 			await loadVPNData();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to generate VPN config';
@@ -59,7 +79,9 @@
 		const a = document.createElement('a');
 		a.href = url;
 		a.download = 'anvil.conf';
+		document.body.appendChild(a);
 		a.click();
+		document.body.removeChild(a);
 		URL.revokeObjectURL(url);
 	}
 
@@ -68,6 +90,22 @@
 		await navigator.clipboard.writeText(vpnConfig);
 		copied = true;
 		setTimeout(() => copied = false, 2000);
+	}
+
+	function formatBytes(bytes: number): string {
+		if (bytes === 0) return '0 B';
+		const k = 1024;
+		const sizes = ['B', 'KB', 'MB', 'GB'];
+		const i = Math.floor(Math.log(bytes) / Math.log(k));
+		return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+	}
+
+	function formatLastHandshake(timestamp: number): string {
+		if (!timestamp) return 'Never';
+		const seconds = Math.floor(Date.now() / 1000) - timestamp;
+		if (seconds < 60) return `${seconds}s ago`;
+		if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+		return `${Math.floor(seconds / 3600)}h ago`;
 	}
 </script>
 
@@ -110,14 +148,14 @@
 									<Icon icon="mdi:ip-network" class="w-4 h-4" />
 									<span>Internal IP</span>
 								</span>
-								<code class="text-green-400 font-mono">{vpnStatus.internal_ip}</code>
+								<code class="text-green-400 font-mono">{vpnStatus.ip_address}</code>
 							</div>
 							<div class="flex items-center justify-between">
 								<span class="text-stone-500 flex items-center space-x-2">
 									<Icon icon="mdi:clock-outline" class="w-4 h-4" />
-									<span>Connected Since</span>
+									<span>Last Handshake</span>
 								</span>
-								<span class="text-white">{vpnStatus.connected_since || 'N/A'}</span>
+								<span class="text-white">{formatLastHandshake(vpnStatus.last_handshake)}</span>
 							</div>
 							<div class="flex items-center justify-between">
 								<span class="text-stone-500 flex items-center space-x-2">
@@ -125,11 +163,15 @@
 									<span>Data Transfer</span>
 								</span>
 								<span class="text-white">
-									<Icon icon="mdi:arrow-up" class="w-3 h-3 inline text-green-400" /> {vpnStatus.bytes_sent || '0 B'} / 
-									<Icon icon="mdi:arrow-down" class="w-3 h-3 inline text-blue-400" /> {vpnStatus.bytes_received || '0 B'}
+									<Icon icon="mdi:arrow-up" class="w-3 h-3 inline text-green-400" /> {formatBytes(vpnStatus.bytes_sent || 0)} / 
+									<Icon icon="mdi:arrow-down" class="w-3 h-3 inline text-blue-400" /> {formatBytes(vpnStatus.bytes_received || 0)}
 								</span>
 							</div>
 						</div>
+
+						<p class="text-xs text-stone-500 mt-4">
+							<Icon icon="mdi:information" class="w-3 h-3 inline" /> Status updates every 10 seconds
+						</p>
 					{:else}
 						<div class="flex items-center space-x-3 mb-6">
 							<div class="w-4 h-4 bg-stone-600 rounded-full"></div>
@@ -138,9 +180,19 @@
 
 						<div class="bg-stone-900/50 border border-stone-800 rounded-lg p-4">
 							<p class="text-stone-400 text-sm">
-								Download and install the WireGuard configuration to connect to the lab network.
+								{#if vpnConfig}
+									Download and install the WireGuard configuration, then activate the tunnel to connect.
+								{:else}
+									Generate a VPN configuration first, then download and install it.
+								{/if}
 							</p>
 						</div>
+
+						{#if vpnStatus?.ip_address}
+							<p class="text-xs text-stone-500 mt-4">
+								Your assigned IP: <code class="text-stone-400">{vpnStatus.ip_address}</code>
+							</p>
+						{/if}
 					{/if}
 				</div>
 

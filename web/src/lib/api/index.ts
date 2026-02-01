@@ -455,6 +455,18 @@ class ApiClient {
 		return this.request<{ instances: any[] }>('/admin/infrastructure/instances');
 	}
 
+	// Platform Settings
+	async getPlatformSettings() {
+		return this.request<{ settings: Record<string, any> }>('/admin/settings');
+	}
+
+	async updatePlatformSettings(settings: Record<string, any>) {
+		return this.request<{ success: boolean }>('/admin/settings', {
+			method: 'PUT',
+			body: JSON.stringify({ settings })
+		});
+	}
+
 	async uploadOvaChallenge(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {
 		const token = this.getAuthToken();
 		

@@ -467,37 +467,88 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	uid := userID.(uuid.UUID)
 	instanceID := c.Param("id")
 
-	// Get instance
-	var containerID *string
-	var status string
+	// Get instance with challenge info for cooldown
+	var inst struct {
+		ContainerID  *string
+		Status       string
+		ChallengeID  string
+		ResourceType string
+	}
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT container_id, status FROM instances WHERE id = $1 AND user_id = $2`,
-		instanceID, uid).Scan(&containerID, &status)
+		`SELECT i.container_id, i.status, i.challenge_id, c.resource_type 
+		 FROM instances i
+		 JOIN challenges c ON i.challenge_id = c.id
+		 WHERE i.id = $1 AND i.user_id = $2`,
+		instanceID, uid).Scan(&inst.ContainerID, &inst.Status, &inst.ChallengeID, &inst.ResourceType)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
 		return
 	}
 
-	if status == "stopped" || status == "terminated" {
+	if inst.Status == "stopped" || inst.Status == "terminated" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "instance already stopped"})
 		return
 	}
 
-	// Stop container
-	if containerID != nil && *containerID != "" {
-		if err := h.containerSvc.StopInstance(c.Request.Context(), *containerID); err != nil {
+	// Stop the resource (container or VM)
+	if inst.ContainerID != nil && *inst.ContainerID != "" {
+		if inst.ResourceType == "vm" && h.vmSvc != nil {
+			if err := h.vmSvc.StopInstance(c.Request.Context(), *inst.ContainerID); err != nil {
+				h.logger.Warn("failed to stop VM", zap.Error(err), zap.String("vm_id", *inst.ContainerID))
+			}
+		} else if err := h.containerSvc.StopInstance(c.Request.Context(), *inst.ContainerID); err != nil {
 			h.logger.Warn("failed to stop container", zap.Error(err))
 		}
 	}
 
-	// Update instance
+	// Update instance status
 	_, err = h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE instances SET status = 'stopped' WHERE id = $1`, instanceID)
+		`UPDATE instances SET status = 'stopped', stopped_at = NOW() WHERE id = $1`, instanceID)
 	if err != nil {
 		h.logger.Error("failed to update instance", zap.Error(err))
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Instance stopped successfully"})
+	// Get cooldown duration from challenge settings (default 15 minutes)
+	var cooldownMinutes int
+	err = h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT COALESCE(cooldown_minutes, 15) FROM challenges WHERE id = $1`,
+		inst.ChallengeID).Scan(&cooldownMinutes)
+	if err != nil {
+		cooldownMinutes = 15
+	}
+
+	// Set cooldown for this user/challenge combination
+	cooldownUntil := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
+	_, err = h.db.Pool.Exec(c.Request.Context(),
+		`INSERT INTO user_cooldowns (id, user_id, challenge_id, cooldown_until, created_at)
+		 VALUES ($1, $2, $3, $4, NOW())
+		 ON CONFLICT (user_id, challenge_id) DO UPDATE SET cooldown_until = $4`,
+		uuid.New(), uid, inst.ChallengeID, cooldownUntil)
+	if err != nil {
+		h.logger.Warn("failed to set cooldown", zap.Error(err))
+	}
+
+	// Log the action
+	h.logAction(c, uid.String(), "instance_stopped", map[string]interface{}{
+		"instance_id":    instanceID,
+		"challenge_id":   inst.ChallengeID,
+		"cooldown_until": cooldownUntil.Unix(),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":          "Instance stopped successfully",
+		"cooldown_until":   cooldownUntil.Unix(),
+		"cooldown_minutes": cooldownMinutes,
+	})
+}
+
+// logAction logs user actions for audit trail
+func (h *InstanceHandler) logAction(c *gin.Context, userID, action string, details map[string]interface{}) {
+	// Insert into audit log (create table if needed)
+	h.db.Pool.Exec(c.Request.Context(),
+		`INSERT INTO audit_log (id, user_id, action, details, ip_address, user_agent, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
+		uuid.New(), userID, action, details, c.ClientIP(), c.GetHeader("User-Agent"))
 }
 
 // Delete terminates and removes an instance

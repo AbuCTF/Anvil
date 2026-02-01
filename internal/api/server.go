@@ -283,7 +283,7 @@ func (s *Server) setupRouter() {
 			{
 				settingsHandler := handlers.NewSettingsHandler(s.config, s.db, s.logger)
 				settings.GET("", settingsHandler.List)
-				settings.PUT("/:key", settingsHandler.Update)
+				settings.PUT("", settingsHandler.Update)
 			}
 
 			// Audit log

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/stores';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
@@ -9,6 +9,7 @@
 	let instance: any = null;
 	let loading = true;
 	let error = '';
+	let cooldownInfo: { until: number; remaining: number } | null = null;
 
 	// Flag submission
 	let flagInput = '';
@@ -18,6 +19,8 @@
 	// Instance management
 	let creatingInstance = false;
 	let instanceAction = '';
+	let timerInterval: ReturnType<typeof setInterval>;
+	let timeRemaining = '';
 
 	// Admin editing
 	let isEditing = false;
@@ -51,6 +54,28 @@
 		if ($auth.isAuthenticated) {
 			await loadUserInstance();
 		}
+		
+		// Update timer every second
+		timerInterval = setInterval(() => {
+			if (instance?.expires_at) {
+				timeRemaining = formatTimeRemaining(instance.expires_at);
+				// Auto-reload if expired
+				if (instance.expires_at < Math.floor(Date.now() / 1000)) {
+					instance = null;
+					loadUserInstance();
+				}
+			}
+			// Update cooldown
+			if (cooldownInfo && cooldownInfo.until > Math.floor(Date.now() / 1000)) {
+				cooldownInfo.remaining = cooldownInfo.until - Math.floor(Date.now() / 1000);
+			} else if (cooldownInfo) {
+				cooldownInfo = null;
+			}
+		}, 1000);
+	});
+
+	onDestroy(() => {
+		if (timerInterval) clearInterval(timerInterval);
 	});
 
 	async function loadChallenge() {
@@ -80,6 +105,9 @@
 			instance = response.instances?.find((i: any) => 
 				i.challenge_slug === slug && i.status === 'running'
 			);
+			if (instance) {
+				timeRemaining = formatTimeRemaining(instance.expires_at);
+			}
 		} catch (e) {
 			console.error('Failed to load instances', e);
 		}
@@ -110,10 +138,21 @@
 	async function startInstance() {
 		if (!slug) return;
 		creatingInstance = true;
+		error = '';
 		try {
 			const result = await api.createInstance(slug as string);
 			instance = result.instance;
-		} catch (e) {
+			if (instance) {
+				timeRemaining = formatTimeRemaining(instance.expires_at);
+			}
+		} catch (e: any) {
+			// Check if it's a cooldown error
+			if (e.cooldown_until) {
+				cooldownInfo = {
+					until: e.cooldown_until,
+					remaining: e.remaining_seconds
+				};
+			}
 			error = e instanceof Error ? e.message : 'Failed to start instance';
 		} finally {
 			creatingInstance = false;
@@ -125,7 +164,8 @@
 		instanceAction = 'extending';
 		try {
 			const result = await api.extendInstance(instance.id);
-			instance = { ...instance, expires_at: result.new_expires_at };
+			instance = { ...instance, expires_at: result.new_expires_at, extensions_used: result.extensions_used };
+			timeRemaining = formatTimeRemaining(result.new_expires_at);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to extend';
 		} finally {
@@ -134,11 +174,18 @@
 	}
 
 	async function stopInstance() {
-		if (!instance) return;
+		if (!instance || !confirm('Stop this instance? You will have a cooldown period before starting again.')) return;
 		instanceAction = 'stopping';
 		try {
-			await api.stopInstance(instance.id);
+			const result = await api.stopInstance(instance.id);
 			instance = null;
+			// Set cooldown info from response
+			if (result.cooldown_until) {
+				cooldownInfo = {
+					until: result.cooldown_until,
+					remaining: result.cooldown_minutes * 60
+				};
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to stop';
 		} finally {
@@ -209,7 +256,18 @@
 		if (remaining <= 0) return 'Expired';
 		const hours = Math.floor(remaining / 3600);
 		const minutes = Math.floor((remaining % 3600) / 60);
-		return `${hours}h ${minutes}m`;
+		const seconds = remaining % 60;
+		if (hours > 0) {
+			return `${hours}h ${minutes}m ${seconds}s`;
+		}
+		return `${minutes}m ${seconds}s`;
+	}
+
+	function formatCooldown(seconds: number): string {
+		if (seconds <= 0) return '0:00';
+		const mins = Math.floor(seconds / 60);
+		const secs = seconds % 60;
+		return `${mins}:${secs.toString().padStart(2, '0')}`;
 	}
 
 	function copyToClipboard(text: string) {
@@ -582,21 +640,53 @@
 
 										<div>
 											<p class="text-xs text-stone-500 mb-1">Time Remaining</p>
-											<p class="text-sm text-stone-300">{formatTimeRemaining(instance.expires_at)}</p>
+											{@const seconds = instance.expires_at - Math.floor(Date.now() / 1000)}
+											<p class="text-lg font-mono {seconds < 300 ? 'text-red-400 animate-pulse' : seconds < 600 ? 'text-yellow-400' : 'text-white'}">{timeRemaining}</p>
+											{#if seconds < 300}
+												<p class="text-xs text-red-400 mt-1">Instance will shut down soon!</p>
+											{/if}
+										</div>
+
+										<div>
+											<p class="text-xs text-stone-500 mb-1">Extensions</p>
+											<p class="text-sm text-stone-400">{instance.extensions_used || 0} / {instance.max_extensions || 3} used</p>
 										</div>
 
 										<div class="flex gap-2">
-											<button on:click={extendInstance} disabled={instanceAction === 'extending'} class="flex-1 text-xs py-2 bg-stone-900 text-stone-300 rounded hover:bg-stone-800 transition disabled:opacity-50">
+											<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs py-2 bg-stone-900 text-stone-300 rounded hover:bg-stone-800 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1">
+												{#if instanceAction === 'extending'}
+													<Icon icon="mdi:loading" class="w-3 h-3 animate-spin" />
+												{:else}
+													<Icon icon="mdi:clock-plus-outline" class="w-3 h-3" />
+												{/if}
 												{instanceAction === 'extending' ? 'Extending...' : 'Extend'}
 											</button>
-											<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs py-2 bg-red-500/10 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50">
+											<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs py-2 bg-red-500/10 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50 flex items-center justify-center gap-1">
+												{#if instanceAction === 'stopping'}
+													<Icon icon="mdi:loading" class="w-3 h-3 animate-spin" />
+												{:else}
+													<Icon icon="mdi:stop" class="w-3 h-3" />
+												{/if}
 												{instanceAction === 'stopping' ? 'Stopping...' : 'Stop'}
 											</button>
 										</div>
 									</div>
+								{:else if cooldownInfo}
+									<!-- Cooldown State -->
+									<div class="text-center py-4">
+										<div class="w-12 h-12 rounded-full bg-yellow-500/10 flex items-center justify-center mx-auto mb-3">
+											<Icon icon="mdi:timer-sand" class="w-6 h-6 text-yellow-500" />
+										</div>
+										<p class="text-yellow-400 text-sm font-medium mb-1">Cooldown Active</p>
+										<p class="text-2xl font-mono text-yellow-400 mb-2">{formatCooldown(cooldownInfo.remaining)}</p>
+										<p class="text-stone-500 text-xs">You can start a new instance after the cooldown period.</p>
+									</div>
 								{:else}
 									<div class="text-center py-4">
 										<p class="text-stone-500 text-sm mb-4">No active instance</p>
+										{#if error}
+											<div class="mb-4 py-2 px-3 rounded text-sm bg-red-500/10 text-red-400">{error}</div>
+										{/if}
 										<button on:click={startInstance} disabled={creatingInstance} class="w-full py-2.5 bg-white text-black text-sm font-medium rounded hover:bg-stone-200 transition disabled:opacity-50 flex items-center justify-center gap-2">
 											{#if creatingInstance}
 												<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />

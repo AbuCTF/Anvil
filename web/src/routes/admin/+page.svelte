@@ -46,6 +46,11 @@
 	let templateUploadProgress = 0;
 	let templateUploading = false;
 
+	// Platform settings
+	let platformSettings: Record<string, any> = {};
+	let savingSettings = false;
+	let settingsChanged = false;
+
 	// Challenge creation
 	let newChallenge = {
 		name: '',
@@ -193,11 +198,36 @@
 				templates = [];
 				activeInstances = [];
 			}
+
+			// Load platform settings
+			try {
+				const settingsRes = await api.getPlatformSettings();
+				platformSettings = settingsRes.settings || {};
+			} catch {
+				platformSettings = {};
+			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load dashboard';
 		} finally {
 			loading = false;
 		}
+	}
+
+	async function savePlatformSettings() {
+		savingSettings = true;
+		try {
+			await api.updatePlatformSettings(platformSettings);
+			settingsChanged = false;
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to save settings');
+		} finally {
+			savingSettings = false;
+		}
+	}
+
+	function updateSetting(key: string, value: any) {
+		platformSettings = { ...platformSettings, [key]: value };
+		settingsChanged = true;
 	}
 
 	async function createNode() {
@@ -384,16 +414,18 @@
 			<!-- Tabs -->
 			<div class="flex gap-1 mb-8 border-b border-stone-800">
 				{#each [
-					{ id: 'overview', label: 'Overview' },
-					{ id: 'challenges', label: 'Challenges' },
-					{ id: 'users', label: 'Users' },
-					{ id: 'infrastructure', label: 'Infrastructure' }
+					{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard' },
+					{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant' },
+					{ id: 'users', label: 'Users', icon: 'mdi:account-group' },
+					{ id: 'infrastructure', label: 'System', icon: 'mdi:server-network' },
+					{ id: 'settings', label: 'Settings', icon: 'mdi:cog' }
 				] as tab}
 					<button
 						type="button"
 						on:click={() => activeTab = tab.id}
-						class="px-4 py-2.5 text-sm font-medium transition-colors relative {activeTab === tab.id ? 'text-white' : 'text-stone-500 hover:text-stone-300'}"
+						class="px-4 py-2.5 text-sm font-medium transition-colors relative flex items-center gap-2 {activeTab === tab.id ? 'text-white' : 'text-stone-500 hover:text-stone-300'}"
 					>
+						<Icon icon={tab.icon} class="w-4 h-4" />
 						{tab.label}
 						{#if activeTab === tab.id}
 							<div class="absolute bottom-0 left-0 right-0 h-0.5 bg-white"></div>
@@ -402,7 +434,7 @@
 				{/each}
 			</div>
 
-			<!-- Overview Tab -->
+			<!-- Dashboard Tab -->
 			{#if activeTab === 'overview'}
 				<!-- Stats Grid -->
 				<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
@@ -924,6 +956,250 @@
 							<p class="text-sm text-stone-500">No active VM instances</p>
 						</div>
 					{/if}
+				</div>
+			{/if}
+
+			<!-- Settings Tab -->
+			{#if activeTab === 'settings'}
+				<div class="space-y-6">
+					<!-- Save Button -->
+					{#if settingsChanged}
+						<div class="flex justify-end">
+							<button
+								on:click={savePlatformSettings}
+								disabled={savingSettings}
+								class="flex items-center gap-2 px-4 py-2 bg-white text-black font-medium rounded-lg hover:bg-stone-200 transition disabled:opacity-50"
+							>
+								{#if savingSettings}
+									<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+								{:else}
+									<Icon icon="mdi:content-save" class="w-4 h-4" />
+								{/if}
+								Save Settings
+							</button>
+						</div>
+					{/if}
+
+					<!-- Instance Timeouts -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800">
+							<h3 class="text-sm font-medium text-white flex items-center gap-2">
+								<Icon icon="mdi:timer-outline" class="w-4 h-4 text-stone-400" />
+								Instance Timeouts
+							</h3>
+							<p class="text-xs text-stone-500 mt-1">Default session durations for VM instances by difficulty</p>
+						</div>
+						<div class="p-4 space-y-4">
+							<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+								{#each [
+									{ key: 'vm_timeout_easy', label: 'Easy', default: 90 },
+									{ key: 'vm_timeout_medium', label: 'Medium', default: 120 },
+									{ key: 'vm_timeout_hard', label: 'Hard', default: 180 },
+									{ key: 'vm_timeout_insane', label: 'Insane', default: 240 }
+								] as setting}
+									<div>
+										<label class="block text-xs font-medium text-stone-400 mb-1">{setting.label}</label>
+										<div class="flex items-center gap-2">
+											<input
+												type="number"
+												value={platformSettings[setting.key] || setting.default}
+												on:input={(e) => updateSetting(setting.key, parseInt((e.target as HTMLInputElement).value))}
+												min="30"
+												max="480"
+												class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+											/>
+											<span class="text-xs text-stone-500">min</span>
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					</div>
+
+					<!-- Cooldown Settings -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800">
+							<h3 class="text-sm font-medium text-white flex items-center gap-2">
+								<Icon icon="mdi:timer-sand" class="w-4 h-4 text-stone-400" />
+								Cooldown Periods
+							</h3>
+							<p class="text-xs text-stone-500 mt-1">Wait time before users can restart an instance after stopping</p>
+						</div>
+						<div class="p-4 space-y-4">
+							<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+								{#each [
+									{ key: 'cooldown_easy', label: 'Easy', default: 5 },
+									{ key: 'cooldown_medium', label: 'Medium', default: 10 },
+									{ key: 'cooldown_hard', label: 'Hard', default: 15 },
+									{ key: 'cooldown_insane', label: 'Insane', default: 20 }
+								] as setting}
+									<div>
+										<label class="block text-xs font-medium text-stone-400 mb-1">{setting.label}</label>
+										<div class="flex items-center gap-2">
+											<input
+												type="number"
+												value={platformSettings[setting.key] || setting.default}
+												on:input={(e) => updateSetting(setting.key, parseInt((e.target as HTMLInputElement).value))}
+												min="0"
+												max="120"
+												class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+											/>
+											<span class="text-xs text-stone-500">min</span>
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					</div>
+
+					<!-- Extension Settings -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800">
+							<h3 class="text-sm font-medium text-white flex items-center gap-2">
+								<Icon icon="mdi:clock-plus-outline" class="w-4 h-4 text-stone-400" />
+								Extension Settings
+							</h3>
+							<p class="text-xs text-stone-500 mt-1">How many times and by how much users can extend their session</p>
+						</div>
+						<div class="p-4 space-y-4">
+							<div class="grid grid-cols-2 gap-4">
+								<div>
+									<label class="block text-xs font-medium text-stone-400 mb-1">Max Extensions</label>
+									<input
+										type="number"
+										value={platformSettings.max_extensions || 3}
+										on:input={(e) => updateSetting('max_extensions', parseInt((e.target as HTMLInputElement).value))}
+										min="0"
+										max="10"
+										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+									/>
+								</div>
+								<div>
+									<label class="block text-xs font-medium text-stone-400 mb-1">Extension Duration</label>
+									<div class="flex items-center gap-2">
+										<input
+											type="number"
+											value={platformSettings.extension_minutes || 30}
+											on:input={(e) => updateSetting('extension_minutes', parseInt((e.target as HTMLInputElement).value))}
+											min="15"
+											max="120"
+											class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+										/>
+										<span class="text-xs text-stone-500">min</span>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- User Limits -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800">
+							<h3 class="text-sm font-medium text-white flex items-center gap-2">
+								<Icon icon="mdi:account-multiple" class="w-4 h-4 text-stone-400" />
+								User Limits
+							</h3>
+							<p class="text-xs text-stone-500 mt-1">Resource limits per user</p>
+						</div>
+						<div class="p-4 space-y-4">
+							<div class="grid grid-cols-2 gap-4">
+								<div>
+									<label class="block text-xs font-medium text-stone-400 mb-1">Max Concurrent Instances</label>
+									<input
+										type="number"
+										value={platformSettings.max_instances_per_user || 1}
+										on:input={(e) => updateSetting('max_instances_per_user', parseInt((e.target as HTMLInputElement).value))}
+										min="1"
+										max="5"
+										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+									/>
+								</div>
+								<div>
+									<label class="block text-xs font-medium text-stone-400 mb-1">Max Daily Submissions</label>
+									<input
+										type="number"
+										value={platformSettings.max_daily_submissions || 100}
+										on:input={(e) => updateSetting('max_daily_submissions', parseInt((e.target as HTMLInputElement).value))}
+										min="10"
+										max="1000"
+										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+									/>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- VPN Settings -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800">
+							<h3 class="text-sm font-medium text-white flex items-center gap-2">
+								<Icon icon="mdi:vpn" class="w-4 h-4 text-stone-400" />
+								VPN Settings
+							</h3>
+							<p class="text-xs text-stone-500 mt-1">WireGuard VPN configuration</p>
+						</div>
+						<div class="p-4 space-y-4">
+							<div class="grid grid-cols-2 gap-4">
+								<div>
+									<label class="block text-xs font-medium text-stone-400 mb-1">VPN Server Endpoint</label>
+									<input
+										type="text"
+										value={platformSettings.vpn_endpoint || 'play.h7tex.com:51820'}
+										on:input={(e) => updateSetting('vpn_endpoint', (e.target as HTMLInputElement).value)}
+										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+									/>
+								</div>
+								<div>
+									<label class="block text-xs font-medium text-stone-400 mb-1">Require VPN for Instances</label>
+									<select
+										value={platformSettings.require_vpn || 'true'}
+										on:change={(e) => updateSetting('require_vpn', (e.target as HTMLSelectElement).value)}
+										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+									>
+										<option value="true">Yes</option>
+										<option value="false">No</option>
+									</select>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Platform Settings -->
+					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+						<div class="px-4 py-3 border-b border-stone-800">
+							<h3 class="text-sm font-medium text-white flex items-center gap-2">
+								<Icon icon="mdi:cog" class="w-4 h-4 text-stone-400" />
+								Platform Settings
+							</h3>
+							<p class="text-xs text-stone-500 mt-1">General platform configuration</p>
+						</div>
+						<div class="p-4 space-y-4">
+							<div class="grid grid-cols-2 gap-4">
+								<div>
+									<label class="block text-xs font-medium text-stone-400 mb-1">Allow Registration</label>
+									<select
+										value={platformSettings.registration_enabled || 'true'}
+										on:change={(e) => updateSetting('registration_enabled', (e.target as HTMLSelectElement).value)}
+										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+									>
+										<option value="true">Open</option>
+										<option value="false">Closed</option>
+									</select>
+								</div>
+								<div>
+									<label class="block text-xs font-medium text-stone-400 mb-1">Scoreboard</label>
+									<select
+										value={platformSettings.scoreboard_enabled || 'true'}
+										on:change={(e) => updateSetting('scoreboard_enabled', (e.target as HTMLSelectElement).value)}
+										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
+									>
+										<option value="true">Public</option>
+										<option value="false">Hidden</option>
+									</select>
+								</div>
+							</div>
+						</div>
+					</div>
 				</div>
 			{/if}
 		{/if}
