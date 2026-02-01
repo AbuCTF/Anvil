@@ -43,7 +43,6 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	}
 
 	// Get top users by score with challenge and flag counts
-	// Uses solved_flags table (not solves) and status enum (not is_banned boolean)
 	query := `
 		SELECT 
 			u.id, 
@@ -54,7 +53,7 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 			COUNT(DISTINCT s.flag_id) as flags_solved,
 			MAX(s.solved_at) as last_solve
 		FROM users u
-		LEFT JOIN solved_flags s ON u.id = s.user_id
+		LEFT JOIN solves s ON u.id = s.user_id
 		LEFT JOIN flags f ON s.flag_id = f.id
 		WHERE u.role != 'admin' AND u.status = 'active'
 		GROUP BY u.id, u.username, u.display_name, u.total_score

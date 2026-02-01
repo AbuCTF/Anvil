@@ -224,7 +224,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	// Get flags
 	flagsQuery := `
 		SELECT id, name, points, sort_order,
-			(SELECT COUNT(*) FROM solved_flags WHERE flag_id = flags.id) as total_solves
+			(SELECT COUNT(*) FROM solves WHERE flag_id = flags.id) as total_solves
 		FROM flags
 		WHERE challenge_id = $1
 		ORDER BY sort_order
@@ -241,7 +241,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 			// Check if user solved this flag
 			if userID != nil {
 				var solvedAt *time.Time
-				solveQuery := `SELECT solved_at FROM solved_flags WHERE user_id = $1 AND flag_id = $2`
+				solveQuery := `SELECT solved_at FROM solves WHERE user_id = $1 AND flag_id = $2`
 				if err := h.db.Pool.QueryRow(c.Request.Context(), solveQuery, userID, f.ID).Scan(&solvedAt); err == nil && solvedAt != nil {
 					f.IsSolved = true
 					ts := solvedAt.Unix()
@@ -287,7 +287,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	if userID != nil {
 		var solveCount int
 		h.db.Pool.QueryRow(c.Request.Context(),
-			`SELECT COUNT(*) FROM solved_flags s JOIN flags f ON s.flag_id = f.id WHERE s.user_id = $1 AND f.challenge_id = $2`,
+			`SELECT COUNT(*) FROM solves s JOIN flags f ON s.flag_id = f.id WHERE s.user_id = $1 AND f.challenge_id = $2`,
 			userID, ch.ID).Scan(&solveCount)
 		ch.UserSolves = solveCount
 		ch.IsSolved = solveCount >= ch.TotalFlags && ch.TotalFlags > 0
@@ -503,7 +503,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// Update challenge solve count
 	h.db.Pool.Exec(c.Request.Context(),
 		`UPDATE challenges SET total_solves = (
-			SELECT COUNT(DISTINCT user_id) FROM solved_flags s
+			SELECT COUNT(DISTINCT user_id) FROM solves s
 			JOIN flags f ON s.flag_id = f.id
 			WHERE f.challenge_id = $1
 		) WHERE id = $1`, challengeID)
@@ -513,7 +513,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT total_flags FROM challenges WHERE id = $1`, challengeID).Scan(&totalFlags)
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM solved_flags s JOIN flags f ON s.flag_id = f.id
+		`SELECT COUNT(*) FROM solves s JOIN flags f ON s.flag_id = f.id
 		 WHERE s.user_id = $1 AND f.challenge_id = $2`, uid, challengeID).Scan(&solvedFlags)
 
 	response := gin.H{
