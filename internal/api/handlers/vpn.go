@@ -3,6 +3,7 @@ package handlers
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -228,6 +229,12 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 
 // generateWireGuardConfig generates a WireGuard client configuration
 func (h *VPNHandler) generateWireGuardConfig(privateKey, ipAddress string) string {
+	// Include port in endpoint if not already present
+	endpoint := h.config.VPN.PublicEndpoint
+	if !strings.Contains(endpoint, ":") {
+		endpoint = fmt.Sprintf("%s:%d", endpoint, h.config.VPN.ListenPort)
+	}
+
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/24
@@ -244,6 +251,6 @@ PersistentKeepalive = 25
 		h.config.VPN.DNS,
 		h.config.VPN.PublicKey,
 		h.config.VPN.AddressRange,
-		h.config.VPN.PublicEndpoint,
+		endpoint,
 	)
 }
