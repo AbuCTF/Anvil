@@ -1194,7 +1194,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Require VPN for Instances</label>
 									<select
 										value={platformSettings.require_vpn || 'true'}
-										on:change={(e) => updateSetting('require_vpn', (e.target as HTMLSelectElement).value)}
+										on:change={(e) => handleSelectChange(e, 'require_vpn')}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Yes</option>
@@ -1220,7 +1220,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Allow Registration</label>
 									<select
 										value={platformSettings.registration_enabled || 'true'}
-										on:change={(e) => updateSetting('registration_enabled', (e.target as HTMLSelectElement).value)}
+										on:change={(e) => handleSelectChange(e, 'registration_enabled')}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Open</option>
@@ -1231,7 +1231,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Scoreboard</label>
 									<select
 										value={platformSettings.scoreboard_enabled || 'true'}
-										on:change={(e) => updateSetting('scoreboard_enabled', (e.target as HTMLSelectElement).value)}
+										on:change={(e) => handleSelectChange(e, 'scoreboard_enabled')}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Public</option>
