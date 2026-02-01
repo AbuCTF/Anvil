@@ -122,7 +122,7 @@ SELECT
     COUNT(DISTINCT s.id) as total_submissions,
     COUNT(DISTINCT s.id) FILTER (WHERE s.is_correct = true) as correct_submissions,
     MAX(i.created_at) as last_instance,
-    MAX(s.submitted_at) as last_submission
+    MAX(s.created_at) as last_submission
 FROM users u
 LEFT JOIN instances i ON u.id = i.user_id
 LEFT JOIN submissions s ON u.id = s.user_id

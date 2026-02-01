@@ -28,8 +28,12 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 		return nil, fmt.Errorf("failed to parse database config: %w", err)
 	}
 
+	// Connection pool settings for better performance
 	poolConfig.MaxConns = int32(cfg.MaxOpenConns)
 	poolConfig.MinConns = int32(cfg.MaxIdleConns)
+	poolConfig.MaxConnLifetime = 30 * time.Minute
+	poolConfig.MaxConnIdleTime = 5 * time.Minute
+	poolConfig.HealthCheckPeriod = 30 * time.Second
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {

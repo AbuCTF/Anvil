@@ -43,20 +43,21 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	}
 
 	// Get top users by score with challenge and flag counts
+	// Uses solved_flags table (not solves) and status enum (not is_banned boolean)
 	query := `
 		SELECT 
 			u.id, 
 			u.username, 
 			u.display_name,
 			u.total_score, 
-			u.country,
-			COUNT(DISTINCT s.challenge_id) as challenges_solved,
+			COUNT(DISTINCT f.challenge_id) as challenges_solved,
 			COUNT(DISTINCT s.flag_id) as flags_solved,
 			MAX(s.solved_at) as last_solve
 		FROM users u
-		LEFT JOIN solves s ON u.id = s.user_id
-		WHERE u.role != 'admin' AND u.is_banned = false
-		GROUP BY u.id, u.username, u.display_name, u.total_score, u.country
+		LEFT JOIN solved_flags s ON u.id = s.user_id
+		LEFT JOIN flags f ON s.flag_id = f.id
+		WHERE u.role != 'admin' AND u.status = 'active'
+		GROUP BY u.id, u.username, u.display_name, u.total_score
 		HAVING u.total_score > 0 OR COUNT(s.id) > 0
 		ORDER BY u.total_score DESC, last_solve ASC NULLS LAST
 		LIMIT 100
@@ -77,7 +78,7 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		var lastSolve *time.Time
 
 		if err := rows.Scan(&entry.UserID, &entry.Username, &entry.DisplayName, &entry.TotalScore,
-			&entry.Country, &entry.ChallengesSolved, &entry.FlagsSolved, &lastSolve); err != nil {
+			&entry.ChallengesSolved, &entry.FlagsSolved, &lastSolve); err != nil {
 			h.logger.Warn("failed to scan scoreboard row", zap.Error(err))
 			continue
 		}
@@ -99,7 +100,7 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	// Get total user count (only users with scores or activity)
 	var totalUsers int
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM users WHERE role != 'admin' AND is_banned = false AND total_score > 0`).Scan(&totalUsers)
+		`SELECT COUNT(*) FROM users WHERE role != 'admin' AND status = 'active' AND total_score > 0`).Scan(&totalUsers)
 
 	c.JSON(http.StatusOK, gin.H{
 		"leaderboard": entries,

@@ -1028,6 +1028,18 @@ func (h *AdminChallengeHandler) DeleteHint(c *gin.Context) {
 
 // GetStats returns platform statistics
 func (h *StatsHandler) Get(c *gin.Context) {
+	// Single optimized query for all stats
+	query := `
+		SELECT
+			(SELECT COUNT(*) FROM users WHERE role != 'admin') as total_users,
+			(SELECT COUNT(*) FROM challenges) as total_challenges,
+			(SELECT COUNT(*) FROM challenges WHERE status = 'published') as published_challenges,
+			(SELECT COUNT(*) FROM challenges WHERE status = 'draft') as draft_challenges,
+			(SELECT COUNT(*) FROM solved_flags) as total_solves,
+			(SELECT COUNT(*) FROM instances) as total_instances,
+			(SELECT COUNT(*) FROM instances WHERE status = 'running') as active_instances
+	`
+
 	var stats struct {
 		TotalUsers          int
 		TotalChallenges     int
@@ -1038,30 +1050,21 @@ func (h *StatsHandler) Get(c *gin.Context) {
 		ActiveInstances     int
 	}
 
-	// Count all users (excluding admins)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM users WHERE role != 'admin'`).Scan(&stats.TotalUsers)
+	err := h.db.Pool.QueryRow(c.Request.Context(), query).Scan(
+		&stats.TotalUsers,
+		&stats.TotalChallenges,
+		&stats.PublishedChallenges,
+		&stats.DraftChallenges,
+		&stats.TotalSolves,
+		&stats.TotalInstances,
+		&stats.ActiveInstances,
+	)
 
-	// Count ALL challenges (for admin view)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM challenges`).Scan(&stats.TotalChallenges)
-
-	// Count published challenges
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM challenges WHERE status = 'published'`).Scan(&stats.PublishedChallenges)
-
-	// Count draft challenges
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM challenges WHERE status = 'draft'`).Scan(&stats.DraftChallenges)
-
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM solved_flags`).Scan(&stats.TotalSolves)
-
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM instances`).Scan(&stats.TotalInstances)
-
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM instances WHERE status = 'running'`).Scan(&stats.ActiveInstances)
+	if err != nil {
+		h.logger.Error("failed to fetch stats", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch stats"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"total_users":          stats.TotalUsers,

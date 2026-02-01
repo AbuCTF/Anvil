@@ -19,8 +19,8 @@ database:
   password: anvil
   database: anvil
   ssl_mode: disable
-  max_open_conns: 25
-  max_idle_conns: 5
+  max_open_conns: 50
+  max_idle_conns: 25
 
 redis:
   host: localhost
