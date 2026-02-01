@@ -11,9 +11,14 @@ interface ApiError {
 
 class ApiClient {
 	private baseUrl: string;
+	private uploadUrl: string;
 
 	constructor(baseUrl: string) {
 		this.baseUrl = baseUrl;
+		// Use dedicated upload domain for large files (bypasses Cloudflare limits)
+		this.uploadUrl = baseUrl.includes('localhost') 
+			? baseUrl 
+			: 'https://upload.h7tex.com';
 	}
 
 	private getAuthToken(): string | null {
@@ -413,7 +418,8 @@ class ApiClient {
 				reject(new Error('Network error during upload'));
 			});
 			
-			xhr.open('POST', `${this.baseUrl}/api/v1/admin/vm-templates/upload`);
+			// Use upload domain to bypass Cloudflare 100MB limit
+			xhr.open('POST', `${this.uploadUrl}/api/v1/admin/vm-templates/upload`);
 			if (token) {
 				xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 			}
