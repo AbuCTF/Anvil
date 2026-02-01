@@ -63,6 +63,8 @@
 		type: 'container',
 		docker_image: '',
 		ova_url: '',
+		vm_template_id: '',  // For selecting existing template
+		vm_source: 'template', // 'template' or 'upload'
 		files: [],
 		// Timer settings
 		vm_timeout_minutes: 60,
@@ -324,20 +326,38 @@
 		uploadProgress = 0;
 
 		try {
-			if (newChallenge.type === 'ova' && ovaFile) {
-				// OVA upload using FormData
-				const formData = new FormData();
-				formData.append('file', ovaFile);
-				formData.append('name', newChallenge.name);
-				formData.append('description', newChallenge.description);
-				formData.append('difficulty', newChallenge.difficulty);
-				formData.append('base_points', String(newChallenge.base_points));
-				formData.append('category', newChallenge.category);
-				formData.append('flags', JSON.stringify(newChallenge.flags));
+			if (newChallenge.type === 'ova') {
+				if (newChallenge.vm_source === 'template' && newChallenge.vm_template_id) {
+					// Create VM challenge using existing template
+					await api.createAdminChallenge({
+						name: newChallenge.name,
+						description: newChallenge.description,
+						difficulty: newChallenge.difficulty,
+						base_points: newChallenge.base_points,
+						category: newChallenge.category,
+						challenge_type: 'vm',
+						vm_template_id: newChallenge.vm_template_id,
+						vcpu: 2,
+						memory_mb: 2048,
+						flags: newChallenge.flags
+					});
+				} else if (ovaFile) {
+					// OVA upload using FormData
+					const formData = new FormData();
+					formData.append('file', ovaFile);
+					formData.append('name', newChallenge.name);
+					formData.append('description', newChallenge.description);
+					formData.append('difficulty', newChallenge.difficulty);
+					formData.append('base_points', String(newChallenge.base_points));
+					formData.append('category', newChallenge.category);
+					formData.append('flags', JSON.stringify(newChallenge.flags));
 
-				await api.uploadOvaChallenge(formData, (progress) => {
-					uploadProgress = progress;
-				});
+					await api.uploadOvaChallenge(formData, (progress) => {
+						uploadProgress = progress;
+					});
+				} else {
+					throw new Error('Please select a template or upload an OVA file');
+				}
 			} else {
 				// Container challenge
 				await api.createAdminChallenge({
@@ -366,7 +386,13 @@
 				type: 'container',
 				docker_image: '',
 				ova_url: '',
-				files: []
+				vm_template_id: '',
+				vm_source: 'template',
+				files: [],
+				vm_timeout_minutes: 60,
+				vm_max_extensions: 2,
+				vm_extension_minutes: 30,
+				cooldown_minutes: 15
 			};
 			ovaFile = null;
 		} catch (e) {
@@ -907,9 +933,9 @@
 										</div>
 									</div>
 									<div class="text-xs text-stone-500">
-										<span>{template.disk_size_gb?.toFixed(1) || '?'} GB</span>
+										<span>{((template.image_size_bytes || 0) / 1024 / 1024 / 1024).toFixed(1)} GB</span>
 										<span class="mx-2">•</span>
-										<span>Min: {template.min_vcpu} vCPU / {template.min_memory_mb} MB</span>
+										<span>{template.vcpu || 2} vCPU / {template.memory_mb || 2048} MB</span>
 									</div>
 									{#if template.description}
 										<p class="text-xs text-stone-600 mt-1 truncate">{template.description}</p>
@@ -1168,7 +1194,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Require VPN for Instances</label>
 									<select
 										value={platformSettings.require_vpn || 'true'}
-										on:change={(e) => handleSelectChange(e, 'require_vpn')}
+										on:change={(e) => updateSetting('require_vpn', (e.target as HTMLSelectElement).value)}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Yes</option>
@@ -1194,7 +1220,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Allow Registration</label>
 									<select
 										value={platformSettings.registration_enabled || 'true'}
-										on:change={(e) => handleSelectChange(e, 'registration_enabled')}
+										on:change={(e) => updateSetting('registration_enabled', (e.target as HTMLSelectElement).value)}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Open</option>
@@ -1205,7 +1231,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">Scoreboard</label>
 									<select
 										value={platformSettings.scoreboard_enabled || 'true'}
-										on:change={(e) => handleSelectChange(e, 'scoreboard_enabled')}
+										on:change={(e) => updateSetting('scoreboard_enabled', (e.target as HTMLSelectElement).value)}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									>
 										<option value="true">Public</option>
@@ -1379,23 +1405,81 @@
 						</div>
 					{:else}
 						<div class="pt-4 border-t border-stone-800 space-y-5">
-							<!-- OVA Upload -->
+							<!-- VM Source Selection -->
 							<div>
-								<label class="block text-sm font-medium text-stone-300 mb-2">OVA File *</label>
-								<div class="border-2 border-dashed border-stone-700 rounded-xl p-6 text-center hover:border-stone-500 transition-colors">
-									{#if ovaFile}
-										<div class="flex items-center justify-center gap-3">
-											<Icon icon="mdi:file-check" class="w-8 h-8 text-green-400" />
-											<div class="text-left">
-												<p class="text-white font-medium">{ovaFile.name}</p>
-												<p class="text-stone-500 text-sm">{(ovaFile.size / 1024 / 1024 / 1024).toFixed(2)} GB</p>
-											</div>
-											<button type="button" on:click={() => ovaFile = null} class="text-red-400 hover:text-red-300 p-2">
-												<Icon icon="mdi:close" class="w-5 h-5" />
-											</button>
+								<label class="block text-sm font-medium text-stone-300 mb-2">VM Source</label>
+								<div class="flex gap-2 p-1 bg-black rounded-lg">
+									<button
+										type="button"
+										on:click={() => newChallenge.vm_source = 'template'}
+										class="flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all {newChallenge.vm_source === 'template' ? 'bg-stone-700 text-white' : 'text-stone-400 hover:text-white'}"
+									>
+										<Icon icon="mdi:harddisk" class="w-4 h-4 inline mr-1" />
+										Use Existing Template
+									</button>
+									<button
+										type="button"
+										on:click={() => newChallenge.vm_source = 'upload'}
+										class="flex-1 py-2 px-3 rounded-md text-sm font-medium transition-all {newChallenge.vm_source === 'upload' ? 'bg-stone-700 text-white' : 'text-stone-400 hover:text-white'}"
+									>
+										<Icon icon="mdi:cloud-upload" class="w-4 h-4 inline mr-1" />
+										Upload New OVA
+									</button>
+								</div>
+							</div>
+
+							{#if newChallenge.vm_source === 'template'}
+								<!-- Template Selector -->
+								<div>
+									<label class="block text-sm font-medium text-stone-300 mb-2">Select VM Template *</label>
+									{#if templates.length === 0}
+										<div class="p-4 bg-stone-900 border border-stone-700 rounded-xl text-center">
+											<Icon icon="mdi:alert-circle" class="w-8 h-8 text-stone-500 mx-auto mb-2" />
+											<p class="text-stone-400 text-sm">No templates available</p>
+											<p class="text-stone-500 text-xs mt-1">Upload a template first or switch to OVA upload</p>
 										</div>
 									{:else}
-										<Icon icon="mdi:cloud-upload" class="w-12 h-12 text-stone-500 mx-auto mb-3" />
+										<div class="space-y-2 max-h-48 overflow-y-auto">
+											{#each templates as template}
+												<button
+													type="button"
+													on:click={() => newChallenge.vm_template_id = template.id}
+													class="w-full p-3 rounded-xl border text-left transition-all {newChallenge.vm_template_id === template.id ? 'bg-white/5 border-white/30' : 'bg-black border-stone-700 hover:border-stone-500'}"
+												>
+													<div class="flex items-center justify-between">
+														<div>
+															<span class="text-white font-medium">{template.name}</span>
+															<p class="text-stone-500 text-xs mt-0.5">
+																{((template.image_size_bytes || 0) / 1024 / 1024 / 1024).toFixed(1)} GB • {template.vcpu || 2} vCPU • {template.memory_mb || 2048} MB
+															</p>
+														</div>
+														{#if newChallenge.vm_template_id === template.id}
+															<Icon icon="mdi:check-circle" class="w-5 h-5 text-green-400" />
+														{/if}
+													</div>
+												</button>
+											{/each}
+										</div>
+									{/if}
+								</div>
+							{:else}
+								<!-- OVA Upload -->
+								<div>
+									<label class="block text-sm font-medium text-stone-300 mb-2">OVA File *</label>
+									<div class="border-2 border-dashed border-stone-700 rounded-xl p-6 text-center hover:border-stone-500 transition-colors">
+										{#if ovaFile}
+											<div class="flex items-center justify-center gap-3">
+												<Icon icon="mdi:file-check" class="w-8 h-8 text-green-400" />
+												<div class="text-left">
+													<p class="text-white font-medium">{ovaFile.name}</p>
+													<p class="text-stone-500 text-sm">{(ovaFile.size / 1024 / 1024 / 1024).toFixed(2)} GB</p>
+												</div>
+												<button type="button" on:click={() => ovaFile = null} class="text-red-400 hover:text-red-300 p-2">
+													<Icon icon="mdi:close" class="w-5 h-5" />
+												</button>
+											</div>
+										{:else}
+											<Icon icon="mdi:cloud-upload" class="w-12 h-12 text-stone-500 mx-auto mb-3" />
 										<p class="text-stone-400 mb-2">Drop your OVA file here or click to browse</p>
 										<input type="file" accept=".ova,.qcow2,.vmdk" on:change={handleOvaUpload} class="hidden" id="ova-upload" />
 										<label for="ova-upload" class="inline-block px-4 py-2 bg-stone-800 text-white rounded-lg cursor-pointer hover:bg-stone-700 transition-colors text-sm">
@@ -1405,6 +1489,7 @@
 								</div>
 								<p class="text-stone-500 text-xs mt-2">Supported: .ova, .qcow2, .vmdk (max 20GB)</p>
 							</div>
+							{/if}
 
 							<!-- Multiple Flags -->
 							<div>
