@@ -163,6 +163,9 @@ func (s *Server) setupRouter() {
 				vpnRoutes.POST("/config", middleware.RateLimitEndpoint(
 					s.config.RateLimit.VPNConfigGen,
 				), vpnHandler.GenerateConfig)
+				vpnRoutes.POST("/config/regenerate", middleware.RateLimitEndpoint(
+					s.config.RateLimit.VPNConfigGen,
+				), vpnHandler.RegenerateConfig)
 				vpnRoutes.GET("/status", vpnHandler.GetStatus)
 			}
 

@@ -228,6 +228,12 @@ class ApiClient {
 		});
 	}
 
+	async regenerateVPNConfig() {
+		return this.request<{ config_file: string; ip_address: string }>('/vpn/config/regenerate', {
+			method: 'POST'
+		});
+	}
+
 	async getVPNStatus() {
 		return this.request<any>('/vpn/status');
 	}

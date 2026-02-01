@@ -9,9 +9,11 @@
 	let vpnStatus: any = null;
 	let loading = true;
 	let generating = false;
+	let regenerating = false;
 	let error = '';
 	let copied = false;
 	let statusInterval: ReturnType<typeof setInterval>;
+	let showRegenerateConfirm = false;
 
 	onMount(async () => {
 		if (!$auth.isAuthenticated) {
@@ -68,6 +70,24 @@
 			error = e instanceof Error ? e.message : 'Failed to generate VPN config';
 		} finally {
 			generating = false;
+		}
+	}
+
+	async function regenerateConfig() {
+		regenerating = true;
+		error = '';
+
+		try {
+			const response = await api.regenerateVPNConfig();
+			if (response.config_file) {
+				vpnConfig = response.config_file;
+			}
+			showRegenerateConfirm = false;
+			await loadVPNData();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to regenerate VPN config';
+		} finally {
+			regenerating = false;
 		}
 	}
 
@@ -228,6 +248,45 @@
 									<span class="px-2 py-1 bg-stone-900 border border-stone-800 rounded text-xs text-stone-500">WireGuard</span>
 								</div>
 							</div>
+
+							<!-- Regenerate Button -->
+							{#if showRegenerateConfirm}
+								<div class="bg-red-950/30 border border-red-900/50 rounded-lg p-4">
+									<p class="text-red-400 text-sm mb-3">
+										<Icon icon="mdi:alert" class="w-4 h-4 inline mr-1" />
+										This will invalidate your current config. You'll need to update your WireGuard client.
+									</p>
+									<div class="flex space-x-3">
+										<button
+											on:click={regenerateConfig}
+											disabled={regenerating}
+											class="flex-1 flex items-center justify-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 disabled:opacity-50 transition"
+										>
+											{#if regenerating}
+												<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+												<span>Regenerating...</span>
+											{:else}
+												<Icon icon="mdi:refresh" class="w-4 h-4" />
+												<span>Confirm Regenerate</span>
+											{/if}
+										</button>
+										<button
+											on:click={() => showRegenerateConfirm = false}
+											class="px-4 py-2 bg-stone-800 text-white rounded-lg hover:bg-stone-700 transition"
+										>
+											Cancel
+										</button>
+									</div>
+								</div>
+							{:else}
+								<button
+									on:click={() => showRegenerateConfirm = true}
+									class="w-full flex items-center justify-center space-x-2 px-4 py-2 bg-stone-900 text-stone-400 rounded-lg hover:bg-stone-800 hover:text-white transition border border-stone-800"
+								>
+									<Icon icon="mdi:refresh" class="w-4 h-4" />
+									<span>Regenerate Config</span>
+								</button>
+							{/if}
 						</div>
 					{:else}
 						<div class="space-y-4">
