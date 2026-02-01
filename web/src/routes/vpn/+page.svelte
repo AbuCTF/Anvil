@@ -72,7 +72,7 @@
 			generating = false;
 		}
 	}
-
+, 
 	async function regenerateConfig() {
 		regenerating = true;
 		error = '';
