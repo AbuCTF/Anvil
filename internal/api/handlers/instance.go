@@ -260,11 +260,13 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	// Start instance based on resource type
 	if challenge.ResourceType == "vm" {
 		// VM-based challenge
-		if h.vmSvc == nil || !h.vmSvc.IsAvailable() {
+		// Note: We don't check IsAvailable() anymore since we use SSH to remote nodes
+		// Node availability is verified by the database query below
+		if h.vmSvc == nil {
 			h.db.Pool.Exec(c.Request.Context(),
 				`UPDATE instances SET status = 'failed', error_message = 'VM service unavailable' WHERE id = $1`, instanceID)
 			c.JSON(http.StatusServiceUnavailable, gin.H{
-				"error": "VM service is not available on this server",
+				"error": "VM service is not configured on this server",
 				"hint":  "This challenge requires VM infrastructure which is not configured",
 			})
 			return
