@@ -7,6 +7,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -284,8 +285,29 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			return
 		}
 
-		// Create VM instance
-		vmInfo, err := h.vmSvc.CreateInstanceForChallenge(c.Request.Context(), challenge.ID, instanceID.String(), vmTemplateID)
+		// Fetch template details from database
+		var vmTemplate vm.VMTemplate
+		err = h.db.Pool.QueryRow(c.Request.Context(),
+			`SELECT id, name, COALESCE(description, ''), image_path, image_format,
+			        COALESCE(image_size_bytes, 0), vcpu, memory_mb, COALESCE(disk_gb, 0),
+			        COALESCE(os_type, 'linux'), created_at, updated_at
+			 FROM vm_templates WHERE id = $1`,
+			vmTemplateID).Scan(
+			&vmTemplate.ID, &vmTemplate.Name, &vmTemplate.Description,
+			&vmTemplate.ImagePath, &vmTemplate.ImageFormat, &vmTemplate.ImageSize,
+			&vmTemplate.VCPU, &vmTemplate.MemoryMB, &vmTemplate.DiskGB,
+			&vmTemplate.OS, &vmTemplate.CreatedAt, &vmTemplate.UpdatedAt,
+		)
+		if err != nil {
+			h.logger.Error("failed to fetch VM template details", zap.Error(err), zap.String("template_id", vmTemplateID))
+			h.db.Pool.Exec(c.Request.Context(),
+				`UPDATE instances SET status = 'failed', error_message = 'VM template not found' WHERE id = $1`, instanceID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "VM template not found"})
+			return
+		}
+
+		// Create VM instance using template data
+		vmInfo, err := h.vmSvc.CreateInstanceWithTemplate(c.Request.Context(), challenge.ID, instanceID.String(), &vmTemplate)
 		if err != nil {
 			h.logger.Error("failed to create VM", zap.Error(err))
 			h.db.Pool.Exec(c.Request.Context(),

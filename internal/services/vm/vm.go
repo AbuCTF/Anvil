@@ -181,14 +181,46 @@ func (s *Service) IsAvailable() bool {
 // CreateInstanceForChallenge creates a VM instance for a specific challenge
 // This is a simplified wrapper for the instance handler
 func (s *Service) CreateInstanceForChallenge(ctx context.Context, challengeID, instanceID string, templateID string) (*VMInstanceInfo, error) {
-	// Look up the template by ID
+	// Look up the template by ID from in-memory cache
 	s.mu.RLock()
 	template, exists := s.templates[templateID]
 	s.mu.RUnlock()
 
 	if !exists {
-		return nil, fmt.Errorf("no VM template found with ID %s for challenge %s", templateID, challengeID)
+		return nil, fmt.Errorf("no VM template found with ID %s for challenge %s (template not loaded in memory)", templateID, challengeID)
 	}
+
+	req := CreateVMRequest{
+		TemplateID:  template.ID,
+		ChallengeID: challengeID,
+		UserID:      "", // Will be set from context
+		VCPU:        template.VCPU,
+		MemoryMB:    template.MemoryMB,
+	}
+
+	instance, err := s.CreateInstance(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	return &VMInstanceInfo{
+		VMID:      instance.ID,
+		IPAddress: instance.IPAddress,
+		VNCPort:   instance.VNCPort,
+	}, nil
+}
+
+// CreateInstanceWithTemplate creates a VM instance using template data provided by caller
+// This allows the caller to fetch template from database
+func (s *Service) CreateInstanceWithTemplate(ctx context.Context, challengeID, instanceID string, template *VMTemplate) (*VMInstanceInfo, error) {
+	if template == nil {
+		return nil, fmt.Errorf("template cannot be nil")
+	}
+
+	// Cache the template for future use
+	s.mu.Lock()
+	s.templates[template.ID] = template
+	s.mu.Unlock()
 
 	req := CreateVMRequest{
 		TemplateID:  template.ID,
