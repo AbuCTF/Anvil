@@ -472,6 +472,11 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	err = h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT EXISTS(SELECT 1 FROM solves WHERE user_id = $1 AND flag_id = $2)`,
 		uid, matchedFlag.ID).Scan(&alreadySolved)
+	
+	if err != nil {
+		h.logger.Error("failed to check solve status", zap.Error(err))
+		// Continue anyway, INSERT will catch duplicate
+	}
 
 	if alreadySolved {
 		c.JSON(http.StatusOK, gin.H{
@@ -483,11 +488,12 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Record solve
+	// Record solve (with ON CONFLICT to handle race conditions)
 	solveID := uuid.New()
 	_, err = h.db.Pool.Exec(c.Request.Context(),
 		`INSERT INTO solves (id, user_id, flag_id, points_awarded, solved_at)
-		 VALUES ($1, $2, $3, $4, NOW())`,
+		 VALUES ($1, $2, $3, $4, NOW())
+		 ON CONFLICT (user_id, flag_id) DO NOTHING`,
 		solveID, uid, matchedFlag.ID, matchedFlag.Points)
 	if err != nil {
 		h.logger.Error("failed to record solve", zap.Error(err))
