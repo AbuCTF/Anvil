@@ -1,13 +1,7 @@
 [Unit]
 Description=WireGuard VPN Status Sync
-After=network.target
+After=network.target docker.service
 
 [Service]
 Type=oneshot
-Environment="DB_HOST=localhost"
-Environment="DB_PORT=5432"
-Environment="DB_USER=anvil"
-Environment="DB_NAME=anvil"
-Environment="WG_INTERFACE=wg0"
-EnvironmentFile=-/etc/anvil/wg-sync.env
 ExecStart=/opt/anvil/scripts/wg-status-sync.sh

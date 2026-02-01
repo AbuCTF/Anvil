@@ -5,12 +5,10 @@
 
 set -euo pipefail
 
-# Database connection (use environment variables or defaults)
-DB_HOST="${DB_HOST:-localhost}"
-DB_PORT="${DB_PORT:-5432}"
+# Docker container name for PostgreSQL
+POSTGRES_CONTAINER="${POSTGRES_CONTAINER:-anvil-postgres}"
 DB_USER="${DB_USER:-anvil}"
 DB_NAME="${DB_NAME:-anvil}"
-DB_PASSWORD="${DB_PASSWORD:-}"
 
 # WireGuard interface
 WG_INTERFACE="${WG_INTERFACE:-wg0}"
@@ -51,7 +49,7 @@ while IFS=$'\t' read -r public_key preshared_key endpoint allowed_ips latest_han
 done <<< "$wg_dump"
 
 if [ -n "$sql_updates" ]; then
-    # Execute updates
-    PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" -c "$sql_updates" 2>/dev/null || true
+    # Execute updates via docker exec
+    docker exec -i "$POSTGRES_CONTAINER" psql -U "$DB_USER" -d "$DB_NAME" -c "$sql_updates" 2>/dev/null || true
     echo "$(date): Synced $(echo "$wg_dump" | wc -l) peers"
 fi
