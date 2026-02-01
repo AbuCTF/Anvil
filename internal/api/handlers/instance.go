@@ -176,6 +176,28 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Check if user is on cooldown for this challenge
+	var cooldownUntil *time.Time
+	var challengeIDForCooldown string
+	err = h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT c.id, uc.cooldown_until 
+		 FROM challenges c 
+		 LEFT JOIN user_cooldowns uc ON uc.challenge_id = c.id AND uc.user_id = $1
+		 WHERE c.slug = $2`,
+		uid, req.ChallengeSlug).Scan(&challengeIDForCooldown, &cooldownUntil)
+	if err == nil && cooldownUntil != nil && time.Now().Before(*cooldownUntil) {
+		remainingSeconds := int(time.Until(*cooldownUntil).Seconds())
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error":             "cooldown period active",
+			"cooldown_until":    cooldownUntil.Unix(),
+			"remaining_seconds": remainingSeconds,
+			"message":           "Please wait before starting another instance of this challenge",
+		})
+		return
+	}
+		return
+	}
+
 	// Get challenge details with resource_type
 	var challenge struct {
 		ID              string

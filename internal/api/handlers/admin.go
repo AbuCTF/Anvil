@@ -227,6 +227,12 @@ type CreateChallengeRequest struct {
 	VCPU         int     `json:"vcpu"`
 	MemoryMB     int     `json:"memory_mb"`
 
+	// Timer and cooldown settings (author-defined)
+	VMTimeoutMinutes   *int `json:"vm_timeout_minutes"`   // nil = use difficulty default
+	VMMaxExtensions    *int `json:"vm_max_extensions"`    // default 2
+	VMExtensionMinutes *int `json:"vm_extension_minutes"` // default 30
+	CooldownMinutes    *int `json:"cooldown_minutes"`     // default 10
+
 	// Common fields
 	BasePoints      int    `json:"base_points"`
 	InstanceTimeout *int   `json:"instance_timeout"`
@@ -368,13 +374,15 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 			id, name, slug, description, difficulty, category_id, status,
 			container_image, container_tag, cpu_limit, memory_limit,
 			exposed_ports, base_points, instance_timeout, max_extensions,
+			vm_timeout_minutes, vm_max_extensions, vm_extension_minutes, cooldown_minutes,
 			author_name, resource_type, supports_docker, supports_vm,
 			total_flags, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW())`,
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW(), NOW())`,
 		challengeID, req.Name, challengeSlug, req.Description, req.Difficulty, req.CategoryID,
 		req.ContainerImage, req.ContainerTag, req.CPULimit, req.MemoryLimit,
-		portsJSON, req.BasePoints, req.InstanceTimeout, req.MaxExtensions, req.AuthorName,
-		resourceType, supportsDocker, supportsVM, len(req.Flags),
+		portsJSON, req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
+		req.VMTimeoutMinutes, req.VMMaxExtensions, req.VMExtensionMinutes, req.CooldownMinutes,
+		req.AuthorName, resourceType, supportsDocker, supportsVM, len(req.Flags),
 	)
 	if err != nil {
 		h.logger.Error("failed to create challenge", zap.Error(err))

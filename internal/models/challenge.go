@@ -72,9 +72,18 @@ type Challenge struct {
 	ExposedPorts     []ExposedPort   `json:"exposed_ports" db:"-"`
 	NetworkMode      string          `json:"network_mode" db:"network_mode"`
 
-	// Instance settings
+	// Instance settings (for Docker)
 	InstanceTimeout *int `json:"instance_timeout,omitempty" db:"instance_timeout"`
 	MaxExtensions   *int `json:"max_extensions,omitempty" db:"max_extensions"`
+
+	// VM-specific settings (author-defined)
+	VMTimeoutMinutes   *int `json:"vm_timeout_minutes,omitempty" db:"vm_timeout_minutes"`
+	VMMaxExtensions    *int `json:"vm_max_extensions,omitempty" db:"vm_max_extensions"`
+	VMExtensionMinutes *int `json:"vm_extension_minutes,omitempty" db:"vm_extension_minutes"`
+	CooldownMinutes    *int `json:"cooldown_minutes,omitempty" db:"cooldown_minutes"`
+
+	// Resource type (docker or vm)
+	ResourceType string `json:"resource_type" db:"resource_type"`
 
 	// Scoring
 	BasePoints int `json:"base_points" db:"base_points"`
@@ -124,9 +133,9 @@ type Flag struct {
 	Points int `json:"points" db:"points"`
 
 	// Stats
-	TotalSolves     int        `json:"total_solves" db:"total_solves"`
-	FirstBloodUser  *uuid.UUID `json:"first_blood_user_id,omitempty" db:"first_blood_user_id"`
-	FirstBloodAt    *time.Time `json:"first_blood_at,omitempty" db:"first_blood_at"`
+	TotalSolves    int        `json:"total_solves" db:"total_solves"`
+	FirstBloodUser *uuid.UUID `json:"first_blood_user_id,omitempty" db:"first_blood_user_id"`
+	FirstBloodAt   *time.Time `json:"first_blood_at,omitempty" db:"first_blood_at"`
 
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
