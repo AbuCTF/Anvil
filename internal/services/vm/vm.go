@@ -815,18 +815,6 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 		return err
 	}
 
-	// Get node info for cleanup (use default for now)
-	node := &NodeInfo{
-		ID:          "default",
-		Hostname:    "172.17.0.1",
-		IPAddress:   "172.17.0.1",
-		SSHPort:     22,
-		SSHUser:     "root",
-		SSHKeyPath:  "/root/.ssh/id_rsa",
-		LibvirtURI:  s.config.LibvirtURI,
-		NetworkName: s.config.NetworkName,
-	}
-
 	// Stop and undefine VM
 	s.stopVM(ctx, instance.Name)
 	s.undefineVM(ctx, instance.Name)
