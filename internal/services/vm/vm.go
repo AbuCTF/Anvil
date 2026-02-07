@@ -466,8 +466,10 @@ func (s *Service) defineAndStartVMOnNode(ctx context.Context, domainXML, vmName 
 // runSSHCommand executes a command on a remote node via SSH
 func (s *Service) runSSHCommand(ctx context.Context, node *NodeInfo, command string) (string, error) {
 	sshArgs := []string{
+		"-q", // Quiet mode - suppress warnings
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR", // Only show errors, not warnings
 		"-o", "ConnectTimeout=10",
 		"-p", fmt.Sprintf("%d", node.SSHPort),
 	}
@@ -481,7 +483,7 @@ func (s *Service) runSSHCommand(ctx context.Context, node *NodeInfo, command str
 	sshArgs = append(sshArgs, target, command)
 
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
-	output, err := cmd.CombinedOutput()
+	output, err := cmd.Output() // Use Output() instead of CombinedOutput() to only get stdout
 	return string(output), err
 }
 
