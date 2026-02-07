@@ -313,7 +313,23 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 		return nil, fmt.Errorf("failed to start VM: %w", err)
 	}
 
-	// Store instance info
+	// Wait for VM to get IP and query actual IP address
+	// This is more reliable than trusting DHCP reservations
+	actualIP, err := s.queryVMIP(ctx, vmName, node, 30)
+	if err != nil {
+		s.logger.Warn("failed to query VM IP, using allocated IP",
+			zap.Error(err),
+			zap.String("fallback_ip", ipAddress))
+		actualIP = ipAddress
+	}
+
+	if actualIP != ipAddress {
+		s.logger.Info("VM got different IP than reserved",
+			zap.String("reserved", ipAddress),
+			zap.String("actual", actualIP))
+	}
+
+	// Store instance info with actual IP
 	instance := &VMInstance{
 		ID:          instanceID,
 		Name:        vmName,
@@ -324,7 +340,7 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 		MemoryMB:    template.MemoryMB,
 		DiskPath:    overlayPath,
 		NetworkID:   node.NetworkName,
-		IPAddress:   ipAddress,
+		IPAddress:   actualIP,
 		MACAddress:  macAddress,
 		VNCPort:     vncPort,
 		CreatedAt:   time.Now(),
@@ -337,7 +353,7 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 
 	return &VMInstanceInfo{
 		VMID:      instanceID,
-		IPAddress: ipAddress,
+		IPAddress: actualIP,
 		VNCPort:   vncPort,
 		NodeID:    node.ID,
 	}, nil
@@ -467,6 +483,29 @@ func (s *Service) runSSHCommand(ctx context.Context, node *NodeInfo, command str
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
 	output, err := cmd.CombinedOutput()
 	return string(output), err
+}
+
+// queryVMIP queries the actual IP address of a VM after boot
+// Retries for up to timeoutSeconds to wait for DHCP
+func (s *Service) queryVMIP(ctx context.Context, vmName string, node *NodeInfo, timeoutSeconds int) (string, error) {
+	virshCmd := "virsh -c qemu:///system"
+	cmd := fmt.Sprintf("%s domifaddr %s | grep -oP 'ipv4\\s+\\K[0-9.]+' | head -1", virshCmd, vmName)
+
+	// Retry for up to timeout seconds
+	for i := 0; i < timeoutSeconds; i++ {
+		output, err := s.runSSHCommand(ctx, node, cmd)
+		if err == nil && strings.TrimSpace(output) != "" {
+			ip := strings.TrimSpace(output)
+			// Remove /prefix if present
+			if idx := strings.Index(ip, "/"); idx > 0 {
+				ip = ip[:idx]
+			}
+			return ip, nil
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	return "", fmt.Errorf("timeout waiting for VM to get IP address")
 }
 
 // generateDomainXML creates libvirt domain XML for a VM
@@ -780,9 +819,24 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 		return err
 	}
 
+	// Get node info for cleanup (use default for now)
+	node := &NodeInfo{
+		ID:          "default",
+		Hostname:    "172.17.0.1",
+		IPAddress:   "172.17.0.1",
+		SSHPort:     22,
+		SSHUser:     "root",
+		SSHKeyPath:  "/root/.ssh/id_rsa",
+		LibvirtURI:  s.config.LibvirtURI,
+		NetworkName: s.config.NetworkName,
+	}
+
 	// Stop and undefine VM
 	s.stopVM(ctx, instance.Name)
 	s.undefineVM(ctx, instance.Name)
+
+	// Remove DHCP reservation
+	s.removeIPReservation(ctx, node, instance.MACAddress)
 
 	// Cleanup resources
 	os.Remove(instance.DiskPath)
@@ -897,17 +951,11 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 		}
 	}
 
-	return nil
-}
-
-// ExtendInstance extends the expiration time of an instance
-func (s *Service) ExtendInstance(ctx context.Context, instanceID string, duration time.Duration) error {
-	s.mu.Lock()
-	instance, exists := s.instances[instanceID]
-	if !exists {
-		s.mu.Unlock()
-		return fmt.Errorf("instance not found: %s", instanceID)
-	}
+	// Clean up stale DHCP reservations
+	s.logger.Info("cleaning up stale DHCP reservations")
+	cleanupCmd := fmt.Sprintf("%s net-dumpxml %s 2>/dev/null | grep -oP \"mac='\\K[^']+\" | while read mac; do %s net-update %s delete ip-dhcp-host \"<host mac='$mac'/>\" --live --config 2>/dev/null || true; done",
+		virshCmd, node.NetworkName, virshCmd, node.NetworkName)
+	s.runSSHCommand(ctx, node, cleanupCmd)
 
 	newExpiry := instance.ExpiresAt.Add(duration)
 	maxExpiry := instance.CreatedAt.Add(s.config.MaxDuration)
