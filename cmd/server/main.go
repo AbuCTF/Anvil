@@ -116,6 +116,16 @@ func main() {
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
+				// Get count of running instances that will expire
+				var expiringCount int
+				db.Pool.QueryRow(ctx, `
+					SELECT COUNT(*) FROM instances i  
+					JOIN challenges c ON i.challenge_id = c.id
+					WHERE i.expires_at < NOW() 
+					  AND i.status IN ('running', 'pending', 'creating')
+					  AND c.resource_type = 'vm'
+				`).Scan(&expiringCount)
+
 				// Clean up expired DB instances
 				if _, err := db.Pool.Exec(ctx, `
 					UPDATE instances 
@@ -123,7 +133,27 @@ func main() {
 					WHERE expires_at < NOW() AND status IN ('running', 'pending', 'creating')
 				`); err != nil {
 					sugar.Errorf("Failed to mark expired instances: %v", err)
+				} else if expiringCount > 0 {
+					// Decrement node counters for expired VMs
+					db.Pool.Exec(ctx, `
+						UPDATE vm_nodes 
+						SET active_vms = GREATEST(0, active_vms - $1),
+							used_vcpu = GREATEST(0, used_vcpu - ($1 * 2)),
+							used_memory_mb = GREATEST(0, used_memory_mb - ($1 * 2048)),
+							updated_at = NOW()
+						WHERE name = 'core'
+					`, expiringCount)
 				}
+
+				// Get count of instances about to be deleted (for node counter correction)
+				var deletingCount int
+				db.Pool.QueryRow(ctx, `
+					SELECT COUNT(*) FROM instances i
+					JOIN challenges c ON i.challenge_id = c.id 
+					WHERE i.status IN ('failed', 'stopped', 'expired') 
+					  AND i.created_at < NOW() - INTERVAL '1 hour'
+					  AND c.resource_type = 'vm'
+				`).Scan(&deletingCount)
 
 				// Delete old failed/stopped/expired instances
 				if _, err := db.Pool.Exec(ctx, `
@@ -133,6 +163,31 @@ func main() {
 				`); err != nil {
 					sugar.Errorf("Failed to cleanup old instances: %v", err)
 				}
+
+				// Force synchronize node counters with reality (safety net)
+				db.Pool.Exec(ctx, `
+					UPDATE vm_nodes n
+					SET active_vms = (
+							SELECT COUNT(*) FROM instances i  
+							JOIN challenges c ON i.challenge_id = c.id
+							WHERE i.status IN ('running', 'creating', 'pending')
+							  AND c.resource_type = 'vm'
+						),
+						used_vcpu = (
+							SELECT COALESCE(SUM(2), 0) FROM instances i 
+							JOIN challenges c ON i.challenge_id = c.id
+							WHERE i.status IN ('running', 'creating', 'pending')
+							  AND c.resource_type = 'vm'
+						),
+						used_memory_mb = (
+							SELECT COALESCE(SUM(2048), 0) FROM instances i 
+							JOIN challenges c ON i.challenge_id = c.id
+							WHERE i.status IN ('running', 'creating', 'pending')
+							  AND c.resource_type = 'vm'
+						),
+						updated_at = NOW()
+					WHERE n.name = 'core'
+				`)
 
 				cancel()
 			}
@@ -150,6 +205,32 @@ func main() {
 					if err := vmSvc.CleanupExpired(ctx); err != nil {
 						sugar.Errorf("VM cleanup failed: %v", err)
 					}
+
+					// Sync node counters with actual DB state after cleanup (joins with challenges to only count VMs)
+					db.Pool.Exec(ctx, `
+					UPDATE vm_nodes n
+					SET active_vms = (
+							SELECT COUNT(*) FROM instances i
+							JOIN challenges c ON i.challenge_id = c.id 
+							WHERE i.status IN ('running', 'creating', 'pending')
+							  AND c.resource_type = 'vm'
+						),
+						used_vcpu = (
+							SELECT COALESCE(SUM(2), 0) FROM instances i
+							JOIN challenges c ON i.challenge_id = c.id 
+							WHERE i.status IN ('running', 'creating', 'pending')
+							  AND c.resource_type = 'vm'
+						),
+						used_memory_mb = (
+							SELECT COALESCE(SUM(2048), 0) FROM instances i
+							JOIN challenges c ON i.challenge_id = c.id 
+							WHERE i.status IN ('running', 'creating', 'pending')
+							  AND c.resource_type = 'vm'
+							),
+							updated_at = NOW()
+						WHERE n.name = 'core'
+					`)
+
 					cancel()
 				}
 			}

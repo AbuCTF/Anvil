@@ -936,7 +936,10 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 	s.undefineVMOnNode(ctx, node, instance.Name)
 
 	// Cleanup resources (DHCP lease will expire automatically)
-	os.Remove(instance.DiskPath)
+	// Delete overlay disk on remote node
+	delCmd := fmt.Sprintf("rm -f %s", instance.DiskPath)
+	s.runSSHCommand(ctx, node, delCmd)
+
 	s.releaseVNCPort(instance.VNCPort)
 	s.releaseIP(instance.IPAddress)
 

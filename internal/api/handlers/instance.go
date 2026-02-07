@@ -574,6 +574,17 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		h.logger.Error("failed to update instance", zap.Error(err))
 	}
 
+	// Decrement VM node counters if this was a VM
+	if inst.ResourceType == "vm" {
+		h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE vm_nodes SET 
+			 used_vcpu = GREATEST(0, used_vcpu - 2),
+			 used_memory_mb = GREATEST(0, used_memory_mb - 2048),
+			 active_vms = GREATEST(0, active_vms - 1),
+			 updated_at = NOW()
+			 WHERE name = 'core'`) // TODO: get actual node from instance
+	}
+
 	// Get cooldown duration from challenge settings (default 15 minutes)
 	var cooldownMinutes int
 	err = h.db.Pool.QueryRow(c.Request.Context(),
@@ -637,6 +648,12 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// Get resource type for node counter update
+	var resourceType string
+	h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT c.resource_type FROM instances i JOIN challenges c ON i.challenge_id = c.id WHERE i.id = $1`,
+		instanceID).Scan(&resourceType)
+
 	// Remove container
 	if containerID != nil && *containerID != "" {
 		h.containerSvc.StopInstance(c.Request.Context(), *containerID)
@@ -648,6 +665,17 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 		`UPDATE instances SET status = 'stopped', stopped_at = NOW() WHERE id = $1`, instanceID)
 	if err != nil {
 		h.logger.Error("failed to update instance", zap.Error(err))
+	}
+
+	// Decrement VM node counters if this was a VM
+	if resourceType == "vm" {
+		h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE vm_nodes SET 
+			 used_vcpu = GREATEST(0, used_vcpu - 2),
+			 used_memory_mb = GREATEST(0, used_memory_mb - 2048),
+			 active_vms = GREATEST(0, active_vms - 1),
+			 updated_at = NOW()
+			 WHERE name = 'core'`) // TODO: get actual node from instance
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Instance stopped successfully"})
