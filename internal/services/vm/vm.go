@@ -290,6 +290,23 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 	macAddress := generateMAC(instanceID)
 	vmName := fmt.Sprintf("anvil-%s", instanceID[:8])
 
+	// Query existing DHCP leases to avoid conflicts
+	existingIPs, err := s.getActiveDHCPLeases(ctx, node)
+	if err != nil {
+		s.logger.Warn("failed to query DHCP leases, proceeding anyway", zap.Error(err))
+		existingIPs = make(map[string]bool)
+	}
+
+	// Allocate IP avoiding conflicts
+	allocatedIP := s.allocateAvailableIP(existingIPs)
+	s.logger.Info("allocated IP for new VM",
+		zap.String("instance_id", instanceID),
+		zap.String("ip", allocatedIP),
+		zap.Int("existing_leases", len(existingIPs)))
+
+	// Try to create DHCP reservation (best effort - not critical)
+	s.createDHCPReservation(ctx, node, macAddress, allocatedIP)
+
 	// Generate libvirt XML
 	domainXML, err := s.generateDomainXML(vmName, instanceID, template.VCPU, template.MemoryMB, overlayPath, macAddress, vncPort, node.NetworkName)
 	if err != nil {
@@ -304,22 +321,23 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 		return nil, fmt.Errorf("failed to start VM: %w", err)
 	}
 
-	// Wait for VM to get IP via DHCP (increased timeout to 60 seconds)
-	// VMs rely entirely on dynamic DHCP allocation
-	actualIP, err := s.queryVMIP(ctx, vmName, node, 60)
+	// Verify VM got the allocated IP (or close to it)
+	// Wait up to 30 seconds for IP
+	actualIP, err := s.queryVMIP(ctx, vmName, node, 30)
 	if err != nil {
-		// Failed to get IP - cleanup and fail
-		s.logger.Error("VM failed to get IP address",
+		s.logger.Warn("failed to verify VM IP, using allocated IP",
 			zap.Error(err),
-			zap.String("vm_name", vmName))
-		virshCmd := "virsh -c qemu:///system"
-		s.runSSHCommand(ctx, node, fmt.Sprintf("%s destroy %s 2>/dev/null || true", virshCmd, vmName))
-		s.runSSHCommand(ctx, node, fmt.Sprintf("%s undefine %s 2>/dev/null || true", virshCmd, vmName))
-		s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f %s", overlayPath))
-		return nil, fmt.Errorf("VM failed to get IP address after 60 seconds: %w", err)
+			zap.String("allocated", allocatedIP))
+		actualIP = allocatedIP
 	}
 
-	s.logger.Info("VM acquired IP via DHCP",
+	if actualIP != allocatedIP {
+		s.logger.Warn("VM got different IP than allocated",
+			zap.String("allocated", allocatedIP),
+			zap.String("actual", actualIP))
+	}
+
+	s.logger.Info("VM acquired IP",
 		zap.String("instance_id", instanceID),
 		zap.String("ip_address", actualIP))
 
@@ -431,6 +449,63 @@ func (s *Service) allocateIPLocked() string {
 	}
 	// Fallback - should never happen with 61k IPs
 	return fmt.Sprintf("10.100.%d.%d", 100+len(s.usedIPs)%150, 10+len(s.usedIPs)%240)
+}
+
+// getActiveDHCPLeases queries existing DHCP leases from libvirt
+func (s *Service) getActiveDHCPLeases(ctx context.Context, node *NodeInfo) (map[string]bool, error) {
+	virshCmd := "virsh -c qemu:///system"
+	cmd := fmt.Sprintf("%s net-dhcp-leases %s --mac 2>/dev/null | tail -n +3 | awk '{print $5}' | cut -d'/' -f1", virshCmd, node.NetworkName)
+
+	output, err := s.runSSHCommand(ctx, node, cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	leases := make(map[string]bool)
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for _, ip := range lines {
+		ip = strings.TrimSpace(ip)
+		if ip != "" && ip != "-" {
+			leases[ip] = true
+		}
+	}
+
+	return leases, nil
+}
+
+// allocateAvailableIP finds an IP that's not in the existing leases
+func (s *Service) allocateAvailableIP(existingIPs map[string]bool) string {
+	// Use 10.100.10.x - 10.100.250.x range
+	for subnet := 10; subnet <= 250; subnet++ {
+		for host := 10; host <= 250; host++ {
+			ip := fmt.Sprintf("10.100.%d.%d", subnet, host)
+			if !existingIPs[ip] {
+				return ip
+			}
+		}
+	}
+	// Fallback
+	return fmt.Sprintf("10.100.100.%d", 10+len(existingIPs)%240)
+}
+
+// createDHCPReservation attempts to create a DHCP reservation (best effort)
+func (s *Service) createDHCPReservation(ctx context.Context, node *NodeInfo, macAddress, ipAddress string) {
+	virshCmd := "virsh -c qemu:///system"
+	hostXML := fmt.Sprintf("<host mac='%s' ip='%s'/>", macAddress, ipAddress)
+	cmd := fmt.Sprintf("%s net-update %s add ip-dhcp-host \"%s\" --live --config 2>/dev/null",
+		virshCmd, node.NetworkName, hostXML)
+
+	_, err := s.runSSHCommand(ctx, node, cmd)
+	if err != nil {
+		s.logger.Debug("DHCP reservation failed (non-critical)",
+			zap.String("mac", macAddress),
+			zap.String("ip", ipAddress),
+			zap.Error(err))
+	} else {
+		s.logger.Info("created DHCP reservation",
+			zap.String("mac", macAddress),
+			zap.String("ip", ipAddress))
+	}
 }
 
 // defineAndStartVMOnNode defines and starts a VM on a remote node via SSH
