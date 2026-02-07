@@ -5,9 +5,11 @@ package vm
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"encoding/xml"
 	"fmt"
-	"math/rand"
+	rand2 "math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -487,9 +489,12 @@ func (s *Service) allocateAvailableIP(existingIPs map[string]bool) string {
 		}
 	}
 
-	// Return random IP from available pool
+	// Return random IP from available pool using crypto/rand for seed
 	if len(availableIPs) > 0 {
-		return availableIPs[rand.Intn(len(availableIPs))]
+		var seed int64
+		binary.Read(rand.Reader, binary.BigEndian, &seed)
+		rng := rand2.New(rand2.NewSource(seed))
+		return availableIPs[rng.Intn(len(availableIPs))]
 	}
 	// Fallback
 	return fmt.Sprintf("10.100.100.%d", 10+len(existingIPs)%240)
@@ -807,7 +812,16 @@ func (s *Service) StopInstance(ctx context.Context, instanceID string) error {
 		return err
 	}
 
-	if err := s.stopVM(ctx, instance.Name); err != nil {
+	// Get node info (assume core node for now - TODO: store node_id with instance)
+	node := &NodeInfo{
+		Name:        "core",
+		IPAddress:   "172.17.0.1",
+		SSHUser:     "root",
+		SSHKeyPath:  "/root/.ssh/id_rsa",
+		NetworkName: "anvil-lab",
+	}
+
+	if err := s.stopVMOnNode(ctx, node, instance.Name); err != nil {
 		return fmt.Errorf("failed to stop VM: %w", err)
 	}
 
@@ -858,14 +872,24 @@ func (s *Service) ResetInstance(ctx context.Context, instanceID string) error {
 		return err
 	}
 
-	// Stop VM
-	s.stopVM(ctx, instance.Name)
+	// Get node info (assume core node for now - TODO: store node_id with instance)
+	node := &NodeInfo{
+		Name:        "core",
+		IPAddress:   "172.17.0.1",
+		SSHUser:     "root",
+		SSHKeyPath:  "/root/.ssh/id_rsa",
+		NetworkName: "anvil-lab",
+	}
 
-	// Delete old overlay
-	os.Remove(instance.DiskPath)
+	// Stop VM on node
+	s.stopVMOnNode(ctx, node, instance.Name)
 
-	// Create new overlay
-	overlayPath, err := s.createOverlay(ctx, template.ImagePath, instanceID)
+	// Delete old overlay on node
+	delCmd := fmt.Sprintf("rm -f %s", instance.DiskPath)
+	s.runSSHCommand(ctx, node, delCmd)
+
+	// Create new overlay on node
+	overlayPath, err := s.createOverlayOnNode(ctx, node, template.ImagePath, instanceID)
 	if err != nil {
 		return fmt.Errorf("failed to create new overlay: %w", err)
 	}
@@ -874,8 +898,9 @@ func (s *Service) ResetInstance(ctx context.Context, instanceID string) error {
 	instance.DiskPath = overlayPath
 	s.mu.Unlock()
 
-	// Start VM with new disk
-	if err := s.startVM(ctx, instance.Name); err != nil {
+	// Start VM with new disk on node
+	startCmd := fmt.Sprintf("virsh -c qemu:///system start %s", instance.Name)
+	if _, err := s.runSSHCommand(ctx, node, startCmd); err != nil {
 		return fmt.Errorf("failed to start VM after reset: %w", err)
 	}
 
@@ -897,9 +922,18 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 		return err
 	}
 
-	// Stop and undefine VM
-	s.stopVM(ctx, instance.Name)
-	s.undefineVM(ctx, instance.Name)
+	// Get node info (assume core node for now - TODO: store node_id with instance)
+	node := &NodeInfo{
+		Name:        "core",
+		IPAddress:   "172.17.0.1",
+		SSHUser:     "root",
+		SSHKeyPath:  "/root/.ssh/id_rsa",
+		NetworkName: "anvil-lab",
+	}
+
+	// Stop and undefine VM on node
+	s.stopVMOnNode(ctx, node, instance.Name)
+	s.undefineVMOnNode(ctx, node, instance.Name)
 
 	// Cleanup resources (DHCP lease will expire automatically)
 	os.Remove(instance.DiskPath)
@@ -1280,6 +1314,20 @@ func (s *Service) stopVM(ctx context.Context, name string) error {
 	cmd := exec.CommandContext(ctx, "virsh", "-c", s.config.LibvirtURI, "destroy", name)
 	cmd.CombinedOutput() // Ignore errors if VM is already stopped
 	return nil
+}
+
+func (s *Service) stopVMOnNode(ctx context.Context, node *NodeInfo, name string) error {
+	cmd := fmt.Sprintf("virsh -c qemu:///system destroy %s 2>/dev/null || true", name)
+	_, err := s.runSSHCommand(ctx, node, cmd)
+	// Ignore errors - VM might already be stopped
+	return err
+}
+
+func (s *Service) undefineVMOnNode(ctx context.Context, node *NodeInfo, name string) error {
+	cmd := fmt.Sprintf("virsh -c qemu:///system undefine %s 2>/dev/null || true", name)
+	_, err := s.runSSHCommand(ctx, node, cmd)
+	// Ignore errors
+	return err
 }
 
 func (s *Service) startVM(ctx context.Context, name string) error {

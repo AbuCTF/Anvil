@@ -594,12 +594,12 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		h.logger.Warn("failed to set cooldown", zap.Error(err))
 	}
 
-	// Log the action
-	h.logAction(c, uid.String(), "instance_stopped", map[string]interface{}{
-		"instance_id":    instanceID,
-		"challenge_id":   inst.ChallengeID,
-		"cooldown_until": cooldownUntil.Unix(),
-	})
+	// Log the action (TODO: uncomment when audit_log table exists)
+	// h.logAction(c, uid.String(), "instance_stopped", map[string]interface{}{
+	// 	"instance_id":    instanceID,
+	// 	"challenge_id":   inst.ChallengeID,
+	// 	"cooldown_until": cooldownUntil.Unix(),
+	// })
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":          "Instance stopped successfully",

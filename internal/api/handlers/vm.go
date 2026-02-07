@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -25,29 +26,29 @@ func NewVMHandler(vmService *vm.Service, logger *zap.Logger) *VMHandler {
 
 // CreateVMRequest is the API request for creating a VM
 type CreateVMRequest struct {
-	TemplateID  string        `json:"template_id" binding:"required"`
-	ChallengeID string        `json:"challenge_id" binding:"required"`
-	VCPU        int           `json:"vcpu,omitempty"`
-	MemoryMB    int           `json:"memory_mb,omitempty"`
-	Duration    string        `json:"duration,omitempty"` // e.g., "2h", "4h"
+	TemplateID  string `json:"template_id" binding:"required"`
+	ChallengeID string `json:"challenge_id" binding:"required"`
+	VCPU        int    `json:"vcpu,omitempty"`
+	MemoryMB    int    `json:"memory_mb,omitempty"`
+	Duration    string `json:"duration,omitempty"` // e.g., "2h", "4h"
 }
 
 // VMResponse is the API response for VM operations
 type VMResponse struct {
-	ID           string            `json:"id"`
-	Name         string            `json:"name"`
-	TemplateID   string            `json:"template_id"`
-	ChallengeID  string            `json:"challenge_id"`
-	Status       string            `json:"status"`
-	IPAddress    string            `json:"ip_address,omitempty"`
-	VNCPort      int               `json:"vnc_port,omitempty"`
-	SSHPort      int               `json:"ssh_port,omitempty"`
-	ExposedPorts map[int]int       `json:"exposed_ports,omitempty"`
-	VCPU         int               `json:"vcpu"`
-	MemoryMB     int               `json:"memory_mb"`
-	CreatedAt    string            `json:"created_at"`
-	StartedAt    *string           `json:"started_at,omitempty"`
-	ExpiresAt    string            `json:"expires_at"`
+	ID           string      `json:"id"`
+	Name         string      `json:"name"`
+	TemplateID   string      `json:"template_id"`
+	ChallengeID  string      `json:"challenge_id"`
+	Status       string      `json:"status"`
+	IPAddress    string      `json:"ip_address,omitempty"`
+	VNCPort      int         `json:"vnc_port,omitempty"`
+	SSHPort      int         `json:"ssh_port,omitempty"`
+	ExposedPorts map[int]int `json:"exposed_ports,omitempty"`
+	VCPU         int         `json:"vcpu"`
+	MemoryMB     int         `json:"memory_mb"`
+	CreatedAt    string      `json:"created_at"`
+	StartedAt    *string     `json:"started_at,omitempty"`
+	ExpiresAt    string      `json:"expires_at"`
 }
 
 // CreateVM creates a new VM instance
@@ -77,7 +78,7 @@ func (h *VMHandler) CreateVM(c *gin.Context) {
 	}
 
 	vmReq := vm.CreateVMRequest{
-		Name:        "",  // Auto-generated
+		Name:        "", // Auto-generated
 		TemplateID:  req.TemplateID,
 		ChallengeID: req.ChallengeID,
 		UserID:      userID.(string),
@@ -239,11 +240,33 @@ func (h *VMHandler) ResetVM(c *gin.Context) {
 		return
 	}
 
+	// Check reset limit from metadata (stored during creation)
+	maxResets := 3 // default
+	resetCount := 0
+	if val, ok := instance.Metadata["reset_count"]; ok {
+		fmt.Sscanf(val, "%d", &resetCount)
+	}
+	if val, ok := instance.Metadata["max_resets"]; ok {
+		fmt.Sscanf(val, "%d", &maxResets)
+	}
+
+	if resetCount >= maxResets {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":       "reset limit reached",
+			"reset_count": resetCount,
+			"max_resets":  maxResets,
+		})
+		return
+	}
+
 	if err := h.vmService.ResetInstance(c.Request.Context(), instanceID); err != nil {
 		h.logger.Error("failed to reset VM", zap.String("id", instanceID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// Increment reset counter
+	instance.Metadata["reset_count"] = fmt.Sprintf("%d", resetCount+1)
 
 	instance, _ = h.vmService.GetInstance(c.Request.Context(), instanceID)
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
