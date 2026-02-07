@@ -957,6 +957,18 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 		virshCmd, node.NetworkName, virshCmd, node.NetworkName)
 	s.runSSHCommand(ctx, node, cleanupCmd)
 
+	return nil
+}
+
+// ExtendInstance extends the expiration time of an instance
+func (s *Service) ExtendInstance(ctx context.Context, instanceID string, duration time.Duration) error {
+	s.mu.Lock()
+	instance, exists := s.instances[instanceID]
+	if !exists {
+		s.mu.Unlock()
+		return fmt.Errorf("instance not found: %s", instanceID)
+	}
+
 	newExpiry := instance.ExpiresAt.Add(duration)
 	maxExpiry := instance.CreatedAt.Add(s.config.MaxDuration)
 	if newExpiry.After(maxExpiry) {
