@@ -572,11 +572,13 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		}
 	}
 
-	// Update instance status
+	// Delete instance immediately (CTF instances are ephemeral, cooldown tracked separately)
 	_, err = h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE instances SET status = 'stopped', stopped_at = NOW() WHERE id = $1`, instanceID)
+		`DELETE FROM instances WHERE id = $1`, instanceID)
 	if err != nil {
-		h.logger.Error("failed to update instance", zap.Error(err))
+		h.logger.Error("failed to delete instance", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete instance"})
+		return
 	}
 
 	// Decrement VM node counters if this was a VM

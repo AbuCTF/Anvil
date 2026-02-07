@@ -819,6 +819,7 @@ func (s *Service) StopInstance(ctx context.Context, instanceID string) error {
 	node := &NodeInfo{
 		Name:        "core",
 		IPAddress:   "172.17.0.1",
+		SSHPort:     22,
 		SSHUser:     "root",
 		SSHKeyPath:  "/root/.ssh/id_rsa",
 		NetworkName: "anvil-lab",
@@ -879,6 +880,7 @@ func (s *Service) ResetInstance(ctx context.Context, instanceID string) error {
 	node := &NodeInfo{
 		Name:        "core",
 		IPAddress:   "172.17.0.1",
+		SSHPort:     22,
 		SSHUser:     "root",
 		SSHKeyPath:  "/root/.ssh/id_rsa",
 		NetworkName: "anvil-lab",
@@ -929,6 +931,7 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 	node := &NodeInfo{
 		Name:        "core",
 		IPAddress:   "172.17.0.1",
+		SSHPort:     22,
 		SSHUser:     "root",
 		SSHKeyPath:  "/root/.ssh/id_rsa",
 		NetworkName: "anvil-lab",
@@ -1038,12 +1041,12 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 		var instanceID string
 		var status string
 		var expiresAt time.Time
-		
+
 		// Query database for instance with this container_id
 		err := s.db.Pool.QueryRow(ctx,
 			`SELECT id, status, expires_at FROM instances WHERE container_id = $1`,
 			vmName).Scan(&instanceID, &status, &expiresAt)
-		
+
 		if err != nil {
 			// Not in database - truly orphaned, destroy it
 			s.logger.Info("cleaning up orphaned VM (not in database)", zap.String("vm_name", vmName))
@@ -1340,23 +1343,33 @@ func (s *Service) stopVM(ctx context.Context, name string) error {
 }
 
 func (s *Service) stopVMOnNode(ctx context.Context, node *NodeInfo, name string) error {
+	s.logger.Info("attempting to stop VM", zap.String("name", name), zap.String("node", node.IPAddress))
+
 	// First check if VM exists and is running
 	checkCmd := fmt.Sprintf("virsh -c qemu:///system list --name | grep -q '^%s$'", name)
 	_, err := s.runSSHCommand(ctx, node, checkCmd)
 	if err != nil {
 		// VM not running, that's fine
-		s.logger.Debug("VM already stopped", zap.String("name", name))
+		s.logger.Debug("VM not found in running list", zap.String("name", name), zap.Error(err))
 		return nil
 	}
 
+	s.logger.Info("VM found running, destroying", zap.String("name", name))
+
 	// Stop the VM
 	cmd := fmt.Sprintf("virsh -c qemu:///system destroy %s", name)
-	_, err = s.runSSHCommand(ctx, node, cmd)
+	output, err := s.runSSHCommand(ctx, node, cmd)
 	if err != nil {
+		s.logger.Error("virsh destroy failed",
+			zap.String("name", name),
+			zap.String("output", output),
+			zap.Error(err))
 		return fmt.Errorf("failed to destroy VM: %w", err)
 	}
-	
-	s.logger.Info("VM stopped successfully", zap.String("name", name))
+
+	s.logger.Info("VM destroyed successfully",
+		zap.String("name", name),
+		zap.String("output", output))
 	return nil
 }
 
