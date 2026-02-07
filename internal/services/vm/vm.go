@@ -837,6 +837,59 @@ func (s *Service) CleanupExpired(ctx context.Context) error {
 	return nil
 }
 
+// ReconcileState cleans up orphaned VMs that aren't in our instance map
+// This is useful on startup to clean up VMs left from previous crashes
+func (s *Service) ReconcileState(ctx context.Context) error {
+	// Get default node
+	node := s.getDefaultNode()
+	if node == nil {
+		return fmt.Errorf("no VM node configured")
+	}
+
+	// List all VMs with "anvil-" prefix
+	virshCmd := "virsh -c qemu:///system"
+	cmd := fmt.Sprintf("%s list --all --name | grep '^anvil-'", virshCmd)
+	output, err := s.runSSHCommand(ctx, node, cmd)
+	if err != nil {
+		s.logger.Warn("failed to list VMs for reconciliation", zap.Error(err))
+		return nil // Don't fail startup
+	}
+
+	vmNames := strings.Split(strings.TrimSpace(output), "\n")
+	
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, vmName := range vmNames {
+		vmName = strings.TrimSpace(vmName)
+		if vmName == "" {
+			continue
+		}
+
+		// Extract UUID from name (anvil-{8chars of UUID})
+		// Check if we have this in our instances map
+		found := false
+		for _, inst := range s.instances {
+			if inst.Name == vmName {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			// Orphaned VM - destroy it
+			s.logger.Info("cleaning up orphaned VM", zap.String("vm_name", vmName))
+			destroyCmd := fmt.Sprintf("%s destroy %s 2>/dev/null || true", virshCmd, vmName)
+			s.runSSHCommand(ctx, node, destroyCmd)
+			
+			undefineCmd := fmt.Sprintf("%s undefine %s 2>/dev/null || true", virshCmd, vmName)
+			s.runSSHCommand(ctx, node, undefineCmd)
+		}
+	}
+
+	return nil
+}
+
 // ExtendInstance extends the expiration time of an instance
 func (s *Service) ExtendInstance(ctx context.Context, instanceID string, duration time.Duration) error {
 	s.mu.Lock()

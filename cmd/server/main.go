@@ -82,6 +82,66 @@ func main() {
 		vmSvc = nil
 	}
 
+	// Reconcile VM state on startup (cleanup orphaned VMs)
+	if vmSvc != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := vmSvc.ReconcileState(ctx); err != nil {
+			sugar.Warnf("Failed to reconcile VM state: %v", err)
+		} else {
+			sugar.Info("VM state reconciliation completed")
+		}
+		cancel()
+	}
+
+	// Start background cleanup goroutines
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				
+				// Clean up expired DB instances
+				if _, err := db.Pool.Exec(ctx, `
+					UPDATE instances 
+					SET status = 'expired', updated_at = NOW()
+					WHERE expires_at < NOW() AND status IN ('running', 'pending', 'creating')
+				`); err != nil {
+					sugar.Errorf("Failed to mark expired instances: %v", err)
+				}
+
+				// Delete old failed/stopped/expired instances
+				if _, err := db.Pool.Exec(ctx, `
+					DELETE FROM instances 
+					WHERE status IN ('failed', 'stopped', 'expired') 
+					  AND created_at < NOW() - INTERVAL '1 hour'
+				`); err != nil {
+					sugar.Errorf("Failed to cleanup old instances: %v", err)
+				}
+
+				cancel()
+			}
+		}
+	}()
+
+	if vmSvc != nil {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					if err := vmSvc.CleanupExpired(ctx); err != nil {
+						sugar.Errorf("VM cleanup failed: %v", err)
+					}
+					cancel()
+				}
+			}
+		}()
+	}
+
 	// Initialize API server
 	server := api.NewServer(cfg, db, containerSvc, vmSvc, uploadSvc, vpnSvc, logger)
 

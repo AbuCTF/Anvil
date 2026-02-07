@@ -172,6 +172,42 @@ func (h *AdminInstanceHandler) ForceDelete(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
 }
 
+func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
+	// Mark all expired instances
+	result, err := h.db.Pool.Exec(c.Request.Context(), `
+		UPDATE instances 
+		SET status = 'expired', updated_at = NOW()
+		WHERE expires_at < NOW() AND status IN ('running', 'pending', 'creating')
+	`)
+	if err != nil {
+		h.logger.Error("failed to mark expired instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark expired instances"})
+		return
+	}
+	
+	expiredCount := result.RowsAffected()
+
+	// Delete old failed/stopped/expired instances
+	result, err = h.db.Pool.Exec(c.Request.Context(), `
+		DELETE FROM instances 
+		WHERE status IN ('failed', 'stopped', 'expired') 
+		  AND created_at < NOW() - INTERVAL '1 hour'
+	`)
+	if err != nil {
+		h.logger.Error("failed to cleanup old instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to cleanup old instances"})
+		return
+	}
+
+	deletedCount := result.RowsAffected()
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "cleanup completed",
+		"marked_expired": expiredCount,
+		"deleted": deletedCount,
+	})
+}
+
 // TokenHandler for team tokens and invite codes
 type TokenHandler struct {
 	config *config.Config

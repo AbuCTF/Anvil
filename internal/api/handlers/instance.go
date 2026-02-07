@@ -69,7 +69,9 @@ func (h *InstanceHandler) List(c *gin.Context) {
 			c.name as challenge_name, c.slug as challenge_slug
 		FROM instances i
 		JOIN challenges c ON i.challenge_id = c.id
-		WHERE i.user_id = $1 AND i.status NOT IN ('stopped', 'failed', 'expired')
+		WHERE i.user_id = $1 
+		  AND i.status NOT IN ('stopped', 'failed', 'expired')
+		  AND i.expires_at > NOW()
 		ORDER BY i.created_at DESC
 	`
 
@@ -162,12 +164,14 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Check if user already has an instance for this challenge
+	// Check if user already has a non-expired instance for this challenge
 	var existingID *string
 	err = h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT i.id FROM instances i
 		 JOIN challenges c ON i.challenge_id = c.id
-		 WHERE i.user_id = $1 AND c.slug = $2 AND i.status IN ('running', 'creating', 'pending')`,
+		 WHERE i.user_id = $1 AND c.slug = $2 
+		   AND i.status IN ('running', 'creating', 'pending')
+		   AND i.expires_at > NOW()`,
 		uid, req.ChallengeSlug).Scan(&existingID)
 	if existingID != nil {
 		c.JSON(http.StatusBadRequest, gin.H{

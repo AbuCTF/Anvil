@@ -264,6 +264,7 @@ func (s *Server) setupRouter() {
 				adminInstanceHandler := handlers.NewAdminInstanceHandler(s.config, s.db, s.containerSvc, s.logger)
 				instances.GET("", adminInstanceHandler.List)
 				instances.GET("/stats", adminInstanceHandler.Stats)
+				instances.POST("/cleanup", adminInstanceHandler.Cleanup)
 				instances.POST("/:id/stop", adminInstanceHandler.ForceStop)
 				instances.DELETE("/:id", adminInstanceHandler.ForceDelete)
 			}

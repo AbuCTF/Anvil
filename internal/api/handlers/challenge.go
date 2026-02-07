@@ -501,7 +501,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		 VALUES ($1, $2, $3, $4, NOW())
 		 ON CONFLICT (user_id, flag_id) DO NOTHING`,
 		solveID, uid, matchedFlag.ID, matchedFlag.Points)
-	
+
 	if err != nil {
 		h.logger.Error("failed to record solve", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
