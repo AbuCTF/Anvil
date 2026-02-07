@@ -889,7 +889,7 @@ func (s *Service) ResetInstance(ctx context.Context, instanceID string) error {
 	s.runSSHCommand(ctx, node, delCmd)
 
 	// Create new overlay on node
-	overlayPath, err := s.createOverlayOnNode(ctx, node, template.ImagePath, instanceID)
+	overlayPath, err := s.createOverlayOnNode(ctx, template.ImagePath, instanceID, node)
 	if err != nil {
 		return fmt.Errorf("failed to create new overlay: %w", err)
 	}
