@@ -84,8 +84,22 @@ func main() {
 
 	// Reconcile VM state on startup (cleanup orphaned VMs)
 	if vmSvc != nil {
+		// Get node connection details from environment or use defaults
+		nodeIP := os.Getenv("VM_NODE_IP")
+		if nodeIP == "" {
+			nodeIP = "172.17.0.1" // Docker host default
+		}
+		sshUser := os.Getenv("VM_NODE_SSH_USER")
+		if sshUser == "" {
+			sshUser = "root"
+		}
+		sshKeyPath := os.Getenv("VM_NODE_SSH_KEY")
+		if sshKeyPath == "" {
+			sshKeyPath = "/root/.ssh/id_rsa"
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if err := vmSvc.ReconcileState(ctx); err != nil {
+		if err := vmSvc.ReconcileState(ctx, nodeIP, nodeIP, sshUser, sshKeyPath); err != nil {
 			sugar.Warnf("Failed to reconcile VM state: %v", err)
 		} else {
 			sugar.Info("VM state reconciliation completed")
@@ -101,7 +115,7 @@ func main() {
 			select {
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				
+
 				// Clean up expired DB instances
 				if _, err := db.Pool.Exec(ctx, `
 					UPDATE instances 

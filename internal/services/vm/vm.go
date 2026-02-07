@@ -839,11 +839,21 @@ func (s *Service) CleanupExpired(ctx context.Context) error {
 
 // ReconcileState cleans up orphaned VMs that aren't in our instance map
 // This is useful on startup to clean up VMs left from previous crashes
-func (s *Service) ReconcileState(ctx context.Context) error {
-	// Get default node
-	node := s.getDefaultNode()
-	if node == nil {
-		return fmt.Errorf("no VM node configured")
+func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshUser, sshKeyPath string) error {
+	if nodeIP == "" {
+		return fmt.Errorf("no node IP provided")
+	}
+
+	node := &NodeInfo{
+		ID:          "default",
+		Name:        "default",
+		Hostname:    nodeHostname,
+		IPAddress:   nodeIP,
+		SSHPort:     22,
+		SSHUser:     sshUser,
+		SSHKeyPath:  sshKeyPath,
+		LibvirtURI:  s.config.LibvirtURI,
+		NetworkName: s.config.NetworkName,
 	}
 
 	// List all VMs with "anvil-" prefix
@@ -856,7 +866,7 @@ func (s *Service) ReconcileState(ctx context.Context) error {
 	}
 
 	vmNames := strings.Split(strings.TrimSpace(output), "\n")
-	
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -881,7 +891,7 @@ func (s *Service) ReconcileState(ctx context.Context) error {
 			s.logger.Info("cleaning up orphaned VM", zap.String("vm_name", vmName))
 			destroyCmd := fmt.Sprintf("%s destroy %s 2>/dev/null || true", virshCmd, vmName)
 			s.runSSHCommand(ctx, node, destroyCmd)
-			
+
 			undefineCmd := fmt.Sprintf("%s undefine %s 2>/dev/null || true", virshCmd, vmName)
 			s.runSSHCommand(ctx, node, undefineCmd)
 		}

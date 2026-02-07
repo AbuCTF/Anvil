@@ -184,7 +184,7 @@ func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark expired instances"})
 		return
 	}
-	
+
 	expiredCount := result.RowsAffected()
 
 	// Delete old failed/stopped/expired instances
@@ -202,9 +202,9 @@ func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 	deletedCount := result.RowsAffected()
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "cleanup completed",
+		"message":        "cleanup completed",
 		"marked_expired": expiredCount,
-		"deleted": deletedCount,
+		"deleted":        deletedCount,
 	})
 }
 
