@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -119,7 +120,7 @@ type CreateVMRequest struct {
 type Service struct {
 	logger       *zap.Logger
 	config       Config
-	db           interface{ Pool interface{ QueryRow(context.Context, string, ...interface{}) interface{ Scan(...interface{}) error } } }
+	db           *database.DB
 	mu           sync.RWMutex
 	instances    map[string]*VMInstance
 	templates    map[string]*VMTemplate
@@ -162,7 +163,7 @@ func DefaultConfig() Config {
 }
 
 // NewService creates a new VM management service
-func NewService(logger *zap.Logger, config Config, db interface{ Pool interface{ QueryRow(context.Context, string, ...interface{}) interface{ Scan(...interface{}) error } } }) (*Service, error) {
+func NewService(logger *zap.Logger, config Config, db *database.DB) (*Service, error) {
 	// Ensure storage directories exist
 	dirs := []string{
 		config.ImageStorePath,
