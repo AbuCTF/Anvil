@@ -16,10 +16,6 @@
 	let showRegenerateConfirm = false;
 
 	onMount(async () => {
-		if (!$auth.isAuthenticated) {
-			goto('/login');
-			return;
-		}
 		await loadVPNData();
 		
 		// Poll status every 10 seconds

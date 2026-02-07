@@ -46,10 +46,6 @@ function getDifficultyColor(difficulty: string): string {
 }
 
 onMount(async () => {
-	if (!$auth.isAuthenticated) {
-		goto('/login');
-		return;
-	}
 	await loadProfile();
 });
 

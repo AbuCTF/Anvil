@@ -26,8 +26,6 @@
 	let refreshInterval: ReturnType<typeof setInterval>;
 
 	onMount(async () => {
-		if (!$auth.isAuthenticated) {
-			goto('/login');
 			return;
 		}
 		await loadInstances();
