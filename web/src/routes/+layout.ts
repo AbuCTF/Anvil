@@ -2,6 +2,9 @@ import { browser } from '$app/environment';
 import type { LayoutLoad } from './$types';
 import { API_BASE } from '$lib/config';
 
+// Disable SSR - we need localStorage which is browser-only
+export const ssr = false;
+
 export const load: LayoutLoad = async ({ fetch }) => {
 	if (browser) {
 		const token = localStorage.getItem('accessToken');
