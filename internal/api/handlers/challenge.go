@@ -135,7 +135,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		if userID != nil {
 			var solveCount int
 			solveQuery := `
-				SELECT COUNT(*) FROM solved_flags s
+				SELECT COUNT(*) FROM solves s
 				JOIN flags f ON s.flag_id = f.id
 				WHERE s.user_id = $1 AND f.challenge_id = $2
 			`
@@ -324,10 +324,10 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 	// Get flags
 	query := `
 		SELECT f.id, f.name, f.points, f.sort_order,
-			(SELECT COUNT(*) FROM solved_flags WHERE flag_id = f.id) as total_solves,
+			(SELECT COUNT(*) FROM solves WHERE flag_id = f.id) as total_solves,
 			s.solved_at
 		FROM flags f
-		LEFT JOIN solved_flags s ON f.id = s.flag_id AND s.user_id = $1
+		LEFT JOIN solves s ON f.id = s.flag_id AND s.user_id = $1
 		WHERE f.challenge_id = $2
 		ORDER BY f.sort_order
 	`

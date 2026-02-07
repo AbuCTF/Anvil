@@ -117,10 +117,10 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 
 	// Get solve counts
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM solved_flags WHERE user_id = $1`, uid).Scan(&profile.TotalSolves)
+		`SELECT COUNT(*) FROM solves WHERE user_id = $1`, uid).Scan(&profile.TotalSolves)
 
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(DISTINCT f.challenge_id) FROM solved_flags s
+		`SELECT COUNT(DISTINCT f.challenge_id) FROM solves s
 		 JOIN flags f ON s.flag_id = f.id
 		 WHERE s.user_id = $1`, uid).Scan(&profile.TotalChallenges)
 
@@ -184,11 +184,11 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 
 	// Total solves
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM solved_flags WHERE user_id = $1`, uid).Scan(&stats.TotalSolves)
+		`SELECT COUNT(*) FROM solves WHERE user_id = $1`, uid).Scan(&stats.TotalSolves)
 
 	// Total challenges solved
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(DISTINCT f.challenge_id) FROM solved_flags s
+		`SELECT COUNT(DISTINCT f.challenge_id) FROM solves s
 		 JOIN flags f ON s.flag_id = f.id WHERE s.user_id = $1`, uid).Scan(&stats.TotalChallenges)
 
 	// Total attempts
@@ -203,7 +203,7 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 	// Solves by difficulty
 	rows, _ := h.db.Pool.Query(c.Request.Context(),
 		`SELECT c.difficulty, COUNT(DISTINCT c.id)
-		 FROM solved_flags s
+		 FROM solves s
 		 JOIN flags f ON s.flag_id = f.id
 		 JOIN challenges c ON f.challenge_id = c.id
 		 WHERE s.user_id = $1
@@ -221,7 +221,7 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 	// Solves by category
 	rows, _ = h.db.Pool.Query(c.Request.Context(),
 		`SELECT COALESCE(cat.name, 'Uncategorized'), COUNT(DISTINCT c.id)
-		 FROM solved_flags s
+		 FROM solves s
 		 JOIN flags f ON s.flag_id = f.id
 		 JOIN challenges c ON f.challenge_id = c.id
 		 LEFT JOIN categories cat ON c.category_id = cat.id
@@ -240,7 +240,7 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 	// Recent activity
 	activityQuery := `
 		SELECT 'solve' as type, c.id, c.name, f.name, s.points_awarded, s.solved_at
-		FROM solved_flags s
+		FROM solves s
 		JOIN flags f ON s.flag_id = f.id
 		JOIN challenges c ON f.challenge_id = c.id
 		WHERE s.user_id = $1
@@ -280,7 +280,7 @@ func (h *UserHandler) GetSolves(c *gin.Context) {
 
 	query := `
 		SELECT s.id, c.id, c.name, c.slug, f.id, f.name, s.points_awarded, s.solved_at
-		FROM solved_flags s
+		FROM solves s
 		JOIN flags f ON s.flag_id = f.id
 		JOIN challenges c ON f.challenge_id = c.id
 		WHERE s.user_id = $1
