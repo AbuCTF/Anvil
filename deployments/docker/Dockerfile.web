@@ -9,7 +9,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm ci && npm install @rollup/rollup-linux-x64-musl --save-optional
 
 # Copy source
 COPY . .
@@ -28,7 +28,7 @@ ARG PUBLIC_API_URL=http://localhost:8080
 ENV PUBLIC_API_URL=$PUBLIC_API_URL
 
 COPY package*.json ./
-RUN npm ci
+RUN npm ci && npm install @rollup/rollup-linux-x64-musl --save-optional
 
 COPY . .
 
