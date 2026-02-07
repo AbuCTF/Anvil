@@ -290,14 +290,6 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 	macAddress := generateMAC(instanceID)
 	vmName := fmt.Sprintf("anvil-%s", instanceID[:8])
 
-	// Allocate a specific IP and add DHCP reservation
-	// This ensures the VM gets a predictable IP that we can display immediately
-	ipAddress, err := s.allocateIPWithReservation(ctx, node, macAddress, instanceID)
-	if err != nil {
-		s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f %s", overlayPath))
-		return nil, fmt.Errorf("failed to allocate IP: %w", err)
-	}
-
 	// Generate libvirt XML
 	domainXML, err := s.generateDomainXML(vmName, instanceID, template.VCPU, template.MemoryMB, overlayPath, macAddress, vncPort, node.NetworkName)
 	if err != nil {
@@ -307,27 +299,29 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 	// Define and start VM on node via SSH + virsh
 	err = s.defineAndStartVMOnNode(ctx, domainXML, vmName, node)
 	if err != nil {
-		// Cleanup overlay and DHCP reservation on failure
+		// Cleanup overlay on failure
 		s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f %s", overlayPath))
-		s.removeIPReservation(ctx, node, macAddress)
 		return nil, fmt.Errorf("failed to start VM: %w", err)
 	}
 
-	// Wait for VM to get IP and query actual IP address
-	// This is more reliable than trusting DHCP reservations
-	actualIP, err := s.queryVMIP(ctx, vmName, node, 30)
+	// Wait for VM to get IP via DHCP (increased timeout to 60 seconds)
+	// VMs rely entirely on dynamic DHCP allocation
+	actualIP, err := s.queryVMIP(ctx, vmName, node, 60)
 	if err != nil {
-		s.logger.Warn("failed to query VM IP, using allocated IP",
+		// Failed to get IP - cleanup and fail
+		s.logger.Error("VM failed to get IP address",
 			zap.Error(err),
-			zap.String("fallback_ip", ipAddress))
-		actualIP = ipAddress
+			zap.String("vm_name", vmName))
+		virshCmd := "virsh -c qemu:///system"
+		s.runSSHCommand(ctx, node, fmt.Sprintf("%s destroy %s 2>/dev/null || true", virshCmd, vmName))
+		s.runSSHCommand(ctx, node, fmt.Sprintf("%s undefine %s 2>/dev/null || true", virshCmd, vmName))
+		s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f %s", overlayPath))
+		return nil, fmt.Errorf("VM failed to get IP address after 60 seconds: %w", err)
 	}
 
-	if actualIP != ipAddress {
-		s.logger.Info("VM got different IP than reserved",
-			zap.String("reserved", ipAddress),
-			zap.String("actual", actualIP))
-	}
+	s.logger.Info("VM acquired IP via DHCP",
+		zap.String("instance_id", instanceID),
+		zap.String("ip_address", actualIP))
 
 	// Store instance info with actual IP
 	instance := &VMInstance{
@@ -837,10 +831,7 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 	s.stopVM(ctx, instance.Name)
 	s.undefineVM(ctx, instance.Name)
 
-	// Remove DHCP reservation
-	s.removeIPReservation(ctx, node, instance.MACAddress)
-
-	// Cleanup resources
+	// Cleanup resources (DHCP lease will expire automatically)
 	os.Remove(instance.DiskPath)
 	s.releaseVNCPort(instance.VNCPort)
 	s.releaseIP(instance.IPAddress)
