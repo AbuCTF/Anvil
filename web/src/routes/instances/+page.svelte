@@ -26,8 +26,6 @@
 	let refreshInterval: ReturnType<typeof setInterval>;
 
 	onMount(async () => {
-			return;
-		}
 		await loadInstances();
 		refreshInterval = setInterval(loadInstances, 30000);
 	});
