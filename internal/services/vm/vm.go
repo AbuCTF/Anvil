@@ -454,7 +454,7 @@ func (s *Service) allocateIPLocked() string {
 // getActiveDHCPLeases queries existing DHCP leases from libvirt
 func (s *Service) getActiveDHCPLeases(ctx context.Context, node *NodeInfo) (map[string]bool, error) {
 	virshCmd := "virsh -c qemu:///system"
-	cmd := fmt.Sprintf("%s net-dhcp-leases %s --mac 2>/dev/null | tail -n +3 | awk '{print $5}' | cut -d'/' -f1", virshCmd, node.NetworkName)
+	cmd := fmt.Sprintf("%s net-dhcp-leases %s 2>/dev/null | tail -n +3 | awk '{print $5}' | cut -d'/' -f1", virshCmd, node.NetworkName)
 
 	output, err := s.runSSHCommand(ctx, node, cmd)
 	if err != nil {
