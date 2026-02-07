@@ -119,6 +119,7 @@ type CreateVMRequest struct {
 type Service struct {
 	logger       *zap.Logger
 	config       Config
+	db           interface{ Pool interface{ QueryRow(context.Context, string, ...interface{}) interface{ Scan(...interface{}) error } } }
 	mu           sync.RWMutex
 	instances    map[string]*VMInstance
 	templates    map[string]*VMTemplate
@@ -161,7 +162,7 @@ func DefaultConfig() Config {
 }
 
 // NewService creates a new VM management service
-func NewService(logger *zap.Logger, config Config) (*Service, error) {
+func NewService(logger *zap.Logger, config Config, db interface{ Pool interface{ QueryRow(context.Context, string, ...interface{}) interface{ Scan(...interface{}) error } } }) (*Service, error) {
 	// Ensure storage directories exist
 	dirs := []string{
 		config.ImageStorePath,
@@ -182,6 +183,7 @@ func NewService(logger *zap.Logger, config Config) (*Service, error) {
 	return &Service{
 		logger:       logger,
 		config:       config,
+		db:           db,
 		instances:    make(map[string]*VMInstance),
 		templates:    make(map[string]*VMTemplate),
 		usedVNCPorts: make(map[int]bool),
@@ -1030,24 +1032,41 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 			continue
 		}
 
-		// Extract UUID from name (anvil-{8chars of UUID})
-		// Check if we have this in our instances map
-		found := false
-		for _, inst := range s.instances {
-			if inst.Name == vmName {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			// Orphaned VM - destroy it
-			s.logger.Info("cleaning up orphaned VM", zap.String("vm_name", vmName))
+		// Extract instance ID from name (anvil-{first 8 chars of UUID})
+		// Check if this VM exists in the database (any status)
+		var instanceID string
+		var status string
+		var expiresAt time.Time
+		
+		// Query database for instance with this container_id
+		err := s.db.Pool.QueryRow(ctx,
+			`SELECT id, status, expires_at FROM instances WHERE container_id = $1`,
+			vmName).Scan(&instanceID, &status, &expiresAt)
+		
+		if err != nil {
+			// Not in database - truly orphaned, destroy it
+			s.logger.Info("cleaning up orphaned VM (not in database)", zap.String("vm_name", vmName))
 			destroyCmd := fmt.Sprintf("%s destroy %s 2>/dev/null || true", virshCmd, vmName)
 			s.runSSHCommand(ctx, node, destroyCmd)
 
 			undefineCmd := fmt.Sprintf("%s undefine %s 2>/dev/null || true", virshCmd, vmName)
 			s.runSSHCommand(ctx, node, undefineCmd)
+		} else if status == "failed" || status == "terminated" || time.Now().After(expiresAt) {
+			// Expired or failed - clean it up
+			s.logger.Info("cleaning up expired/failed VM",
+				zap.String("vm_name", vmName),
+				zap.String("status", status),
+				zap.Time("expires_at", expiresAt))
+			destroyCmd := fmt.Sprintf("%s destroy %s 2>/dev/null || true", virshCmd, vmName)
+			s.runSSHCommand(ctx, node, destroyCmd)
+
+			undefineCmd := fmt.Sprintf("%s undefine %s 2>/dev/null || true", virshCmd, vmName)
+			s.runSSHCommand(ctx, node, undefineCmd)
+		} else {
+			// Valid instance (running, stopped, provisioning) - leave it alone
+			s.logger.Debug("keeping valid VM",
+				zap.String("vm_name", vmName),
+				zap.String("status", status))
 		}
 	}
 
@@ -1320,10 +1339,24 @@ func (s *Service) stopVM(ctx context.Context, name string) error {
 }
 
 func (s *Service) stopVMOnNode(ctx context.Context, node *NodeInfo, name string) error {
-	cmd := fmt.Sprintf("virsh -c qemu:///system destroy %s 2>/dev/null || true", name)
-	_, err := s.runSSHCommand(ctx, node, cmd)
-	// Ignore errors - VM might already be stopped
-	return err
+	// First check if VM exists and is running
+	checkCmd := fmt.Sprintf("virsh -c qemu:///system list --name | grep -q '^%s$'", name)
+	_, err := s.runSSHCommand(ctx, node, checkCmd)
+	if err != nil {
+		// VM not running, that's fine
+		s.logger.Debug("VM already stopped", zap.String("name", name))
+		return nil
+	}
+
+	// Stop the VM
+	cmd := fmt.Sprintf("virsh -c qemu:///system destroy %s", name)
+	_, err = s.runSSHCommand(ctx, node, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to destroy VM: %w", err)
+	}
+	
+	s.logger.Info("VM stopped successfully", zap.String("name", name))
+	return nil
 }
 
 func (s *Service) undefineVMOnNode(ctx context.Context, node *NodeInfo, name string) error {

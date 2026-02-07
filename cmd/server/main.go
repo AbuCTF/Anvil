@@ -76,7 +76,7 @@ func main() {
 	uploadSvc := upload.NewService(storageSvc, logger, upload.DefaultConfig())
 
 	// Initialize VM service (optional - may fail if libvirt not available)
-	vmSvc, err := vm.NewService(logger, vm.DefaultConfig())
+	vmSvc, err := vm.NewService(logger, vm.DefaultConfig(), db)
 	if err != nil {
 		sugar.Warnf("VM service not available (this is OK for Docker-only mode): %v", err)
 		vmSvc = nil

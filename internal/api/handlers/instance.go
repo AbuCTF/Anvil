@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -560,10 +561,14 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		if inst.ResourceType == "vm" && h.vmSvc != nil {
 			if err := h.vmSvc.StopInstance(c.Request.Context(), *inst.ContainerID); err != nil {
-				h.logger.Warn("failed to stop VM", zap.Error(err), zap.String("vm_id", *inst.ContainerID))
+				h.logger.Error("failed to stop VM", zap.Error(err), zap.String("vm_id", *inst.ContainerID))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to stop VM: %v", err)})
+				return
 			}
 		} else if err := h.containerSvc.StopInstance(c.Request.Context(), *inst.ContainerID); err != nil {
-			h.logger.Warn("failed to stop container", zap.Error(err))
+			h.logger.Error("failed to stop container", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to stop container: %v", err)})
+			return
 		}
 	}
 
