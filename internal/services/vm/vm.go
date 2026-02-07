@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -473,16 +474,22 @@ func (s *Service) getActiveDHCPLeases(ctx context.Context, node *NodeInfo) (map[
 	return leases, nil
 }
 
-// allocateAvailableIP finds an IP that's not in the existing leases
+// allocateAvailableIP finds a random available IP from the pool
 func (s *Service) allocateAvailableIP(existingIPs map[string]bool) string {
-	// Use 10.100.10.x - 10.100.250.x range
+	// Build list of all possible IPs in 10.100.10.x - 10.100.250.x range
+	var availableIPs []string
 	for subnet := 10; subnet <= 250; subnet++ {
 		for host := 10; host <= 250; host++ {
 			ip := fmt.Sprintf("10.100.%d.%d", subnet, host)
 			if !existingIPs[ip] {
-				return ip
+				availableIPs = append(availableIPs, ip)
 			}
 		}
+	}
+
+	// Return random IP from available pool
+	if len(availableIPs) > 0 {
+		return availableIPs[rand.Intn(len(availableIPs))]
 	}
 	// Fallback
 	return fmt.Sprintf("10.100.100.%d", 10+len(existingIPs)%240)

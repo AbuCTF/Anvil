@@ -57,7 +57,9 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # For container managementano
+      - /var/run/docker.sock:/var/run/docker.sock  # For container management
+      - /root/.ssh:/root/.ssh:ro  # SSH key for VM host access
+      - ./data/storage:/var/lib/anvil/storage  # Shared storage
       - /var/lib/anvil:/var/lib/anvil  # VM templates and storage
     depends_on:
       postgres:
