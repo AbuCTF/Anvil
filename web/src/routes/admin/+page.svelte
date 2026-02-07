@@ -170,10 +170,6 @@
 	}
 
 	onMount(async () => {
-		if (!$auth.isAuthenticated || $auth.user?.role !== 'admin') {
-			goto('/');
-			return;
-		}
 		await loadDashboard();
 	});
 
