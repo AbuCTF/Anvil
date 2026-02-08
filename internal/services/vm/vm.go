@@ -603,6 +603,8 @@ func (s *Service) generateDomainXML(name, uuid string, vcpu, memoryMB int, diskP
   <vcpu>%d</vcpu>
   <cputune>
     <shares>512</shares>
+    <period>100000</period>
+    <quota>50000</quota>
   </cputune>
   <os>
     <type arch='x86_64'>hvm</type>
