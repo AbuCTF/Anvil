@@ -41,8 +41,8 @@
 	let templateFile: File | null = null;
 	let templateName = '';
 	let templateDescription = '';
-	let templateMinVcpu = 2;
-	let templateMinMemory = 2048;
+	let templateMinVcpu = 1;
+	let templateMinMemory = 1024;
 	let templateUploadProgress = 0;
 	let templateUploading = false;
 
@@ -341,8 +341,8 @@
 						category: newChallenge.category,
 						challenge_type: 'vm',
 						vm_template_id: newChallenge.vm_template_id,
-						vcpu: 2,
-						memory_mb: 2048,
+						vcpu: 1,
+						memory_mb: 1024,
 						flags: newChallenge.flags
 					});
 				} else if (ovaFile) {
@@ -939,7 +939,7 @@
 									<div class="text-xs text-stone-500">
 										<span>{((template.image_size_bytes || 0) / 1024 / 1024 / 1024).toFixed(1)} GB</span>
 										<span class="mx-2">•</span>
-										<span>{template.vcpu || 2} vCPU / {template.memory_mb || 2048} MB</span>
+										<span>{template.vcpu || 1} vCPU / {template.memory_mb || 1024} MB</span>
 									</div>
 									{#if template.description}
 										<p class="text-xs text-stone-600 mt-1 truncate">{template.description}</p>
@@ -1454,7 +1454,7 @@
 														<div>
 															<span class="text-white font-medium">{template.name}</span>
 															<p class="text-stone-500 text-xs mt-0.5">
-																{((template.image_size_bytes || 0) / 1024 / 1024 / 1024).toFixed(1)} GB • {template.vcpu || 2} vCPU • {template.memory_mb || 2048} MB
+																{((template.image_size_bytes || 0) / 1024 / 1024 / 1024).toFixed(1)} GB • {template.vcpu || 1} vCPU • {template.memory_mb || 1024} MB
 															</p>
 														</div>
 														{#if newChallenge.vm_template_id === template.id}

@@ -335,10 +335,10 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		supportsDocker = false
 		supportsVM = true
 		if req.VCPU == 0 {
-			req.VCPU = 2
+			req.VCPU = 1
 		}
 		if req.MemoryMB == 0 {
-			req.MemoryMB = 2048
+			req.MemoryMB = 1024
 		}
 	} else {
 		if req.ContainerTag == "" {

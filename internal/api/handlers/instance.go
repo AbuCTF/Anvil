@@ -585,8 +585,8 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	if inst.ResourceType == "vm" {
 		h.db.Pool.Exec(c.Request.Context(),
 			`UPDATE vm_nodes SET 
-			 used_vcpu = GREATEST(0, used_vcpu - 2),
-			 used_memory_mb = GREATEST(0, used_memory_mb - 2048),
+			 used_vcpu = GREATEST(0, used_vcpu - 1),
+			 used_memory_mb = GREATEST(0, used_memory_mb - 1024),
 			 active_vms = GREATEST(0, active_vms - 1),
 			 updated_at = NOW()
 			 WHERE name = 'core'`) // TODO: get actual node from instance
@@ -678,8 +678,8 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 	if resourceType == "vm" {
 		h.db.Pool.Exec(c.Request.Context(),
 			`UPDATE vm_nodes SET 
-			 used_vcpu = GREATEST(0, used_vcpu - 2),
-			 used_memory_mb = GREATEST(0, used_memory_mb - 2048),
+			 used_vcpu = GREATEST(0, used_vcpu - 1),
+			 used_memory_mb = GREATEST(0, used_memory_mb - 1024),
 			 active_vms = GREATEST(0, active_vms - 1),
 			 updated_at = NOW()
 			 WHERE name = 'core'`) // TODO: get actual node from instance

@@ -155,8 +155,8 @@ func DefaultConfig() Config {
 		VNCPortStart:        5900,
 		VNCPortEnd:          6100,
 		MaxInstancesPerUser: 2,
-		DefaultVCPU:         2,
-		DefaultMemoryMB:     2048,
+		DefaultVCPU:         1,
+		DefaultMemoryMB:     1024,
 		DefaultDuration:     2 * time.Hour,
 		MaxDuration:         8 * time.Hour,
 	}
@@ -601,6 +601,9 @@ func (s *Service) generateDomainXML(name, uuid string, vcpu, memoryMB int, diskP
   <uuid>%s</uuid>
   <memory unit='MiB'>%d</memory>
   <vcpu>%d</vcpu>
+  <cputune>
+    <shares>512</shares>
+  </cputune>
   <os>
     <type arch='x86_64'>hvm</type>
     <boot dev='hd'/>

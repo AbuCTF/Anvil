@@ -162,8 +162,8 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 	// Get form values
 	name := c.PostForm("name")
 	description := c.PostForm("description")
-	minVCPU := c.DefaultPostForm("min_vcpu", "2")
-	minMemoryMB := c.DefaultPostForm("min_memory_mb", "2048")
+	minVCPU := c.DefaultPostForm("min_vcpu", "1")
+	minMemoryMB := c.DefaultPostForm("min_memory_mb", "1024")
 	osType := c.DefaultPostForm("os_type", "linux")
 
 	if name == "" {
@@ -365,8 +365,8 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, descriptio
 	}
 
 	// Parse vcpu and memory
-	vcpuInt := 2
-	memoryInt := 2048
+	vcpuInt := 1
+	memoryInt := 1024
 	fmt.Sscanf(minVCPU, "%d", &vcpuInt)
 	fmt.Sscanf(minMemoryMB, "%d", &memoryInt)
 
@@ -572,10 +572,10 @@ func (h *VMTemplateHandler) Register(c *gin.Context) {
 
 	// Set defaults
 	if req.VCPU == 0 {
-		req.VCPU = 2
+		req.VCPU = 1
 	}
 	if req.MemoryMB == 0 {
-		req.MemoryMB = 2048
+		req.MemoryMB = 1024
 	}
 	if req.OSType == "" {
 		req.OSType = "linux"
