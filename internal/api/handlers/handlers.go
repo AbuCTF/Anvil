@@ -279,17 +279,30 @@ func (h *AdminInstanceHandler) ForceStop(c *gin.Context) {
 			if vmSvc, ok := h.vmSvc.(interface {
 				DestroyInstanceByName(context.Context, string) error
 			}); ok {
-				vmSvc.DestroyInstanceByName(c.Request.Context(), *containerID)
+				if err := vmSvc.DestroyInstanceByName(c.Request.Context(), *containerID); err != nil {
+					h.logger.Error("failed to destroy VM", zap.Error(err))
+					// Continue anyway - VM might already be destroyed
+				}
 			}
 		} else if containerSvc, ok := h.containerSvc.(interface {
 			StopInstance(context.Context, string) error
 		}); ok {
-			containerSvc.StopInstance(c.Request.Context(), *containerID)
+			if err := containerSvc.StopInstance(c.Request.Context(), *containerID); err != nil {
+				h.logger.Error("failed to stop container", zap.Error(err))
+				// Continue anyway
+			}
 		}
 	}
 
 	// Delete from database
-	h.db.Pool.Exec(c.Request.Context(), `DELETE FROM instances WHERE id = $1`, instanceID)
+	_, err = h.db.Pool.Exec(c.Request.Context(), `DELETE FROM instances WHERE id = $1`, instanceID)
+	if err != nil {
+		h.logger.Error("failed to delete instance from database", zap.Error(err), zap.String("instance_id", instanceID))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete instance from database"})
+		return
+	}
+
+	h.logger.Info("instance deleted", zap.String("instance_id", instanceID), zap.String("resource_type", resourceType))
 
 	// Update node counters if VM
 	if resourceType == "vm" {
