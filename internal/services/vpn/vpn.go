@@ -1,6 +1,7 @@
 package vpn
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
+	"github.com/anvil-lab/anvil/internal/database"
 	"go.uber.org/zap"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
@@ -18,6 +20,7 @@ import (
 // Service handles VPN configuration and management
 type Service struct {
 	config config.VPNConfig
+	db     *database.DB
 	logger *zap.Logger
 
 	// IP allocation
@@ -28,7 +31,7 @@ type Service struct {
 }
 
 // NewService creates a new VPN service
-func NewService(cfg config.VPNConfig, logger *zap.Logger) (*Service, error) {
+func NewService(cfg config.VPNConfig, db *database.DB, logger *zap.Logger) (*Service, error) {
 	// Parse the address range
 	_, ipNet, err := net.ParseCIDR(cfg.AddressRange)
 	if err != nil {
@@ -43,13 +46,58 @@ func NewService(cfg config.VPNConfig, logger *zap.Logger) (*Service, error) {
 
 	s := &Service{
 		config:    cfg,
+		db:        db,
 		logger:    logger,
 		usedIPs:   make(map[string]bool),
 		ipNetwork: ipNet,
 		nextIP:    startIP,
 	}
 
+	// Load existing allocated IPs from database
+	if err := s.loadAllocatedIPs(); err != nil {
+		logger.Warn("failed to load existing VPN IPs", zap.Error(err))
+	}
+
 	return s, nil
+}
+
+// loadAllocatedIPs loads all allocated IPs from database to prevent conflicts
+func (s *Service) loadAllocatedIPs() error {
+	rows, err := s.db.Pool.Query(context.Background(), `SELECT assigned_ip FROM vpn_configs`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var highestIP net.IP
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			continue
+		}
+		s.usedIPs[ip] = true
+		
+		// Track highest allocated IP to continue from there
+		currentIP := net.ParseIP(ip)
+		if currentIP != nil {
+			if highestIP == nil || bytes.Compare(currentIP, highestIP) > 0 {
+				highestIP = currentIP
+			}
+		}
+	}
+
+	// Set nextIP to highest + 1
+	if highestIP != nil {
+		s.nextIP = make(net.IP, len(highestIP))
+		copy(s.nextIP, highestIP)
+		incrementIP(s.nextIP)
+	}
+
+	s.logger.Info(\"loaded allocated VPN IPs\", 
+		zap.Int(\"used_count\", len(s.usedIPs)),
+		zap.String(\"next_ip\", s.nextIP.String()))
+
+	return rows.Err()
 }
 
 // Status returns the VPN service status

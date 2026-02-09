@@ -61,7 +61,7 @@ func main() {
 		sugar.Fatalf("Failed to initialize container service: %v", err)
 	}
 
-	vpnSvc, err := vpn.NewService(cfg.VPN, logger)
+	vpnSvc, err := vpn.NewService(cfg.VPN, db, logger)
 	if err != nil {
 		sugar.Fatalf("Failed to initialize VPN service: %v", err)
 	}
