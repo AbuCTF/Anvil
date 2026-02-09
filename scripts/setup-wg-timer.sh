@@ -18,13 +18,3 @@ sudo systemctl start wg-status-sync.timer
 
 # Stop old cron-based sync if running
 crontab -l | grep -v "wg-status-sync.sh" | crontab - 2>/dev/null || true
-
-echo ""
-echo "✓ Systemd timer installed and started"
-echo "✓ Old crontab entry removed"
-echo ""
-echo "Check timer status:"
-echo "  sudo systemctl status wg-status-sync.timer"
-echo ""
-echo "Check recent logs:"
-echo "  tail -f /var/log/wg-status.log"
