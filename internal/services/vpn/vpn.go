@@ -235,30 +235,40 @@ func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) err
 		zap.String("assigned_ip", assignedIP),
 	)
 
-	// Add peer using wg command
-	cmd := exec.CommandContext(ctx, "wg", "set", s.config.Interface,
-		"peer", publicKey,
-		"allowed-ips", assignedIP+"/32")
-
+	// Execute wg command on host via docker exec to host
+	// The container needs to run wg on the host, not inside the container
+	// We use SSH to localhost (the host) to execute the command
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no", 
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"root@172.17.0.1",
+		fmt.Sprintf("wg set %s peer %s allowed-ips %s/32", s.config.Interface, publicKey, assignedIP))
+	
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("failed to add peer: %w, output: %s", err, string(output))
-	}
-
-	s.logger.Info("Successfully added VPN peer", zap.String("public_key", publicKey[:8]+"..."))
-	return nil
-}
-
+		s.logger.Error("failed to add peer",
+			zap.Error(err),
+			zap.String("output", string(output)),
+			zap.String("public_key", publicKey[:8]+"..."))
 // RemovePeer removes a peer from the WireGuard server
 func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 	s.logger.Info("Removing VPN peer",
 		zap.String("public_key", publicKey[:8]+"..."),
 	)
 
-	// Remove peer using wg command
-	cmd := exec.CommandContext(ctx, "wg", "set", s.config.Interface, "peer", publicKey, "remove")
+	// Execute wg command on host via SSH
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"root@172.17.0.1",
+		fmt.Sprintf("wg set %s peer %s remove", s.config.Interface, publicKey))
+	
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		s.logger.Error("failed to remove peer",
+			zap.Error(err),
+			zap.String("output", string(output)),
+			zap.String("public_key", publicKey[:8]+"..."))
 		return fmt.Errorf("failed to remove peer: %w, output: %s", err, string(output))
 	}
 
