@@ -250,6 +250,13 @@ func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) err
 			zap.Error(err),
 			zap.String("output", string(output)),
 			zap.String("public_key", publicKey[:8]+"..."))
+		return fmt.Errorf("failed to add peer: %w, output: %s", err, string(output))
+	}
+
+	s.logger.Info("Successfully added VPN peer", zap.String("public_key", publicKey[:8]+"..."))
+	return nil
+}
+
 // RemovePeer removes a peer from the WireGuard server
 func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 	s.logger.Info("Removing VPN peer",
