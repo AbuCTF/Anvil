@@ -323,8 +323,8 @@ func (s *Service) GetPeerStatus(publicKey string) (*PeerStatus, error) {
 			}
 
 			lastHandshake := peer.LastHandshakeTime.Unix()
-			// Consider connected if handshake was within last 3 minutes
-			connected := !peer.LastHandshakeTime.IsZero() && time.Since(peer.LastHandshakeTime) < 3*time.Minute
+			// Consider connected if handshake was within last 30 seconds
+			connected := !peer.LastHandshakeTime.IsZero() && time.Since(peer.LastHandshakeTime) < 30*time.Second
 
 			return &PeerStatus{
 				Connected:     connected,

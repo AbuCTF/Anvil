@@ -211,8 +211,8 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 	if lastHandshake != nil && !lastHandshake.IsZero() {
 		ts := lastHandshake.Unix()
 		lastHandshakeUnix = &ts
-		// Consider connected if handshake within last 3 minutes
-		connected = time.Since(*lastHandshake) < 3*time.Minute
+		// Consider connected if handshake within last 30 seconds
+		connected = time.Since(*lastHandshake) < 30*time.Second
 	}
 
 	c.JSON(http.StatusOK, VPNStatusResponse{
