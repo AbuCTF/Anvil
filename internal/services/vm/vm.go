@@ -985,12 +985,20 @@ func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) 
 	s.undefineVM(ctx, vmName)
 
 	// Try to cleanup overlay disk (best effort, path might not be known)
+	s.logger.Info("attempting to cleanup overlay disk", zap.String("vm_name", vmName))
 	overlayPath := filepath.Join(s.config.InstanceStorePath, "overlays", fmt.Sprintf("%s.qcow2", vmName))
-	os.Remove(overlayPath) // Ignore errors if file doesn't exist
+	removeErr := os.Remove(overlayPath)
+	if removeErr != nil {
+		s.logger.Debug("overlay file removal skipped or failed", zap.String("path", overlayPath), zap.Error(removeErr))
+	} else {
+		s.logger.Info("overlay file removed", zap.String("path", overlayPath))
+	}
 
+	s.logger.Info("attempting to acquire mutex lock for instance cleanup", zap.String("vm_name", vmName))
 	// Remove from memory map if present (extract instance ID from name)
 	// VM names are in format "anvil-{first 8 chars of UUID}"
 	s.mu.Lock()
+	s.logger.Info("mutex lock acquired, cleaning up instance map", zap.String("vm_name", vmName))
 	for id, inst := range s.instances {
 		if inst.Name == vmName {
 			s.releaseVNCPort(inst.VNCPort)
@@ -1000,6 +1008,7 @@ func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) 
 		}
 	}
 	s.mu.Unlock()
+	s.logger.Info("mutex lock released", zap.String("vm_name", vmName))
 
 	s.logger.Info("VM instance destroyed by name", zap.String("vm_name", vmName))
 
