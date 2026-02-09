@@ -238,12 +238,12 @@ func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) err
 	// Execute wg command on host via docker exec to host
 	// The container needs to run wg on the host, not inside the container
 	// We use SSH to localhost (the host) to execute the command
-	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no", 
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
 		"root@172.17.0.1",
 		fmt.Sprintf("wg set %s peer %s allowed-ips %s/32", s.config.Interface, publicKey, assignedIP))
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		s.logger.Error("failed to add peer",
@@ -269,7 +269,7 @@ func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 		"-o", "LogLevel=ERROR",
 		"root@172.17.0.1",
 		fmt.Sprintf("wg set %s peer %s remove", s.config.Interface, publicKey))
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		s.logger.Error("failed to remove peer",

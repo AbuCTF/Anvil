@@ -1385,7 +1385,13 @@ func (s *Service) defineAndStartVM(ctx context.Context, instance *VMInstance) er
 }
 
 func (s *Service) stopVM(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "virsh", "-c", s.config.LibvirtURI, "destroy", name)
+	// Execute virsh on host via SSH
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=5",
+		"root@172.17.0.1",
+		fmt.Sprintf("virsh -c qemu:///system destroy %s 2>/dev/null || true", name))
 	cmd.CombinedOutput() // Ignore errors if VM is already stopped
 	return nil
 }
@@ -1429,7 +1435,13 @@ func (s *Service) undefineVMOnNode(ctx context.Context, node *NodeInfo, name str
 }
 
 func (s *Service) startVM(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "virsh", "-c", s.config.LibvirtURI, "start", name)
+	// Execute virsh on host via SSH
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=5",
+		"root@172.17.0.1",
+		fmt.Sprintf("virsh -c qemu:///system start %s", name))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("virsh start failed: %s: %w", string(output), err)
 	}
@@ -1437,7 +1449,13 @@ func (s *Service) startVM(ctx context.Context, name string) error {
 }
 
 func (s *Service) undefineVM(ctx context.Context, name string) error {
-	cmd := exec.CommandContext(ctx, "virsh", "-c", s.config.LibvirtURI, "undefine", name)
+	// Execute virsh on host via SSH
+	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=5",
+		"root@172.17.0.1",
+		fmt.Sprintf("virsh -c qemu:///system undefine %s 2>/dev/null || true", name))
 	cmd.CombinedOutput() // Ignore errors
 	return nil
 }
