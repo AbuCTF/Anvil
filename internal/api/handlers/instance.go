@@ -560,9 +560,9 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	// Stop and destroy the resource (container or VM)
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		if inst.ResourceType == "vm" && h.vmSvc != nil {
-			// Destroy VM completely (stop + undefine)
-			if err := h.vmSvc.DestroyInstance(c.Request.Context(), *inst.ContainerID); err != nil {
-				h.logger.Error("failed to destroy VM", zap.Error(err), zap.String("vm_id", *inst.ContainerID))
+			// Destroy VM completely (stop + undefine) using VM name
+			if err := h.vmSvc.DestroyInstanceByName(c.Request.Context(), *inst.ContainerID); err != nil {
+				h.logger.Error("failed to destroy VM", zap.Error(err), zap.String("vm_name", *inst.ContainerID))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to destroy VM: %v", err)})
 				return
 			}
@@ -665,8 +665,8 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 	// Remove container or VM
 	if containerID != nil && *containerID != "" {
 		if resourceType == "vm" && h.vmSvc != nil {
-			// Destroy VM completely
-			h.vmSvc.DestroyInstance(c.Request.Context(), *containerID)
+			// Destroy VM completely using VM name
+			h.vmSvc.DestroyInstanceByName(c.Request.Context(), *containerID)
 		} else {
 			h.containerSvc.StopInstance(c.Request.Context(), *containerID)
 			h.containerSvc.RemoveInstance(c.Request.Context(), *containerID)

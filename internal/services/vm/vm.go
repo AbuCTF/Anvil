@@ -963,6 +963,46 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 	return nil
 }
 
+// DestroyInstanceByName destroys a VM by its name (container_id) without requiring it to be in memory
+// This is used when stopping instances that may not be in the in-memory map (e.g., after service restart)
+func (s *Service) DestroyInstanceByName(ctx context.Context, vmName string) error {
+	// Get node info (assume core node for now - TODO: store node_id with instance)
+	node := &NodeInfo{
+		Name:        "core",
+		IPAddress:   "172.17.0.1",
+		SSHPort:     22,
+		SSHUser:     "root",
+		SSHKeyPath:  "/root/.ssh/id_rsa",
+		NetworkName: "anvil-lab",
+	}
+
+	// Stop and undefine VM on node
+	s.stopVMOnNode(ctx, node, vmName)
+	s.undefineVMOnNode(ctx, node, vmName)
+
+	// Try to cleanup overlay disk (best effort, path might not be known)
+	overlayPath := filepath.Join(s.config.InstanceStorePath, "overlays", fmt.Sprintf("%s.qcow2", vmName))
+	delCmd := fmt.Sprintf("rm -f %s", overlayPath)
+	s.runSSHCommand(ctx, node, delCmd)
+
+	// Remove from memory map if present (extract instance ID from name)
+	// VM names are in format "anvil-{first 8 chars of UUID}"
+	s.mu.Lock()
+	for id, inst := range s.instances {
+		if inst.Name == vmName {
+			s.releaseVNCPort(inst.VNCPort)
+			s.releaseIP(inst.IPAddress)
+			delete(s.instances, id)
+			break
+		}
+	}
+	s.mu.Unlock()
+
+	s.logger.Info("VM instance destroyed by name", zap.String("vm_name", vmName))
+
+	return nil
+}
+
 // ListUserInstances returns all instances for a user
 func (s *Service) ListUserInstances(ctx context.Context, userID string) ([]*VMInstance, error) {
 	s.mu.RLock()
