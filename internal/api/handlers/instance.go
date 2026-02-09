@@ -534,6 +534,8 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	uid := userID.(uuid.UUID)
 	instanceID := c.Param("id")
 
+	h.logger.Info("Stop handler called", zap.String("user_id", uid.String()), zap.String("instance_id", instanceID))
+
 	// Get instance with challenge info for cooldown
 	var inst struct {
 		ContainerID  *string
@@ -548,6 +550,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		 WHERE i.id = $1 AND i.user_id = $2`,
 		instanceID, uid).Scan(&inst.ContainerID, &inst.Status, &inst.ChallengeID, &inst.ResourceType)
 	if err != nil {
+		h.logger.Error("instance query failed in Stop handler", zap.Error(err), zap.String("instance_id", instanceID), zap.String("user_id", uid.String()))
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
 		return
 	}
@@ -656,6 +659,8 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 	}
 	uid := userID.(uuid.UUID)
 	instanceID := c.Param("id")
+
+	h.logger.Info("Delete handler called", zap.String("user_id", uid.String()), zap.String("instance_id", instanceID))
 
 	// Get instance
 	var containerID *string
