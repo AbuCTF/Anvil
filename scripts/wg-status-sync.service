@@ -5,7 +5,7 @@ After=network.target docker.service
 [Service]
 Type=oneshot
 User=root
-WorkingDirectory=/root/Anvil
-ExecStart=/root/Anvil/scripts/wg-status-sync.sh
+WorkingDirectory=/home/abu/Anvil
+ExecStart=/home/abu/Anvil/scripts/wg-status-sync.sh
 StandardOutput=append:/var/log/wg-status.log
 StandardError=append:/var/log/wg-status.log
