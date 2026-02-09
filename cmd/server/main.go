@@ -165,7 +165,7 @@ func main() {
 				}
 
 				// Force synchronize node counters with reality (safety net)
-				// Uses actual template values by joining with vm_templates
+				// Uses 1 vCPU / 1024 MB per VM (current template defaults)
 				db.Pool.Exec(ctx, `
 					UPDATE vm_nodes n
 					SET active_vms = (
@@ -175,16 +175,14 @@ func main() {
 							  AND c.resource_type = 'vm'
 						),
 						used_vcpu = (
-							SELECT COALESCE(SUM(t.vcpu), 0) FROM instances i 
+							SELECT COUNT(*) FROM instances i 
 							JOIN challenges c ON i.challenge_id = c.id
-							JOIN vm_templates t ON c.vm_template_id = t.id
 							WHERE i.status IN ('running', 'creating', 'pending')
 							  AND c.resource_type = 'vm'
 						),
 						used_memory_mb = (
-							SELECT COALESCE(SUM(t.memory_mb), 0) FROM instances i 
+							SELECT COUNT(*) * 1024 FROM instances i 
 							JOIN challenges c ON i.challenge_id = c.id
-							JOIN vm_templates t ON c.vm_template_id = t.id
 							WHERE i.status IN ('running', 'creating', 'pending')
 							  AND c.resource_type = 'vm'
 						),

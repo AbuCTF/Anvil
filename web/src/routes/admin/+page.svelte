@@ -331,12 +331,17 @@
 					'Content-Type': 'application/json'
 				}
 			});
-			if (!response.ok) throw new Error('Failed to stop instance');
-			await loadDashboard(); // Refresh dashboard
-		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to stop instance');
-		} finally {
+			if (!response.ok) {
+				const error = await response.json().catch(() => ({ error: 'Failed to stop instance' }));
+				throw new Error(error.error || 'Failed to stop instance');
+			}
+			// Clear loading immediately when successful
 			actionLoading = '';
+			// Then refresh dashboard
+			await loadDashboard();
+		} catch (e) {
+			actionLoading = '';
+			alert(e instanceof Error ? e.message : 'Failed to stop instance');
 		}
 	}
 
@@ -1015,10 +1020,11 @@
 										<td class="px-4 py-2">
 											<button
 												on:click={() => deleteInstance(instance.id)}
-												class="text-xs text-red-400 hover:text-red-300 hover:underline"
+												disabled={actionLoading === instance.id}
+												class="text-xs text-red-400 hover:text-red-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
 												title="Force stop this instance"
 											>
-												Stop
+												{actionLoading === instance.id ? 'Stopping...' : 'Stop'}
 											</button>
 										</td>
 									</tr>
