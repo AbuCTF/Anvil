@@ -1385,6 +1385,7 @@ func (s *Service) defineAndStartVM(ctx context.Context, instance *VMInstance) er
 }
 
 func (s *Service) stopVM(ctx context.Context, name string) error {
+	s.logger.Info("executing SSH virsh destroy", zap.String("vm_name", name))
 	// Execute virsh on host via SSH
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
@@ -1392,7 +1393,14 @@ func (s *Service) stopVM(ctx context.Context, name string) error {
 		"-o", "ConnectTimeout=5",
 		"root@172.17.0.1",
 		fmt.Sprintf("virsh -c qemu:///system destroy %s 2>/dev/null || true", name))
-	cmd.CombinedOutput() // Ignore errors if VM is already stopped
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		s.logger.Warn("virsh destroy command returned error (may be expected)",
+			zap.String("vm_name", name),
+			zap.String("output", string(output)),
+			zap.Error(err))
+	}
+	s.logger.Info("virsh destroy completed", zap.String("vm_name", name))
 	return nil
 }
 
@@ -1449,6 +1457,7 @@ func (s *Service) startVM(ctx context.Context, name string) error {
 }
 
 func (s *Service) undefineVM(ctx context.Context, name string) error {
+	s.logger.Info("executing SSH virsh undefine", zap.String("vm_name", name))
 	// Execute virsh on host via SSH
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
@@ -1456,7 +1465,14 @@ func (s *Service) undefineVM(ctx context.Context, name string) error {
 		"-o", "ConnectTimeout=5",
 		"root@172.17.0.1",
 		fmt.Sprintf("virsh -c qemu:///system undefine %s 2>/dev/null || true", name))
-	cmd.CombinedOutput() // Ignore errors
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		s.logger.Warn("virsh undefine command returned error (may be expected)",
+			zap.String("vm_name", name),
+			zap.String("output", string(output)),
+			zap.Error(err))
+	}
+	s.logger.Info("virsh undefine completed", zap.String("vm_name", name))
 	return nil
 }
 

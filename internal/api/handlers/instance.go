@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -534,6 +535,10 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	uid := userID.(uuid.UUID)
 	instanceID := c.Param("id")
 
+	// Create context with timeout to prevent hanging
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
 	h.logger.Info("Stop handler called", zap.String("user_id", uid.String()), zap.String("instance_id", instanceID))
 
 	// Get instance with challenge info for cooldown
@@ -543,7 +548,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		ChallengeID  string
 		ResourceType string
 	}
-	err := h.db.Pool.QueryRow(c.Request.Context(),
+	err := h.db.Pool.QueryRow(ctx,
 		`SELECT i.container_id, i.status, i.challenge_id, c.resource_type 
 		 FROM instances i
 		 JOIN challenges c ON i.challenge_id = c.id
@@ -570,13 +575,13 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		if inst.ResourceType == "vm" && h.vmSvc != nil {
 			// Destroy VM completely (stop + undefine) using VM name
-			if err := h.vmSvc.DestroyInstanceByName(c.Request.Context(), *inst.ContainerID); err != nil {
+			if err := h.vmSvc.DestroyInstanceByName(ctx, *inst.ContainerID); err != nil {
 				h.logger.Error("failed to destroy VM", zap.Error(err), zap.String("vm_name", *inst.ContainerID))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to destroy VM: %v", err)})
 				return
 			}
 			h.logger.Info("VM destroyed successfully, proceeding to delete database record", zap.String("instance_id", instanceID), zap.String("container_id", *inst.ContainerID))
-		} else if err := h.containerSvc.StopInstance(c.Request.Context(), *inst.ContainerID); err != nil {
+		} else if err := h.containerSvc.StopInstance(ctx, *inst.ContainerID); err != nil {
 			h.logger.Error("failed to stop container", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to stop container: %v", err)})
 			return
@@ -587,7 +592,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 
 	// Delete instance immediately (CTF instances are ephemeral, cooldown tracked separately)
 	h.logger.Info("attempting to delete instance from database", zap.String("instance_id", instanceID))
-	_, err = h.db.Pool.Exec(c.Request.Context(),
+	_, err = h.db.Pool.Exec(ctx,
 		`DELETE FROM instances WHERE id = $1`, instanceID)
 	if err != nil {
 		h.logger.Error("failed to delete instance", zap.Error(err), zap.String("instance_id", instanceID))
@@ -598,7 +603,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 
 	// Decrement VM node counters if this was a VM
 	if inst.ResourceType == "vm" {
-		h.db.Pool.Exec(c.Request.Context(),
+		h.db.Pool.Exec(ctx,
 			`UPDATE vm_nodes SET 
 			 used_vcpu = GREATEST(0, used_vcpu - 1),
 			 used_memory_mb = GREATEST(0, used_memory_mb - 1024),
@@ -609,7 +614,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 
 	// Get cooldown duration from challenge settings (default 15 minutes)
 	var cooldownMinutes int
-	err = h.db.Pool.QueryRow(c.Request.Context(),
+	err = h.db.Pool.QueryRow(ctx,
 		`SELECT COALESCE(cooldown_minutes, 15) FROM challenges WHERE id = $1`,
 		inst.ChallengeID).Scan(&cooldownMinutes)
 	if err != nil {
@@ -618,7 +623,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 
 	// Set cooldown for this user/challenge combination
 	cooldownUntil := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
-	_, err = h.db.Pool.Exec(c.Request.Context(),
+	_, err = h.db.Pool.Exec(ctx,
 		`INSERT INTO user_cooldowns (id, user_id, challenge_id, cooldown_until, created_at)
 		 VALUES ($1, $2, $3, $4, NOW())
 		 ON CONFLICT (user_id, challenge_id) DO UPDATE SET cooldown_until = $4`,
