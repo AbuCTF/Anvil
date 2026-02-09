@@ -997,18 +997,29 @@ func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) 
 	s.logger.Info("attempting to acquire mutex lock for instance cleanup", zap.String("vm_name", vmName))
 	// Remove from memory map if present (extract instance ID from name)
 	// VM names are in format "anvil-{first 8 chars of UUID}"
+	var vncPort int
+	var ipAddress string
+
 	s.mu.Lock()
 	s.logger.Info("mutex lock acquired, cleaning up instance map", zap.String("vm_name", vmName))
 	for id, inst := range s.instances {
 		if inst.Name == vmName {
-			s.releaseVNCPort(inst.VNCPort)
-			s.releaseIP(inst.IPAddress)
+			vncPort = inst.VNCPort
+			ipAddress = inst.IPAddress
 			delete(s.instances, id)
 			break
 		}
 	}
 	s.mu.Unlock()
 	s.logger.Info("mutex lock released", zap.String("vm_name", vmName))
+
+	// Release resources after unlocking to avoid deadlock
+	if vncPort > 0 {
+		s.releaseVNCPort(vncPort)
+	}
+	if ipAddress != "" {
+		s.releaseIP(ipAddress)
+	}
 
 	s.logger.Info("VM instance destroyed by name", zap.String("vm_name", vmName))
 
