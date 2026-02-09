@@ -320,6 +320,26 @@
 		}
 	}
 
+	async function deleteInstance(instanceId: string) {
+		if (!confirm('Force stop this instance? The user will lose their session.')) return;
+		actionLoading = instanceId;
+		try {
+			const response = await fetch(`/api/v1/admin/instances/${instanceId}/stop`, {
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${$auth.accessToken}`,
+					'Content-Type': 'application/json'
+				}
+			});
+			if (!response.ok) throw new Error('Failed to stop instance');
+			await loadDashboard(); // Refresh dashboard
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to stop instance');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
 	function formatDate(timestamp: number): string {
 		return new Date(timestamp * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 	}
@@ -977,6 +997,7 @@
 									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">IP</th>
 									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Status</th>
 									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Expires</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Actions</th>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-stone-800">
@@ -990,6 +1011,15 @@
 										</td>
 										<td class="px-4 py-2 text-xs text-stone-500">
 											{instance.expires_at ? new Date(instance.expires_at * 1000).toLocaleTimeString() : '-'}
+										</td>
+										<td class="px-4 py-2">
+											<button
+												on:click={() => deleteInstance(instance.id)}
+												class="text-xs text-red-400 hover:text-red-300 hover:underline"
+												title="Force stop this instance"
+											>
+												Stop
+											</button>
 										</td>
 									</tr>
 								{/each}

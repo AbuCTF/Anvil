@@ -965,7 +965,8 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 
 // DestroyInstanceByName destroys a VM by its name (container_id) without requiring it to be in memory
 // This is used when stopping instances that may not be in the in-memory map (e.g., after service restart)
-func (s *Service) DestroyInstanceByName(ctx context.Context, vmName string) error {
+// The vmNameOrID can be either the full UUID or the VM name (anvil-{8chars})
+func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) error {
 	// Get node info (assume core node for now - TODO: store node_id with instance)
 	node := &NodeInfo{
 		Name:        "core",
@@ -975,6 +976,19 @@ func (s *Service) DestroyInstanceByName(ctx context.Context, vmName string) erro
 		SSHKeyPath:  "/root/.ssh/id_rsa",
 		NetworkName: "anvil-lab",
 	}
+
+	// Convert full UUID to VM name format if needed
+	vmName := vmNameOrID
+	if !strings.HasPrefix(vmName, "anvil-") {
+		// Assume it's a full UUID, convert to VM name
+		if len(vmNameOrID) >= 8 {
+			vmName = fmt.Sprintf("anvil-%s", vmNameOrID[:8])
+		}
+	}
+
+	s.logger.Info("destroying VM instance",
+		zap.String("input", vmNameOrID),
+		zap.String("vm_name", vmName))
 
 	// Stop and undefine VM on node
 	s.stopVMOnNode(ctx, node, vmName)

@@ -138,8 +138,8 @@ func main() {
 					db.Pool.Exec(ctx, `
 						UPDATE vm_nodes 
 						SET active_vms = GREATEST(0, active_vms - $1),
-							used_vcpu = GREATEST(0, used_vcpu - ($1 * 2)),
-							used_memory_mb = GREATEST(0, used_memory_mb - ($1 * 2048)),
+							used_vcpu = GREATEST(0, used_vcpu - ($1 * 1)),
+							used_memory_mb = GREATEST(0, used_memory_mb - ($1 * 1024)),
 							updated_at = NOW()
 						WHERE name = 'core'
 					`, expiringCount)
@@ -165,6 +165,7 @@ func main() {
 				}
 
 				// Force synchronize node counters with reality (safety net)
+				// Uses actual template values by joining with vm_templates
 				db.Pool.Exec(ctx, `
 					UPDATE vm_nodes n
 					SET active_vms = (
@@ -174,14 +175,16 @@ func main() {
 							  AND c.resource_type = 'vm'
 						),
 						used_vcpu = (
-							SELECT COALESCE(SUM(2), 0) FROM instances i 
+							SELECT COALESCE(SUM(t.vcpu), 0) FROM instances i 
 							JOIN challenges c ON i.challenge_id = c.id
+							JOIN vm_templates t ON c.vm_template_id = t.id
 							WHERE i.status IN ('running', 'creating', 'pending')
 							  AND c.resource_type = 'vm'
 						),
 						used_memory_mb = (
-							SELECT COALESCE(SUM(2048), 0) FROM instances i 
+							SELECT COALESCE(SUM(t.memory_mb), 0) FROM instances i 
 							JOIN challenges c ON i.challenge_id = c.id
+							JOIN vm_templates t ON c.vm_template_id = t.id
 							WHERE i.status IN ('running', 'creating', 'pending')
 							  AND c.resource_type = 'vm'
 						),
