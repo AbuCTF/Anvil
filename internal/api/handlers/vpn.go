@@ -335,7 +335,7 @@ func (h *VPNHandler) generateWireGuardConfig(privateKey, ipAddress string) strin
 
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
-Address = %s/24
+Address = %s/32
 %s
 [Peer]
 PublicKey = %s

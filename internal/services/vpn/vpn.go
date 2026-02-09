@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -229,18 +230,22 @@ AllowedIPs = %s/32
 
 // AddPeer adds a peer to the WireGuard server
 func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) error {
-	// This would use wgctrl to add the peer dynamically
-	// For now, we'll log the operation
 	s.logger.Info("Adding VPN peer",
 		zap.String("public_key", publicKey[:8]+"..."),
 		zap.String("assigned_ip", assignedIP),
 	)
 
-	// In a real implementation:
-	// 1. Use wgctrl to add the peer
-	// 2. Or write to the WireGuard config and reload
-	// 3. Or use the wg command-line tool
+	// Add peer using wg command
+	cmd := exec.CommandContext(ctx, "wg", "set", s.config.Interface,
+		"peer", publicKey,
+		"allowed-ips", assignedIP+"/32")
 
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to add peer: %w, output: %s", err, string(output))
+	}
+
+	s.logger.Info("Successfully added VPN peer", zap.String("public_key", publicKey[:8]+"..."))
 	return nil
 }
 
@@ -250,7 +255,14 @@ func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 		zap.String("public_key", publicKey[:8]+"..."),
 	)
 
-	// Similar to AddPeer, this would use wgctrl or the wg command
+	// Remove peer using wg command
+	cmd := exec.CommandContext(ctx, "wg", "set", s.config.Interface, "peer", publicKey, "remove")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to remove peer: %w, output: %s", err, string(output))
+	}
+
+	s.logger.Info("Successfully removed VPN peer", zap.String("public_key", publicKey[:8]+"..."))
 	return nil
 }
 
