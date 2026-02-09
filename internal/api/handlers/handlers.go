@@ -1,9 +1,11 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
@@ -154,22 +156,153 @@ type AdminInstanceHandler struct {
 	config       *config.Config
 	db           *database.DB
 	containerSvc interface{}
+	vmSvc        interface{}
 	logger       *zap.Logger
 }
 
-func NewAdminInstanceHandler(cfg *config.Config, db *database.DB, containerSvc interface{}, logger *zap.Logger) *AdminInstanceHandler {
-	return &AdminInstanceHandler{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
+func NewAdminInstanceHandler(cfg *config.Config, db *database.DB, containerSvc interface{}, vmSvc interface{}, logger *zap.Logger) *AdminInstanceHandler {
+	return &AdminInstanceHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger}
 }
 
 func (h *AdminInstanceHandler) List(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"instances": []interface{}{}})
+	query := `
+		SELECT i.id, i.user_id, i.challenge_id, i.status, i.container_id, i.ip_address,
+		       i.created_at, i.expires_at, u.username, c.name as challenge_name,
+		       c.resource_type
+		FROM instances i
+		JOIN users u ON i.user_id = u.id
+		JOIN challenges c ON i.challenge_id = c.id
+		ORDER BY i.created_at DESC
+		LIMIT 100
+	`
+
+	rows, err := h.db.Pool.Query(c.Request.Context(), query)
+	if err != nil {
+		h.logger.Error("failed to list instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch instances"})
+		return
+	}
+	defer rows.Close()
+
+	var instances []gin.H
+	for rows.Next() {
+		var id, userID, challengeID, status, username, challengeName, resourceType string
+		var containerID, ipAddress *string
+		var createdAt, expiresAt time.Time
+
+		if err := rows.Scan(&id, &userID, &challengeID, &status, &containerID, &ipAddress,
+			&createdAt, &expiresAt, &username, &challengeName, &resourceType); err != nil {
+			h.logger.Error("failed to scan instance", zap.Error(err))
+			continue
+		}
+
+		inst := gin.H{
+			"id":             id,
+			"user_id":        userID,
+			"username":       username,
+			"challenge_id":   challengeID,
+			"challenge_name": challengeName,
+			"resource_type":  resourceType,
+			"status":         status,
+			"created_at":     createdAt.Unix(),
+			"expires_at":     expiresAt.Unix(),
+		}
+
+		if containerID != nil {
+			inst["container_id"] = *containerID
+		}
+		if ipAddress != nil {
+			inst["ip_address"] = *ipAddress
+		}
+
+		instances = append(instances, inst)
+	}
+
+	if instances == nil {
+		instances = []gin.H{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"instances": instances, "total": len(instances)})
 }
-func (h *AdminInstanceHandler) Stats(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"stats": gin.H{}}) }
+
+func (h *AdminInstanceHandler) Stats(c *gin.Context) {
+	var stats struct {
+		TotalInstances  int
+		RunningVMs      int
+		RunningContainers int
+		UsedVCPU        int
+		UsedMemoryMB    int
+		ActiveVMs       int
+	}
+
+	h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT COUNT(*) FROM instances WHERE status = 'running'
+	`).Scan(&stats.TotalInstances)
+
+	h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT COUNT(*) FROM instances i
+		JOIN challenges c ON i.challenge_id = c.id
+		WHERE i.status = 'running' AND c.resource_type = 'vm'
+	`).Scan(&stats.RunningVMs)
+
+	h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT COUNT(*) FROM instances i
+		JOIN challenges c ON i.challenge_id = c.id
+		WHERE i.status = 'running' AND c.resource_type = 'docker'
+	`).Scan(&stats.RunningContainers)
+
+	h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT COALESCE(used_vcpu, 0), COALESCE(used_memory_mb, 0), COALESCE(active_vms, 0)
+		FROM vm_nodes WHERE name = 'core'
+	`).Scan(&stats.UsedVCPU, &stats.UsedMemoryMB, &stats.ActiveVMs)
+
+	c.JSON(http.StatusOK, gin.H{"stats": stats})
+}
+
 func (h *AdminInstanceHandler) ForceStop(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	instanceID := c.Param("id")
+
+	var containerID *string
+	var resourceType string
+	err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT i.container_id, c.resource_type FROM instances i
+		 JOIN challenges c ON i.challenge_id = c.id WHERE i.id = $1`,
+		instanceID).Scan(&containerID, &resourceType)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		return
+	}
+
+	// Stop the resource
+	if containerID != nil && *containerID != "" {
+		if resourceType == "vm" && h.vmSvc != nil {
+			if vmSvc, ok := h.vmSvc.(interface{ DestroyInstanceByName(context.Context, string) error }); ok {
+				vmSvc.DestroyInstanceByName(c.Request.Context(), *containerID)
+			}
+		} else if containerSvc, ok := h.containerSvc.(interface{ StopInstance(context.Context, string) error }); ok {
+			containerSvc.StopInstance(c.Request.Context(), *containerID)
+		}
+	}
+
+	// Delete from database
+	h.db.Pool.Exec(c.Request.Context(), `DELETE FROM instances WHERE id = $1`, instanceID)
+
+	// Update node counters if VM
+	if resourceType == "vm" {
+		h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE vm_nodes SET 
+			 used_vcpu = GREATEST(0, used_vcpu - 1),
+			 used_memory_mb = GREATEST(0, used_memory_mb - 1024),
+			 active_vms = GREATEST(0, active_vms - 1),
+			 updated_at = NOW()
+			 WHERE name = 'core'`)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "instance stopped"})
 }
+
 func (h *AdminInstanceHandler) ForceDelete(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	h.ForceStop(c) // Same implementation
 }
 
 func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
