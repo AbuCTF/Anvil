@@ -110,24 +110,24 @@ echo ""
 echo "=== Creating Anvil VM network ==="
 cat > /tmp/anvil-network.xml << EOF
 <network>
-  <name>anvil-vms</name>
+  <name>anvil-lab</name>
   <forward mode='nat'>
     <nat>
       <port start='1024' end='65535'/>
     </nat>
   </forward>
   <bridge name='virbr-anvil' stp='on' delay='0'/>
-  <ip address='10.20.0.1' netmask='255.255.0.0'>
+  <ip address='10.100.0.1' netmask='255.255.0.0'>
     <dhcp>
-      <range start='10.20.1.1' end='10.20.255.254'/>
+      <range start='10.100.1.1' end='10.100.255.254'/>
     </dhcp>
   </ip>
 </network>
 EOF
 
 virsh net-define /tmp/anvil-network.xml || echo "Network might already exist"
-virsh net-start anvil-vms || echo "Network might already be running"
-virsh net-autostart anvil-vms
+virsh net-start anvil-lab || echo "Network might already be running"
+virsh net-autostart anvil-lab
 
 # Install Docker (for API/Web containers)
 echo ""
