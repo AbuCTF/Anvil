@@ -990,14 +990,13 @@ func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) 
 		zap.String("input", vmNameOrID),
 		zap.String("vm_name", vmName))
 
-	// Stop and undefine VM on node
-	s.stopVMOnNode(ctx, node, vmName)
-	s.undefineVMOnNode(ctx, node, vmName)
+	// Stop and undefine VM - use local commands since libvirt socket is mounted
+	s.stopVM(ctx, vmName)
+	s.undefineVM(ctx, vmName)
 
 	// Try to cleanup overlay disk (best effort, path might not be known)
 	overlayPath := filepath.Join(s.config.InstanceStorePath, "overlays", fmt.Sprintf("%s.qcow2", vmName))
-	delCmd := fmt.Sprintf("rm -f %s", overlayPath)
-	s.runSSHCommand(ctx, node, delCmd)
+	os.Remove(overlayPath) // Ignore errors if file doesn't exist
 
 	// Remove from memory map if present (extract instance ID from name)
 	// VM names are in format "anvil-{first 8 chars of UUID}"
