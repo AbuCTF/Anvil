@@ -323,6 +323,11 @@ func (h *VPNHandler) generateWireGuardConfig(privateKey, ipAddress string) strin
 		dnsLine = fmt.Sprintf("DNS = %s\n", h.config.VPN.DNS)
 	}
 
+	// AllowedIPs - route challenge networks through VPN
+	// 10.100.0.0/16 = VM network (libvirt)
+	// 172.20.0.0/16 = Container network (docker)
+	allowedIPs := "10.100.0.0/16, 172.20.0.0/16"
+
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/24
@@ -337,7 +342,7 @@ PersistentKeepalive = 25
 		ipAddress,
 		dnsLine,
 		h.config.VPN.PublicKey,
-		h.config.VPN.AddressRange,
+		allowedIPs,
 		endpoint,
 	)
 }

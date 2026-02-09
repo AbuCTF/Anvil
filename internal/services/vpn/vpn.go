@@ -183,14 +183,21 @@ func (s *Service) ReleaseIP(ip string) {
 
 // GenerateClientConfig generates a WireGuard client configuration
 func (s *Service) GenerateClientConfig(privateKey, assignedIP string) string {
-	// AllowedIPs for client - route VPN network (10.10.0.0/16) AND VM network (10.100.0.0/16) through VPN
-	allowedIPs := "10.10.0.0/16, 10.100.0.0/16"
+	// AllowedIPs - route challenge networks through VPN
+	// 10.100.0.0/16 = VM network (libvirt)
+	// 172.20.0.0/16 = Container network (docker)
+	allowedIPs := "10.100.0.0/16, 172.20.0.0/16"
+
+	// DNS is optional
+	dnsLine := ""
+	if s.config.DNS != "" {
+		dnsLine = fmt.Sprintf("DNS = %s\n", s.config.DNS)
+	}
 
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/32
-DNS = %s
-MTU = %d
+%sMTU = %d
 
 [Peer]
 PublicKey = %s
@@ -200,7 +207,7 @@ PersistentKeepalive = 25
 `,
 		privateKey,
 		assignedIP,
-		s.config.DNS,
+		dnsLine,
 		s.config.MTU,
 		s.config.PublicKey,
 		allowedIPs,
