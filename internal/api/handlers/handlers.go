@@ -227,12 +227,12 @@ func (h *AdminInstanceHandler) List(c *gin.Context) {
 
 func (h *AdminInstanceHandler) Stats(c *gin.Context) {
 	var stats struct {
-		TotalInstances  int
-		RunningVMs      int
+		TotalInstances    int
+		RunningVMs        int
 		RunningContainers int
-		UsedVCPU        int
-		UsedMemoryMB    int
-		ActiveVMs       int
+		UsedVCPU          int
+		UsedMemoryMB      int
+		ActiveVMs         int
 	}
 
 	h.db.Pool.QueryRow(c.Request.Context(), `
@@ -276,10 +276,14 @@ func (h *AdminInstanceHandler) ForceStop(c *gin.Context) {
 	// Stop the resource
 	if containerID != nil && *containerID != "" {
 		if resourceType == "vm" && h.vmSvc != nil {
-			if vmSvc, ok := h.vmSvc.(interface{ DestroyInstanceByName(context.Context, string) error }); ok {
+			if vmSvc, ok := h.vmSvc.(interface {
+				DestroyInstanceByName(context.Context, string) error
+			}); ok {
 				vmSvc.DestroyInstanceByName(c.Request.Context(), *containerID)
 			}
-		} else if containerSvc, ok := h.containerSvc.(interface{ StopInstance(context.Context, string) error }); ok {
+		} else if containerSvc, ok := h.containerSvc.(interface {
+			StopInstance(context.Context, string) error
+		}); ok {
 			containerSvc.StopInstance(c.Request.Context(), *containerID)
 		}
 	}

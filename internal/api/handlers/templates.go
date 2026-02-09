@@ -602,15 +602,15 @@ func (h *VMTemplateHandler) Register(c *gin.Context) {
 }
 
 // ListActiveInstances returns all running VM instances
-// GET /api/v1/admin/vm-instances
+// GET /api/v1/admin/infrastructure/instances
 func (h *VMTemplateHandler) ListActiveInstances(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
 		SELECT i.id, i.user_id, u.username, i.challenge_id, ch.name,
-		       i.name, i.status::text, i.ip_address, i.created_at, i.expires_at
-		FROM vm_instances i
+		       i.container_id, i.status, i.ip_address, i.created_at, i.expires_at
+		FROM instances i
 		JOIN users u ON i.user_id = u.id
 		JOIN challenges ch ON i.challenge_id = ch.id
-		WHERE i.status IN ('running', 'starting', 'stopping')
+		WHERE i.status = 'running' AND ch.resource_type = 'vm'
 		ORDER BY i.created_at DESC
 	`)
 	if err != nil {
@@ -630,14 +630,13 @@ func (h *VMTemplateHandler) ListActiveInstances(c *gin.Context) {
 		Status        string  `json:"status"`
 		IPAddress     *string `json:"ip_address"`
 		CreatedAt     int64   `json:"created_at"`
-		ExpiresAt     *int64  `json:"expires_at"`
+		ExpiresAt     int64   `json:"expires_at"`
 	}
 
 	var instances []InstanceResponse
 	for rows.Next() {
 		var inst InstanceResponse
-		var createdAt time.Time
-		var expiresAt *time.Time
+		var createdAt, expiresAt time.Time
 
 		if err := rows.Scan(
 			&inst.ID, &inst.UserID, &inst.Username, &inst.ChallengeID, &inst.ChallengeName,
@@ -647,10 +646,7 @@ func (h *VMTemplateHandler) ListActiveInstances(c *gin.Context) {
 		}
 
 		inst.CreatedAt = createdAt.Unix()
-		if expiresAt != nil {
-			ts := expiresAt.Unix()
-			inst.ExpiresAt = &ts
-		}
+		inst.ExpiresAt = expiresAt.Unix()
 		instances = append(instances, inst)
 	}
 
