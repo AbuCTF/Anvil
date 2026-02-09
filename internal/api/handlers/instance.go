@@ -557,6 +557,12 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		return
 	}
 
+	h.logger.Info("stopping instance",
+		zap.String("instance_id", instanceID),
+		zap.String("status", inst.Status),
+		zap.String("resource_type", inst.ResourceType),
+		zap.Bool("has_container_id", inst.ContainerID != nil && *inst.ContainerID != ""))
+
 	// Stop and destroy the resource (container or VM)
 	if inst.ContainerID != nil && *inst.ContainerID != "" {
 		if inst.ResourceType == "vm" && h.vmSvc != nil {
@@ -566,21 +572,26 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to destroy VM: %v", err)})
 				return
 			}
+			h.logger.Info("VM destroyed successfully, proceeding to delete database record", zap.String("instance_id", instanceID), zap.String("container_id", *inst.ContainerID))
 		} else if err := h.containerSvc.StopInstance(c.Request.Context(), *inst.ContainerID); err != nil {
 			h.logger.Error("failed to stop container", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to stop container: %v", err)})
 			return
+		} else {
+			h.logger.Info("Container stopped successfully, proceeding to delete database record", zap.String("instance_id", instanceID), zap.String("container_id", *inst.ContainerID))
 		}
 	}
 
 	// Delete instance immediately (CTF instances are ephemeral, cooldown tracked separately)
+	h.logger.Info("attempting to delete instance from database", zap.String("instance_id", instanceID))
 	_, err = h.db.Pool.Exec(c.Request.Context(),
 		`DELETE FROM instances WHERE id = $1`, instanceID)
 	if err != nil {
-		h.logger.Error("failed to delete instance", zap.Error(err))
+		h.logger.Error("failed to delete instance", zap.Error(err), zap.String("instance_id", instanceID))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete instance"})
 		return
 	}
+	h.logger.Info("successfully deleted instance from database", zap.String("instance_id", instanceID))
 
 	// Decrement VM node counters if this was a VM
 	if inst.ResourceType == "vm" {
