@@ -967,16 +967,6 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 // This is used when stopping instances that may not be in the in-memory map (e.g., after service restart)
 // The vmNameOrID can be either the full UUID or the VM name (anvil-{8chars})
 func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) error {
-	// Get node info (assume core node for now - TODO: store node_id with instance)
-	node := &NodeInfo{
-		Name:        "core",
-		IPAddress:   "172.17.0.1",
-		SSHPort:     22,
-		SSHUser:     "root",
-		SSHKeyPath:  "/root/.ssh/id_rsa",
-		NetworkName: "anvil-lab",
-	}
-
 	// Convert full UUID to VM name format if needed
 	vmName := vmNameOrID
 	if !strings.HasPrefix(vmName, "anvil-") {

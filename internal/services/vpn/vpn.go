@@ -76,7 +76,7 @@ func (s *Service) loadAllocatedIPs() error {
 			continue
 		}
 		s.usedIPs[ip] = true
-		
+
 		// Track highest allocated IP to continue from there
 		currentIP := net.ParseIP(ip)
 		if currentIP != nil {
@@ -93,9 +93,9 @@ func (s *Service) loadAllocatedIPs() error {
 		incrementIP(s.nextIP)
 	}
 
-	s.logger.Info(\"loaded allocated VPN IPs\", 
-		zap.Int(\"used_count\", len(s.usedIPs)),
-		zap.String(\"next_ip\", s.nextIP.String()))
+	s.logger.Info("loaded allocated VPN IPs",
+		zap.Int("used_count", len(s.usedIPs)),
+		zap.String("next_ip", s.nextIP.String()))
 
 	return rows.Err()
 }
