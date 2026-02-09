@@ -238,10 +238,15 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	}
 	uid := userID.(uuid.UUID)
 
-	// Get old public key to remove from WireGuard
-	var oldPublicKey string
+	// Get old public key and IP to remove from WireGuard and release IP
+	var oldPublicKey, oldIPAddress string
 	_ = h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT public_key FROM vpn_configs WHERE user_id = $1`, uid).Scan(&oldPublicKey)
+		`SELECT public_key, assigned_ip FROM vpn_configs WHERE user_id = $1`, uid).Scan(&oldPublicKey, &oldIPAddress)
+
+	// Release old IP from pool
+	if oldIPAddress != "" {
+		h.vpnSvc.ReleaseIP(oldIPAddress)
+	}
 
 	// Remove old peer from WireGuard
 	if oldPublicKey != "" && h.config.Environment == "production" {
