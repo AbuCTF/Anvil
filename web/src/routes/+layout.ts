@@ -2,8 +2,9 @@ import { browser } from '$app/environment';
 import type { LayoutLoad } from './$types';
 import { API_BASE } from '$lib/config';
 
-// Disable SSR - we need localStorage which is browser-only
-export const ssr = false;
+// Enable SSR for faster initial page load, hydrate client-side
+export const ssr = true;
+export const prerender = false;
 
 export const load: LayoutLoad = async ({ fetch }) => {
 	if (browser) {

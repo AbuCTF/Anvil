@@ -16,18 +16,15 @@
 
 	onMount(async () => {
 		try {
-			// Fetch challenges count
-			const challengesRes = await api.getChallenges();
-			stats.challenges = challengesRes.challenges?.length || 0;
+			// Fetch data in parallel for faster loading
+			const [challengesRes, statsRes] = await Promise.all([
+				api.getChallenges().catch(() => ({ challenges: [] })),
+				api.getStats().catch(() => ({ total_users: 0, total_solves: 0 }))
+			]);
 			
-			// Fetch platform stats (public endpoint)
-			try {
-				const statsRes = await api.getStats();
-				stats.users = statsRes.total_users || 0;
-				stats.solves = statsRes.total_solves || 0;
-			} catch(e) {
-				// Stats not available
-			}
+			stats.challenges = challengesRes.challenges?.length || 0;
+			stats.users = statsRes.total_users || 0;
+			stats.solves = statsRes.total_solves || 0;
 		} catch (e) {
 			// Failed to fetch data
 		}
