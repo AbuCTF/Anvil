@@ -12,7 +12,8 @@ const config = {
 			$stores: 'src/lib/stores',
 			$utils: 'src/lib/utils',
 			$api: 'src/lib/api'
-		}
+		},
+		inlineStyleThreshold: 2048
 	}
 };
 

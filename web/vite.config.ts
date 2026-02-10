@@ -27,17 +27,21 @@ export default defineConfig({
 		terserOptions: {
 			compress: {
 				drop_console: true,
-				drop_debugger: true
+				drop_debugger: true,
+				passes: 2
 			}
 		},
 		rollupOptions: {
 			output: {
 				manualChunks: {
 					'svelte-vendor': ['svelte'],
-					'bits-ui': ['bits-ui']
+					'bits-ui': ['bits-ui'],
+					'icons': ['@iconify/svelte']
 				}
 			}
 		},
-		chunkSizeWarningLimit: 1000
+		chunkSizeWarningLimit: 500,
+		cssCodeSplit: true,
+		reportCompressedSize: false
 	}
 });
