@@ -56,16 +56,21 @@ Nginx reverse proxy:
 - `set_real_ip_from` all Cloudflare ranges + `real_ip_header CF-Connecting-IP`
 - gzip on, static asset caching 1yr
 
-🚨 NOTE:
+**¯\\_(ツ)_/¯**
 
 Large file uploads (VM images bypass Cloudflare's 100MB limit):
 - Cloudflare DNS: `upload` A record → server IP, **DNS only** (grey cloud, no proxy)
 - Nginx: separate server block for `upload.your-domain.com`
-  - `client_max_body_size 0` (no limit)
-  - `proxy_request_buffering off`
+  - `client_max_body_size 0` (no limit), `proxy_request_buffering off`
   - Only proxies `/api/` — everything else returns 404
-- Frontend auto-detects `upload.{domain}` for large uploads
-- HTTP is fine (binary blobs, short-lived JWT). Add certbot if you want HTTPS.
+- SSL required (mixed content): get a cert with certbot before enabling
+- Frontend auto-detects `https://upload.{domain}` for large uploads
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+# create the nginx server block for upload.your-domain.com first, then:
+sudo certbot --nginx -d upload.your-domain.com
+```
 
 Cloudflare:
 - DNS: A record → server IP, **proxied** (orange cloud)
