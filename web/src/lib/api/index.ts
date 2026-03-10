@@ -21,7 +21,7 @@ class ApiClient {
 			this.uploadUrl = baseUrl;
 		} else if (browser) {
 			const parts = window.location.hostname.split('.').slice(-2).join('.');
-			this.uploadUrl = `${window.location.protocol}//upload.${parts}`;
+			this.uploadUrl = `http://upload.${parts}`;
 		} else {
 			this.uploadUrl = baseUrl;
 		}

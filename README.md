@@ -11,7 +11,7 @@ v0.1.0 [`forging`]
 - SvelteKit frontend
 
 
-#### **Deploy**
+### **Deploy**
 
 Edit these:
 - `.env` — secrets, endpoints, passwords
@@ -55,6 +55,17 @@ Nginx reverse proxy:
 - `/` → `127.0.0.1:3000`
 - `set_real_ip_from` all Cloudflare ranges + `real_ip_header CF-Connecting-IP`
 - gzip on, static asset caching 1yr
+
+🚨 NOTE:
+
+Large file uploads (VM images bypass Cloudflare's 100MB limit):
+- Cloudflare DNS: `upload` A record → server IP, **DNS only** (grey cloud, no proxy)
+- Nginx: separate server block for `upload.your-domain.com`
+  - `client_max_body_size 0` (no limit)
+  - `proxy_request_buffering off`
+  - Only proxies `/api/` — everything else returns 404
+- Frontend auto-detects `upload.{domain}` for large uploads
+- HTTP is fine (binary blobs, short-lived JWT). Add certbot if you want HTTPS.
 
 Cloudflare:
 - DNS: A record → server IP, **proxied** (orange cloud)
