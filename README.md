@@ -29,6 +29,7 @@ Key changes in `docker-compose.yml`:
 - web target: `development` → `production`
 - `PUBLIC_API_URL`: `https://your-domain.com`
 - bind postgres/redis/api/web to `127.0.0.1`
+- api container: `privileged: true`, `pid: "host"` (required for VPN peer management via nsenter)
 - pipe all env vars from `.env`
 
 WireGuard (on host, not in Docker):
@@ -37,6 +38,16 @@ sudo apt install wireguard-tools
 # write /etc/wireguard/wg0.conf with your private key
 # PostUp: iptables FORWARD + MASQUERADE on your interface
 sudo systemctl enable --now wg-quick@wg0
+```
+
+VPN status sync (updates on /vpn page):
+```bash
+chmod +x scripts/wg-status-sync.sh
+sed -i 's/\r$//' scripts/wg-status-sync.sh          # fix CRLF if cloned on Windows
+sudo cp scripts/wg-status-sync.service /etc/systemd/system/
+sudo cp scripts/wg-status-sync.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now wg-status-sync.timer
 ```
 
 Nginx reverse proxy:
