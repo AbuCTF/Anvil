@@ -19,10 +19,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o anvil ./cmd/serve
 # Final stage
 FROM alpine:3.19
 
+# wireguard-tools for wg peer management via nsenter
 # openssh-client for remote VM node operations
 # tar for extracting OVA files
 # qemu-img for converting VMDK to QCOW2
-RUN apk add --no-cache ca-certificates tzdata openssh-client tar qemu-img
+RUN apk add --no-cache ca-certificates tzdata wireguard-tools openssh-client tar qemu-img
 
 WORKDIR /app
 

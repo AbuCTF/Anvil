@@ -45,6 +45,12 @@ Nginx reverse proxy:
 - `set_real_ip_from` all Cloudflare ranges + `real_ip_header CF-Connecting-IP`
 - gzip on, static asset caching 1yr
 
+Cloudflare:
+- DNS: A record → server IP, **proxied** (orange cloud)
+- SSL/TLS mode: **Flexible** (origin nginx listens on 80 only)
+  - If you want Full/Strict: add a self-signed or origin cert + nginx 443 listener
+  - 521 error = Cloudflare can't reach origin. Check: SSL mode, port 80/443 open, nginx running
+
 OCI (Oracle Cloud):
 - Security List: allow TCP 80, 443 + UDP 51820
 - OS iptables: `iptables -I INPUT` for same ports (OCI Ubuntu drops by default)
@@ -59,6 +65,19 @@ docker compose up -d --build
 Verify:
 ```bash
 curl https://your-domain.com/api/health
+```
+
+First admin (inject directly into DB):
+```bash
+docker exec -it anvil-postgres psql -U anvil -d anvil -c \
+  "INSERT INTO users (username, email, password_hash, role, status) \
+   VALUES ('abu', 'admin@abu.rocks', crypt('', gen_salt('bf', 10)), 'admin', 'active');"
+```
+
+To promote an existing user instead:
+```bash
+docker exec -it anvil-postgres psql -U anvil -d anvil -c \
+  "UPDATE users SET role = 'admin' WHERE username = 'youruser';"
 ```
 
 #### **VM Support**

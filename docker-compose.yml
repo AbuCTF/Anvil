@@ -45,6 +45,7 @@ services:
       dockerfile: deployments/docker/Dockerfile.api
     container_name: anvil-api
     user: root
+    pid: "host"
     environment:
       - ANVIL_ENV=${ANVIL_ENV:-production}
       - ANVIL_DATABASE_HOST=postgres

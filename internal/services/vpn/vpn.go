@@ -235,14 +235,9 @@ func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) err
 		zap.String("assigned_ip", assignedIP),
 	)
 
-	// Execute wg command on host via docker exec to host
-	// The container needs to run wg on the host, not inside the container
-	// We use SSH to localhost (the host) to execute the command
-	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR",
-		"root@172.17.0.1",
-		fmt.Sprintf("wg set %s peer %s allowed-ips %s/32", s.config.Interface, publicKey, assignedIP))
+	// Use nsenter to run wg in the host's network namespace (requires pid:host in docker-compose)
+	cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-n",
+		"wg", "set", s.config.Interface, "peer", publicKey, "allowed-ips", assignedIP+"/32")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -263,12 +258,9 @@ func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 		zap.String("public_key", publicKey[:8]+"..."),
 	)
 
-	// Execute wg command on host via SSH
-	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		"-o", "LogLevel=ERROR",
-		"root@172.17.0.1",
-		fmt.Sprintf("wg set %s peer %s remove", s.config.Interface, publicKey))
+	// Use nsenter to run wg in the host's network namespace (requires pid:host in docker-compose)
+	cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-n",
+		"wg", "set", s.config.Interface, "peer", publicKey, "remove")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
