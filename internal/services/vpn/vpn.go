@@ -315,8 +315,8 @@ func (s *Service) GetPeerStatus(publicKey string) (*PeerStatus, error) {
 			}
 
 			lastHandshake := peer.LastHandshakeTime.Unix()
-			// Consider connected if handshake was within last 30 seconds
-			connected := !peer.LastHandshakeTime.IsZero() && time.Since(peer.LastHandshakeTime) < 30*time.Second
+			// WireGuard handshakes every ~2 min when idle; 3 min threshold covers that
+			connected := !peer.LastHandshakeTime.IsZero() && time.Since(peer.LastHandshakeTime) < 3*time.Minute
 
 			return &PeerStatus{
 				Connected:     connected,

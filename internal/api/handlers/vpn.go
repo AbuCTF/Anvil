@@ -211,8 +211,8 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 	if lastHandshake != nil && !lastHandshake.IsZero() {
 		ts := lastHandshake.Unix()
 		lastHandshakeUnix = &ts
-		// Consider connected if handshake within last 30 seconds
-		connected = time.Since(*lastHandshake) < 30*time.Second
+		// WireGuard handshakes every ~2 min when idle; 3 min threshold covers that with margin
+		connected = time.Since(*lastHandshake) < 3*time.Minute
 	}
 
 	c.JSON(http.StatusOK, VPNStatusResponse{
