@@ -1225,7 +1225,7 @@
 									<label class="block text-xs font-medium text-stone-400 mb-1">VPN Server Endpoint</label>
 									<input
 										type="text"
-										value={platformSettings.vpn_endpoint || 'play.h7tex.com:51820'}
+										value={platformSettings.vpn_endpoint || 'play.abu.rocks:51820'}
 										on:input={(e) => handleTextInput(e, 'vpn_endpoint')}
 										class="w-full px-3 py-2 bg-black border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500"
 									/>
