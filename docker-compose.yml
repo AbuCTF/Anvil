@@ -46,6 +46,9 @@ services:
     container_name: anvil-api
     user: root
     pid: "host"
+    cap_add:
+      - NET_ADMIN
+      - SYS_PTRACE
     environment:
       - ANVIL_ENV=${ANVIL_ENV:-production}
       - ANVIL_DATABASE_HOST=postgres
