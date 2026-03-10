@@ -15,10 +15,16 @@ class ApiClient {
 
 	constructor(baseUrl: string) {
 		this.baseUrl = baseUrl;
-		// Use dedicated upload domain for large files (bypasses Cloudflare limits)
-		this.uploadUrl = baseUrl.includes('localhost') 
-			? baseUrl 
-			: 'https://upload.h7tex.com';
+		// Use dedicated upload domain for large files (bypasses Cloudflare 100MB limit)
+		// upload.{domain} is DNS-only (grey cloud) — goes direct to origin
+		if (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) {
+			this.uploadUrl = baseUrl;
+		} else if (browser) {
+			const parts = window.location.hostname.split('.').slice(-2).join('.');
+			this.uploadUrl = `${window.location.protocol}//upload.${parts}`;
+		} else {
+			this.uploadUrl = baseUrl;
+		}
 	}
 
 	private getAuthToken(): string | null {
@@ -518,11 +524,8 @@ class ApiClient {
 	async uploadOvaChallenge(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {
 		const token = this.getAuthToken();
 		
-		// Use direct upload URL to bypass Cloudflare's 100MB limit
-		// In production, this goes through upload.h7tex.com (DNS-only, no Cloudflare proxy, with Let's Encrypt SSL)
-		const uploadBaseUrl = browser && window.location.hostname !== 'localhost' 
-			? `https://upload.${window.location.hostname.split('.').slice(-2).join('.')}`
-			: this.baseUrl;
+		// Use the dedicated upload domain (bypasses Cloudflare 100MB limit)
+		const uploadBaseUrl = this.uploadUrl;
 		
 		return new Promise((resolve, reject) => {
 			const xhr = new XMLHttpRequest();
