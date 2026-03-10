@@ -5,14 +5,17 @@
 -- VM NODES (Worker nodes that can run VMs)
 -- ============================================================================
 
-CREATE TYPE node_status AS ENUM (
-    'online',
-    'offline',
-    'maintenance',
-    'draining'  -- No new VMs, waiting for existing to finish
-);
+DO $$ BEGIN
+    CREATE TYPE node_status AS ENUM (
+        'online',
+        'offline',
+        'maintenance',
+        'draining'
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-CREATE TABLE vm_nodes (
+CREATE TABLE IF NOT EXISTS vm_nodes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     
     -- Node identification
@@ -76,9 +79,9 @@ CREATE TABLE vm_nodes (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_vm_nodes_status ON vm_nodes(status);
-CREATE INDEX idx_vm_nodes_priority ON vm_nodes(priority DESC);
-CREATE INDEX idx_vm_nodes_region ON vm_nodes(region);
+CREATE INDEX IF NOT EXISTS idx_vm_nodes_status ON vm_nodes(status);
+CREATE INDEX IF NOT EXISTS idx_vm_nodes_priority ON vm_nodes(priority DESC);
+CREATE INDEX IF NOT EXISTS idx_vm_nodes_region ON vm_nodes(region);
 
 -- ============================================================================
 -- CHALLENGE TIMER SETTINGS
@@ -100,7 +103,7 @@ COMMENT ON COLUMN challenges.cooldown_minutes IS 'Cooldown period in minutes aft
 -- USER COOLDOWNS
 -- ============================================================================
 
-CREATE TABLE user_cooldowns (
+CREATE TABLE IF NOT EXISTS user_cooldowns (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     challenge_id UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
@@ -117,8 +120,8 @@ CREATE TABLE user_cooldowns (
     UNIQUE(user_id, challenge_id)
 );
 
-CREATE INDEX idx_user_cooldowns_user ON user_cooldowns(user_id);
-CREATE INDEX idx_user_cooldowns_until ON user_cooldowns(cooldown_until);
+CREATE INDEX IF NOT EXISTS idx_user_cooldowns_user ON user_cooldowns(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_cooldowns_until ON user_cooldowns(cooldown_until);
 
 -- ============================================================================
 -- UPDATE VM_INSTANCES TABLE
@@ -135,7 +138,7 @@ ALTER TABLE vm_instances ADD COLUMN IF NOT EXISTS cooldown_applied BOOLEAN DEFAU
 -- NODE HEALTH HISTORY (for monitoring)
 -- ============================================================================
 
-CREATE TABLE node_health_history (
+CREATE TABLE IF NOT EXISTS node_health_history (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     node_id UUID NOT NULL REFERENCES vm_nodes(id) ON DELETE CASCADE,
     
@@ -163,8 +166,8 @@ CREATE TABLE node_health_history (
     recorded_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_node_health_node ON node_health_history(node_id);
-CREATE INDEX idx_node_health_time ON node_health_history(recorded_at);
+CREATE INDEX IF NOT EXISTS idx_node_health_node ON node_health_history(node_id);
+CREATE INDEX IF NOT EXISTS idx_node_health_time ON node_health_history(recorded_at);
 
 -- Partition or auto-cleanup old health data (keep 7 days)
 -- This could be done via pg_cron or application cleanup job
@@ -274,8 +277,11 @@ $$ LANGUAGE plpgsql;
 -- TRIGGERS
 -- ============================================================================
 
-CREATE TRIGGER update_vm_nodes_updated_at BEFORE UPDATE ON vm_nodes
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+DO $$ BEGIN
+    CREATE TRIGGER update_vm_nodes_updated_at BEFORE UPDATE ON vm_nodes
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- ============================================================================
 -- INSERT PRIMARY NODE (current server)
