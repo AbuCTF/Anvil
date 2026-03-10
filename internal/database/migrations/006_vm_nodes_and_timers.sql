@@ -1,4 +1,4 @@
--- 003_vm_nodes_and_timers.sql
+-- 006_vm_nodes_and_timers.sql
 -- Adds support for multi-node VM orchestration, challenge-specific timers, and cooldown periods
 
 -- ============================================================================
