@@ -1,16 +1,18 @@
+# anvil — docker compose up -d --build
+# fill .env first, then run
+
 services:
-  # PostgreSQL Database
   postgres:
     image: postgres:16-alpine
     container_name: anvil-postgres
     environment:
       POSTGRES_USER: anvil
-      POSTGRES_PASSWORD: anvil
+      POSTGRES_PASSWORD: ${ANVIL_DATABASE_PASSWORD:-anvil}
       POSTGRES_DB: anvil
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U anvil -d anvil"]
       interval: 10s
@@ -18,8 +20,8 @@ services:
       retries: 5
     networks:
       - anvil-internal
+    restart: unless-stopped
 
-  # Redis Cache
   redis:
     image: redis:7-alpine
     container_name: anvil-redis
@@ -27,7 +29,7 @@ services:
     volumes:
       - redis_data:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -35,32 +37,39 @@ services:
       retries: 5
     networks:
       - anvil-internal
+    restart: unless-stopped
 
-  # Anvil Backend API
   api:
     build:
       context: .
       dockerfile: deployments/docker/Dockerfile.api
     container_name: anvil-api
-    user: root  # Required for Docker socket access
+    user: root
     environment:
-      - ANVIL_ENV=development
+      - ANVIL_ENV=${ANVIL_ENV:-production}
       - ANVIL_DATABASE_HOST=postgres
       - ANVIL_DATABASE_PORT=5432
       - ANVIL_DATABASE_USER=anvil
-      - ANVIL_DATABASE_PASSWORD=anvil
+      - ANVIL_DATABASE_PASSWORD=${ANVIL_DATABASE_PASSWORD:-anvil}
       - ANVIL_DATABASE_DATABASE=anvil
       - ANVIL_REDIS_HOST=redis
       - ANVIL_REDIS_PORT=6379
       - ANVIL_SERVER_PORT=8080
-      - ANVIL_JWT_SECRET=dev-secret-change-in-production
+      - ANVIL_JWT_SECRET=${ANVIL_JWT_SECRET:-change-me}
+      - ANVIL_VPN_ENABLED=${ANVIL_VPN_ENABLED:-true}
+      - ANVIL_VPN_INTERFACE=${ANVIL_VPN_INTERFACE:-wg0}
+      - ANVIL_VPN_LISTEN_PORT=${ANVIL_VPN_LISTEN_PORT:-51820}
+      - ANVIL_VPN_PUBLIC_ENDPOINT=${ANVIL_VPN_PUBLIC_ENDPOINT}
+      - ANVIL_VPN_PRIVATE_KEY=${ANVIL_VPN_PRIVATE_KEY}
+      - ANVIL_VPN_PUBLIC_KEY=${ANVIL_VPN_PUBLIC_KEY}
+      - ANVIL_VPN_ADDRESS_RANGE=${ANVIL_VPN_ADDRESS_RANGE:-10.10.0.0/16}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # For container management
-      - /root/.ssh:/root/.ssh:ro  # SSH key for VM host access
-      - ./data/storage:/var/lib/anvil/storage  # Shared storage
-      - /var/lib/anvil:/var/lib/anvil  # VM templates and storage
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /root/.ssh:/root/.ssh:ro
+      - ./data/storage:/var/lib/anvil/storage
+      - /var/lib/anvil:/var/lib/anvil
     depends_on:
       postgres:
         condition: service_healthy
@@ -71,26 +80,23 @@ services:
       - anvil-challenges
     restart: unless-stopped
 
-  # Anvil Frontend (development)
   web:
     build:
       context: ./web
       dockerfile: ../deployments/docker/Dockerfile.web
-      target: development
+      target: production
       args:
-        PUBLIC_API_URL: http://localhost:8080  # Change for production
+        PUBLIC_API_URL: https://play.abu.rocks
     container_name: anvil-web
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
     ports:
-      - "3000:3000"
-    volumes:
-      - ./web:/app
-      - /app/node_modules
+      - "127.0.0.1:3000:3000"
     depends_on:
       - api
     networks:
       - anvil-internal
+    restart: unless-stopped
 
 networks:
   anvil-internal:

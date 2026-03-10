@@ -1,42 +1,43 @@
-# Anvil Platform Configuration
-# Override these values with environment variables prefixed with ANVIL_
-# e.g., ANVIL_SERVER_PORT=9000
+# anvil platform configuration
+# env vars override everything here — prefix with ANVIL_
+# e.g. ANVIL_SERVER_PORT=9000, ANVIL_JWT_SECRET=...
 
-environment: development
+environment: production
 
 server:
   port: 8080
   host: "0.0.0.0"
-  read_timeout: 15s
-  write_timeout: 15s
+  read_timeout: 30s
+  write_timeout: 30s
   shutdown_timeout: 30s
-  trusted_proxies: []
+  trusted_proxies:
+    - "172.16.0.0/12"
+    - "127.0.0.1"
 
 database:
-  host: localhost
+  host: postgres
   port: 5432
   user: anvil
-  password: anvil
+  password: ""          # set via ANVIL_DATABASE_PASSWORD in .env
   database: anvil
   ssl_mode: disable
   max_open_conns: 50
   max_idle_conns: 25
 
 redis:
-  host: localhost
+  host: redis
   port: 6379
   password: ""
   db: 0
 
 jwt:
-  # CHANGE THIS IN PRODUCTION!
-  secret: "change-me-in-production-please"
+  secret: ""            # set via ANVIL_JWT_SECRET in .env
   access_expiry: 15m
-  refresh_expiry: 168h  # 7 days
+  refresh_expiry: 168h
   issuer: anvil
 
 container:
-  runtime: docker  # docker or podman
+  runtime: docker
   network_name: anvil-challenges
   network_subnet: "172.20.0.0/16"
   default_timeout: 2h
@@ -50,33 +51,24 @@ vpn:
   enabled: true
   interface: wg0
   listen_port: 51820
-  public_endpoint: ""  # Set to your server's public IP/domain
-  private_key: ""      # Generate with: wg genkey
-  public_key: ""       # Generate with: echo $PRIVATE_KEY | wg pubkey
+  public_endpoint: ""   # set via ANVIL_VPN_PUBLIC_ENDPOINT in .env
+  private_key: ""       # set via ANVIL_VPN_PRIVATE_KEY in .env
+  public_key: ""        # set via ANVIL_VPN_PUBLIC_KEY in .env
   address_range: "10.10.0.0/16"
   dns: "1.1.1.1"
   mtu: 1420
 
 platform:
   name: "Anvil"
-  
-  # Registration modes: open, invite, token, disabled
-  registration_mode: open
+  registration_mode: open     # open, invite, token, disabled
   require_email_verify: false
-  
-  # Scoring configuration
   scoring_enabled: true
   scoreboard_enabled: true
   scoreboard_public: true
-  # Scoring modes: static, dynamic, time_decay
-  scoring_mode: static
-  
-  # Challenge settings
+  scoring_mode: dynamic       # static, dynamic, time_decay
   flag_submission_enabled: true
   hints_enabled: true
   writeup_submission: false
-  
-  # Instance settings
   default_instance_timeout: 2h
   max_instance_extensions: 3
   extension_duration: 30m
@@ -85,19 +77,15 @@ rate_limit:
   enabled: true
   requests_per_minute: 300
   burst_size: 50
-  
   login:
     requests: 5
     window: 15m
-  
   flag_submission:
     requests: 10
     window: 1m
-  
   instance_start:
     requests: 3
     window: 10m
-  
   vpn_config_gen:
     requests: 2
     window: 1h

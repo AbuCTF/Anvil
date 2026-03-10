@@ -9,7 +9,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci && npm install @rollup/rollup-linux-x64-musl --save-optional
+RUN npm ci
 
 # Copy source
 COPY . .
@@ -28,12 +28,15 @@ ARG PUBLIC_API_URL=http://localhost:8080
 ENV PUBLIC_API_URL=$PUBLIC_API_URL
 
 COPY package*.json ./
-RUN npm ci && npm install @rollup/rollup-linux-x64-musl --save-optional
+RUN npm ci
 
 COPY . .
 
 # Create .env with the build arg so SvelteKit picks it up
 RUN echo "PUBLIC_API_URL=$PUBLIC_API_URL" > .env
+
+# Generate SvelteKit types before build
+RUN npx svelte-kit sync
 
 RUN npm run build
 
