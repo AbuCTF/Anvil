@@ -41,13 +41,8 @@ services:
       context: .
       dockerfile: deployments/docker/Dockerfile.api
     container_name: anvil-api
-    user: root
+    privileged: true
     pid: "host"
-    cap_add:
-      - NET_ADMIN
-      - SYS_PTRACE
-    security_opt:
-      - seccomp:unconfined
     environment:
       - ANVIL_ENV=${ANVIL_ENV:-production}
       - ANVIL_DATABASE_HOST=postgres
