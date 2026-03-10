@@ -10,19 +10,8 @@ v0.1.0 [`forging`]
 - Dynamic scoring
 - SvelteKit frontend
 
-#### **Quick Start**
 
-```
-git clone https://github.com/AbuCTF/Anvil.git
-cd Anvil
-cp .env.example .env
-docker compose up --build
-```
-
-frontend on [localhost:3000](http://localhost:3000), api on [localhost:8080](http://localhost:8080/health)
-
-
-#### **Production**
+#### **Deploy**
 
 Edit these:
 - `.env` — secrets, endpoints, passwords

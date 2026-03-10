@@ -18,14 +18,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
 CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC);
 
 -- Platform settings table for admin-configurable options
-CREATE TABLE IF NOT EXISTS platform_settings (
-    key VARCHAR(100) PRIMARY KEY,
-    value JSONB NOT NULL,
-    description TEXT,
-    category VARCHAR(50) DEFAULT 'general',
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_by UUID REFERENCES users(id)
-);
+-- Table created in 001, add category column if missing
+ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS category VARCHAR(50) DEFAULT 'general';
 
 -- Default platform settings
 INSERT INTO platform_settings (key, value, description, category) VALUES
