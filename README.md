@@ -10,8 +10,6 @@ v0.1.0 [`forging`]
 - Dynamic scoring
 - SvelteKit frontend
 
----
-
 #### **Quick Start**
 
 ```
