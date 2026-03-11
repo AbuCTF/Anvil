@@ -200,30 +200,29 @@
 
 						<div class="p-5 space-y-4">
 							<div class="flex items-center justify-between">
-								<span class="text-stone-500 text-sm">IP Address</span>
-								<div class="flex items-center space-x-2">
+								<span class="text-stone-500 text-xs uppercase tracking-wider">Target</span>
+								<div class="flex items-center gap-2">
 									<code class="px-3 py-1.5 bg-black text-green-400 border border-stone-800 rounded font-mono text-sm">
 										{instance.ip_address}
 									</code>
 									<button 
 										on:click={() => navigator.clipboard.writeText(instance.ip_address)}
-										class="p-1.5 bg-black border border-stone-800 rounded text-stone-400 hover:text-white transition"
-										title="Copy IP"
+										class="p-1.5 text-stone-500 hover:text-white transition"
+										title="Copy"
 									>
-										<Icon icon="mdi:content-copy" class="w-4 h-4" />
+										<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
 									</button>
 								</div>
 							</div>
 
 							{#if instance.ports && Object.keys(instance.ports).length > 0}
 								<div>
-									<span class="text-stone-500 text-sm block mb-3">Exposed Ports</span>
+									<span class="text-stone-500 text-xs uppercase tracking-wider block mb-2">Ports</span>
 									<div class="flex flex-wrap gap-2">
 										{#each Object.entries(instance.ports) as [service, port]}
-											<span class="inline-flex items-center px-3 py-1.5 bg-black text-stone-300 border border-stone-800 rounded text-sm">
-												<Icon icon="mdi:ethernet" class="w-4 h-4 mr-1.5 text-stone-500" />
-												<span class="text-stone-500">{service}:</span>
-												<code class="text-white ml-1">{port}</code>
+											<span class="inline-flex items-center px-3 py-1.5 bg-black text-stone-300 border border-stone-800 rounded text-sm font-mono">
+												<span class="text-stone-500">{service} →</span>
+												<span class="text-white ml-1.5">{port}</span>
 											</span>
 										{/each}
 									</div>

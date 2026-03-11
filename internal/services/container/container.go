@@ -57,7 +57,7 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 		client:    cli,
 		logger:    logger,
 		usedPorts: make(map[int]bool),
-		portRange: [2]int{32000, 33000}, // Dynamic port range
+		portRange: [2]int{32768, 61000}, // Linux ephemeral port range, Docker-managed
 	}
 
 	// Ensure network exists

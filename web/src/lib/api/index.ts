@@ -565,6 +565,16 @@ class ApiClient {
 			xhr.send(formData);
 		});
 	}
+
+	async getInstanceFlags(params?: { challenge_id?: string; user_id?: string }) {
+		const q = params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
+		return this.request<{ instance_flags: any[]; total: number }>(`/admin/instance-flags${q}`);
+	}
+
+	async getFlagShares(params?: { challenge_id?: string; submitter_id?: string }) {
+		const q = params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
+		return this.request<{ flag_shares: any[]; total: number }>(`/admin/flag-shares${q}`);
+	}
 }
 
 export const api = new ApiClient(API_BASE);

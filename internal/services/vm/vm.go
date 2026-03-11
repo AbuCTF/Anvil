@@ -377,8 +377,75 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 	}, nil
 }
 
-// createOverlayOnNode creates a CoW overlay disk on a remote node via SSH
+// syncImageToNode ensures the base image exists on the remote node.
+// If the file is not present (or is a different size), it is copied via SCP.
+func (s *Service) syncImageToNode(ctx context.Context, localPath string, node *NodeInfo) error {
+	// Check whether the file already exists on the node with the same size
+	checkCmd := fmt.Sprintf("stat -c%%s %s 2>/dev/null || echo missing", localPath)
+	remoteOut, _ := s.runSSHCommand(ctx, node, checkCmd)
+	remoteOut = strings.TrimSpace(remoteOut)
+
+	localInfo, err := os.Stat(localPath)
+	if err != nil {
+		return fmt.Errorf("base image not found locally at %s: %w", localPath, err)
+	}
+	localSize := fmt.Sprintf("%d", localInfo.Size())
+
+	if remoteOut == localSize {
+		// File already present and same size — nothing to do
+		s.logger.Info("base image already present on node, skipping sync",
+			zap.String("path", localPath),
+			zap.String("node", node.Name),
+		)
+		return nil
+	}
+
+	s.logger.Info("syncing base image to node via SCP",
+		zap.String("local_path", localPath),
+		zap.String("node", node.Name),
+		zap.String("node_ip", node.IPAddress),
+	)
+
+	// Ensure the remote directory exists
+	remoteDir := filepath.Dir(localPath)
+	if _, err := s.runSSHCommand(ctx, node, fmt.Sprintf("mkdir -p %s", remoteDir)); err != nil {
+		return fmt.Errorf("failed to create remote directory %s: %w", remoteDir, err)
+	}
+
+	// SCP the file over
+	scpArgs := []string{
+		"-q",
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ConnectTimeout=30",
+		"-P", fmt.Sprintf("%d", node.SSHPort),
+	}
+	if node.SSHKeyPath != "" {
+		scpArgs = append(scpArgs, "-i", node.SSHKeyPath)
+	}
+	scpArgs = append(scpArgs, localPath, fmt.Sprintf("%s@%s:%s", node.SSHUser, node.IPAddress, localPath))
+
+	cmd := exec.CommandContext(ctx, "scp", scpArgs...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("scp failed: %s: %w", string(output), err)
+	}
+
+	s.logger.Info("base image synced to node",
+		zap.String("path", localPath),
+		zap.String("node", node.Name),
+	)
+	return nil
+}
+
+// createOverlayOnNode creates a CoW overlay disk on a remote node via SSH.
+// It first ensures the base image is present on the node, copying it via SCP if needed.
 func (s *Service) createOverlayOnNode(ctx context.Context, basePath string, instanceID string, node *NodeInfo) (string, error) {
+	// Ensure the base image exists on the node (copy if needed)
+	if err := s.syncImageToNode(ctx, basePath, node); err != nil {
+		return "", fmt.Errorf("failed to sync base image to node: %w", err)
+	}
+
 	overlayDir := "/var/lib/anvil/storage/vms/overlays"
 	overlayPath := fmt.Sprintf("%s/%s.qcow2", overlayDir, instanceID)
 

@@ -258,6 +258,11 @@ func (s *Server) setupRouter() {
 				categories.DELETE("/:id", categoryHandler.Delete)
 			}
 
+			// Dynamic flag monitoring (admin only)
+			adminChalMonitor := handlers.NewAdminChallengeHandler(s.config, s.db, s.containerSvc, s.logger)
+			admin.GET("/instance-flags", adminChalMonitor.ListInstanceFlags)
+			admin.GET("/flag-shares", adminChalMonitor.ListFlagShareEvents)
+
 			// Instance management (admin view)
 			instances := admin.Group("/instances")
 			{

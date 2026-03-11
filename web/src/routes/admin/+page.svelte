@@ -21,6 +21,12 @@
 	let nodes: any[] = [];
 	let templates: any[] = [];
 	let activeInstances: any[] = [];
+
+	// Audit data
+	let intelLoading = false;
+	let flagShares: any[] = [];
+	let instanceFlags: any[] = [];
+
 	let showNodeModal = false;
 	let showTemplateUploadModal = false;
 
@@ -59,9 +65,10 @@
 		difficulty: 'easy',
 		base_points: 100,
 		flag: '',
-		flags: [{ name: 'User Flag', flag: '', points: 50 }, { name: 'Root Flag', flag: '', points: 50 }],
+		flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 		type: 'container',
 		docker_image: '',
+		exposed_ports: [{ port: 1337, protocol: 'tcp' }],
 		ova_url: '',
 		vm_template_id: '',  // For selecting existing template
 		vm_source: 'template', // 'template' or 'upload'
@@ -216,6 +223,29 @@
 			error = e instanceof Error ? e.message : 'Failed to load dashboard';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function loadIntel() {
+		intelLoading = true;
+		try {
+			const [sharesRes, flagsRes] = await Promise.all([
+				api.getFlagShares(),
+				api.getInstanceFlags()
+			]);
+			flagShares = sharesRes.flag_shares || [];
+			instanceFlags = flagsRes.instance_flags || [];
+		} catch {
+			// non-critical
+		} finally {
+			intelLoading = false;
+		}
+	}
+
+	function setTab(id: string) {
+		activeTab = id;
+		if (id === 'intel' && flagShares.length === 0 && instanceFlags.length === 0) {
+			loadIntel();
 		}
 	}
 
@@ -395,8 +425,18 @@
 					difficulty: newChallenge.difficulty,
 					base_points: newChallenge.base_points,
 					category: newChallenge.category,
+					challenge_type: 'docker',
 					container_image: newChallenge.docker_image,
-					flag: newChallenge.flag || newChallenge.flags[0]?.flag
+					exposed_ports: newChallenge.exposed_ports.filter(p => p.port > 0),
+					flags: newChallenge.flags.map((f, i) => ({
+						name: f.name,
+						flag: f.flag,
+						points: f.points,
+						sort_order: i + 1,
+						flag_type: f.flag_type || 'static',
+						dynamic_flag_prefix: f.dynamic_flag_prefix || ''
+					})),
+					cooldown_minutes: newChallenge.cooldown_minutes
 				});
 			}
 
@@ -411,9 +451,10 @@
 				difficulty: 'easy',
 				base_points: 100,
 				flag: '',
-				flags: [{ name: 'User Flag', flag: '', points: 50 }, { name: 'Root Flag', flag: '', points: 50 }],
+				flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 				type: 'container',
 				docker_image: '',
+				exposed_ports: [{ port: 1337, protocol: 'tcp' }],
 				ova_url: '',
 				vm_template_id: '',
 				vm_source: 'template',
@@ -488,11 +529,12 @@
 					{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant' },
 					{ id: 'users', label: 'Users', icon: 'mdi:account-group' },
 					{ id: 'infrastructure', label: 'System', icon: 'mdi:server-network' },
-					{ id: 'settings', label: 'Settings', icon: 'mdi:cog' }
+					{ id: 'settings', label: 'Settings', icon: 'mdi:cog' },
+					{ id: 'intel', label: 'Audit', icon: 'mdi:shield-search' }
 				] as tab}
 					<button
 						type="button"
-						on:click={() => activeTab = tab.id}
+						on:click={() => setTab(tab.id)}
 						class="px-4 py-2.5 text-sm font-medium transition-colors relative flex items-center gap-2 {activeTab === tab.id ? 'text-white' : 'text-stone-500 hover:text-stone-300'}"
 					>
 						<Icon icon={tab.icon} class="w-4 h-4" />
@@ -1282,6 +1324,94 @@
 						</div>
 					</div>
 				</div>
+			{:else if activeTab === 'intel'}
+				<div class="space-y-8">
+					<!-- Flag Share Events -->
+					<div>
+						<div class="flex items-center justify-between mb-4">
+							<h2 class="text-sm font-semibold text-stone-300 uppercase tracking-wider flex items-center gap-2">
+								<Icon icon="mdi:shield-alert" class="w-4 h-4 text-red-400" />
+								Flag Share Events
+							</h2>
+							<button type="button" on:click={loadIntel} class="text-xs text-stone-500 hover:text-stone-300 flex items-center gap-1">
+								<Icon icon="mdi:refresh" class="w-3.5 h-3.5" />
+								Refresh
+							</button>
+						</div>
+						{#if intelLoading}
+							<div class="flex justify-center py-8">
+								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />
+							</div>
+						{:else if flagShares.length === 0}
+							<p class="text-stone-500 text-sm text-center py-8">No flag share events detected.</p>
+						{:else}
+							<div class="overflow-x-auto rounded border border-stone-800">
+								<table class="w-full text-sm">
+									<thead class="bg-stone-900 text-stone-400 text-xs uppercase tracking-wider">
+										<tr>
+											<th class="px-4 py-3 text-left">Challenge</th>
+											<th class="px-4 py-3 text-left">Flag Owner</th>
+											<th class="px-4 py-3 text-left">Submitter</th>
+											<th class="px-4 py-3 text-left">IP</th>
+											<th class="px-4 py-3 text-left">Flag Value</th>
+											<th class="px-4 py-3 text-left">Time</th>
+										</tr>
+									</thead>
+									<tbody class="divide-y divide-stone-800">
+										{#each flagShares as ev}
+											<tr class="hover:bg-stone-900/40">
+												<td class="px-4 py-3 text-white">{ev.challenge_name ?? ev.challenge_id}</td>
+												<td class="px-4 py-3 text-amber-400">{ev.owner_username ?? ev.owner_user_id}</td>
+												<td class="px-4 py-3 text-red-400">{ev.submitter_username ?? ev.submitter_user_id}</td>
+												<td class="px-4 py-3 text-stone-400 font-mono text-xs">{ev.submitter_ip ?? '—'}</td>
+												<td class="px-4 py-3 font-mono text-xs text-stone-300 max-w-xs truncate">{ev.flag_value}</td>
+												<td class="px-4 py-3 text-stone-500 text-xs">{new Date(ev.created_at).toLocaleString()}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						{/if}
+					</div>
+
+					<!-- Instance Flags -->
+					<div>
+						<h2 class="text-sm font-semibold text-stone-300 uppercase tracking-wider flex items-center gap-2 mb-4">
+							<Icon icon="mdi:key-variant" class="w-4 h-4 text-blue-400" />
+							Instance Flags ({instanceFlags.length})
+						</h2>
+						{#if intelLoading}
+							<div class="flex justify-center py-8">
+								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />
+							</div>
+						{:else if instanceFlags.length === 0}
+							<p class="text-stone-500 text-sm text-center py-8">No instance flags generated yet.</p>
+						{:else}
+							<div class="overflow-x-auto rounded border border-stone-800">
+								<table class="w-full text-sm">
+									<thead class="bg-stone-900 text-stone-400 text-xs uppercase tracking-wider">
+										<tr>
+											<th class="px-4 py-3 text-left">User</th>
+											<th class="px-4 py-3 text-left">Challenge</th>
+											<th class="px-4 py-3 text-left">Flag Value</th>
+											<th class="px-4 py-3 text-left">Instance ID</th>
+										</tr>
+									</thead>
+									<tbody class="divide-y divide-stone-800">
+										{#each instanceFlags as fl}
+											<tr class="hover:bg-stone-900/40">
+												<td class="px-4 py-3 text-white">{fl.username ?? fl.user_id}</td>
+												<td class="px-4 py-3 text-stone-300">{fl.challenge_name ?? fl.challenge_id}</td>
+												<td class="px-4 py-3 font-mono text-xs text-green-400 max-w-xs truncate">{fl.flag_value}</td>
+												<td class="px-4 py-3 font-mono text-xs text-stone-500">{fl.instance_id}</td>
+											</tr>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						{/if}
+					</div>
+				</div>
 			{/if}
 		{/if}
 	</div>
@@ -1428,18 +1558,93 @@
 									bind:value={newChallenge.docker_image}
 									required
 									class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white font-mono placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
-									placeholder="registry.example.com/challenge:latest"
+									placeholder="ghcr.io/abuctf/token-overflow:latest"
 								/>
-								<p class="text-stone-500 text-xs mt-2">Image should be pre-built and pushed to a registry</p>
+								<p class="text-stone-500 text-xs mt-2">Pre-built image from a registry (GHCR, Docker Hub, etc.)</p>
 							</div>
+
+							<!-- Exposed Ports -->
 							<div>
-								<label class="block text-sm font-medium text-stone-300 mb-2">Flag *</label>
+								<div class="flex items-center justify-between mb-2">
+									<label class="block text-sm font-medium text-stone-300">Exposed Ports</label>
+									<button
+										type="button"
+										on:click={() => newChallenge.exposed_ports = [...newChallenge.exposed_ports, { port: 0, protocol: 'tcp' }]}
+										class="text-xs text-stone-400 hover:text-white transition"
+									>+ Add Port</button>
+								</div>
+								<div class="space-y-2">
+									{#each newChallenge.exposed_ports as ep, i}
+										<div class="flex items-center gap-2">
+											<input
+												type="number"
+												bind:value={ep.port}
+												min="1" max="65535"
+												class="flex-1 px-3 py-2 bg-black border border-stone-700 rounded-lg text-white font-mono text-sm focus:outline-none focus:border-stone-500 transition-all"
+												placeholder="1337"
+											/>
+											<select
+												bind:value={ep.protocol}
+												class="px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
+											>
+												<option value="tcp">TCP</option>
+												<option value="udp">UDP</option>
+											</select>
+											{#if newChallenge.exposed_ports.length > 1}
+												<button type="button" on:click={() => newChallenge.exposed_ports = newChallenge.exposed_ports.filter((_, idx) => idx !== i)} class="p-1.5 text-stone-500 hover:text-red-400 transition">
+													<Icon icon="mdi:close" class="w-4 h-4" />
+												</button>
+											{/if}
+										</div>
+									{/each}
+								</div>
+								<p class="text-stone-500 text-xs mt-1.5">Ports the container exposes (mapped to random host ports)</p>
+							</div>
+
+							<!-- Flags -->
+							<div>
+								<div class="flex items-center justify-between mb-2">
+									<label class="block text-sm font-medium text-stone-300">Flags</label>
+									<button
+										type="button"
+										on:click={() => newChallenge.flags = [...newChallenge.flags, { name: `Flag ${newChallenge.flags.length + 1}`, flag: '', points: 25, flag_type: 'static', dynamic_flag_prefix: '' }]}
+										class="text-xs text-stone-400 hover:text-white transition"
+									>+ Add Flag</button>
+								</div>
+								<div class="space-y-3">
+									{#each newChallenge.flags as fl, i}
+										<div class="p-3 bg-black border border-stone-800 rounded-lg space-y-2">
+											<div class="flex items-center gap-2">
+												<input type="text" bind:value={fl.name} class="flex-1 px-3 py-1.5 bg-stone-950 border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500" placeholder="Flag name" />
+												<input type="number" bind:value={fl.points} min="0" class="w-20 px-3 py-1.5 bg-stone-950 border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500" placeholder="pts" />
+												<select bind:value={fl.flag_type} class="px-2 py-1.5 bg-stone-950 border border-stone-700 rounded text-white text-xs focus:outline-none focus:border-stone-500">
+													<option value="static">Static</option>
+													<option value="dynamic">Dynamic</option>
+												</select>
+												{#if newChallenge.flags.length > 1}
+													<button type="button" on:click={() => newChallenge.flags = newChallenge.flags.filter((_, idx) => idx !== i)} class="p-1 text-stone-500 hover:text-red-400 transition">
+														<Icon icon="mdi:close" class="w-4 h-4" />
+													</button>
+												{/if}
+											</div>
+											{#if fl.flag_type === 'static'}
+												<input type="text" bind:value={fl.flag} class="w-full px-3 py-1.5 bg-stone-950 border border-stone-700 rounded text-white font-mono text-sm focus:outline-none focus:border-stone-500" placeholder="flag&#123;value&#125;" />
+											{:else}
+												<input type="text" bind:value={fl.dynamic_flag_prefix} class="w-full px-3 py-1.5 bg-stone-950 border border-stone-700 rounded text-white font-mono text-sm focus:outline-none focus:border-stone-500" placeholder="Prefix (e.g. H7CTF) — generates H7CTF&#123;uuid&#125; per user" />
+											{/if}
+										</div>
+									{/each}
+								</div>
+							</div>
+
+							<!-- Cooldown -->
+							<div>
+								<label class="block text-sm font-medium text-stone-300 mb-2">Reset Cooldown (minutes)</label>
 								<input
-									type="text"
-									bind:value={newChallenge.flag}
-									required
-									class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white font-mono placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
-									placeholder="flag&#123;example_flag_here&#125;"
+									type="number"
+									bind:value={newChallenge.cooldown_minutes}
+									min="0"
+									class="w-32 px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
 								/>
 							</div>
 						</div>

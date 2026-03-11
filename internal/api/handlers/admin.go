@@ -196,11 +196,13 @@ func (h *AdminUserHandler) Delete(c *gin.Context) {
 
 // FlagInput represents a flag in the create challenge request
 type FlagInput struct {
-	Name        string `json:"name" binding:"required"`
-	Description string `json:"description"`
-	Flag        string `json:"flag" binding:"required"`
-	Points      int    `json:"points" binding:"required"`
-	SortOrder   int    `json:"sort_order"`
+	Name              string `json:"name" binding:"required"`
+	Description       string `json:"description"`
+	Flag              string `json:"flag"` // required for static; leave empty for dynamic
+	Points            int    `json:"points" binding:"required"`
+	SortOrder         int    `json:"sort_order"`
+	FlagType          string `json:"flag_type"`           // "static" (default) | "dynamic"
+	DynamicFlagPrefix string `json:"dynamic_flag_prefix"` // e.g. "H7CTF" → "H7CTF{uuid}"
 }
 
 // CreateChallengeRequest represents the request to create a challenge
@@ -407,17 +409,31 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	// Insert flags
 	for i, flag := range flagsToCreate {
 		flagID := uuid.New()
-		// Hash the flag for storage
-		flagHash := hashFlag(flag.Flag)
 		sortOrder := flag.SortOrder
 		if sortOrder == 0 {
 			sortOrder = i + 1
 		}
+		flagType := flag.FlagType
+		if flagType == "" {
+			flagType = "static"
+		}
+		// Hash only for static flags; dynamic flags have no pre-set value
+		flagHash := ""
+		if flagType == "static" {
+			flagHash = hashFlag(flag.Flag)
+		}
+		var dynPrefix *string
+		if flag.DynamicFlagPrefix != "" {
+			s := flag.DynamicFlagPrefix
+			dynPrefix = &s
+		}
 
 		_, err = tx.Exec(c.Request.Context(),
-			`INSERT INTO flags (id, challenge_id, name, description, flag_hash, points, sort_order, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())`,
+			`INSERT INTO flags (id, challenge_id, name, description, flag_hash, points, sort_order,
+			                    flag_type, dynamic_flag_prefix, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
 			flagID, challengeID, flag.Name, flag.Description, flagHash, flag.Points, sortOrder,
+			flagType, dynPrefix,
 		)
 		if err != nil {
 			h.logger.Error("failed to create flag", zap.Error(err), zap.String("flag_name", flag.Name))
@@ -832,11 +848,13 @@ func (h *AdminChallengeHandler) Archive(c *gin.Context) {
 
 // CreateFlagRequest represents the request to create a flag
 type CreateFlagRequest struct {
-	Name          string `json:"name" binding:"required"`
-	Flag          string `json:"flag" binding:"required"`
-	Points        int    `json:"points"`
-	Order         int    `json:"order"`
-	CaseSensitive bool   `json:"case_sensitive"`
+	Name              string `json:"name" binding:"required"`
+	Flag              string `json:"flag"` // empty when FlagType == "dynamic"
+	Points            int    `json:"points"`
+	Order             int    `json:"order"`
+	CaseSensitive     bool   `json:"case_sensitive"`
+	FlagType          string `json:"flag_type"`           // "static" | "dynamic"
+	DynamicFlagPrefix string `json:"dynamic_flag_prefix"` // e.g. "H7CTF"
 }
 
 // ListFlags returns flags for a challenge
@@ -891,12 +909,27 @@ func (h *AdminChallengeHandler) CreateFlag(c *gin.Context) {
 		req.Points = 100
 	}
 
+	flagType := req.FlagType
+	if flagType == "" {
+		flagType = "static"
+	}
+	flagHash := ""
+	if flagType == "static" {
+		flagHash = hashFlag(req.Flag)
+	}
+	var dynPrefix *string
+	if req.DynamicFlagPrefix != "" {
+		s := req.DynamicFlagPrefix
+		dynPrefix = &s
+	}
+
 	flagID := uuid.New()
-	flagHash := hashFlag(req.Flag)
 	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`INSERT INTO flags (id, challenge_id, name, flag_hash, points, sort_order, case_sensitive, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())`,
-		flagID, challengeID, req.Name, flagHash, req.Points, req.Order, req.CaseSensitive)
+		`INSERT INTO flags (id, challenge_id, name, flag_hash, points, sort_order, case_sensitive,
+		                    flag_type, dynamic_flag_prefix, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+		flagID, challengeID, req.Name, flagHash, req.Points, req.Order, req.CaseSensitive,
+		flagType, dynPrefix)
 	if err != nil {
 		h.logger.Error("failed to create flag", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create flag"})
@@ -919,6 +952,16 @@ func (h *AdminChallengeHandler) UpdateFlag(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Resolve flag_type
+	if req.FlagType != "" {
+		_, err := h.db.Pool.Exec(c.Request.Context(),
+			`UPDATE flags SET flag_type = $1, dynamic_flag_prefix = NULLIF($2,'') WHERE id = $3`,
+			req.FlagType, req.DynamicFlagPrefix, flagID)
+		if err != nil {
+			h.logger.Warn("failed to update flag_type", zap.Error(err))
+		}
 	}
 
 	// Only update flag_hash if a new flag value is provided
@@ -1066,6 +1109,177 @@ func (h *AdminChallengeHandler) DeleteHint(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "hint deleted"})
+}
+
+// ListFlagShareEvents returns all detected flag-sharing events for admin review.
+// GET /api/v1/admin/flag-shares[?challenge_id=&submitter_id=&limit=]
+func (h *AdminChallengeHandler) ListFlagShareEvents(c *gin.Context) {
+	challengeIDFilter := c.Query("challenge_id")
+	submitterFilter := c.Query("submitter_id")
+	limit := 500
+
+	var cid, sid interface{} = nil, nil
+	if challengeIDFilter != "" {
+		cid = challengeIDFilter
+	}
+	if submitterFilter != "" {
+		sid = submitterFilter
+	}
+
+	rows, err := h.db.Pool.Query(c.Request.Context(),
+		`SELECT
+			fse.id,
+			fse.created_at,
+			fse.challenge_id,
+			ch.name        AS challenge_name,
+			fse.flag_id,
+			f.name         AS flag_name,
+			fse.flag_value,
+			fse.owner_user_id,
+			owner.username AS owner_username,
+			fse.submitter_user_id,
+			sub.username   AS submitter_username,
+			fse.submitter_ip,
+			fse.owner_instance_id
+		FROM flag_share_events fse
+		JOIN challenges ch  ON ch.id  = fse.challenge_id
+		JOIN flags      f   ON f.id   = fse.flag_id
+		JOIN users      owner ON owner.id = fse.owner_user_id
+		JOIN users      sub   ON sub.id   = fse.submitter_user_id
+		WHERE ($1::uuid IS NULL OR fse.challenge_id      = $1)
+		  AND ($2::uuid IS NULL OR fse.submitter_user_id = $2)
+		ORDER BY fse.created_at DESC
+		LIMIT $3`,
+		cid, sid, limit)
+	if err != nil {
+		h.logger.Error("failed to list flag share events", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flag share events"})
+		return
+	}
+	defer rows.Close()
+
+	type shareRow struct {
+		ID                string `json:"id"`
+		CreatedAt         int64  `json:"created_at"`
+		ChallengeID       string `json:"challenge_id"`
+		ChallengeName     string `json:"challenge_name"`
+		FlagID            string `json:"flag_id"`
+		FlagName          string `json:"flag_name"`
+		FlagValue         string `json:"flag_value"`
+		OwnerUserID       string `json:"owner_user_id"`
+		OwnerUsername     string `json:"owner_username"`
+		SubmitterUserID   string `json:"submitter_user_id"`
+		SubmitterUsername string `json:"submitter_username"`
+		SubmitterIP       string `json:"submitter_ip"`
+		OwnerInstanceID   string `json:"owner_instance_id"`
+	}
+
+	var results []shareRow
+	for rows.Next() {
+		var r shareRow
+		var createdAt time.Time
+		if err := rows.Scan(
+			&r.ID, &createdAt, &r.ChallengeID, &r.ChallengeName,
+			&r.FlagID, &r.FlagName, &r.FlagValue,
+			&r.OwnerUserID, &r.OwnerUsername,
+			&r.SubmitterUserID, &r.SubmitterUsername,
+			&r.SubmitterIP, &r.OwnerInstanceID,
+		); err != nil {
+			continue
+		}
+		r.CreatedAt = createdAt.Unix()
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []shareRow{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"flag_shares": results, "total": len(results)})
+}
+
+// ListInstanceFlags returns all generated dynamic flags — admin monitoring only.
+// GET /api/v1/admin/instance-flags[?challenge_id=&user_id=&limit=]
+func (h *AdminChallengeHandler) ListInstanceFlags(c *gin.Context) {
+	challengeIDFilter := c.Query("challenge_id")
+	userIDFilter := c.Query("user_id")
+	limit := 500
+
+	query := `
+		SELECT
+			inf.id,
+			inf.instance_id,
+			inf.user_id,
+			u.username,
+			inf.challenge_id,
+			ch.name  AS challenge_name,
+			inf.flag_id,
+			f.name   AS flag_name,
+			f.flag_type,
+			inf.flag_value,
+			inf.created_at,
+			i.status AS instance_status
+		FROM instance_flags inf
+		JOIN users      u  ON u.id  = inf.user_id
+		JOIN challenges ch ON ch.id = inf.challenge_id
+		JOIN flags      f  ON f.id  = inf.flag_id
+		JOIN instances  i  ON i.id  = inf.instance_id
+		WHERE ($1::uuid IS NULL OR inf.challenge_id = $1)
+		  AND ($2::uuid IS NULL OR inf.user_id      = $2)
+		ORDER BY inf.created_at DESC
+		LIMIT $3
+	`
+
+	var cid, uid interface{} = nil, nil
+	if challengeIDFilter != "" {
+		cid = challengeIDFilter
+	}
+	if userIDFilter != "" {
+		uid = userIDFilter
+	}
+
+	rows, err := h.db.Pool.Query(c.Request.Context(), query, cid, uid, limit)
+	if err != nil {
+		h.logger.Error("failed to list instance flags", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch instance flags"})
+		return
+	}
+	defer rows.Close()
+
+	type row struct {
+		ID             string `json:"id"`
+		InstanceID     string `json:"instance_id"`
+		UserID         string `json:"user_id"`
+		Username       string `json:"username"`
+		ChallengeID    string `json:"challenge_id"`
+		ChallengeName  string `json:"challenge_name"`
+		FlagID         string `json:"flag_id"`
+		FlagName       string `json:"flag_name"`
+		FlagType       string `json:"flag_type"`
+		FlagValue      string `json:"flag_value"`
+		CreatedAt      int64  `json:"created_at"`
+		InstanceStatus string `json:"instance_status"`
+	}
+
+	var results []row
+	for rows.Next() {
+		var r row
+		var createdAt time.Time
+		if err := rows.Scan(
+			&r.ID, &r.InstanceID, &r.UserID, &r.Username,
+			&r.ChallengeID, &r.ChallengeName,
+			&r.FlagID, &r.FlagName, &r.FlagType,
+			&r.FlagValue, &createdAt, &r.InstanceStatus,
+		); err != nil {
+			continue
+		}
+		r.CreatedAt = createdAt.Unix()
+		results = append(results, r)
+	}
+	if results == nil {
+		results = []row{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"instance_flags": results, "total": len(results)})
 }
 
 // ===== Stats Handler =====

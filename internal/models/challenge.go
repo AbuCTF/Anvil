@@ -129,6 +129,12 @@ type Flag struct {
 	IsRegex       bool    `json:"is_regex" db:"is_regex"`
 	CaseSensitive bool    `json:"case_sensitive" db:"case_sensitive"`
 
+	// Dynamic flag config (flag_type = "static" | "dynamic")
+	// When dynamic, Anvil generates PREFIX{uuid} per instance and injects it
+	// as the FLAG env var; flag_hash is not used.
+	FlagType          string  `json:"flag_type" db:"flag_type"`
+	DynamicFlagPrefix *string `json:"dynamic_flag_prefix,omitempty" db:"dynamic_flag_prefix"`
+
 	// Scoring
 	Points int `json:"points" db:"points"`
 

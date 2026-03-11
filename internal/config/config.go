@@ -10,14 +10,14 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	Environment string         `mapstructure:"environment"`
-	Server      ServerConfig   `mapstructure:"server"`
-	Database    DatabaseConfig `mapstructure:"database"`
-	Redis       RedisConfig    `mapstructure:"redis"`
-	JWT         JWTConfig      `mapstructure:"jwt"`
+	Environment string          `mapstructure:"environment"`
+	Server      ServerConfig    `mapstructure:"server"`
+	Database    DatabaseConfig  `mapstructure:"database"`
+	Redis       RedisConfig     `mapstructure:"redis"`
+	JWT         JWTConfig       `mapstructure:"jwt"`
 	Container   ContainerConfig `mapstructure:"container"`
-	VPN         VPNConfig      `mapstructure:"vpn"`
-	Platform    PlatformConfig `mapstructure:"platform"`
+	VPN         VPNConfig       `mapstructure:"vpn"`
+	Platform    PlatformConfig  `mapstructure:"platform"`
 	RateLimit   RateLimitConfig `mapstructure:"rate_limit"`
 }
 
@@ -60,21 +60,21 @@ func (r RedisConfig) Addr() string {
 }
 
 type JWTConfig struct {
-	Secret           string        `mapstructure:"secret"`
-	AccessExpiry     time.Duration `mapstructure:"access_expiry"`
-	RefreshExpiry    time.Duration `mapstructure:"refresh_expiry"`
-	Issuer           string        `mapstructure:"issuer"`
+	Secret        string        `mapstructure:"secret"`
+	AccessExpiry  time.Duration `mapstructure:"access_expiry"`
+	RefreshExpiry time.Duration `mapstructure:"refresh_expiry"`
+	Issuer        string        `mapstructure:"issuer"`
 }
 
 type ContainerConfig struct {
-	Runtime         string        `mapstructure:"runtime"` // docker or podman
-	NetworkName     string        `mapstructure:"network_name"`
-	NetworkSubnet   string        `mapstructure:"network_subnet"`
-	DefaultTimeout  time.Duration `mapstructure:"default_timeout"`
-	MaxPerUser      int           `mapstructure:"max_per_user"`
-	CleanupInterval time.Duration `mapstructure:"cleanup_interval"`
-	HealthCheckInterval time.Duration `mapstructure:"health_check_interval"`
-	Labels          map[string]string `mapstructure:"labels"`
+	Runtime             string            `mapstructure:"runtime"` // docker or podman
+	NetworkName         string            `mapstructure:"network_name"`
+	NetworkSubnet       string            `mapstructure:"network_subnet"`
+	DefaultTimeout      time.Duration     `mapstructure:"default_timeout"`
+	MaxPerUser          int               `mapstructure:"max_per_user"`
+	CleanupInterval     time.Duration     `mapstructure:"cleanup_interval"`
+	HealthCheckInterval time.Duration     `mapstructure:"health_check_interval"`
+	Labels              map[string]string `mapstructure:"labels"`
 }
 
 type VPNConfig struct {
@@ -90,24 +90,24 @@ type VPNConfig struct {
 }
 
 type PlatformConfig struct {
-	Name                 string `mapstructure:"name"`
-	Description          string `mapstructure:"description"`
-	
+	Name        string `mapstructure:"name"`
+	Description string `mapstructure:"description"`
+
 	// Registration settings
-	RegistrationMode     string `mapstructure:"registration_mode"` // open, invite, token, disabled
-	RequireEmailVerify   bool   `mapstructure:"require_email_verify"`
-	
+	RegistrationMode   string `mapstructure:"registration_mode"` // open, invite, token, disabled
+	RequireEmailVerify bool   `mapstructure:"require_email_verify"`
+
 	// Scoring settings
-	ScoringEnabled       bool   `mapstructure:"scoring_enabled"`
-	ScoreboardEnabled    bool   `mapstructure:"scoreboard_enabled"`
-	ScoreboardPublic     bool   `mapstructure:"scoreboard_public"`
-	ScoringMode          string `mapstructure:"scoring_mode"` // static, dynamic, time_decay
-	
+	ScoringEnabled    bool   `mapstructure:"scoring_enabled"`
+	ScoreboardEnabled bool   `mapstructure:"scoreboard_enabled"`
+	ScoreboardPublic  bool   `mapstructure:"scoreboard_public"`
+	ScoringMode       string `mapstructure:"scoring_mode"` // static, dynamic, time_decay
+
 	// Challenge settings
-	FlagSubmissionEnabled bool   `mapstructure:"flag_submission_enabled"`
-	HintsEnabled         bool   `mapstructure:"hints_enabled"`
-	WriteupSubmission    bool   `mapstructure:"writeup_submission"`
-	
+	FlagSubmissionEnabled bool `mapstructure:"flag_submission_enabled"`
+	HintsEnabled          bool `mapstructure:"hints_enabled"`
+	WriteupSubmission     bool `mapstructure:"writeup_submission"`
+
 	// Instance settings
 	DefaultInstanceTimeout time.Duration `mapstructure:"default_instance_timeout"`
 	MaxInstanceExtensions  int           `mapstructure:"max_instance_extensions"`
@@ -115,15 +115,15 @@ type PlatformConfig struct {
 }
 
 type RateLimitConfig struct {
-	Enabled           bool          `mapstructure:"enabled"`
-	RequestsPerMinute int           `mapstructure:"requests_per_minute"`
-	BurstSize         int           `mapstructure:"burst_size"`
-	
+	Enabled           bool `mapstructure:"enabled"`
+	RequestsPerMinute int  `mapstructure:"requests_per_minute"`
+	BurstSize         int  `mapstructure:"burst_size"`
+
 	// Specific endpoint limits
-	Login             RateLimit     `mapstructure:"login"`
-	FlagSubmission    RateLimit     `mapstructure:"flag_submission"`
-	InstanceStart     RateLimit     `mapstructure:"instance_start"`
-	VPNConfigGen      RateLimit     `mapstructure:"vpn_config_gen"`
+	Login          RateLimit `mapstructure:"login"`
+	FlagSubmission RateLimit `mapstructure:"flag_submission"`
+	InstanceStart  RateLimit `mapstructure:"instance_start"`
+	VPNConfigGen   RateLimit `mapstructure:"vpn_config_gen"`
 }
 
 type RateLimit struct {

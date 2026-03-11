@@ -397,11 +397,12 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// Normalize flag (trim whitespace)
 	submittedFlag := strings.TrimSpace(req.Flag)
 
-	// Find matching flag
+	// ── Static flag check ────────────────────────────────────────────────────
+	// Query static flags and compare by hashing the submitted value.
 	query := `
 		SELECT f.id, f.flag_hash, f.name, f.points, f.case_sensitive
 		FROM flags f
-		WHERE f.challenge_id = $1
+		WHERE f.challenge_id = $1 AND f.flag_type = 'static'
 	`
 	rows, err := h.db.Pool.Query(c.Request.Context(), query, challengeID)
 	if err != nil {
@@ -432,7 +433,6 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			continue
 		}
 
-		// Compare flags by hashing submitted flag and comparing hashes
 		var submittedHash string
 		if f.CaseSensitive {
 			submittedHash = hashFlagForComparison(submittedFlag)
@@ -440,12 +440,77 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			submittedHash = hashFlagForComparison(strings.ToLower(submittedFlag))
 		}
 
-		match := subtle.ConstantTimeCompare([]byte(submittedHash), []byte(f.FlagHash)) == 1
-
-		if match {
+		if subtle.ConstantTimeCompare([]byte(submittedHash), []byte(f.FlagHash)) == 1 {
 			matchedFlag = f
 			found = true
 			break
+		}
+	}
+	rows.Close()
+
+	// ── Dynamic flag check ───────────────────────────────────────────────────
+	// 1. Look for a flag generated for THIS user → clean solve.
+	// 2. If not found, check if the value exists for ANY other user's instance
+	//    → flag share detected: still grant the solve (silent detection) and
+	//      log a flag_share_events record for admin review.
+	if !found {
+		var dynFlagID, dynFlagName string
+		var dynPoints int
+		err := h.db.Pool.QueryRow(c.Request.Context(),
+			`SELECT f.id, f.name, f.points
+			   FROM instance_flags inf
+			   JOIN flags f ON f.id = inf.flag_id
+			  WHERE inf.user_id      = $1
+			    AND inf.challenge_id = $2
+			    AND inf.flag_value   = $3`,
+			uid, challengeID, submittedFlag,
+		).Scan(&dynFlagID, &dynFlagName, &dynPoints)
+		if err == nil {
+			// Legit: flag belongs to this user
+			matchedFlag.ID = dynFlagID
+			matchedFlag.Name = dynFlagName
+			matchedFlag.Points = dynPoints
+			found = true
+		} else {
+			// Check whether this exact flag value was generated for someone ELSE
+			var ownerUserID, ownerInstanceID, sharedFlagID, sharedFlagName string
+			var sharedPoints int
+			shareErr := h.db.Pool.QueryRow(c.Request.Context(),
+				`SELECT inf.user_id, inf.instance_id, f.id, f.name, f.points
+				   FROM instance_flags inf
+				   JOIN flags f ON f.id = inf.flag_id
+				  WHERE inf.flag_value   = $1
+				    AND inf.challenge_id = $2
+				    AND inf.user_id     != $3
+				  LIMIT 1`,
+				submittedFlag, challengeID, uid,
+			).Scan(&ownerUserID, &ownerInstanceID, &sharedFlagID, &sharedFlagName, &sharedPoints)
+			if shareErr == nil {
+				// Flag share detected — accept transparently, log silently
+				matchedFlag.ID = sharedFlagID
+				matchedFlag.Name = sharedFlagName
+				matchedFlag.Points = sharedPoints
+				found = true
+
+				_, logErr := h.db.Pool.Exec(c.Request.Context(),
+					`INSERT INTO flag_share_events
+						(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
+						 submitter_user_id, flag_value, submitter_ip, created_at)
+					VALUES
+						(uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, NOW())`,
+					challengeID, sharedFlagID, ownerUserID, ownerInstanceID,
+					uid, submittedFlag, c.ClientIP())
+				if logErr != nil {
+					h.logger.Warn("failed to log flag share event", zap.Error(logErr))
+				} else {
+					h.logger.Warn("FLAG SHARE DETECTED",
+						zap.String("submitter", uid.String()),
+						zap.String("owner", ownerUserID),
+						zap.String("challenge_id", challengeID),
+						zap.String("flag_value", submittedFlag),
+					)
+				}
+			}
 		}
 	}
 

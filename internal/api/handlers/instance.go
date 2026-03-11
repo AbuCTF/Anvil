@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -42,7 +44,7 @@ type InstanceResponse struct {
 	ContainerID    string         `json:"container_id,omitempty"`
 	Status         string         `json:"status"`
 	IPAddress      string         `json:"ip_address,omitempty"`
-	Ports          map[string]int `json:"ports,omitempty"` // service -> port
+	Ports          map[string]int `json:"ports,omitempty"`
 	CreatedAt      int64          `json:"created_at"`
 	ExpiresAt      int64          `json:"expires_at"`
 	ExtensionsUsed int            `json:"extensions_used"`
@@ -111,10 +113,15 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		inst.CreatedAt = createdAt.Unix()
 		inst.ExpiresAt = expiresAt.Unix()
 
-		// Parse ports JSON
+		// Parse ports JSON and build connection info
 		if len(portsJSON) > 0 {
+			if err := json.Unmarshal(portsJSON, &inst.Ports); err != nil {
+				h.logger.Warn("failed to parse assigned_ports", zap.Error(err))
+				inst.Ports = make(map[string]int)
+			}
+		}
+		if inst.Ports == nil {
 			inst.Ports = make(map[string]int)
-			// Would parse JSON here
 		}
 
 		instances = append(instances, inst)
@@ -262,6 +269,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 
 	var instanceIP string
 	var resourceID string // container_id or vm_id
+	var portMappings map[string]int
 
 	// Start instance based on resource type
 	if challenge.ResourceType == "vm" {
@@ -376,6 +384,36 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			},
 		}
 
+		// Parse exposed_ports from challenge definition
+		if len(challenge.ExposedPorts) > 0 {
+			var portConfigs []struct {
+				Port     int    `json:"port"`
+				Protocol string `json:"protocol"`
+			}
+			if err := json.Unmarshal(challenge.ExposedPorts, &portConfigs); err != nil {
+				h.logger.Warn("failed to parse exposed_ports", zap.Error(err))
+			} else {
+				for _, pc := range portConfigs {
+					proto := pc.Protocol
+					if proto == "" {
+						proto = "tcp"
+					}
+					containerReq.ExposedPorts = append(containerReq.ExposedPorts, container.ExposedPort{
+						Port:     pc.Port,
+						Protocol: proto,
+					})
+				}
+			}
+		}
+
+		// Generate per-instance flags for dynamic-flag challenges and inject as env vars
+		envVars, err := h.generateAndStoreDynamicFlags(c.Request.Context(), instanceID, uid, challenge.ID)
+		if err != nil {
+			h.logger.Warn("dynamic flag generation failed, continuing without env injection",
+				zap.Error(err), zap.String("challenge_id", challenge.ID))
+		}
+		containerReq.EnvironmentVars = envVars
+
 		containerInfo, err := h.containerSvc.CreateInstance(c.Request.Context(), containerReq)
 		if err != nil {
 			h.logger.Error("failed to create container", zap.Error(err))
@@ -386,12 +424,16 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		}
 		instanceIP = containerInfo.IPAddress
 		resourceID = containerInfo.ContainerID
+		portMappings = containerInfo.PortMappings
 	}
 
-	// Update instance record
+	// Serialize port mappings for DB storage
+	portsJSON, _ := json.Marshal(portMappings)
+
+	// Update instance record with ports
 	_, err = h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE instances SET container_id = $1, ip_address = $2, status = 'running' WHERE id = $3`,
-		resourceID, instanceIP, instanceID)
+		`UPDATE instances SET container_id = $1, ip_address = $2, assigned_ports = $3, status = 'running' WHERE id = $4`,
+		resourceID, instanceIP, portsJSON, instanceID)
 	if err != nil {
 		h.logger.Error("failed to update instance", zap.Error(err))
 	}
@@ -405,6 +447,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			ContainerID:   resourceID,
 			Status:        "running",
 			IPAddress:     instanceIP,
+			Ports:         portMappings,
 			CreatedAt:     time.Now().Unix(),
 			ExpiresAt:     expiresAt.Unix(),
 			MaxExtensions: maxExts,
@@ -713,4 +756,90 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Instance stopped successfully"})
+}
+
+// generateAndStoreDynamicFlags queries all dynamic flags for a challenge, generates
+// a unique PREFIX{uuid} value per flag, persists them in instance_flags, and returns
+// the set of Docker env-var strings to inject into the container.
+//
+// Env vars injected:
+//
+//	FLAG=<value>              — first (or only) dynamic flag
+//	FLAG_<UPPER_SLUG>=<value> — every dynamic flag by sanitised name
+//
+// Static flags are ignored — they live in flag_hash and need no injection.
+func (h *InstanceHandler) generateAndStoreDynamicFlags(
+	ctx context.Context,
+	instanceID uuid.UUID,
+	userID uuid.UUID,
+	challengeID string,
+) ([]string, error) {
+	rows, err := h.db.Pool.Query(ctx,
+		`SELECT id, name, flag_type, dynamic_flag_prefix
+		   FROM flags
+		  WHERE challenge_id = $1 AND flag_type = 'dynamic'`,
+		challengeID)
+	if err != nil {
+		return nil, fmt.Errorf("querying dynamic flags: %w", err)
+	}
+	defer rows.Close()
+
+	type dynFlag struct {
+		ID     string
+		Name   string
+		Prefix string // resolved prefix, e.g. "H7CTF"
+	}
+	var dynamicFlags []dynFlag
+	for rows.Next() {
+		var id, name, flagType string
+		var prefix *string
+		if err := rows.Scan(&id, &name, &flagType, &prefix); err != nil {
+			continue
+		}
+		p := "FLAG"
+		if prefix != nil && *prefix != "" {
+			p = *prefix
+		}
+		dynamicFlags = append(dynamicFlags, dynFlag{ID: id, Name: name, Prefix: p})
+	}
+
+	if len(dynamicFlags) == 0 {
+		return nil, nil
+	}
+
+	var envVars []string
+	for i, df := range dynamicFlags {
+		// Generate unique value: PREFIX{uuid}
+		flagValue := fmt.Sprintf("%s{%s}", df.Prefix, uuid.New().String())
+
+		// Persist — ON CONFLICT DO NOTHING makes re-create idempotent
+		_, err := h.db.Pool.Exec(ctx,
+			`INSERT INTO instance_flags
+				(id, instance_id, user_id, challenge_id, flag_id, flag_value, created_at)
+			VALUES
+				(uuid_generate_v4(), $1, $2, $3, $4, $5, NOW())
+			ON CONFLICT (instance_id, flag_id) DO NOTHING`,
+			instanceID, userID, challengeID, df.ID, flagValue)
+		if err != nil {
+			h.logger.Error("failed to store dynamic flag",
+				zap.Error(err), zap.String("flag_id", df.ID))
+			continue
+		}
+
+		// First dynamic flag → canonical FLAG env var
+		if i == 0 {
+			envVars = append(envVars, "FLAG="+flagValue)
+		}
+		// Name-scoped var for multi-flag challenges: FLAG_TOKEN_OVERFLOW=...
+		slug := strings.ToUpper(strings.ReplaceAll(df.Name, " ", "_"))
+		slug = strings.Map(func(r rune) rune {
+			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+				return r
+			}
+			return '_'
+		}, slug)
+		envVars = append(envVars, fmt.Sprintf("FLAG_%s=%s", slug, flagValue))
+	}
+
+	return envVars, nil
 }
