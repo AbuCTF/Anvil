@@ -94,6 +94,12 @@ net.ipv6.conf.all.forwarding = 1
 EOF
 sysctl -p /etc/sysctl.d/99-anvil.conf
 
+HOST_INTERFACE=$(ip route show default | awk '/default/ {print $5; exit}')
+if [ -z "$HOST_INTERFACE" ]; then
+  echo "ERROR: Could not detect the host uplink interface"
+  exit 1
+fi
+
 # Create WireGuard config directory
 mkdir -p /etc/wireguard
 
@@ -141,14 +147,26 @@ apt-get install -y docker-compose-plugin
 # Create WireGuard server config template
 echo ""
 echo "=== Creating WireGuard server config ==="
-cat > /etc/wireguard/wg0.conf.template << 'EOF'
+cat > /etc/wireguard/wg0.conf.template << EOF
 [Interface]
 # Server private key - REPLACE THIS
 PrivateKey = SERVER_PRIVATE_KEY
 Address = 10.10.0.1/16
 ListenPort = 51820
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE
+PostUp = iptables -t raw -I PREROUTING 1 -i %i -d 172.20.0.0/16 -j ACCEPT
+PostUp = iptables -I FORWARD 1 -i %i -d 172.20.0.0/16 -j ACCEPT
+PostUp = iptables -I FORWARD 1 -s 172.20.0.0/16 -o %i -j ACCEPT
+PostUp = iptables -A FORWARD -i %i -j ACCEPT
+PostUp = iptables -A FORWARD -o %i -j ACCEPT
+PostUp = iptables -t nat -I POSTROUTING 1 -s 172.20.0.0/16 -d 10.10.0.0/16 -j RETURN
+PostUp = iptables -t nat -A POSTROUTING -o ${HOST_INTERFACE} -j MASQUERADE
+PostDown = iptables -t raw -D PREROUTING -i %i -d 172.20.0.0/16 -j ACCEPT
+PostDown = iptables -D FORWARD -i %i -d 172.20.0.0/16 -j ACCEPT
+PostDown = iptables -D FORWARD -s 172.20.0.0/16 -o %i -j ACCEPT
+PostDown = iptables -D FORWARD -i %i -j ACCEPT
+PostDown = iptables -D FORWARD -o %i -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -s 172.20.0.0/16 -d 10.10.0.0/16 -j RETURN
+PostDown = iptables -t nat -D POSTROUTING -o ${HOST_INTERFACE} -j MASQUERADE
 SaveConfig = false
 
 # Peers will be added dynamically by Anvil
@@ -161,6 +179,7 @@ echo "Next steps:"
 echo "1. Configure WireGuard:"
 echo "   - Copy your server private key to /etc/wireguard/wg0.conf"
 echo "   - Start with: systemctl enable --now wg-quick@wg0"
+echo "   - Template detected uplink interface: ${HOST_INTERFACE}"
 echo ""
 echo "2. Open firewall ports:"
 echo "   - 51820/udp (WireGuard)"

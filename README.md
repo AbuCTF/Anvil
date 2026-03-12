@@ -8,15 +8,7 @@ Self-hosted B2R/AD-CTF platform with VM & container support.
   - Multi-flag challenges
   - Dynamic scoring
 
-#### **Quick Start**
-
-```bash
-openssl rand -base64 32                                  # db password
-openssl rand -hex 64                                     # jwt secret
-wg genkey | tee /tmp/wg-priv | wg pubkey > /tmp/wg-pub  # vpn keys
-```
-
-#### 2. Configure
+#### **Configure**
 
 | File | What |
 |------|------|
@@ -30,12 +22,13 @@ In `docker-compose.yml`:
 - Bind postgres/redis/api/web to `127.0.0.1`
 - API container: `privileged: true`, `pid: "host"` (nsenter for VPN peer management)
 
-#### 3. WireGuard
+#### **WireGuard**
 
 On the host, not in Docker.
 
 ```bash
 sudo apt install wireguard-tools
+HOST_INTERFACE=$(ip route show default | awk '/default/ {print $5; exit}')
 ```
 
 `/etc/wireguard/wg0.conf`:
@@ -44,16 +37,30 @@ sudo apt install wireguard-tools
 PrivateKey = <server private key>
 Address = 10.10.0.1/16
 ListenPort = 51820
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o <interface> -j MASQUERADE
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o <interface> -j MASQUERADE
+PostUp = iptables -t raw -I PREROUTING 1 -i %i -d 172.20.0.0/16 -j ACCEPT
+PostUp = iptables -I FORWARD 1 -i %i -d 172.20.0.0/16 -j ACCEPT
+PostUp = iptables -I FORWARD 1 -s 172.20.0.0/16 -o %i -j ACCEPT
+PostUp = iptables -A FORWARD -i %i -j ACCEPT
+PostUp = iptables -A FORWARD -o %i -j ACCEPT
+PostUp = iptables -t nat -I POSTROUTING 1 -s 172.20.0.0/16 -d 10.10.0.0/16 -j RETURN
+PostUp = iptables -t nat -A POSTROUTING -o <uplink interface> -j MASQUERADE
+PostDown = iptables -t raw -D PREROUTING -i %i -d 172.20.0.0/16 -j ACCEPT
+PostDown = iptables -D FORWARD -i %i -d 172.20.0.0/16 -j ACCEPT
+PostDown = iptables -D FORWARD -s 172.20.0.0/16 -o %i -j ACCEPT
+PostDown = iptables -D FORWARD -i %i -j ACCEPT
+PostDown = iptables -D FORWARD -o %i -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -s 172.20.0.0/16 -d 10.10.0.0/16 -j RETURN
+PostDown = iptables -t nat -D POSTROUTING -o <uplink interface> -j MASQUERADE
 ```
+
+The `raw` table rule is required for Docker bridge networks on `iptables-nft` hosts. Docker installs a direct-access drop in `PREROUTING` for bridge IPs, so VPN traffic for `anvil-challenges` must be accepted before that rule. The `POSTROUTING ... RETURN` rule prevents Docker from masquerading challenge replies back to VPN clients.
 
 ```bash
 echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
 sudo systemctl enable --now wg-quick@wg0
 ```
 
-#### 4. VPN Sync
+#### **VPN Sync**
 
 ```bash
 chmod +x scripts/wg-status-sync.sh
@@ -64,18 +71,18 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now wg-status-sync.timer
 ```
 
-#### 5. Nginx
+#### **Nginx**
 
 - `/api/` → `127.0.0.1:8080`
 - `/` → `127.0.0.1:3000`
 - `set_real_ip_from` Cloudflare ranges + `real_ip_header CF-Connecting-IP`
 
 For large uploads (VM images, bypasses Cloudflare 100MB limit):
-- `upload.your-domain.com` A record → server IP, **DNS only** (grey cloud)
+- `upload.your-domain.com` A record → server IP, **DNS only**
 - Separate nginx block: `client_max_body_size 0`, `proxy_request_buffering off`
 - `sudo certbot --nginx -d upload.your-domain.com`
 
-#### 6. Launch
+#### **Launch**
 
 ```bash
 sudo mkdir -p /var/lib/anvil/images/uploads /var/lib/anvil/images/templates
@@ -89,7 +96,7 @@ docker exec -it anvil-postgres psql -U anvil -d anvil -c \
    VALUES ('admin', 'admin@example.com', crypt('password', gen_salt('bf', 10)), 'admin', 'active');"
 ```
 
-#### OCI notes
+#### **OCI notes**
 
 ```bash
 sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
@@ -98,7 +105,7 @@ sudo iptables -I INPUT -p udp --dport 51820 -j ACCEPT
 sudo netfilter-persistent save
 ```
 
-## Architecture
+#### **Architecture**
 
 ```
 User → WireGuard VPN (10.10.x.x) → Host
@@ -110,27 +117,18 @@ User → WireGuard VPN (10.10.x.x) → Host
                                            └── ...
 ```
 
-No host port bindings. VPN routes `172.20.0.0/16` through the tunnel. Users hit container IPs and native ports directly.
+No host port bindings or NAT. VPN routes both `172.20.0.0/16` (containers) and `10.100.0.0/16` (VMs) through the tunnel. Players hit resource IPs and native ports directly with per-user access control.
 
-## Environment Variables
+If you change `container.network_subnet` in `config/config.yaml`, update both the WireGuard firewall rules above and the routed client `AllowedIPs` to match.
 
-| Variable | Description |
-|----------|-------------|
-| `ANVIL_DATABASE_PASSWORD` | PostgreSQL password |
-| `ANVIL_JWT_SECRET` | JWT signing secret |
-| `ANVIL_VPN_PRIVATE_KEY` | WireGuard server private key |
-| `ANVIL_VPN_PUBLIC_KEY` | WireGuard server public key |
-| `ANVIL_VPN_PUBLIC_ENDPOINT` | Server public IP for VPN clients |
-| `PUBLIC_API_URL` | Frontend → API URL (build arg) |
-
-## Stack
+#### **Stack**
 
 | Component | Tech |
 |-----------|------|
-| API | Go, Gin, pgx |
+| API | Go, Gin, PGX |
 | Frontend | SvelteKit, Tailwind |
 | Database | PostgreSQL 16 |
 | Cache | Redis 7 |
 | VPN | WireGuard |
-| Containers | Docker (bridge network, no host NAT) |
-| VMs | libvirt/QEMU via SSH to remote nodes |
+| Containers | Docker |
+| VMs | libvirt/QEMU |
