@@ -403,10 +403,22 @@ func getRegistryAuth(image string) string {
 		}
 	}
 
-	// Docker API expects base64-encoded JSON: {"username":"...","password":"..."}
-	// The config.json "auth" field is already base64(user:pass)
-	authJSON := fmt.Sprintf(`{"username":"","password":"","auth":"%s"}`, auth.Auth)
-	return base64.StdEncoding.EncodeToString([]byte(authJSON))
+	// Docker API expects base64-encoded JSON with username and password.
+	// The config.json "auth" field is base64(user:pass) — decode and split.
+	decoded, err := base64.StdEncoding.DecodeString(auth.Auth)
+	if err != nil {
+		return ""
+	}
+	parts2 := strings.SplitN(string(decoded), ":", 2)
+	if len(parts2) != 2 {
+		return ""
+	}
+	authJSON, _ := json.Marshal(map[string]string{
+		"username":      parts2[0],
+		"password":      parts2[1],
+		"serveraddress": registry,
+	})
+	return base64.StdEncoding.EncodeToString(authJSON)
 }
 
 // parseCPULimit parses CPU limit string to nanocpus
