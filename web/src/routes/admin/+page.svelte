@@ -1335,7 +1335,7 @@
 					<!-- Flag Share Events -->
 					<div>
 						<div class="flex items-center justify-between mb-4">
-							<h3 class="text-sm font-medium text-stone-400 uppercase tracking-wider">Flag Share Events</h3>
+							<h3 class="text-sm font-medium text-stone-400 tracking-wider">Flag Share Events</h3>
 							<button type="button" on:click={loadIntel} class="text-xs text-stone-500 hover:text-stone-300 flex items-center gap-1 transition">
 								<Icon icon="mdi:refresh" class="w-3.5 h-3.5" />
 								Refresh
@@ -1396,7 +1396,7 @@
 
 					<!-- Instance Flags -->
 					<div>
-						<h3 class="text-sm font-medium text-stone-400 uppercase tracking-wider mb-4">Instance Flags ({instanceFlags.length})</h3>
+						<h3 class="text-sm font-medium text-stone-400 tracking-wider mb-4">Instance Flags ({instanceFlags.length})</h3>
 						{#if intelLoading}
 							<div class="bg-stone-950 border border-stone-800 rounded-lg p-8 flex justify-center">
 								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />

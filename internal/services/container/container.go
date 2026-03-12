@@ -145,10 +145,13 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	if req.Registry != "" {
 		image = req.Registry + "/" + image
 	}
-	if req.Tag != "" {
-		image = image + ":" + req.Tag
-	} else {
-		image = image + ":latest"
+	// Only append tag if image doesn't already contain one
+	if !strings.Contains(image, ":") {
+		if req.Tag != "" {
+			image = image + ":" + req.Tag
+		} else {
+			image = image + ":latest"
+		}
 	}
 
 	// Pull image if needed
