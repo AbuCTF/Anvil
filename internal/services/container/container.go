@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -25,11 +23,6 @@ type Service struct {
 	config config.ContainerConfig
 	client *client.Client
 	logger *zap.Logger
-
-	// Port allocation
-	portMu    sync.Mutex
-	usedPorts map[int]bool
-	portRange [2]int // [start, end]
 
 	// Network management
 	networkID string
@@ -53,11 +46,9 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 	}
 
 	s := &Service{
-		config:    cfg,
-		client:    cli,
-		logger:    logger,
-		usedPorts: make(map[int]bool),
-		portRange: [2]int{32768, 61000}, // Linux ephemeral port range, Docker-managed
+		config: cfg,
+		client: cli,
+		logger: logger,
 	}
 
 	// Ensure network exists
@@ -145,7 +136,6 @@ type CreateInstanceResponse struct {
 	ContainerID   string
 	ContainerName string
 	IPAddress     string
-	PortMappings  map[string]int // {"80/tcp": 32001}
 }
 
 // CreateInstance creates a new challenge container
@@ -166,8 +156,16 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		return nil, fmt.Errorf("failed to pull image: %w", err)
 	}
 
-	// Allocate ports
-	portMappings, portBindings, exposedPorts := s.allocatePorts(req.ExposedPorts)
+	// Build exposed ports set (no host port bindings — VPN-only access)
+	exposedPorts := make(nat.PortSet)
+	for _, p := range req.ExposedPorts {
+		protocol := p.Protocol
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		containerPort := nat.Port(fmt.Sprintf("%d/%s", p.Port, protocol))
+		exposedPorts[containerPort] = struct{}{}
+	}
 
 	// Container name
 	containerName := fmt.Sprintf("anvil-%s-%s", req.ChallengeSlug, req.InstanceID.String()[:8])
@@ -187,7 +185,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	cpuLimit, _ := parseCPULimit(req.CPULimit)
 	memoryLimit, _ := parseMemoryLimit(req.MemoryLimit)
 
-	// Create container
+	// Create container (no PortBindings — VPN users reach container IP directly)
 	resp, err := s.client.ContainerCreate(ctx,
 		&container.Config{
 			Image:        image,
@@ -196,8 +194,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 			Env:          req.EnvironmentVars,
 		},
 		&container.HostConfig{
-			PortBindings: portBindings,
-			NetworkMode:  container.NetworkMode(s.config.NetworkName),
+			NetworkMode: container.NetworkMode(s.config.NetworkName),
 			Resources: container.Resources{
 				NanoCPUs: cpuLimit,
 				Memory:   memoryLimit,
@@ -216,14 +213,12 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		containerName,
 	)
 	if err != nil {
-		s.releasePorts(portMappings)
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
 
 	// Start container
 	if err := s.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		s.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
-		s.releasePorts(portMappings)
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
 
@@ -250,7 +245,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		ContainerID:   resp.ID,
 		ContainerName: containerName,
 		IPAddress:     ipAddress,
-		PortMappings:  portMappings,
 	}, nil
 }
 
@@ -267,19 +261,6 @@ func (s *Service) StartInstance(ctx context.Context, containerID string) error {
 
 // RemoveInstance removes a container
 func (s *Service) RemoveInstance(ctx context.Context, containerID string) error {
-	// Get container info to release ports
-	inspect, err := s.client.ContainerInspect(ctx, containerID)
-	if err == nil {
-		// Release allocated ports
-		for _, bindings := range inspect.HostConfig.PortBindings {
-			for _, binding := range bindings {
-				var port int
-				fmt.Sscanf(binding.HostPort, "%d", &port)
-				s.releasePort(port)
-			}
-		}
-	}
-
 	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{
 		Force:         true,
 		RemoveVolumes: true,
@@ -376,81 +357,6 @@ func (s *Service) pullImage(ctx context.Context, image string) error {
 	// Wait for pull to complete
 	_, err = io.Copy(io.Discard, reader)
 	return err
-}
-
-// allocatePorts allocates host ports for container ports
-func (s *Service) allocatePorts(ports []ExposedPort) (map[string]int, nat.PortMap, nat.PortSet) {
-	s.portMu.Lock()
-	defer s.portMu.Unlock()
-
-	portMappings := make(map[string]int)
-	portBindings := make(nat.PortMap)
-	exposedPorts := make(nat.PortSet)
-
-	for _, p := range ports {
-		protocol := p.Protocol
-		if protocol == "" {
-			protocol = "tcp"
-		}
-
-		// Find available port
-		hostPort := s.findAvailablePort()
-		if hostPort == 0 {
-			continue // No ports available
-		}
-
-		containerPort := nat.Port(fmt.Sprintf("%d/%s", p.Port, protocol))
-		portKey := fmt.Sprintf("%d/%s", p.Port, protocol)
-
-		exposedPorts[containerPort] = struct{}{}
-		portBindings[containerPort] = []nat.PortBinding{
-			{
-				HostIP:   "0.0.0.0",
-				HostPort: fmt.Sprintf("%d", hostPort),
-			},
-		}
-		portMappings[portKey] = hostPort
-		s.usedPorts[hostPort] = true
-	}
-
-	return portMappings, portBindings, exposedPorts
-}
-
-// findAvailablePort finds an available port in the range
-func (s *Service) findAvailablePort() int {
-	for port := s.portRange[0]; port <= s.portRange[1]; port++ {
-		if !s.usedPorts[port] && s.isPortAvailable(port) {
-			return port
-		}
-	}
-	return 0
-}
-
-// isPortAvailable checks if a port is available on the host
-func (s *Service) isPortAvailable(port int) bool {
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		return false
-	}
-	ln.Close()
-	return true
-}
-
-// releasePorts releases allocated ports
-func (s *Service) releasePorts(portMappings map[string]int) {
-	s.portMu.Lock()
-	defer s.portMu.Unlock()
-
-	for _, port := range portMappings {
-		delete(s.usedPorts, port)
-	}
-}
-
-// releasePort releases a single port
-func (s *Service) releasePort(port int) {
-	s.portMu.Lock()
-	defer s.portMu.Unlock()
-	delete(s.usedPorts, port)
 }
 
 // parseCPULimit parses CPU limit string to nanocpus

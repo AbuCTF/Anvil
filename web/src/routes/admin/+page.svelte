@@ -70,10 +70,12 @@
 		docker_image: '',
 		exposed_ports: [{ port: 1337, protocol: 'tcp' }],
 		ova_url: '',
-		vm_template_id: '',  // For selecting existing template
-		vm_source: 'template', // 'template' or 'upload'
+		vm_template_id: '',
+		vm_source: 'template',
 		files: [],
 		// Timer settings
+		instance_timeout: 120,
+		max_extensions: 3,
 		vm_timeout_minutes: 60,
 		vm_max_extensions: 2,
 		vm_extension_minutes: 30,
@@ -436,6 +438,8 @@
 						flag_type: f.flag_type || 'static',
 						dynamic_flag_prefix: f.dynamic_flag_prefix || ''
 					})),
+					instance_timeout: newChallenge.instance_timeout,
+					max_extensions: newChallenge.max_extensions,
 					cooldown_minutes: newChallenge.cooldown_minutes
 				});
 			}
@@ -459,6 +463,8 @@
 				vm_template_id: '',
 				vm_source: 'template',
 				files: [],
+				instance_timeout: 120,
+				max_extensions: 3,
 				vm_timeout_minutes: 60,
 				vm_max_extensions: 2,
 				vm_extension_minutes: 30,
@@ -1329,8 +1335,7 @@
 					<!-- Flag Share Events -->
 					<div>
 						<div class="flex items-center justify-between mb-4">
-							<h2 class="text-sm font-semibold text-stone-300 uppercase tracking-wider flex items-center gap-2">
-								<Icon icon="mdi:shield-alert" class="w-4 h-4 text-red-400" />
+							<h2 class="text-sm font-semibold text-stone-300 uppercase tracking-wider">
 								Flag Share Events
 							</h2>
 							<button type="button" on:click={loadIntel} class="text-xs text-stone-500 hover:text-stone-300 flex items-center gap-1">
@@ -1376,8 +1381,7 @@
 
 					<!-- Instance Flags -->
 					<div>
-						<h2 class="text-sm font-semibold text-stone-300 uppercase tracking-wider flex items-center gap-2 mb-4">
-							<Icon icon="mdi:key-variant" class="w-4 h-4 text-blue-400" />
+						<h2 class="text-sm font-semibold text-stone-300 uppercase tracking-wider mb-4">
 							Instance Flags ({instanceFlags.length})
 						</h2>
 						{#if intelLoading}
@@ -1598,7 +1602,7 @@
 										</div>
 									{/each}
 								</div>
-								<p class="text-stone-500 text-xs mt-1.5">Ports the container exposes (mapped to random host ports)</p>
+								<p class="text-stone-500 text-xs mt-1.5">Ports the challenge service listens on (accessible via VPN)</p>
 							</div>
 
 							<!-- Flags -->
@@ -1637,15 +1641,39 @@
 								</div>
 							</div>
 
-							<!-- Cooldown -->
+							<!-- Timer & Limits -->
 							<div>
-								<label class="block text-sm font-medium text-stone-300 mb-2">Reset Cooldown (minutes)</label>
-								<input
-									type="number"
-									bind:value={newChallenge.cooldown_minutes}
-									min="0"
-									class="w-32 px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
-								/>
+								<label class="block text-sm font-medium text-stone-300 mb-3">Instance Settings</label>
+								<div class="grid grid-cols-3 gap-3">
+									<div>
+										<label class="block text-stone-500 text-xs mb-1">Timeout (min)</label>
+										<input
+											type="number"
+											bind:value={newChallenge.instance_timeout}
+											min="1"
+											class="w-full px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
+										/>
+									</div>
+									<div>
+										<label class="block text-stone-500 text-xs mb-1">Max Extensions</label>
+										<input
+											type="number"
+											bind:value={newChallenge.max_extensions}
+											min="0"
+											class="w-full px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
+										/>
+									</div>
+									<div>
+										<label class="block text-stone-500 text-xs mb-1">Cooldown (min)</label>
+										<input
+											type="number"
+											bind:value={newChallenge.cooldown_minutes}
+											min="0"
+											class="w-full px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
+										/>
+									</div>
+								</div>
+								<p class="text-stone-500 text-xs mt-1.5">How long the instance runs, how many extensions, and cooldown between resets</p>
 							</div>
 						</div>
 					{:else}

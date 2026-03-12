@@ -239,10 +239,10 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Calculate timeout
+	// Calculate timeout (instance_timeout is stored in minutes)
 	timeout := h.config.Container.DefaultTimeout
-	if challenge.InstanceTimeout != nil {
-		timeout = time.Duration(*challenge.InstanceTimeout) * time.Second
+	if challenge.InstanceTimeout != nil && *challenge.InstanceTimeout > 0 {
+		timeout = time.Duration(*challenge.InstanceTimeout) * time.Minute
 	}
 
 	maxExts := 3
@@ -424,7 +424,16 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		}
 		instanceIP = containerInfo.IPAddress
 		resourceID = containerInfo.ContainerID
-		portMappings = containerInfo.PortMappings
+
+		// Store native ports for VPN access (not host-mapped ports)
+		portMappings = make(map[string]int)
+		for _, ep := range containerReq.ExposedPorts {
+			proto := ep.Protocol
+			if proto == "" {
+				proto = "tcp"
+			}
+			portMappings[fmt.Sprintf("%d/%s", ep.Port, proto)] = ep.Port
+		}
 	}
 
 	// Serialize port mappings for DB storage

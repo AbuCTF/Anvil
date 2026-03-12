@@ -78,6 +78,25 @@
 		}
 	}
 
+	async function revertInstance(instanceId: string, challengeSlug: string) {
+		actionLoading[instanceId] = 'reverting';
+		try {
+			await api.stopInstance(instanceId);
+			await api.createInstance(challengeSlug);
+			await loadInstances();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to revert instance';
+		} finally {
+			delete actionLoading[instanceId];
+			actionLoading = { ...actionLoading };
+		}
+	}
+
+	function getConnectionCmd(ip: string, portKey: string): string {
+		const port = portKey.split('/')[0];
+		return `nc ${ip} ${port}`;
+	}
+
 	function formatTimeRemaining(expiresAt: number): string {
 		const now = Math.floor(Date.now() / 1000);
 		const remaining = expiresAt - now;
@@ -217,13 +236,21 @@
 
 							{#if instance.ports && Object.keys(instance.ports).length > 0}
 								<div>
-									<span class="text-stone-500 text-xs uppercase tracking-wider block mb-2">Ports</span>
-									<div class="flex flex-wrap gap-2">
-										{#each Object.entries(instance.ports) as [service, port]}
-											<span class="inline-flex items-center px-3 py-1.5 bg-black text-stone-300 border border-stone-800 rounded text-sm font-mono">
-												<span class="text-stone-500">{service} →</span>
-												<span class="text-white ml-1.5">{port}</span>
-											</span>
+									<span class="text-stone-500 text-xs uppercase tracking-wider block mb-2">Connect</span>
+									<div class="space-y-1.5">
+										{#each Object.entries(instance.ports) as [portKey]}
+											<div class="flex items-center gap-2">
+												<code class="flex-1 px-3 py-1.5 bg-black text-stone-300 border border-stone-800 rounded font-mono text-sm">
+													{getConnectionCmd(instance.ip_address, portKey)}
+												</code>
+												<button 
+													on:click={() => navigator.clipboard.writeText(getConnectionCmd(instance.ip_address, portKey))}
+													class="p-1.5 text-stone-500 hover:text-white transition"
+													title="Copy"
+												>
+													<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
+												</button>
+											</div>
 										{/each}
 									</div>
 								</div>
@@ -264,6 +291,19 @@
 								{:else}
 									<Icon icon="mdi:clock-plus" class="w-5 h-5" />
 									<span>Extend</span>
+								{/if}
+							</button>
+							<button
+								on:click={() => revertInstance(instance.id, instance.challenge_slug)}
+								disabled={!!actionLoading[instance.id]}
+								class="flex-1 flex items-center justify-center space-x-2 px-4 py-3 bg-stone-900 text-white rounded-lg hover:bg-stone-800 disabled:opacity-50 transition border border-stone-800"
+							>
+								{#if actionLoading[instance.id] === 'reverting'}
+									<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />
+									<span>Reverting...</span>
+								{:else}
+									<Icon icon="mdi:restart" class="w-5 h-5" />
+									<span>Revert</span>
 								{/if}
 							</button>
 							<button

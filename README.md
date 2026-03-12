@@ -1,121 +1,118 @@
-Self-hosted B2R/AD-CTF platform. VMs, containers, WireGuard. One box.
+Self-hosted B2R/AD-CTF platform with VM & container support.
 
-`Anvil`
+`Latest Release`
+- v0.1.0 [`in dev`]
+  - Docker container challenges
+  - Full VM support (OVA/VMDK/QCOW2)
+  - WireGuard VPN integration
+  - Multi-flag challenges
+  - Dynamic scoring
 
-v0.1.0 [`forging`]
-- Docker container challenges
-- Full VM support (OVA/VMDK/QCOW2)
-- WireGuard VPN integration
-- Multi-flag challenges
-- Dynamic scoring
-- SvelteKit frontend
+#### **Quick Start**
 
-
-### **Deploy**
-
-Edit these:
-- `.env` — secrets, endpoints, passwords
-- `docker-compose.yml` — production targets, build args, port bindings
-- `config/config.yaml` — VPN keys, platform tuning
-
-Generate secrets:
 ```bash
-openssl rand -base64 32                              # db password
-openssl rand -hex 64                                 # jwt secret
+openssl rand -base64 32                                  # db password
+openssl rand -hex 64                                     # jwt secret
 wg genkey | tee /tmp/wg-priv | wg pubkey > /tmp/wg-pub  # vpn keys
 ```
 
-Key changes in `docker-compose.yml`:
-- web target: `development` → `production`
-- `PUBLIC_API_URL`: `https://your-domain.com`
-- bind postgres/redis/api/web to `127.0.0.1`
-- api container: `privileged: true`, `pid: "host"` (required for VPN peer management via nsenter)
-- pipe all env vars from `.env`
+#### 2. Configure
 
-WireGuard (on host, not in Docker):
+| File | What |
+|------|------|
+| `.env` | Secrets, endpoints, passwords |
+| `docker-compose.yml` | Build targets, port bindings, env passthrough |
+| `config/config.yaml` | Platform tuning, rate limits, scoring mode |
+
+In `docker-compose.yml`:
+- Web build target: `production`
+- `PUBLIC_API_URL`: `https://your-domain.com`
+- Bind postgres/redis/api/web to `127.0.0.1`
+- API container: `privileged: true`, `pid: "host"` (nsenter for VPN peer management)
+
+#### 3. WireGuard
+
+On the host, not in Docker.
+
 ```bash
 sudo apt install wireguard-tools
-# write /etc/wireguard/wg0.conf with your private key
-# PostUp: iptables FORWARD + MASQUERADE on your interface
+```
+
+`/etc/wireguard/wg0.conf`:
+```ini
+[Interface]
+PrivateKey = <server private key>
+Address = 10.10.0.1/16
+ListenPort = 51820
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o <interface> -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o <interface> -j MASQUERADE
+```
+
+```bash
+echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.conf && sudo sysctl -p
 sudo systemctl enable --now wg-quick@wg0
 ```
 
-VPN status sync (updates on /vpn page):
+#### 4. VPN Sync
+
 ```bash
 chmod +x scripts/wg-status-sync.sh
-sed -i 's/\r$//' scripts/wg-status-sync.sh          # fix CRLF if cloned on Windows
+sed -i 's/\r$//' scripts/wg-status-sync.sh
 sudo cp scripts/wg-status-sync.service /etc/systemd/system/
 sudo cp scripts/wg-status-sync.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now wg-status-sync.timer
 ```
 
-Nginx reverse proxy:
+#### 5. Nginx
+
 - `/api/` → `127.0.0.1:8080`
 - `/` → `127.0.0.1:3000`
-- `set_real_ip_from` all Cloudflare ranges + `real_ip_header CF-Connecting-IP`
-- gzip on, static asset caching 1yr
+- `set_real_ip_from` Cloudflare ranges + `real_ip_header CF-Connecting-IP`
 
-**¯\\_(ツ)_/¯**
+For large uploads (VM images, bypasses Cloudflare 100MB limit):
+- `upload.your-domain.com` A record → server IP, **DNS only** (grey cloud)
+- Separate nginx block: `client_max_body_size 0`, `proxy_request_buffering off`
+- `sudo certbot --nginx -d upload.your-domain.com`
 
-Large file uploads (VM images bypass Cloudflare's 100MB limit):
-- Cloudflare DNS: `upload` A record → server IP, **DNS only** (grey cloud, no proxy)
-- Nginx: separate server block for `upload.your-domain.com`
-  - `client_max_body_size 0` (no limit), `proxy_request_buffering off`
-  - Only proxies `/api/` — everything else returns 404
-- SSL required (mixed content): get a cert with certbot before enabling
-- Frontend auto-detects `https://upload.{domain}` for large uploads
+#### 6. Launch
 
-```bash
-sudo apt install certbot python3-certbot-nginx
-# create the nginx server block for upload.your-domain.com first, then:
-sudo certbot --nginx -d upload.your-domain.com
-```
-
-Cloudflare:
-- DNS: A record → server IP, **proxied** (orange cloud)
-- SSL/TLS mode: **Flexible** (origin nginx listens on 80 only)
-  - If you want Full/Strict: add a self-signed or origin cert + nginx 443 listener
-  - 521 error = Cloudflare can't reach origin. Check: SSL mode, port 80/443 open, nginx running
-
-OCI (Oracle Cloud):
-- Security List: allow TCP 80, 443 + UDP 51820
-- OS iptables: `iptables -I INPUT` for same ports (OCI Ubuntu drops by default)
-- `sudo netfilter-persistent save`
-
-Launch:
 ```bash
 sudo mkdir -p /var/lib/anvil/images/uploads /var/lib/anvil/images/templates
 docker compose up -d --build
-```
-
-Verify:
-```bash
 curl https://your-domain.com/api/health
 ```
 
-First admin (inject directly into DB):
 ```bash
 docker exec -it anvil-postgres psql -U anvil -d anvil -c \
   "INSERT INTO users (username, email, password_hash, role, status) \
-   VALUES ('abu', 'admin@abu.rocks', crypt('', gen_salt('bf', 10)), 'admin', 'active');"
+   VALUES ('admin', 'admin@example.com', crypt('password', gen_salt('bf', 10)), 'admin', 'active');"
 ```
 
-To promote an existing user instead:
+#### OCI notes
+
 ```bash
-docker exec -it anvil-postgres psql -U anvil -d anvil -c \
-  "UPDATE users SET role = 'admin' WHERE username = 'youruser';"
+sudo iptables -I INPUT -p tcp --dport 80 -j ACCEPT
+sudo iptables -I INPUT -p tcp --dport 443 -j ACCEPT
+sudo iptables -I INPUT -p udp --dport 51820 -j ACCEPT
+sudo netfilter-persistent save
 ```
 
-#### **VM Support**
+## Architecture
 
-Upload OVA/VMDK/QCOW2 for challenges requiring:
-- Kernel exploits (DirtyCOW, DirtyPipe)
-- Systemd abuse
-- Full network stack
-- Active Directory labs
+```
+User → WireGuard VPN (10.10.x.x) → Host
+                                      ├── Nginx → API (8080) + Web (3000)
+                                      ├── PostgreSQL + Redis
+                                      └── anvil-challenges (172.20.0.0/16)
+                                           ├── container-1 (172.20.x.x)
+                                           ├── container-2 (172.20.x.x)
+                                           └── ...
+```
 
-#### **Environment Variables**
+No host port bindings. VPN routes `172.20.0.0/16` through the tunnel. Users hit container IPs and native ports directly.
+
+## Environment Variables
 
 | Variable | Description |
 |----------|-------------|
@@ -126,15 +123,14 @@ Upload OVA/VMDK/QCOW2 for challenges requiring:
 | `ANVIL_VPN_PUBLIC_ENDPOINT` | Server public IP for VPN clients |
 | `PUBLIC_API_URL` | Frontend → API URL (build arg) |
 
-full list in `.env.example`
+## Stack
 
-#### **Roadmap**
-
-- [x] Core platform (challenges, users, instances)
-- [x] VPN connectivity (WireGuard)
-- [x] VM support (OVA/VMDK/QCOW2)
-- [x] Scoreboard + dynamic scoring
-- [x] SvelteKit frontend
-- [ ] Multi-cloud (AWS, Azure)
-- [ ] Active Directory labs
-- [ ] Attack-Defense mode
+| Component | Tech |
+|-----------|------|
+| API | Go, Gin, pgx |
+| Frontend | SvelteKit, Tailwind |
+| Database | PostgreSQL 16 |
+| Cache | Redis 7 |
+| VPN | WireGuard |
+| Containers | Docker (bridge network, no host NAT) |
+| VMs | libvirt/QEMU via SSH to remote nodes |
