@@ -68,6 +68,7 @@
 		flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 		type: 'container',
 		docker_image: '',
+		container_platform: '',
 		exposed_ports: [{ port: 1337, protocol: 'tcp', service: 'tcp' }],
 		ova_url: '',
 		vm_template_id: '',
@@ -429,6 +430,7 @@
 					category: newChallenge.category,
 					challenge_type: 'docker',
 					container_image: newChallenge.docker_image,
+					container_platform: newChallenge.container_platform,
 					exposed_ports: newChallenge.exposed_ports.filter(p => p.port > 0),
 					flags: newChallenge.flags.map((f, i) => ({
 						name: f.name,
@@ -458,6 +460,7 @@
 				flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 				type: 'container',
 				docker_image: '',
+				container_platform: '',
 				exposed_ports: [{ port: 1337, protocol: 'tcp', service: 'tcp' }],
 				ova_url: '',
 				vm_template_id: '',
@@ -1591,6 +1594,20 @@
 									placeholder="ghcr.io/abuctf/token-overflow:latest"
 								/>
 								<p class="text-stone-500 text-xs mt-2">Pre-built image from a registry (GHCR, Docker Hub, etc.)</p>
+							</div>
+
+							<!-- Platform -->
+							<div>
+								<label class="block text-sm font-medium text-stone-300 mb-2">Platform</label>
+								<select
+									bind:value={newChallenge.container_platform}
+									class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+								>
+									<option value="">Auto (native architecture)</option>
+									<option value="linux/amd64">linux/amd64</option>
+									<option value="linux/arm64">linux/arm64</option>
+								</select>
+								<p class="text-stone-500 text-xs mt-2">Set if the image architecture differs from the server (e.g. amd64 image on ARM host)</p>
 							</div>
 
 							<!-- Exposed Ports -->

@@ -212,26 +212,27 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 
 	// Get challenge details with resource_type
 	var challenge struct {
-		ID              string
-		Name            string
-		ResourceType    string // 'docker' or 'vm'
-		ContainerImage  string
-		ContainerTag    string
-		CPULimit        string
-		MemoryLimit     string
-		ExposedPorts    []byte
-		InstanceTimeout *int
-		MaxExtensions   *int
+		ID                string
+		Name              string
+		ResourceType      string // 'docker' or 'vm'
+		ContainerImage    string
+		ContainerTag      string
+		ContainerPlatform string
+		CPULimit          string
+		MemoryLimit       string
+		ExposedPorts      []byte
+		InstanceTimeout   *int
+		MaxExtensions     *int
 	}
 
 	err = h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT id, name, resource_type, COALESCE(container_image, ''), COALESCE(container_tag, 'latest'),
-		        COALESCE(cpu_limit, '1'), COALESCE(memory_limit, '512m'),
+		        COALESCE(container_platform, ''), COALESCE(cpu_limit, '1'), COALESCE(memory_limit, '512m'),
 		        exposed_ports, instance_timeout, max_extensions
 		 FROM challenges WHERE slug = $1 AND status = 'published'`,
 		req.ChallengeSlug).Scan(
 		&challenge.ID, &challenge.Name, &challenge.ResourceType, &challenge.ContainerImage, &challenge.ContainerTag,
-		&challenge.CPULimit, &challenge.MemoryLimit, &challenge.ExposedPorts,
+		&challenge.ContainerPlatform, &challenge.CPULimit, &challenge.MemoryLimit, &challenge.ExposedPorts,
 		&challenge.InstanceTimeout, &challenge.MaxExtensions,
 	)
 	if err != nil {
@@ -375,6 +376,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			ChallengeSlug: req.ChallengeSlug,
 			Image:         challenge.ContainerImage,
 			Tag:           challenge.ContainerTag,
+			Platform:      challenge.ContainerPlatform,
 			CPULimit:      challenge.CPULimit,
 			MemoryLimit:   challenge.MemoryLimit,
 			Labels: map[string]string{

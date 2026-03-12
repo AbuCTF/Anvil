@@ -217,11 +217,12 @@ type CreateChallengeRequest struct {
 	ChallengeType string `json:"challenge_type"`
 
 	// Docker-specific fields
-	ContainerImage string `json:"container_image"`
-	ContainerTag   string `json:"container_tag"`
-	CPULimit       string `json:"cpu_limit"`
-	MemoryLimit    string `json:"memory_limit"`
-	ExposedPorts   []struct {
+	ContainerImage    string `json:"container_image"`
+	ContainerTag      string `json:"container_tag"`
+	ContainerPlatform string `json:"container_platform"` // e.g. "linux/amd64" for cross-arch
+	CPULimit          string `json:"cpu_limit"`
+	MemoryLimit       string `json:"memory_limit"`
+	ExposedPorts      []struct {
 		Port     int    `json:"port"`
 		Protocol string `json:"protocol"`
 		Service  string `json:"service"`
@@ -378,14 +379,14 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	_, err = tx.Exec(c.Request.Context(),
 		`INSERT INTO challenges (
 			id, name, slug, description, difficulty, category_id, status,
-			container_image, container_tag, cpu_limit, memory_limit,
+			container_image, container_tag, container_platform, cpu_limit, memory_limit,
 			exposed_ports, base_points, instance_timeout, max_extensions,
 			vm_timeout_minutes, vm_max_extensions, vm_extension_minutes, cooldown_minutes,
 			author_name, resource_type, supports_docker, supports_vm,
 			total_flags, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, NOW(), NOW())`,
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NOW(), NOW())`,
 		challengeID, req.Name, challengeSlug, req.Description, req.Difficulty, req.CategoryID,
-		req.ContainerImage, req.ContainerTag, req.CPULimit, req.MemoryLimit,
+		req.ContainerImage, req.ContainerTag, req.ContainerPlatform, req.CPULimit, req.MemoryLimit,
 		portsJSON, req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 		req.VMTimeoutMinutes, req.VMMaxExtensions, req.VMExtensionMinutes, req.CooldownMinutes,
 		req.AuthorName, resourceType, supportsDocker, supportsVM, len(req.Flags),
@@ -755,12 +756,14 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		_, err = h.db.Pool.Exec(c.Request.Context(),
 			`UPDATE challenges SET
 				name = $1, description = $2, difficulty = $3, category_id = $4,
-				container_image = $5, container_tag = $6, cpu_limit = $7, memory_limit = $8,
-				base_points = $9, instance_timeout = $10, max_extensions = $11,
-				author_name = $12, updated_at = NOW()
-			WHERE id = $13`,
+				container_image = $5, container_tag = $6, container_platform = $7,
+				cpu_limit = $8, memory_limit = $9,
+				base_points = $10, instance_timeout = $11, max_extensions = $12,
+				author_name = $13, updated_at = NOW()
+			WHERE id = $14`,
 			req.Name, req.Description, req.Difficulty, req.CategoryID,
-			req.ContainerImage, req.ContainerTag, req.CPULimit, req.MemoryLimit,
+			req.ContainerImage, req.ContainerTag, req.ContainerPlatform,
+			req.CPULimit, req.MemoryLimit,
 			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 			req.AuthorName, challengeID,
 		)

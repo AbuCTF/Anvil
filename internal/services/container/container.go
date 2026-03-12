@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 )
 
@@ -121,6 +122,7 @@ type CreateInstanceRequest struct {
 	Image           string
 	Tag             string
 	Registry        string
+	Platform        string // e.g. "linux/amd64" for cross-arch emulation
 	ExposedPorts    []ExposedPort
 	CPULimit        string
 	MemoryLimit     string
@@ -157,8 +159,8 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		}
 	}
 
-	// Pull image if needed
-	if err := s.pullImage(ctx, image); err != nil {
+	// Pull image if needed (with platform for cross-arch support)
+	if err := s.pullImage(ctx, image, req.Platform); err != nil {
 		return nil, fmt.Errorf("failed to pull image: %w", err)
 	}
 
@@ -191,7 +193,19 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	cpuLimit, _ := parseCPULimit(req.CPULimit)
 	memoryLimit, _ := parseMemoryLimit(req.MemoryLimit)
 
-	// Create container on default network first, then attach to challenge network
+	// Build platform spec for cross-arch emulation (e.g. amd64 image on arm64 host)
+	var platform *ocispec.Platform
+	if req.Platform != "" {
+		parts := strings.SplitN(req.Platform, "/", 3)
+		if len(parts) >= 2 {
+			platform = &ocispec.Platform{OS: parts[0], Architecture: parts[1]}
+			if len(parts) == 3 {
+				platform.Variant = parts[2]
+			}
+		}
+	}
+
+	// Create container directly on the challenge network
 	resp, err := s.client.ContainerCreate(ctx,
 		&container.Config{
 			Image:        image,
@@ -200,6 +214,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 			Env:          req.EnvironmentVars,
 		},
 		&container.HostConfig{
+			NetworkMode: container.NetworkMode(s.config.NetworkName),
 			Resources: container.Resources{
 				NanoCPUs: cpuLimit,
 				Memory:   memoryLimit,
@@ -210,21 +225,12 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 			},
 		},
 		nil,
-		nil,
+		platform,
 		containerName,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
-
-	// Explicitly connect to the challenge network by ID (most reliable method)
-	if err := s.client.NetworkConnect(ctx, s.networkID, resp.ID, nil); err != nil {
-		s.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
-		return nil, fmt.Errorf("failed to connect container to network %s: %w", s.config.NetworkName, err)
-	}
-
-	// Disconnect from default bridge — container should only be on the challenge network
-	_ = s.client.NetworkDisconnect(ctx, "bridge", resp.ID, false)
 
 	// Start container
 	if err := s.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
@@ -232,15 +238,28 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
 
-	// Get container IP
+	// Get container IP — inspect after start to allow Docker to assign the address
 	ipAddress := ""
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 10; i++ {
+		time.Sleep(300 * time.Millisecond)
 		inspect, err := s.client.ContainerInspect(ctx, resp.ID)
 		if err != nil {
 			s.logger.Warn("Failed to inspect container", zap.Error(err))
 			break
 		}
 		if inspect.NetworkSettings != nil {
+			// Log all networks on first attempt for debugging
+			if i == 0 {
+				netNames := make([]string, 0)
+				for k, v := range inspect.NetworkSettings.Networks {
+					netNames = append(netNames, fmt.Sprintf("%s=%s", k, v.IPAddress))
+				}
+				s.logger.Info("Container inspect networks",
+					zap.String("container", resp.ID[:12]),
+					zap.Strings("network_ips", netNames),
+					zap.String("global_ip", inspect.NetworkSettings.IPAddress),
+				)
+			}
 			// Try exact network name match
 			if net, ok := inspect.NetworkSettings.Networks[s.config.NetworkName]; ok && net.IPAddress != "" {
 				ipAddress = net.IPAddress
@@ -256,9 +275,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 			if ipAddress != "" {
 				break
 			}
-		}
-		if i < 4 {
-			time.Sleep(500 * time.Millisecond)
 		}
 	}
 
@@ -367,17 +383,22 @@ func (s *Service) cleanupLoop() {
 }
 
 // pullImage pulls a Docker image
-func (s *Service) pullImage(ctx context.Context, image string) error {
+func (s *Service) pullImage(ctx context.Context, image string, platform string) error {
 	// Check if image exists locally
 	_, _, err := s.client.ImageInspectWithRaw(ctx, image)
 	if err == nil {
-		return nil // Image exists
+		// If a specific platform is requested, always re-pull to ensure correct arch
+		if platform == "" {
+			return nil // Image exists, no platform constraint
+		}
 	}
 
-	s.logger.Info("Pulling image", zap.String("image", image))
+	s.logger.Info("Pulling image", zap.String("image", image), zap.String("platform", platform))
 
 	// Try to load registry auth from Docker config
-	pullOpts := types.ImagePullOptions{}
+	pullOpts := types.ImagePullOptions{
+		Platform: platform, // e.g. "linux/amd64" — empty string means native arch
+	}
 	if authStr := getRegistryAuth(image); authStr != "" {
 		pullOpts.RegistryAuth = authStr
 	}
