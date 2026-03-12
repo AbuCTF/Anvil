@@ -102,6 +102,7 @@ networks:
     driver: bridge
   anvil-challenges:
     driver: bridge
+    name: anvil-challenges
     ipam:
       config:
         - subnet: 172.20.0.0/16
