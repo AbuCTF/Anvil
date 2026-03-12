@@ -446,8 +446,6 @@ type ContainerStats struct {
 	TotalContainers   int
 	RunningContainers int
 	StoppedContainers int
-	UsedPorts         int
-	AvailablePorts    int
 }
 
 func (s *Service) Stats(ctx context.Context) (*ContainerStats, error) {
@@ -467,11 +465,6 @@ func (s *Service) Stats(ctx context.Context) (*ContainerStats, error) {
 			stats.StoppedContainers++
 		}
 	}
-
-	s.portMu.Lock()
-	stats.UsedPorts = len(s.usedPorts)
-	stats.AvailablePorts = s.portRange[1] - s.portRange[0] - len(s.usedPorts)
-	s.portMu.Unlock()
 
 	return stats, nil
 }

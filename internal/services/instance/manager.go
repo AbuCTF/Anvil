@@ -218,9 +218,23 @@ func (m *Manager) createDockerInstance(ctx context.Context, req CreateInstanceRe
 		},
 	}
 
+	// Pass exposed ports to container request
+	for _, p := range req.Ports {
+		containerReq.ExposedPorts = append(containerReq.ExposedPorts, container.ExposedPort{
+			Port:     p,
+			Protocol: "tcp",
+		})
+	}
+
 	cont, err := m.containerSvc.CreateInstance(ctx, containerReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
+	}
+
+	// Build native port map from request ports
+	exposedPorts := make(map[string]int, len(req.Ports))
+	for _, p := range req.Ports {
+		exposedPorts[fmt.Sprintf("%d/tcp", p)] = p
 	}
 
 	now := time.Now()
@@ -233,7 +247,7 @@ func (m *Manager) createDockerInstance(ctx context.Context, req CreateInstanceRe
 		Name:          cont.ContainerName,
 		State:         StateRunning,
 		IPAddress:     cont.IPAddress,
-		ExposedPorts:  cont.PortMappings,
+		ExposedPorts:  exposedPorts,
 		CPU:           req.CPULimit,
 		MemoryMB:      parseMemoryMB(req.MemoryLimit),
 		CreatedAt:     now,
