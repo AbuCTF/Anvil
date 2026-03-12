@@ -66,6 +66,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /root/.ssh:/root/.ssh:ro
+      - /home/ubuntu/.docker/config.json:/root/.docker/config.json:ro
       - ./data/storage:/var/lib/anvil/storage
       - /var/lib/anvil:/var/lib/anvil
     depends_on:

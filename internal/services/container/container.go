@@ -2,8 +2,11 @@ package container
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -351,7 +354,13 @@ func (s *Service) pullImage(ctx context.Context, image string) error {
 
 	s.logger.Info("Pulling image", zap.String("image", image))
 
-	reader, err := s.client.ImagePull(ctx, image, types.ImagePullOptions{})
+	// Try to load registry auth from Docker config
+	pullOpts := types.ImagePullOptions{}
+	if authStr := getRegistryAuth(image); authStr != "" {
+		pullOpts.RegistryAuth = authStr
+	}
+
+	reader, err := s.client.ImagePull(ctx, image, pullOpts)
 	if err != nil {
 		return err
 	}
@@ -360,6 +369,44 @@ func (s *Service) pullImage(ctx context.Context, image string) error {
 	// Wait for pull to complete
 	_, err = io.Copy(io.Discard, reader)
 	return err
+}
+
+// getRegistryAuth reads auth from ~/.docker/config.json for the image's registry
+func getRegistryAuth(image string) string {
+	configFile := "/root/.docker/config.json"
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Auths map[string]struct {
+			Auth string `json:"auth"`
+		} `json:"auths"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+
+	// Extract registry from image reference (e.g. "ghcr.io/user/repo:tag" → "ghcr.io")
+	registry := "docker.io"
+	parts := strings.SplitN(image, "/", 2)
+	if len(parts) > 1 && strings.Contains(parts[0], ".") {
+		registry = parts[0]
+	}
+
+	auth, ok := cfg.Auths[registry]
+	if !ok || auth.Auth == "" {
+		// Try with https:// prefix
+		auth, ok = cfg.Auths["https://"+registry]
+		if !ok || auth.Auth == "" {
+			return ""
+		}
+	}
+
+	// Docker API expects base64-encoded JSON: {"username":"...","password":"..."}
+	// The config.json "auth" field is already base64(user:pass)
+	authJSON := fmt.Sprintf(`{"username":"","password":"","auth":"%s"}`, auth.Auth)
+	return base64.StdEncoding.EncodeToString([]byte(authJSON))
 }
 
 // parseCPULimit parses CPU limit string to nanocpus
