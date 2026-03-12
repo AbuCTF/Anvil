@@ -640,13 +640,30 @@
 										</div>
 										
 										<div>
-											<p class="text-xs text-stone-500 mb-1">IP Address</p>
-											<div class="flex items-center justify-between bg-black rounded px-3 py-2">
-												<code class="text-sm text-white font-mono">{instance.ip_address}</code>
-												<button on:click={() => copyToClipboard(instance.ip_address)} class="text-stone-500 hover:text-white transition">
-													<Icon icon="mdi:content-copy" class="w-4 h-4" />
-												</button>
-											</div>
+											<p class="text-xs text-stone-500 mb-1">Connect</p>
+											{#if instance.ports && Object.keys(instance.ports).length > 0}
+												{#each Object.entries(instance.ports) as [portKey, _]}
+													{@const [port, proto] = portKey.split('/')}
+													{@const isHttp = proto === 'http' || ['80','443','8080','8443','3000'].includes(port)}
+													<div class="flex items-center justify-between bg-black rounded px-3 py-2 mb-1">
+														{#if isHttp}
+															<a href="http://{instance.ip_address}:{port}" target="_blank" rel="noopener" class="text-sm text-blue-400 hover:text-blue-300 font-mono">http://{instance.ip_address}:{port}</a>
+														{:else}
+															<code class="text-sm text-white font-mono">nc {instance.ip_address} {port}</code>
+														{/if}
+														<button on:click={() => copyToClipboard(isHttp ? `http://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`)} class="text-stone-500 hover:text-white transition">
+															<Icon icon="mdi:content-copy" class="w-4 h-4" />
+														</button>
+													</div>
+												{/each}
+											{:else}
+												<div class="flex items-center justify-between bg-black rounded px-3 py-2">
+													<code class="text-sm text-white font-mono">{instance.ip_address}</code>
+													<button on:click={() => copyToClipboard(instance.ip_address)} class="text-stone-500 hover:text-white transition">
+														<Icon icon="mdi:content-copy" class="w-4 h-4" />
+													</button>
+												</div>
+											{/if}
 										</div>
 
 										<div>

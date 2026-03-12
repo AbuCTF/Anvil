@@ -228,16 +228,22 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
 
-	// Get container IP
-	inspect, err := s.client.ContainerInspect(ctx, resp.ID)
-	if err != nil {
-		s.logger.Warn("Failed to inspect container", zap.Error(err))
-	}
-
+	// Get container IP (may take a moment after start on some Docker versions)
 	ipAddress := ""
-	if inspect.NetworkSettings != nil {
-		if net, ok := inspect.NetworkSettings.Networks[s.config.NetworkName]; ok {
-			ipAddress = net.IPAddress
+	for i := 0; i < 3; i++ {
+		inspect, err := s.client.ContainerInspect(ctx, resp.ID)
+		if err != nil {
+			s.logger.Warn("Failed to inspect container", zap.Error(err))
+			break
+		}
+		if inspect.NetworkSettings != nil {
+			if net, ok := inspect.NetworkSettings.Networks[s.config.NetworkName]; ok && net.IPAddress != "" {
+				ipAddress = net.IPAddress
+				break
+			}
+		}
+		if i < 2 {
+			time.Sleep(500 * time.Millisecond)
 		}
 	}
 

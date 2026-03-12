@@ -93,8 +93,16 @@
 	}
 
 	function getConnectionCmd(ip: string, portKey: string): string {
-		const port = portKey.split('/')[0];
+		const [port, proto] = portKey.split('/');
+		if (proto === 'http' || port === '80' || port === '443' || port === '8080' || port === '8443' || port === '3000') {
+			return `http://${ip}:${port}`;
+		}
 		return `nc ${ip} ${port}`;
+	}
+
+	function isHttpPort(portKey: string): boolean {
+		const [port, proto] = portKey.split('/');
+		return proto === 'http' || port === '80' || port === '443' || port === '8080' || port === '8443' || port === '3000';
 	}
 
 	function formatTimeRemaining(expiresAt: number): string {
@@ -240,9 +248,15 @@
 									<div class="space-y-1.5">
 										{#each Object.entries(instance.ports) as [portKey]}
 											<div class="flex items-center gap-2">
-												<code class="flex-1 px-3 py-1.5 bg-black text-stone-300 border border-stone-800 rounded font-mono text-sm">
-													{getConnectionCmd(instance.ip_address, portKey)}
-												</code>
+												{#if isHttpPort(portKey)}
+													<a href={getConnectionCmd(instance.ip_address, portKey)} target="_blank" rel="noopener" class="flex-1 px-3 py-1.5 bg-black text-blue-400 border border-stone-800 rounded font-mono text-sm hover:text-blue-300 transition">
+														{getConnectionCmd(instance.ip_address, portKey)}
+													</a>
+												{:else}
+													<code class="flex-1 px-3 py-1.5 bg-black text-stone-300 border border-stone-800 rounded font-mono text-sm">
+														{getConnectionCmd(instance.ip_address, portKey)}
+													</code>
+												{/if}
 												<button 
 													on:click={() => navigator.clipboard.writeText(getConnectionCmd(instance.ip_address, portKey))}
 													class="p-1.5 text-stone-500 hover:text-white transition"
