@@ -1,3 +1,5 @@
+![logo](/web/static/logo.png)
+
 Self-hosted B2R/AD-CTF platform with VM & container support.
 
 `Latest Release`
