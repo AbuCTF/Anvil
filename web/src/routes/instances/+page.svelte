@@ -93,16 +93,16 @@
 	}
 
 	function getConnectionCmd(ip: string, portKey: string): string {
-		const [port, proto] = portKey.split('/');
-		if (proto === 'http' || port === '80' || port === '443' || port === '8080' || port === '8443' || port === '3000') {
+		const [port, svc] = portKey.split('/');
+		if (svc === 'http') {
 			return `http://${ip}:${port}`;
 		}
 		return `nc ${ip} ${port}`;
 	}
 
 	function isHttpPort(portKey: string): boolean {
-		const [port, proto] = portKey.split('/');
-		return proto === 'http' || port === '80' || port === '443' || port === '8080' || port === '8443' || port === '3000';
+		const [, svc] = portKey.split('/');
+		return svc === 'http';
 	}
 
 	function formatTimeRemaining(expiresAt: number): string {

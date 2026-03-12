@@ -385,11 +385,12 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		}
 
 		// Parse exposed_ports from challenge definition
+		var portConfigs []struct {
+			Port     int    `json:"port"`
+			Protocol string `json:"protocol"`
+			Service  string `json:"service"`
+		}
 		if len(challenge.ExposedPorts) > 0 {
-			var portConfigs []struct {
-				Port     int    `json:"port"`
-				Protocol string `json:"protocol"`
-			}
 			if err := json.Unmarshal(challenge.ExposedPorts, &portConfigs); err != nil {
 				h.logger.Warn("failed to parse exposed_ports", zap.Error(err))
 			} else {
@@ -426,13 +427,14 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		resourceID = containerInfo.ContainerID
 
 		// Store native ports for VPN access (not host-mapped ports)
+		// Port key uses service type (tcp/http) so frontend knows how to display
 		portMappings = make(map[string]int)
-		for _, ep := range containerReq.ExposedPorts {
-			proto := ep.Protocol
-			if proto == "" {
-				proto = "tcp"
+		for i, ep := range containerReq.ExposedPorts {
+			svcType := "tcp"
+			if i < len(portConfigs) && portConfigs[i].Service != "" {
+				svcType = portConfigs[i].Service
 			}
-			portMappings[fmt.Sprintf("%d/%s", ep.Port, proto)] = ep.Port
+			portMappings[fmt.Sprintf("%d/%s", ep.Port, svcType)] = ep.Port
 		}
 	}
 

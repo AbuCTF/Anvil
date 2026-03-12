@@ -68,7 +68,7 @@
 		flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 		type: 'container',
 		docker_image: '',
-		exposed_ports: [{ port: 1337, protocol: 'tcp' }],
+		exposed_ports: [{ port: 1337, protocol: 'tcp', service: 'tcp' }],
 		ova_url: '',
 		vm_template_id: '',
 		vm_source: 'template',
@@ -458,7 +458,7 @@
 				flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 				type: 'container',
 				docker_image: '',
-				exposed_ports: [{ port: 1337, protocol: 'tcp' }],
+				exposed_ports: [{ port: 1337, protocol: 'tcp', service: 'tcp' }],
 				ova_url: '',
 				vm_template_id: '',
 				vm_source: 'template',
@@ -1599,7 +1599,7 @@
 									<label class="block text-sm font-medium text-stone-300">Exposed Ports</label>
 									<button
 										type="button"
-										on:click={() => newChallenge.exposed_ports = [...newChallenge.exposed_ports, { port: 0, protocol: 'tcp' }]}
+										on:click={() => newChallenge.exposed_ports = [...newChallenge.exposed_ports, { port: 0, protocol: 'tcp', service: 'tcp' }]}
 										class="text-xs text-stone-400 hover:text-white transition"
 									>+ Add Port</button>
 								</div>
@@ -1620,6 +1620,13 @@
 												<option value="tcp">TCP</option>
 												<option value="udp">UDP</option>
 											</select>
+											<select
+												bind:value={ep.service}
+												class="px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
+											>
+												<option value="tcp">nc (TCP)</option>
+												<option value="http">HTTP</option>
+											</select>
 											{#if newChallenge.exposed_ports.length > 1}
 												<button type="button" on:click={() => newChallenge.exposed_ports = newChallenge.exposed_ports.filter((_, idx) => idx !== i)} class="p-1.5 text-stone-500 hover:text-red-400 transition">
 													<Icon icon="mdi:close" class="w-4 h-4" />
@@ -1628,7 +1635,7 @@
 										</div>
 									{/each}
 								</div>
-								<p class="text-stone-500 text-xs mt-1.5">Ports the challenge service listens on (accessible via VPN)</p>
+								<p class="text-stone-500 text-xs mt-1.5">Ports the challenge service listens on. Service type controls how the connect command is shown to users.</p>
 							</div>
 
 							<!-- Flags -->

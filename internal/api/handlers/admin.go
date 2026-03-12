@@ -224,6 +224,7 @@ type CreateChallengeRequest struct {
 	ExposedPorts   []struct {
 		Port     int    `json:"port"`
 		Protocol string `json:"protocol"`
+		Service  string `json:"service"`
 	} `json:"exposed_ports"`
 
 	// VM-specific fields

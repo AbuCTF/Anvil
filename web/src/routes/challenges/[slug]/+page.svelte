@@ -643,8 +643,8 @@
 											<p class="text-xs text-stone-500 mb-1">Connect</p>
 											{#if instance.ports && Object.keys(instance.ports).length > 0}
 												{#each Object.entries(instance.ports) as [portKey, _]}
-													{@const [port, proto] = portKey.split('/')}
-													{@const isHttp = proto === 'http' || ['80','443','8080','8443','3000'].includes(port)}
+													{@const [port, svc] = portKey.split('/')}
+													{@const isHttp = svc === 'http'}
 													<div class="flex items-center justify-between bg-black rounded px-3 py-2 mb-1">
 														{#if isHttp}
 															<a href="http://{instance.ip_address}:{port}" target="_blank" rel="noopener" class="text-sm text-blue-400 hover:text-blue-300 font-mono">http://{instance.ip_address}:{port}</a>

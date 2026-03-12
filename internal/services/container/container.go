@@ -191,7 +191,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	cpuLimit, _ := parseCPULimit(req.CPULimit)
 	memoryLimit, _ := parseMemoryLimit(req.MemoryLimit)
 
-	// Create container (no PortBindings — VPN users reach container IP directly)
+	// Create container on default network first, then attach to challenge network
 	resp, err := s.client.ContainerCreate(ctx,
 		&container.Config{
 			Image:        image,
@@ -200,7 +200,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 			Env:          req.EnvironmentVars,
 		},
 		&container.HostConfig{
-			NetworkMode: container.NetworkMode(s.config.NetworkName),
 			Resources: container.Resources{
 				NanoCPUs: cpuLimit,
 				Memory:   memoryLimit,
@@ -210,11 +209,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 				MaximumRetryCount: 3,
 			},
 		},
-		&network.NetworkingConfig{
-			EndpointsConfig: map[string]*network.EndpointSettings{
-				s.config.NetworkName: {},
-			},
-		},
+		nil,
 		nil,
 		containerName,
 	)
@@ -222,27 +217,47 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
 
+	// Explicitly connect to the challenge network by ID (most reliable method)
+	if err := s.client.NetworkConnect(ctx, s.networkID, resp.ID, nil); err != nil {
+		s.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		return nil, fmt.Errorf("failed to connect container to network %s: %w", s.config.NetworkName, err)
+	}
+
+	// Disconnect from default bridge — container should only be on the challenge network
+	_ = s.client.NetworkDisconnect(ctx, "bridge", resp.ID, false)
+
 	// Start container
 	if err := s.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		s.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
 
-	// Get container IP (may take a moment after start on some Docker versions)
+	// Get container IP
 	ipAddress := ""
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		inspect, err := s.client.ContainerInspect(ctx, resp.ID)
 		if err != nil {
 			s.logger.Warn("Failed to inspect container", zap.Error(err))
 			break
 		}
 		if inspect.NetworkSettings != nil {
+			// Try exact network name match
 			if net, ok := inspect.NetworkSettings.Networks[s.config.NetworkName]; ok && net.IPAddress != "" {
 				ipAddress = net.IPAddress
 				break
 			}
+			// Fallback: grab any available IP
+			for _, net := range inspect.NetworkSettings.Networks {
+				if net.IPAddress != "" {
+					ipAddress = net.IPAddress
+					break
+				}
+			}
+			if ipAddress != "" {
+				break
+			}
 		}
-		if i < 2 {
+		if i < 4 {
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
@@ -251,6 +266,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		zap.String("container_id", resp.ID[:12]),
 		zap.String("name", containerName),
 		zap.String("ip", ipAddress),
+		zap.String("network", s.config.NetworkName),
 	)
 
 	return &CreateInstanceResponse{
