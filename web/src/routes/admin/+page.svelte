@@ -1335,44 +1335,59 @@
 					<!-- Flag Share Events -->
 					<div>
 						<div class="flex items-center justify-between mb-4">
-							<h2 class="text-sm font-semibold text-stone-300 uppercase tracking-wider">
-								Flag Share Events
-							</h2>
-							<button type="button" on:click={loadIntel} class="text-xs text-stone-500 hover:text-stone-300 flex items-center gap-1">
+							<h3 class="text-sm font-medium text-stone-400 uppercase tracking-wider">Flag Share Events</h3>
+							<button type="button" on:click={loadIntel} class="text-xs text-stone-500 hover:text-stone-300 flex items-center gap-1 transition">
 								<Icon icon="mdi:refresh" class="w-3.5 h-3.5" />
 								Refresh
 							</button>
 						</div>
 						{#if intelLoading}
-							<div class="flex justify-center py-8">
+							<div class="bg-stone-950 border border-stone-800 rounded-lg p-8 flex justify-center">
 								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />
 							</div>
-						{:else if flagShares.length === 0}
-							<p class="text-stone-500 text-sm text-center py-8">No flag share events detected.</p>
 						{:else}
-							<div class="overflow-x-auto rounded border border-stone-800">
-								<table class="w-full text-sm">
-									<thead class="bg-stone-900 text-stone-400 text-xs uppercase tracking-wider">
-										<tr>
-											<th class="px-4 py-3 text-left">Challenge</th>
-											<th class="px-4 py-3 text-left">Flag Owner</th>
-											<th class="px-4 py-3 text-left">Submitter</th>
-											<th class="px-4 py-3 text-left">IP</th>
-											<th class="px-4 py-3 text-left">Flag Value</th>
-											<th class="px-4 py-3 text-left">Time</th>
+							<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+								<table class="w-full">
+									<thead>
+										<tr class="border-b border-stone-800">
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Challenge</th>
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Flag Owner</th>
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Submitter</th>
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">IP</th>
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Flag Value</th>
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Time</th>
 										</tr>
 									</thead>
 									<tbody class="divide-y divide-stone-800">
 										{#each flagShares as ev}
-											<tr class="hover:bg-stone-900/40">
-												<td class="px-4 py-3 text-white">{ev.challenge_name ?? ev.challenge_id}</td>
-												<td class="px-4 py-3 text-amber-400">{ev.owner_username ?? ev.owner_user_id}</td>
-												<td class="px-4 py-3 text-red-400">{ev.submitter_username ?? ev.submitter_user_id}</td>
-												<td class="px-4 py-3 text-stone-400 font-mono text-xs">{ev.submitter_ip ?? '—'}</td>
-												<td class="px-4 py-3 font-mono text-xs text-stone-300 max-w-xs truncate">{ev.flag_value}</td>
-												<td class="px-4 py-3 text-stone-500 text-xs">{new Date(ev.created_at).toLocaleString()}</td>
+											<tr class="hover:bg-stone-900/50 transition-colors">
+												<td class="px-4 py-3">
+													<span class="text-sm text-white">{ev.challenge_name ?? ev.challenge_id}</span>
+												</td>
+												<td class="px-4 py-3">
+													<span class="text-sm text-amber-400">{ev.owner_username ?? ev.owner_user_id}</span>
+												</td>
+												<td class="px-4 py-3">
+													<span class="text-sm text-red-400">{ev.submitter_username ?? ev.submitter_user_id}</span>
+												</td>
+												<td class="px-4 py-3">
+													<span class="text-xs text-stone-400 font-mono">{ev.submitter_ip ?? '—'}</span>
+												</td>
+												<td class="px-4 py-3">
+													<span class="text-xs text-stone-300 font-mono max-w-xs truncate block">{ev.flag_value}</span>
+												</td>
+												<td class="px-4 py-3">
+													<span class="text-xs text-stone-500">{new Date(ev.created_at).toLocaleString()}</span>
+												</td>
 											</tr>
 										{/each}
+										{#if flagShares.length === 0}
+											<tr>
+												<td colspan="6" class="px-4 py-12 text-center">
+													<p class="text-sm text-stone-500">No flag share events detected</p>
+												</td>
+											</tr>
+										{/if}
 									</tbody>
 								</table>
 							</div>
@@ -1381,35 +1396,46 @@
 
 					<!-- Instance Flags -->
 					<div>
-						<h2 class="text-sm font-semibold text-stone-300 uppercase tracking-wider mb-4">
-							Instance Flags ({instanceFlags.length})
-						</h2>
+						<h3 class="text-sm font-medium text-stone-400 uppercase tracking-wider mb-4">Instance Flags ({instanceFlags.length})</h3>
 						{#if intelLoading}
-							<div class="flex justify-center py-8">
+							<div class="bg-stone-950 border border-stone-800 rounded-lg p-8 flex justify-center">
 								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />
 							</div>
-						{:else if instanceFlags.length === 0}
-							<p class="text-stone-500 text-sm text-center py-8">No instance flags generated yet.</p>
 						{:else}
-							<div class="overflow-x-auto rounded border border-stone-800">
-								<table class="w-full text-sm">
-									<thead class="bg-stone-900 text-stone-400 text-xs uppercase tracking-wider">
-										<tr>
-											<th class="px-4 py-3 text-left">User</th>
-											<th class="px-4 py-3 text-left">Challenge</th>
-											<th class="px-4 py-3 text-left">Flag Value</th>
-											<th class="px-4 py-3 text-left">Instance ID</th>
+							<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+								<table class="w-full">
+									<thead>
+										<tr class="border-b border-stone-800">
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">User</th>
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Challenge</th>
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Flag Value</th>
+											<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Instance ID</th>
 										</tr>
 									</thead>
 									<tbody class="divide-y divide-stone-800">
 										{#each instanceFlags as fl}
-											<tr class="hover:bg-stone-900/40">
-												<td class="px-4 py-3 text-white">{fl.username ?? fl.user_id}</td>
-												<td class="px-4 py-3 text-stone-300">{fl.challenge_name ?? fl.challenge_id}</td>
-												<td class="px-4 py-3 font-mono text-xs text-green-400 max-w-xs truncate">{fl.flag_value}</td>
-												<td class="px-4 py-3 font-mono text-xs text-stone-500">{fl.instance_id}</td>
+											<tr class="hover:bg-stone-900/50 transition-colors">
+												<td class="px-4 py-3">
+													<span class="text-sm text-white">{fl.username ?? fl.user_id}</span>
+												</td>
+												<td class="px-4 py-3">
+													<span class="text-sm text-stone-300">{fl.challenge_name ?? fl.challenge_id}</span>
+												</td>
+												<td class="px-4 py-3">
+													<span class="text-xs text-green-400 font-mono max-w-xs truncate block">{fl.flag_value}</span>
+												</td>
+												<td class="px-4 py-3">
+													<span class="text-xs text-stone-500 font-mono">{fl.instance_id}</span>
+												</td>
 											</tr>
 										{/each}
+										{#if instanceFlags.length === 0}
+											<tr>
+												<td colspan="4" class="px-4 py-12 text-center">
+													<p class="text-sm text-stone-500">No instance flags generated yet</p>
+												</td>
+											</tr>
+										{/if}
 									</tbody>
 								</table>
 							</div>
@@ -1623,6 +1649,7 @@
 												<input type="number" bind:value={fl.points} min="0" class="w-20 px-3 py-1.5 bg-stone-950 border border-stone-700 rounded text-white text-sm focus:outline-none focus:border-stone-500" placeholder="pts" />
 												<select bind:value={fl.flag_type} class="px-2 py-1.5 bg-stone-950 border border-stone-700 rounded text-white text-xs focus:outline-none focus:border-stone-500">
 													<option value="static">Static</option>
+													<option value="regex">Regex</option>
 													<option value="dynamic">Dynamic</option>
 												</select>
 												{#if newChallenge.flags.length > 1}
@@ -1633,6 +1660,9 @@
 											</div>
 											{#if fl.flag_type === 'static'}
 												<input type="text" bind:value={fl.flag} class="w-full px-3 py-1.5 bg-stone-950 border border-stone-700 rounded text-white font-mono text-sm focus:outline-none focus:border-stone-500" placeholder="flag&#123;value&#125;" />
+											{:else if fl.flag_type === 'regex'}
+												<input type="text" bind:value={fl.flag} class="w-full px-3 py-1.5 bg-stone-950 border border-stone-700 rounded text-white font-mono text-sm focus:outline-none focus:border-stone-500" placeholder="H7CTF&#123;[a-f0-9-]+&#125; — container generates flag, regex validates" />
+												<p class="text-stone-600 text-xs mt-1">Duplicate submissions across users trigger flag-share alerts in Audit</p>
 											{:else}
 												<input type="text" bind:value={fl.dynamic_flag_prefix} class="w-full px-3 py-1.5 bg-stone-950 border border-stone-700 rounded text-white font-mono text-sm focus:outline-none focus:border-stone-500" placeholder="Prefix (e.g. H7CTF) — generates H7CTF&#123;uuid&#125; per user" />
 											{/if}

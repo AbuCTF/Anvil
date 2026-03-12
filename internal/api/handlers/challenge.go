@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -447,6 +448,69 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		}
 	}
 	rows.Close()
+
+	// ── Regex flag check ─────────────────────────────────────────────────────
+	// Container generates its own dynamic flag; admin defines a regex pattern.
+	// Any submission matching the regex is correct. Duplicate values across
+	// users trigger a silent flag-share event.
+	if !found {
+		regexRows, regexErr := h.db.Pool.Query(c.Request.Context(),
+			`SELECT f.id, f.flag_hash, f.name, f.points
+			   FROM flags f
+			  WHERE f.challenge_id = $1 AND f.flag_type = 'regex'`,
+			challengeID)
+		if regexErr == nil {
+			for regexRows.Next() {
+				var fID, pattern, fName string
+				var fPoints int
+				if err := regexRows.Scan(&fID, &pattern, &fName, &fPoints); err != nil {
+					continue
+				}
+				re, err := regexp.Compile(pattern)
+				if err != nil {
+					h.logger.Warn("invalid regex flag pattern", zap.String("flag_id", fID), zap.Error(err))
+					continue
+				}
+				if re.MatchString(submittedFlag) {
+					matchedFlag.ID = fID
+					matchedFlag.Name = fName
+					matchedFlag.Points = fPoints
+					found = true
+
+					// Flag share detection: same exact value previously submitted by another user
+					var priorUserID string
+					shareErr := h.db.Pool.QueryRow(c.Request.Context(),
+						`SELECT user_id FROM flag_attempts
+						  WHERE submitted_flag = $1 AND challenge_id = $2
+						    AND is_correct = true AND user_id != $3
+						  LIMIT 1`,
+						submittedFlag, challengeID, uid,
+					).Scan(&priorUserID)
+					if shareErr == nil {
+						_, logErr := h.db.Pool.Exec(c.Request.Context(),
+							`INSERT INTO flag_share_events
+								(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
+								 submitter_user_id, flag_value, submitter_ip, created_at)
+							 VALUES
+								(uuid_generate_v4(), $1, $2, $3, NULL, $4, $5, $6, NOW())`,
+							challengeID, fID, priorUserID, uid, submittedFlag, c.ClientIP())
+						if logErr != nil {
+							h.logger.Warn("failed to log regex flag share event", zap.Error(logErr))
+						} else {
+							h.logger.Warn("FLAG SHARE DETECTED (regex)",
+								zap.String("submitter", uid.String()),
+								zap.String("prior_user", priorUserID),
+								zap.String("challenge_id", challengeID),
+								zap.String("flag_value", submittedFlag),
+							)
+						}
+					}
+					break
+				}
+			}
+			regexRows.Close()
+		}
+	}
 
 	// ── Dynamic flag check ───────────────────────────────────────────────────
 	// 1. Look for a flag generated for THIS user → clean solve.

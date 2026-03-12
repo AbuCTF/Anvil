@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -417,10 +418,16 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		if flagType == "" {
 			flagType = "static"
 		}
-		// Hash only for static flags; dynamic flags have no pre-set value
+		// Hash only for static flags; regex stores pattern as-is; dynamic has no pre-set value
 		flagHash := ""
 		if flagType == "static" {
 			flagHash = hashFlag(flag.Flag)
+		} else if flagType == "regex" {
+			if _, err := regexp.Compile(flag.Flag); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid regex pattern for flag '" + flag.Name + "': " + err.Error()})
+				return
+			}
+			flagHash = flag.Flag
 		}
 		var dynPrefix *string
 		if flag.DynamicFlagPrefix != "" {
@@ -916,6 +923,12 @@ func (h *AdminChallengeHandler) CreateFlag(c *gin.Context) {
 	flagHash := ""
 	if flagType == "static" {
 		flagHash = hashFlag(req.Flag)
+	} else if flagType == "regex" {
+		if _, err := regexp.Compile(req.Flag); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid regex pattern: " + err.Error()})
+			return
+		}
+		flagHash = req.Flag
 	}
 	var dynPrefix *string
 	if req.DynamicFlagPrefix != "" {
@@ -966,7 +979,16 @@ func (h *AdminChallengeHandler) UpdateFlag(c *gin.Context) {
 
 	// Only update flag_hash if a new flag value is provided
 	if req.Flag != "" {
-		flagHash := hashFlag(req.Flag)
+		var flagHash string
+		if req.FlagType == "regex" {
+			if _, err := regexp.Compile(req.Flag); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid regex pattern: " + err.Error()})
+				return
+			}
+			flagHash = req.Flag
+		} else {
+			flagHash = hashFlag(req.Flag)
+		}
 		_, err := h.db.Pool.Exec(c.Request.Context(),
 			`UPDATE flags SET name = $1, flag_hash = $2, points = $3, sort_order = $4, case_sensitive = $5, updated_at = NOW()
 			 WHERE id = $6`,
