@@ -626,10 +626,10 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// Record solve (with ON CONFLICT to handle race conditions)
 	solveID := uuid.New()
 	result, err := h.db.Pool.Exec(c.Request.Context(),
-		`INSERT INTO solves (id, user_id, flag_id, points_awarded, solved_at)
-		 VALUES ($1, $2, $3, $4, NOW())
+		`INSERT INTO solves (id, user_id, challenge_id, flag_id, points_awarded, solved_at)
+		 VALUES ($1, $2, $3, $4, $5, NOW())
 		 ON CONFLICT (user_id, flag_id) DO NOTHING`,
-		solveID, uid, matchedFlag.ID, matchedFlag.Points)
+		solveID, uid, challengeID, matchedFlag.ID, matchedFlag.Points)
 
 	if err != nil {
 		h.logger.Error("failed to record solve", zap.Error(err))
