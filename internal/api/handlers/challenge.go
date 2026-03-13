@@ -418,8 +418,8 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// the user is locked out for flagLockoutDuration.
 	const (
 		flagLockoutThreshold = 10
-		flagLockoutWindow    = 5 * 60  // 5 minutes in seconds
-		flagLockoutDuration  = 10 * 60 // 10 minutes in seconds
+		flagLockoutWindow    = 5 * time.Minute
+		flagLockoutDuration  = 10 * time.Minute
 	)
 	var lockedUntil *time.Time
 	var wrongAttempts int
@@ -442,10 +442,13 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 	// Reset window if the last tracking window has expired
-	if lockErr == nil && time.Since(firstAttemptAt).Seconds() > flagLockoutWindow {
-		h.db.Pool.Exec(c.Request.Context(), //nolint:errcheck
+	if lockErr == nil && time.Since(firstAttemptAt) > flagLockoutWindow {
+		if _, delErr := h.db.Pool.Exec(c.Request.Context(),
 			`DELETE FROM flag_attempt_lockouts WHERE user_id = $1 AND challenge_id = $2`,
-			uid, challengeID)
+			uid, challengeID,
+		); delErr != nil {
+			h.logger.Warn("failed to reset lockout tracking", zap.Error(delErr))
+		}
 		wrongAttempts = 0
 	}
 
@@ -651,10 +654,10 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		newCount := wrongAttempts + 1
 		var newLockedUntil interface{}
 		if newCount >= flagLockoutThreshold {
-			t := time.Now().Add(flagLockoutDuration * time.Second)
+			t := time.Now().Add(flagLockoutDuration)
 			newLockedUntil = t
 		}
-		h.db.Pool.Exec(c.Request.Context(), //nolint:errcheck
+		if _, upsertErr := h.db.Pool.Exec(c.Request.Context(),
 			`INSERT INTO flag_attempt_lockouts (user_id, challenge_id, wrong_attempts, first_attempt_at, locked_until, updated_at)
 			 VALUES ($1, $2, $3, NOW(), $4, NOW())
 			 ON CONFLICT (user_id, challenge_id) DO UPDATE
@@ -662,7 +665,9 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			     locked_until   = COALESCE($4, flag_attempt_lockouts.locked_until),
 			     updated_at     = NOW()`,
 			uid, challengeID, newCount, newLockedUntil,
-		)
+		); upsertErr != nil {
+			h.logger.Warn("failed to update lockout tracking", zap.Error(upsertErr))
+		}
 
 		c.JSON(http.StatusOK, gin.H{
 			"correct": false,
@@ -672,9 +677,12 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	}
 
 	// Correct submission: clear any lockout entry
-	h.db.Pool.Exec(c.Request.Context(), //nolint:errcheck
+	if _, delErr := h.db.Pool.Exec(c.Request.Context(),
 		`DELETE FROM flag_attempt_lockouts WHERE user_id = $1 AND challenge_id = $2`,
-		uid, challengeID)
+		uid, challengeID,
+	); delErr != nil {
+		h.logger.Warn("failed to clear lockout on correct submission", zap.Error(delErr))
+	}
 
 	// Check if already solved
 	var alreadySolved bool

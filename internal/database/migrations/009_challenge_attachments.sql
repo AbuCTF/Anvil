@@ -16,7 +16,7 @@ CREATE TABLE challenge_attachments (
     content_type VARCHAR(200),
 
     -- Storage
-    storage_key VARCHAR(500) NOT NULL UNIQUE,  -- Path under ./data/storage/
+    storage_key VARCHAR(500) NOT NULL UNIQUE,  -- Relative path under the storage backend root (e.g. 'challenge-attachments/{challenge_id}/{uuid}')
 
     -- Optional metadata
     description TEXT,

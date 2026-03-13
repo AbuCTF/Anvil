@@ -134,7 +134,11 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	// Optional fields
 	description := c.PostForm("description")
 	sortOrder := 0
-	fmt.Sscanf(c.PostForm("sort_order"), "%d", &sortOrder)
+	if soStr := c.PostForm("sort_order"); soStr != "" {
+		if n, err := fmt.Sscanf(soStr, "%d", &sortOrder); n != 1 || err != nil {
+			sortOrder = 0
+		}
+	}
 
 	// Get uploader ID
 	uploaderID, _ := c.Get("user_id")
@@ -258,7 +262,9 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 	c.Header("X-Content-Type-Options", "nosniff")
 
 	c.Status(http.StatusOK)
-	io.Copy(c.Writer, reader) //nolint:errcheck
+	if _, copyErr := io.Copy(c.Writer, reader); copyErr != nil {
+		h.logger.Warn("attachment download interrupted", zap.Error(copyErr), zap.String("key", storageKey))
+	}
 }
 
 // ListPublic is used by the challenge detail endpoint to embed attachments.

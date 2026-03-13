@@ -171,19 +171,13 @@
 				flagInput = '';
 				await loadChallenge();
 			}
-		} catch (e: any) {
+		} catch (e: unknown) {
 			// Handle brute-force lockout (429)
-			if (e instanceof Error && e.message && e.message.toLowerCase().includes('too many')) {
-				submitResult = {
-					correct: false,
-					message: e.message
-				};
-			} else {
-				submitResult = {
-					correct: false,
-					message: e instanceof Error ? e.message : 'Submission failed'
-				};
-			}
+			const msg = e instanceof Error ? e.message : 'Submission failed';
+			submitResult = {
+				correct: false,
+				message: msg
+			};
 		} finally {
 			submitting = false;
 		}
