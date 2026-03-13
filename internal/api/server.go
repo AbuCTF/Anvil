@@ -104,9 +104,15 @@ func (s *Server) setupRouter() {
 				auth.POST("/logout", authHandler.Logout)
 			}
 
-			// Public challenge listing (if scoreboard is public)
-			public.GET("/challenges", handlers.NewChallengeHandler(s.config, s.db, s.logger).List)
-			public.GET("/challenges/:slug", handlers.NewChallengeHandler(s.config, s.db, s.logger).Get)
+			// Public challenge listing — optionally enriched with per-user progress
+			// when the caller supplies a valid JWT.
+			challengesPublic := v1.Group("")
+			challengesPublic.Use(middleware.OptionalAuth(s.config, s.db))
+			{
+				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.logger)
+				challengesPublic.GET("/challenges", challengeHandler.List)
+				challengesPublic.GET("/challenges/:slug", challengeHandler.Get)
+			}
 
 			// Public scoreboard (if enabled)
 			public.GET("/scoreboard", handlers.NewScoreboardHandler(s.config, s.db, s.logger).Get)

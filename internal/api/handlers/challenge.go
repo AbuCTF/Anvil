@@ -91,8 +91,13 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 	// Get user ID if authenticated
 	var userID *uuid.UUID
 	if id, exists := c.Get("user_id"); exists {
-		uid, _ := uuid.Parse(id.(string))
-		userID = &uid
+		if uid, ok := id.(uuid.UUID); ok {
+			userID = &uid
+		} else if uidStr, ok := id.(string); ok {
+			if uid, err := uuid.Parse(uidStr); err == nil {
+				userID = &uid
+			}
+		}
 	}
 
 	// Query published challenges
@@ -169,8 +174,9 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		if uid, ok := id.(uuid.UUID); ok {
 			userID = &uid
 		} else if uidStr, ok := id.(string); ok {
-			uid, _ := uuid.Parse(uidStr)
-			userID = &uid
+			if uid, err := uuid.Parse(uidStr); err == nil {
+				userID = &uid
+			}
 		}
 	}
 	if role, exists := c.Get("role"); exists {
@@ -691,8 +697,13 @@ func (h *ChallengeHandler) GetHints(c *gin.Context) {
 	// Get user ID if authenticated
 	var userID *uuid.UUID
 	if id, exists := c.Get("user_id"); exists {
-		uid, _ := uuid.Parse(id.(string))
-		userID = &uid
+		if uid, ok := id.(uuid.UUID); ok {
+			userID = &uid
+		} else if uidStr, ok := id.(string); ok {
+			if uid, err := uuid.Parse(uidStr); err == nil {
+				userID = &uid
+			}
+		}
 	}
 
 	// Get challenge ID
