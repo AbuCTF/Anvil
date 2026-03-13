@@ -634,65 +634,91 @@
 							<div class="p-4">
 								{#if instance}
 									<div class="space-y-4">
+										<!-- Status -->
 										<div class="flex items-center gap-2">
 											<span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
 											<span class="text-green-400 text-sm font-medium">Running</span>
 										</div>
-										
+
+										<!-- Connection Details -->
 										<div>
-											<p class="text-xs text-stone-500 mb-1">Connect</p>
+											<p class="text-xs font-medium text-stone-500 uppercase tracking-wider mb-2">Connect</p>
 											{#if instance.ports && Object.keys(instance.ports).length > 0}
-												{#each Object.entries(instance.ports) as [portKey, _]}
-													{@const [port, svc] = portKey.split('/')}
-													{@const isHttp = svc === 'http'}
-													<div class="flex items-center justify-between bg-black rounded px-3 py-2 mb-1">
-														{#if isHttp}
-															<a href="http://{instance.ip_address}:{port}" target="_blank" rel="noopener" class="text-sm text-blue-400 hover:text-blue-300 font-mono">http://{instance.ip_address}:{port}</a>
-														{:else}
-															<code class="text-sm text-white font-mono">nc {instance.ip_address} {port}</code>
-														{/if}
-														<button on:click={() => copyToClipboard(isHttp ? `http://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`)} class="text-stone-500 hover:text-white transition">
-															<Icon icon="mdi:content-copy" class="w-4 h-4" />
-														</button>
-													</div>
-												{/each}
+												<div class="space-y-2">
+													{#each Object.entries(instance.ports) as [portKey, _]}
+														{@const [port, svc] = portKey.split('/')}
+														{@const isHttp = svc === 'http' || svc === 'https'}
+														{@const connStr = isHttp ? `http://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`}
+														<div class="bg-black border border-stone-800 rounded-lg overflow-hidden">
+															<div class="flex items-center gap-2 px-3 py-1.5 border-b border-stone-800/60 bg-stone-900/40">
+																<Icon
+																	icon={isHttp ? 'mdi:web' : 'mdi:console'}
+																	class="w-3.5 h-3.5 {isHttp ? 'text-blue-400' : 'text-green-400'}"
+																/>
+																<span class="text-xs font-medium {isHttp ? 'text-blue-400' : 'text-green-400'} uppercase tracking-wider">
+																	{isHttp ? 'HTTP' : 'TCP'}
+																</span>
+																<span class="text-xs text-stone-600 ml-auto">:{port}</span>
+															</div>
+															<div class="flex items-center justify-between px-3 py-2">
+																{#if isHttp}
+																	<a href="http://{instance.ip_address}:{port}" target="_blank" rel="noopener" class="text-xs text-blue-400 hover:text-blue-300 font-mono truncate flex-1 min-w-0">
+																		http://{instance.ip_address}:{port}
+																	</a>
+																{:else}
+																	<code class="text-xs text-stone-300 font-mono">{connStr}</code>
+																{/if}
+																<button
+																	on:click={() => copyToClipboard(connStr)}
+																	class="ml-2 flex-shrink-0 text-stone-600 hover:text-stone-300 transition"
+																	title="Copy"
+																>
+																	<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
+																</button>
+															</div>
+														</div>
+													{/each}
+												</div>
 											{:else}
-												<div class="flex items-center justify-between bg-black rounded px-3 py-2">
-													<code class="text-sm text-white font-mono">{instance.ip_address}</code>
-													<button on:click={() => copyToClipboard(instance.ip_address)} class="text-stone-500 hover:text-white transition">
-														<Icon icon="mdi:content-copy" class="w-4 h-4" />
+												<div class="bg-black border border-stone-800 rounded-lg px-3 py-2 flex items-center justify-between">
+													<code class="text-xs text-stone-300 font-mono">{instance.ip_address}</code>
+													<button on:click={() => copyToClipboard(instance.ip_address)} class="ml-2 text-stone-600 hover:text-stone-300 transition">
+														<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
 													</button>
 												</div>
 											{/if}
 										</div>
 
-										<div>
-											<p class="text-xs text-stone-500 mb-1">Time Remaining</p>
-											<p class="text-lg font-mono {getTimeColorClass(instance.expires_at)}">{timeRemaining}</p>
-											{#if getSecondsRemaining(instance.expires_at) < 300}
-												<p class="text-xs text-red-400 mt-1">Instance will shut down soon!</p>
-											{/if}
+										<!-- Time & Extensions -->
+										<div class="grid grid-cols-2 gap-3">
+											<div class="bg-black border border-stone-800 rounded-lg p-3">
+												<p class="text-xs text-stone-500 mb-1">Time Left</p>
+												<p class="text-base font-mono font-semibold {getTimeColorClass(instance.expires_at)}">{timeRemaining}</p>
+												{#if getSecondsRemaining(instance.expires_at) < 300}
+													<p class="text-xs text-red-400 mt-1">Expiring soon!</p>
+												{/if}
+											</div>
+											<div class="bg-black border border-stone-800 rounded-lg p-3">
+												<p class="text-xs text-stone-500 mb-1">Extensions</p>
+												<p class="text-base font-semibold text-stone-300">{instance.extensions_used || 0}<span class="text-stone-600 font-normal text-sm"> / {instance.max_extensions || 3}</span></p>
+											</div>
 										</div>
 
-										<div>
-											<p class="text-xs text-stone-500 mb-1">Extensions</p>
-											<p class="text-sm text-stone-400">{instance.extensions_used || 0} / {instance.max_extensions || 3} used</p>
-										</div>
-
+										<!-- Actions -->
 										<div class="flex gap-2">
-											<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs py-2 bg-stone-900 text-stone-300 rounded hover:bg-stone-800 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1">
+											<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs py-2 bg-stone-900 text-stone-300 rounded-lg border border-stone-800 hover:bg-stone-800 hover:border-stone-700 transition disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
 												{#if instanceAction === 'extending'}
-													<Icon icon="mdi:loading" class="w-3 h-3 animate-spin" />
+													<Icon icon="mdi:loading" class="w-3.5 h-3.5 animate-spin" />
 												{:else}
-													<Icon icon="mdi:clock-plus-outline" class="w-3 h-3" />
+													<Icon icon="mdi:clock-plus-outline" class="w-3.5 h-3.5" />
 												{/if}
 												{instanceAction === 'extending' ? 'Extending...' : 'Extend'}
 											</button>
-											<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs py-2 bg-red-500/10 text-red-400 rounded hover:bg-red-500/20 transition disabled:opacity-50 flex items-center justify-center gap-1">
+											<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs py-2 bg-red-500/10 text-red-400 rounded-lg border border-red-900/40 hover:bg-red-500/20 transition disabled:opacity-40 flex items-center justify-center gap-1.5">
 												{#if instanceAction === 'stopping'}
-													<Icon icon="mdi:loading" class="w-3 h-3 animate-spin" />
+													<Icon icon="mdi:loading" class="w-3.5 h-3.5 animate-spin" />
 												{:else}
-													<Icon icon="mdi:stop" class="w-3 h-3" />
+													<Icon icon="mdi:stop-circle-outline" class="w-3.5 h-3.5" />
 												{/if}
 												{instanceAction === 'stopping' ? 'Stopping...' : 'Stop'}
 											</button>
