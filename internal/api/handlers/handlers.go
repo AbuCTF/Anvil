@@ -10,6 +10,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
 	"github.com/gin-gonic/gin"
@@ -48,13 +49,19 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 
 // ChallengeHandler - methods implemented in challenge.go
 type ChallengeHandler struct {
-	config *config.Config
-	db     *database.DB
-	logger *zap.Logger
+	config         *config.Config
+	db             *database.DB
+	logger         *zap.Logger
+	attachmentHdlr *AttachmentHandler
 }
 
 func NewChallengeHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *ChallengeHandler {
 	return &ChallengeHandler{config: cfg, db: db, logger: logger}
+}
+
+// NewChallengeHandlerWithAttachments creates a ChallengeHandler with attachment support.
+func NewChallengeHandlerWithAttachments(cfg *config.Config, db *database.DB, logger *zap.Logger, ah *AttachmentHandler) *ChallengeHandler {
+	return &ChallengeHandler{config: cfg, db: db, logger: logger, attachmentHdlr: ah}
 }
 
 // ScoreboardHandler - methods implemented in scoreboard.go
@@ -538,6 +545,17 @@ func NewStatsHandler(db *database.DB, logger *zap.Logger) *StatsHandler {
 }
 
 // Get method is implemented in admin.go
+
+// AttachmentHandler handles challenge file attachment operations
+type AttachmentHandler struct {
+	db         *database.DB
+	storageSvc storage.StorageBackend
+	logger     *zap.Logger
+}
+
+func NewAttachmentHandler(db *database.DB, storageSvc storage.StorageBackend, logger *zap.Logger) *AttachmentHandler {
+	return &AttachmentHandler{db: db, storageSvc: storageSvc, logger: logger}
+}
 
 // logAdminAction logs an admin action to the audit log
 func logAdminAction(db *database.DB, c *gin.Context, userID, action, resourceType, resourceID string, metadata map[string]interface{}) {

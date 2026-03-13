@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -60,6 +61,7 @@ type ChallengeDetailResponse struct {
 	ExposedPorts    []models.ExposedPort `json:"exposed_ports"`
 	Flags           []FlagResponse       `json:"flags"`
 	Hints           []HintResponse       `json:"hints"`
+	Attachments     []AttachmentResponse `json:"attachments"`
 	ReleaseDate     *time.Time           `json:"release_date,omitempty"`
 	InstanceTimeout *int                 `json:"instance_timeout,omitempty"`
 	MaxExtensions   *int                 `json:"max_extensions,omitempty"`
@@ -304,6 +306,16 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		ch.IsSolved = solveCount >= ch.TotalFlags && ch.TotalFlags > 0
 	}
 
+	// Attach file attachments
+	if h.attachmentHdlr != nil {
+		if attachments, err := h.attachmentHdlr.ListPublic(c, ch.ID); err == nil {
+			ch.Attachments = attachments
+		}
+	}
+	if ch.Attachments == nil {
+		ch.Attachments = []AttachmentResponse{}
+	}
+
 	c.JSON(http.StatusOK, ch)
 }
 
@@ -399,6 +411,42 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
+	}
+
+	// ── Brute-force lockout check ─────────────────────────────────────────────
+	// After flagLockoutThreshold consecutive wrong attempts in flagLockoutWindow,
+	// the user is locked out for flagLockoutDuration.
+	const (
+		flagLockoutThreshold = 10
+		flagLockoutWindow    = 5 * 60  // 5 minutes in seconds
+		flagLockoutDuration  = 10 * 60 // 10 minutes in seconds
+	)
+	var lockedUntil *time.Time
+	var wrongAttempts int
+	var firstAttemptAt time.Time
+	lockRow := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT wrong_attempts, first_attempt_at, locked_until
+		 FROM flag_attempt_lockouts
+		 WHERE user_id = $1 AND challenge_id = $2`,
+		uid, challengeID,
+	)
+	lockErr := lockRow.Scan(&wrongAttempts, &firstAttemptAt, &lockedUntil)
+	if lockErr == nil && lockedUntil != nil && time.Now().Before(*lockedUntil) {
+		retryAfter := int(time.Until(*lockedUntil).Seconds()) + 1
+		c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error":       "Too many incorrect attempts. Please wait before trying again.",
+			"locked_until": lockedUntil.Unix(),
+			"retry_after":  retryAfter,
+		})
+		return
+	}
+	// Reset window if the last tracking window has expired
+	if lockErr == nil && time.Since(firstAttemptAt).Seconds() > flagLockoutWindow {
+		h.db.Pool.Exec(c.Request.Context(), //nolint:errcheck
+			`DELETE FROM flag_attempt_lockouts WHERE user_id = $1 AND challenge_id = $2`,
+			uid, challengeID)
+		wrongAttempts = 0
 	}
 
 	// Normalize flag (trim whitespace)
@@ -599,12 +647,34 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		`UPDATE challenges SET total_attempts = total_attempts + 1 WHERE id = $1`, challengeID)
 
 	if !found {
+		// ── Update brute-force lockout tracking ───────────────────────────────
+		newCount := wrongAttempts + 1
+		var newLockedUntil interface{}
+		if newCount >= flagLockoutThreshold {
+			t := time.Now().Add(flagLockoutDuration * time.Second)
+			newLockedUntil = t
+		}
+		h.db.Pool.Exec(c.Request.Context(), //nolint:errcheck
+			`INSERT INTO flag_attempt_lockouts (user_id, challenge_id, wrong_attempts, first_attempt_at, locked_until, updated_at)
+			 VALUES ($1, $2, $3, NOW(), $4, NOW())
+			 ON CONFLICT (user_id, challenge_id) DO UPDATE
+			 SET wrong_attempts = EXCLUDED.wrong_attempts,
+			     locked_until   = COALESCE($4, flag_attempt_lockouts.locked_until),
+			     updated_at     = NOW()`,
+			uid, challengeID, newCount, newLockedUntil,
+		)
+
 		c.JSON(http.StatusOK, gin.H{
 			"correct": false,
 			"message": "Incorrect flag. Try again!",
 		})
 		return
 	}
+
+	// Correct submission: clear any lockout entry
+	h.db.Pool.Exec(c.Request.Context(), //nolint:errcheck
+		`DELETE FROM flag_attempt_lockouts WHERE user_id = $1 AND challenge_id = $2`,
+		uid, challengeID)
 
 	// Check if already solved
 	var alreadySolved bool

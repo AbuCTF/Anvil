@@ -7,7 +7,6 @@
 	let email = '';
 	let password = '';
 	let confirmPassword = '';
-	let inviteCode = '';
 	let loading = false;
 	let error = '';
 
@@ -25,7 +24,7 @@
 		error = '';
 
 		try {
-			const response = await api.register(username, email, password, inviteCode || undefined);
+			const response = await api.register(username, email, password);
 			
 			// Store tokens
 			localStorage.setItem('accessToken', response.access_token);
@@ -132,19 +131,6 @@
 				{/if}
 			</div>
 
-			<div>
-				<label for="inviteCode" class="block text-sm font-medium text-stone-300 mb-2">
-					Invite Code <span class="text-stone-500 text-xs">(Optional)</span>
-				</label>
-				<input
-					id="inviteCode"
-					type="text"
-					bind:value={inviteCode}
-					class="block w-full px-4 py-3 bg-black border border-stone-700 rounded-lg text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
-					placeholder="Enter invite code"
-				/>
-			</div>
-
 			<button
 				type="submit"
 				disabled={!formValid || loading}
@@ -156,10 +142,6 @@
 					Create Account
 				{/if}
 			</button>
-
-			<p class="text-center text-xs text-stone-500">
-				By creating an account, you agree to our terms and privacy policy
-			</p>
 		</form>
 	</div>
 </div>

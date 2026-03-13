@@ -378,6 +378,56 @@ class ApiClient {
 		});
 	}
 
+	// Challenge Attachments (admin)
+	async listAttachments(challengeId: string) {
+		return this.request<{ attachments: any[] }>(`/admin/challenges/${challengeId}/attachments`);
+	}
+
+	async uploadAttachment(
+		challengeId: string,
+		formData: FormData,
+		onProgress?: (progress: number) => void
+	): Promise<any> {
+		const token = this.getAuthToken();
+		// Use upload subdomain for large files (bypasses Cloudflare 100 MB limit)
+		const baseUrl = this.uploadUrl;
+
+		return new Promise((resolve, reject) => {
+			const xhr = new XMLHttpRequest();
+
+			xhr.upload.addEventListener('progress', (e) => {
+				if (e.lengthComputable && onProgress) {
+					onProgress(Math.round((e.loaded / e.total) * 100));
+				}
+			});
+
+			xhr.addEventListener('load', () => {
+				if (xhr.status >= 200 && xhr.status < 300) {
+					try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({}); }
+				} else {
+					try {
+						const err = JSON.parse(xhr.responseText);
+						reject(new Error(err.error || 'Upload failed'));
+					} catch {
+						reject(new Error('Upload failed'));
+					}
+				}
+			});
+
+			xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+
+			xhr.open('POST', `${baseUrl}/api/v1/admin/challenges/${challengeId}/attachments`);
+			if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+			xhr.send(formData);
+		});
+	}
+
+	async deleteAttachment(challengeId: string, attachmentId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}/attachments/${attachmentId}`, {
+			method: 'DELETE'
+		});
+	}
+
 	// VM Templates
 	async getVMTemplates() {
 		return this.request<{ templates: any[] }>('/admin/vm-templates');

@@ -239,7 +239,7 @@ func main() {
 	}
 
 	// Initialize API server
-	server := api.NewServer(cfg, db, containerSvc, vmSvc, uploadSvc, vpnSvc, logger)
+	server := api.NewServer(cfg, db, containerSvc, vmSvc, uploadSvc, storageSvc, vpnSvc, logger)
 
 	// Create HTTP server with extended timeouts for large file uploads
 	httpServer := &http.Server{
