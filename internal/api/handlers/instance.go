@@ -538,8 +538,10 @@ func (h *InstanceHandler) Extend(c *gin.Context) {
 	}
 
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, status, expires_at, extensions_used, max_extensions
-		 FROM instances WHERE id = $1 AND user_id = $2`,
+		`SELECT i.id, i.status, i.expires_at, i.extensions_used, COALESCE(c.max_extensions, 3) as max_extensions
+		 FROM instances i
+		 JOIN challenges c ON i.challenge_id = c.id
+		 WHERE i.id = $1 AND i.user_id = $2`,
 		instanceID, uid).Scan(&inst.ID, &inst.Status, &inst.ExpiresAt, &inst.ExtensionsUsed, &inst.MaxExtensions)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
