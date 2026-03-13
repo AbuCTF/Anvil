@@ -194,6 +194,81 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 	}
 }
 
+// OptionalAuth middleware validates JWT tokens if present, but does not require them.
+// If a valid token is found the user context is populated; otherwise the request
+// continues unauthenticated.
+func OptionalAuth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.Next()
+			return
+		}
+
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+			c.Next()
+			return
+		}
+
+		tokenString := parts[1]
+
+		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return []byte(cfg.JWT.Secret), nil
+		})
+
+		if err != nil || !token.Valid {
+			c.Next()
+			return
+		}
+
+		claims, ok := token.Claims.(*Claims)
+		if !ok {
+			c.Next()
+			return
+		}
+
+		if claims.TokenType == "user" {
+			var status string
+			err := db.Pool.QueryRow(c.Request.Context(),
+				"SELECT status FROM users WHERE id = $1",
+				claims.UserID,
+			).Scan(&status)
+
+			if err != nil || status != "active" {
+				c.Next()
+				return
+			}
+
+			c.Set("user_id", claims.UserID)
+			c.Set("username", claims.Username)
+			c.Set("role", claims.Role)
+			c.Set("token_type", "user")
+		} else if claims.TokenType == "team" {
+			var expiresAt time.Time
+			err := db.Pool.QueryRow(c.Request.Context(),
+				"SELECT expires_at FROM sessions WHERE id = $1",
+				claims.SessionID,
+			).Scan(&expiresAt)
+
+			if err != nil || time.Now().After(expiresAt) {
+				c.Next()
+				return
+			}
+
+			c.Set("session_id", claims.SessionID)
+			c.Set("username", claims.Username)
+			c.Set("role", "user")
+			c.Set("token_type", "team")
+		}
+
+		c.Next()
+	}
+}
+
 // RequireRole middleware checks if user has required role
 func RequireRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
