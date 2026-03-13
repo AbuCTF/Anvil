@@ -28,32 +28,43 @@
 	let searchQuery = '';
 	let selectedDifficulty = '';
 	let selectedCategory = '';
-	let showSolved = true;
+	let showSolved = false;
 
-	$: categories = [...new Set(challenges.map(c => c.category).filter(Boolean))] as string[];
+	$: categories = [...new Set(challenges.map((c) => c.category).filter(Boolean))] as string[];
 
-	$: filteredChallenges = challenges.filter(c => {
+	$: filteredChallenges = challenges.filter((c) => {
 		if (searchQuery && !c.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
 		if (selectedDifficulty && c.difficulty !== selectedDifficulty) return false;
 		if (selectedCategory && c.category !== selectedCategory) return false;
-		if (!showSolved && c.is_solved) return false;
+		if (showSolved && !c.is_solved) return false;
 		return true;
 	});
 
 	function getDifficultyColor(difficulty: string): string {
-		switch(difficulty.toLowerCase()) {
-			case 'easy': return 'text-green-400 border-green-900 bg-green-950/30';
-			case 'medium': return 'text-yellow-400 border-yellow-900 bg-yellow-950/30';
-			case 'hard': return 'text-red-400 border-red-900 bg-red-950/30';
-			case 'insane': return 'text-purple-400 border-purple-900 bg-purple-950/30';
-			default: return 'text-stone-400 border-stone-800';
+		switch (difficulty.toLowerCase()) {
+			case 'easy':
+				return 'text-green-400 border-green-900 bg-green-950/30';
+			case 'medium':
+				return 'text-yellow-400 border-yellow-900 bg-yellow-950/30';
+			case 'hard':
+				return 'text-red-400 border-red-900 bg-red-950/30';
+			case 'insane':
+				return 'text-purple-400 border-purple-900 bg-purple-950/30';
+			default:
+				return 'text-stone-400 border-stone-800';
 		}
 	}
 
 	onMount(async () => {
 		try {
 			const response = await api.getChallenges();
-			challenges = response.challenges || [];
+			challenges =
+				response.challenges?.map((c) => {
+					// FIXME: API should be returning correct user_solves and is_solved
+					const userSolves = c.user_solves || 0;
+					const isSolved = userSolves >= c.total_flags && c.total_flags > 0;
+					return { ...c, user_solves: userSolves, is_solved: isSolved };
+				}) || [];
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load challenges';
 		} finally {
@@ -68,23 +79,22 @@
 
 <div class="min-h-screen bg-black">
 	<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-		<div class="flex flex-col md:flex-row md:items-center md:justify-between mb-8">
-			<div>
+		<div class="flex flex-col md:flex-row md:items-end md:justify-between mb-8">
+			<div class="flex-1">
 				<h1 class="text-3xl font-bold text-white">Challenges</h1>
-				<p class="mt-2 text-stone-400">Boot-to-root machines and security challenges</p>
 			</div>
 
 			{#if !loading}
 				<div class="mt-4 md:mt-0 flex items-center space-x-6 text-sm">
 					<div class="flex items-center space-x-2">
 						<Icon icon="mdi:flag-outline" class="w-5 h-5 text-stone-500" />
-						<span class="text-stone-300">{filteredChallenges.length}</span>
+						<span class="text-stone-300">{challenges.length}</span>
 						<span class="text-stone-500">challenges</span>
 					</div>
 					{#if $auth.isAuthenticated}
 						<div class="flex items-center space-x-2">
 							<Icon icon="mdi:check-circle" class="w-5 h-5 text-green-500" />
-							<span class="text-stone-300">{challenges.filter(c => c.is_solved).length}</span>
+							<span class="text-stone-300">{challenges.filter((c) => c.is_solved).length}</span>
 							<span class="text-stone-500">solved</span>
 						</div>
 					{/if}
@@ -96,7 +106,10 @@
 		<div class="bg-stone-950 border border-stone-800 rounded-lg p-6 mb-8">
 			<div class="grid grid-cols-1 md:grid-cols-4 gap-4">
 				<div class="relative">
-					<Icon icon="mdi:magnify" class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-stone-500" />
+					<Icon
+						icon="mdi:magnify"
+						class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-stone-500"
+					/>
 					<input
 						type="text"
 						bind:value={searchQuery}
@@ -127,13 +140,15 @@
 				</select>
 
 				{#if $auth.isAuthenticated}
-					<label class="flex items-center space-x-3 px-4 py-3 bg-black border border-stone-700 rounded-lg cursor-pointer hover:border-stone-600 transition">
+					<label
+						class="flex items-center space-x-3 px-4 py-3 bg-black border border-stone-700 rounded-lg cursor-pointer hover:border-stone-600 transition"
+					>
 						<input
 							type="checkbox"
 							bind:checked={showSolved}
 							class="w-4 h-4 rounded border-stone-600 bg-stone-900 text-white focus:ring-0 focus:ring-offset-0"
 						/>
-						<span class="text-stone-300 text-sm">Show Solved</span>
+						<span class="text-stone-300 text-sm">Show Solved Only</span>
 					</label>
 				{/if}
 			</div>
@@ -162,11 +177,15 @@
 				{#each filteredChallenges as challenge}
 					<a
 						href="/challenges/{challenge.slug}"
-						class="group bg-stone-950 border border-stone-800 rounded-lg overflow-hidden hover:border-stone-700 transition-all duration-200 {challenge.is_solved ? 'ring-1 ring-green-900/30' : ''}"
+						class="group bg-stone-950 border border-stone-800 rounded-lg overflow-hidden hover:border-stone-700 transition-all duration-200 {challenge.is_solved
+							? 'ring-1 ring-green-900/30'
+							: ''}"
 					>
 						<div class="p-6">
 							<div class="flex items-start justify-between mb-4">
-								<h3 class="text-lg font-semibold text-white group-hover:text-stone-200 transition flex-1">
+								<h3
+									class="text-lg font-semibold text-white group-hover:text-stone-200 transition flex-1"
+								>
 									{challenge.name}
 								</h3>
 								{#if challenge.is_solved}
@@ -181,19 +200,33 @@
 							{/if}
 
 							<div class="flex flex-wrap items-center gap-2 mb-4">
-								<span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium border {getDifficultyColor(challenge.difficulty)}">
+								<span
+									class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium border {getDifficultyColor(
+										challenge.difficulty
+									)}"
+								>
 									{challenge.difficulty}
 								</span>
 
 								{#if challenge.category}
-									<span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-stone-900 text-stone-400 border border-stone-800">
+									<span
+										class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-stone-900 text-stone-400 border border-stone-800"
+									>
 										{challenge.category}
 									</span>
 								{/if}
 
 								<!-- VM or Docker badge -->
-								<span class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium border {challenge.resource_type === 'vm' ? 'bg-purple-950/50 text-purple-400 border-purple-800' : 'bg-blue-950/50 text-blue-400 border-blue-800'}">
-									<Icon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} class="w-3.5 h-3.5 mr-1" />
+								<span
+									class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium border {challenge.resource_type ===
+									'vm'
+										? 'bg-purple-950/50 text-purple-400 border-purple-800'
+										: 'bg-blue-950/50 text-blue-400 border-blue-800'}"
+								>
+									<Icon
+										icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'}
+										class="w-3.5 h-3.5 mr-1"
+									/>
 									{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}
 								</span>
 							</div>
@@ -220,7 +253,9 @@
 								<div class="pt-4 border-t border-stone-800">
 									<div class="flex items-center justify-between text-xs mb-2">
 										<span class="text-stone-500">Progress</span>
-										<span class="text-stone-400">{challenge.user_solves || 0}/{challenge.total_flags}</span>
+										<span class="text-stone-400"
+											>{challenge.user_solves || 0}/{challenge.total_flags}</span
+										>
 									</div>
 									<div class="w-full bg-stone-900 rounded-full h-2 overflow-hidden">
 										<div
