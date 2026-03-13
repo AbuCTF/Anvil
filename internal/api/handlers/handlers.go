@@ -139,7 +139,39 @@ func NewCategoryHandler(cfg *config.Config, db *database.DB, logger *zap.Logger)
 }
 
 func (h *CategoryHandler) List(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"categories": []interface{}{}})
+	rows, err := h.db.Pool.Query(c.Request.Context(),
+		`SELECT id, name, slug, COALESCE(description, ''), COALESCE(color, ''), sort_order
+		 FROM categories ORDER BY sort_order, name`)
+	if err != nil {
+		h.logger.Error("failed to list categories", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch categories"})
+		return
+	}
+	defer rows.Close()
+
+	var categories []gin.H
+	for rows.Next() {
+		var id, name, catSlug, description, color string
+		var sortOrder int
+		if err := rows.Scan(&id, &name, &catSlug, &description, &color, &sortOrder); err != nil {
+			h.logger.Error("failed to scan category row", zap.Error(err))
+			continue
+		}
+		categories = append(categories, gin.H{
+			"id":          id,
+			"name":        name,
+			"slug":        catSlug,
+			"description": description,
+			"color":       color,
+			"sort_order":  sortOrder,
+		})
+	}
+
+	if categories == nil {
+		categories = []gin.H{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"categories": categories})
 }
 func (h *CategoryHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
