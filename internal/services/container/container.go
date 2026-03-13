@@ -205,29 +205,35 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		}
 	}
 
+	containerCfg := &container.Config{
+		Image:        image,
+		ExposedPorts: exposedPorts,
+		Labels:       labels,
+		Env:          req.EnvironmentVars,
+	}
+	hostCfg := &container.HostConfig{
+		NetworkMode: container.NetworkMode(s.config.NetworkName),
+		Resources: container.Resources{
+			NanoCPUs: cpuLimit,
+			Memory:   memoryLimit,
+		},
+		RestartPolicy: container.RestartPolicy{
+			Name:              "on-failure",
+			MaximumRetryCount: 3,
+		},
+	}
+
 	// Create container directly on the challenge network
-	resp, err := s.client.ContainerCreate(ctx,
-		&container.Config{
-			Image:        image,
-			ExposedPorts: exposedPorts,
-			Labels:       labels,
-			Env:          req.EnvironmentVars,
-		},
-		&container.HostConfig{
-			NetworkMode: container.NetworkMode(s.config.NetworkName),
-			Resources: container.Resources{
-				NanoCPUs: cpuLimit,
-				Memory:   memoryLimit,
-			},
-			RestartPolicy: container.RestartPolicy{
-				Name:              "on-failure",
-				MaximumRetryCount: 3,
-			},
-		},
-		nil,
-		platform,
-		containerName,
-	)
+	resp, err := s.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, platform, containerName)
+	if err != nil && platform != nil && strings.Contains(err.Error(), "does not provide the specified platform") {
+		// The local image does not have the requested platform variant (e.g. the
+		// image is amd64-only but arm64 was requested).  Retry without a platform
+		// constraint so the daemon runs the image with whatever arch is available,
+		// using QEMU/binfmt emulation when necessary.
+		s.logger.Warn("ContainerCreate with platform spec failed; retrying without platform constraint",
+			zap.String("image", image), zap.String("platform", req.Platform), zap.Error(err))
+		resp, err = s.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
@@ -385,8 +391,10 @@ func (s *Service) cleanupLoop() {
 // pullImage pulls a Docker image
 func (s *Service) pullImage(ctx context.Context, image string, platform string) error {
 	// Check if image exists locally
+	imageExists := false
 	_, _, err := s.client.ImageInspectWithRaw(ctx, image)
 	if err == nil {
+		imageExists = true
 		// If a specific platform is requested, always re-pull to ensure correct arch
 		if platform == "" {
 			return nil // Image exists, no platform constraint
@@ -396,16 +404,40 @@ func (s *Service) pullImage(ctx context.Context, image string, platform string) 
 	s.logger.Info("Pulling image", zap.String("image", image), zap.String("platform", platform))
 
 	// Try to load registry auth from Docker config
+	authStr := getRegistryAuth(image)
 	pullOpts := types.ImagePullOptions{
 		Platform: platform, // e.g. "linux/amd64" — empty string means native arch
 	}
-	if authStr := getRegistryAuth(image); authStr != "" {
+	if authStr != "" {
 		pullOpts.RegistryAuth = authStr
 	}
 
 	reader, err := s.client.ImagePull(ctx, image, pullOpts)
 	if err != nil {
-		return err
+		if platform != "" {
+			// Platform-specific pull failed.
+			if imageExists {
+				// A local copy already exists (possibly a different arch); use it and
+				// let ContainerCreate decide whether it is compatible.
+				s.logger.Warn("Platform-specific image pull failed; using existing local image",
+					zap.String("image", image), zap.String("platform", platform), zap.Error(err))
+				return nil
+			}
+			// No local copy — retry without a platform constraint so we pull whatever
+			// the registry offers (the daemon will use QEMU/binfmt emulation if needed).
+			s.logger.Warn("Platform-specific image pull failed; retrying without platform constraint",
+				zap.String("image", image), zap.String("platform", platform), zap.Error(err))
+			fallbackOpts := types.ImagePullOptions{}
+			if authStr != "" {
+				fallbackOpts.RegistryAuth = authStr
+			}
+			reader, err = s.client.ImagePull(ctx, image, fallbackOpts)
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
 	}
 	defer reader.Close()
 
