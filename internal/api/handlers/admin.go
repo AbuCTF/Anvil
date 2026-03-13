@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -212,6 +214,7 @@ type CreateChallengeRequest struct {
 	Description string  `json:"description"`
 	Difficulty  string  `json:"difficulty" binding:"required"`
 	CategoryID  *string `json:"category_id"`
+	Category    string  `json:"category"` // human-readable name; auto-resolved to category_id
 
 	// Challenge type: "docker" or "vm"
 	ChallengeType string `json:"challenge_type"`
@@ -361,6 +364,18 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		req.BasePoints = 100
 	}
 
+	// Resolve category name to ID (or create the category if new).
+	// category_id takes precedence over category (name) when both are supplied.
+	if req.Category != "" && req.CategoryID == nil {
+		catID, err := h.resolveOrCreateCategory(c.Request.Context(), req.Category)
+		if err != nil {
+			h.logger.Error("failed to resolve category", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve category"})
+			return
+		}
+		req.CategoryID = catID
+	}
+
 	// Convert exposed ports to JSON
 	portsJSON, _ := json.Marshal(req.ExposedPorts)
 
@@ -497,6 +512,39 @@ func hashFlag(flag string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// resolveOrCreateCategory looks up a category by name (case-insensitive) or creates it if absent.
+// Returns nil when categoryName is blank.
+func (h *AdminChallengeHandler) resolveOrCreateCategory(ctx context.Context, categoryName string) (*string, error) {
+	trimmed := strings.TrimSpace(categoryName)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	var id string
+	err := h.db.Pool.QueryRow(ctx,
+		`SELECT id FROM categories WHERE LOWER(name) = LOWER($1)`, trimmed).Scan(&id)
+	if err == nil {
+		return &id, nil
+	}
+
+	// Category not found – create it
+	newID := uuid.New().String()
+	categorySlug := slug.Make(trimmed)
+	_, err = h.db.Pool.Exec(ctx,
+		`INSERT INTO categories (id, name, slug) VALUES ($1, $2, $3)`,
+		newID, trimmed, categorySlug)
+	if err != nil {
+		// Another request may have created it concurrently; retry the lookup
+		if retryErr := h.db.Pool.QueryRow(ctx,
+			`SELECT id FROM categories WHERE LOWER(name) = LOWER($1)`, trimmed).Scan(&id); retryErr == nil {
+			return &id, nil
+		}
+		return nil, fmt.Errorf("failed to create category: %w", err)
+	}
+
+	return &newID, nil
+}
+
 // CreateOVAChallenge handles OVA file upload and creates a VM challenge
 func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	// Increase request timeout for large uploads
@@ -507,6 +555,7 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	description := c.PostForm("description")
 	difficulty := c.PostForm("difficulty")
 	basePointsStr := c.PostForm("base_points")
+	categoryName := c.PostForm("category")
 	flagsJSON := c.PostForm("flags")
 
 	if name == "" {
@@ -522,6 +571,18 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		if bp, err := json.Number(basePointsStr).Int64(); err == nil {
 			basePoints = int(bp)
 		}
+	}
+
+	// Resolve category name to ID (or create the category if new)
+	var categoryID *string
+	if categoryName != "" {
+		catID, err := h.resolveOrCreateCategory(c.Request.Context(), categoryName)
+		if err != nil {
+			h.logger.Error("failed to resolve category", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve category"})
+			return
+		}
+		categoryID = catID
 	}
 
 	// Parse flags
@@ -592,11 +653,11 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	// Insert challenge (include container_image as empty string to satisfy NOT NULL constraint)
 	_, err = tx.Exec(c.Request.Context(),
 		`INSERT INTO challenges (
-			id, name, slug, description, difficulty, status,
+			id, name, slug, description, difficulty, category_id, status,
 			base_points, resource_type, supports_docker, supports_vm,
 			total_flags, container_image, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, 'draft', $6, 'vm', false, true, $7, '', NOW(), NOW())`,
-		challengeID, name, challengeSlug, description, difficulty, basePoints, len(flags),
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, 'vm', false, true, $8, '', NOW(), NOW())`,
+		challengeID, name, challengeSlug, description, difficulty, categoryID, basePoints, len(flags),
 	)
 	if err != nil {
 		h.logger.Error("failed to create OVA challenge", zap.Error(err))
@@ -721,6 +782,18 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Resolve category name to ID (or create the category if new).
+	// category_id takes precedence over category (name) when both are supplied.
+	if req.Category != "" && req.CategoryID == nil {
+		catID, err := h.resolveOrCreateCategory(c.Request.Context(), req.Category)
+		if err != nil {
+			h.logger.Error("failed to resolve category", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve category"})
+			return
+		}
+		req.CategoryID = catID
 	}
 
 	// Update challenge - handle both container and VM fields
