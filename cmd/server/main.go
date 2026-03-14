@@ -110,7 +110,7 @@ func main() {
 	// Start background cleanup goroutines
 
 	// Container instance expiry goroutine — runs every minute and stops/removes
-	// Docker containers whose timer has expired.  It mirrors what the user-facing
+	// Docker containers whose timer has expired.
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
