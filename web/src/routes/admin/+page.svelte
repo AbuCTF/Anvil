@@ -562,7 +562,8 @@
 					if (description) fd.append('description', description);
 					try {
 						await api.uploadAttachment(createdChallengeId, fd);
-					} catch {
+					} catch (uploadErr) {
+						console.warn(`Failed to upload attachment "${file.name}":`, uploadErr);
 						failedFiles.push(file.name);
 					}
 				}
@@ -605,7 +606,10 @@
 			if (failedFiles.length > 0) {
 				// Challenge was created — surface file upload failures as a page-level warning
 				// so the admin can re-upload from the challenge detail page
-				error = `Challenge created, but ${failedFiles.length} file(s) failed to upload: ${failedFiles.join(', ')}. You can re-upload them from the challenge detail page.`;
+				const maxShown = 3;
+				const shown = failedFiles.slice(0, maxShown).join(', ');
+				const extra = failedFiles.length > maxShown ? ` and ${failedFiles.length - maxShown} more` : '';
+				error = `Challenge created, but ${failedFiles.length} file(s) failed to upload: ${shown}${extra}. You can re-upload them from the challenge detail page.`;
 			}
 		} catch (e) {
 			uploadError = e instanceof Error ? e.message : 'Failed to create challenge';

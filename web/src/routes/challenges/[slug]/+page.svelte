@@ -39,6 +39,13 @@
 	let attachmentUploadProgress = 0;
 	let attachmentFileInput: HTMLInputElement;
 	let attachmentDescription = '';
+	// Tracks whether a file is selected (reactive; bind:this alone doesn't trigger re-evaluation)
+	let attachmentFileSelected = false;
+
+	function onAttachmentFileChange(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		attachmentFileSelected = !!(input.files?.length);
+	}
 
 	async function uploadAttachment() {
 		if (!attachmentFileInput?.files?.[0] || !challenge?.id) return;
@@ -53,6 +60,7 @@
 			// Reload challenge to refresh attachment list
 			await loadChallenge();
 			attachmentDescription = '';
+			attachmentFileSelected = false;
 			if (attachmentFileInput) attachmentFileInput.value = '';
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Upload failed';
@@ -75,8 +83,8 @@
 	function formatFileSize(bytes: number): string {
 		if (bytes === 0) return '0 B';
 		const k = 1024;
-		const sizes = ['B', 'KB', 'MB', 'GB'];
-		const i = Math.floor(Math.log(bytes) / Math.log(k));
+		const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+		const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
 		return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
 	}
 
@@ -712,6 +720,7 @@
 										<input
 											type="file"
 											bind:this={attachmentFileInput}
+											on:change={onAttachmentFileChange}
 											class="block w-full text-xs text-stone-400 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-stone-800 file:text-stone-300 hover:file:bg-stone-700 cursor-pointer"
 										/>
 										<input
@@ -730,7 +739,7 @@
 										{/if}
 										<button
 											on:click={uploadAttachment}
-											disabled={attachmentUploading || !attachmentFileInput?.files?.length}
+											disabled={attachmentUploading || !attachmentFileSelected}
 											class="text-xs px-3 py-1.5 bg-white text-black font-medium rounded hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
 										>
 											{attachmentUploading ? 'Uploading...' : 'Upload'}
@@ -747,6 +756,7 @@
 								<input
 									type="file"
 									bind:this={attachmentFileInput}
+									on:change={onAttachmentFileChange}
 									class="block w-full text-xs text-stone-400 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-stone-800 file:text-stone-300 hover:file:bg-stone-700 cursor-pointer"
 								/>
 								<input
@@ -765,7 +775,7 @@
 								{/if}
 								<button
 									on:click={uploadAttachment}
-									disabled={attachmentUploading || !attachmentFileInput?.files?.length}
+									disabled={attachmentUploading || !attachmentFileSelected}
 									class="text-xs px-3 py-1.5 bg-white text-black font-medium rounded hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
 								>
 									{attachmentUploading ? 'Uploading...' : 'Upload'}
