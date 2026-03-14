@@ -292,6 +292,17 @@ class ApiClient {
 		return this.request<{ challenges: any[] }>('/admin/challenges');
 	}
 
+	async getAdminCategories() {
+		return this.request<{ categories: any[] }>('/admin/categories');
+	}
+
+	async createAdminCategory(data: { name: string; description?: string; color?: string }) {
+		return this.request<any>('/admin/categories', {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	}
+
 	async createAdminUser(data: any) {
 		return this.request<any>('/admin/users', {
 			method: 'POST',

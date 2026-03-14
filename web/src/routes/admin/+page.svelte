@@ -58,10 +58,13 @@
 	let settingsChanged = false;
 
 	// Challenge creation
+	let categories: any[] = [];
 	let newChallenge = {
 		name: '',
 		description: '',
 		category: '',
+		category_id: '',
+		newCategoryName: '',
 		difficulty: 'easy',
 		base_points: 100,
 		flag: '',
@@ -147,7 +150,21 @@
 	}
 
 	function openEditModal(challenge: any) {
-		editingChallenge = { ...challenge };
+		editingChallenge = {
+			...challenge,
+			// Ensure arrays/optional fields have proper defaults for the form
+			exposed_ports: challenge.exposed_ports || [],
+			instance_timeout: challenge.instance_timeout ?? 120,
+			max_extensions: challenge.max_extensions ?? 3,
+			cooldown_minutes: challenge.cooldown_minutes ?? 15,
+			container_image: challenge.container_image || '',
+			container_tag: challenge.container_tag || 'latest',
+			container_platform: challenge.container_platform || '',
+			cpu_limit: challenge.cpu_limit || '1',
+			memory_limit: challenge.memory_limit || '512m',
+			author_name: challenge.author_name || '',
+			category_id: challenge.category_id || '',
+		};
 		showEditModal = true;
 	}
 
@@ -160,10 +177,35 @@
 				description: editingChallenge.description,
 				difficulty: editingChallenge.difficulty,
 				base_points: editingChallenge.base_points,
-				resource_type: editingChallenge.resource_type
+				resource_type: editingChallenge.resource_type,
+				author_name: editingChallenge.author_name || '',
+				instance_timeout: editingChallenge.instance_timeout,
+				max_extensions: editingChallenge.max_extensions,
+				cooldown_minutes: editingChallenge.cooldown_minutes,
 			};
 
-			// Add VM template if it's a VM challenge and template is selected
+			// Category: send category_id (may be empty string to clear it) or fallback to name
+			if (categories.length > 0) {
+				// categories dropdown was shown — send the selected ID (or null to clear)
+				payload.category_id = editingChallenge.category_id || null;
+			} else if (editingChallenge.category_name) {
+				// free-text fallback — send by name for backend resolution
+				payload.category = editingChallenge.category_name;
+			}
+
+			// Docker-specific fields
+			if (editingChallenge.resource_type !== 'vm') {
+				payload.container_image = editingChallenge.container_image;
+				payload.container_tag = editingChallenge.container_tag || 'latest';
+				payload.container_platform = editingChallenge.container_platform;
+				payload.cpu_limit = editingChallenge.cpu_limit;
+				payload.memory_limit = editingChallenge.memory_limit;
+				if (Array.isArray(editingChallenge.exposed_ports)) {
+					payload.exposed_ports = editingChallenge.exposed_ports.filter((p: any) => p.port > 0);
+				}
+			}
+
+			// VM-specific fields
 			if (editingChallenge.resource_type === 'vm' && editingChallenge.vm_template_id) {
 				payload.vm_template_id = editingChallenge.vm_template_id;
 			}
@@ -186,14 +228,16 @@
 	async function loadDashboard() {
 		loading = true;
 		try {
-			const [statsRes, usersRes, challengesRes] = await Promise.all([
+			const [statsRes, usersRes, challengesRes, categoriesRes] = await Promise.all([
 				api.getAdminStats(),
 				api.getAdminUsers(),
-				api.getAdminChallenges()
+				api.getAdminChallenges(),
+				api.getAdminCategories().catch(() => ({ categories: [] }))
 			]);
 			stats = statsRes;
 			users = usersRes.users || [];
 			challenges = challengesRes.challenges || [];
+			categories = categoriesRes.categories || [];
 
 			// Load infrastructure data in parallel
 			try {
@@ -387,6 +431,27 @@
 		uploadError = '';
 		uploadProgress = 0;
 
+		// Resolve the category: either an existing ID or a new category name
+		let categoryId: string | undefined;
+		let categoryName: string | undefined;
+
+		if (newChallenge.category_id === '__new__') {
+			// User wants to create a new category - send by name for backend resolution
+			const trimmed = (newChallenge.newCategoryName || '').trim();
+			if (!trimmed) {
+				uploadError = 'Please enter a name for the new category.';
+				uploadLoading = false;
+				return;
+			}
+			categoryName = trimmed;
+		} else if (newChallenge.category_id) {
+			// Existing category selected by ID
+			categoryId = newChallenge.category_id;
+		} else if (newChallenge.category) {
+			// Free-text fallback (no categories loaded)
+			categoryName = newChallenge.category;
+		}
+
 		try {
 			if (newChallenge.type === 'ova') {
 				if (newChallenge.vm_source === 'template' && newChallenge.vm_template_id) {
@@ -396,7 +461,8 @@
 						description: newChallenge.description,
 						difficulty: newChallenge.difficulty,
 						base_points: newChallenge.base_points,
-						category: newChallenge.category,
+						...(categoryId ? { category_id: categoryId } : {}),
+						...(categoryName ? { category: categoryName } : {}),
 						challenge_type: 'vm',
 						vm_template_id: newChallenge.vm_template_id,
 						vcpu: 1,
@@ -411,7 +477,8 @@
 					formData.append('description', newChallenge.description);
 					formData.append('difficulty', newChallenge.difficulty);
 					formData.append('base_points', String(newChallenge.base_points));
-					formData.append('category', newChallenge.category);
+					if (categoryId) formData.append('category_id', categoryId);
+					else if (categoryName) formData.append('category', categoryName);
 					formData.append('flags', JSON.stringify(newChallenge.flags));
 
 					await api.uploadOvaChallenge(formData, (progress) => {
@@ -427,7 +494,8 @@
 					description: newChallenge.description,
 					difficulty: newChallenge.difficulty,
 					base_points: newChallenge.base_points,
-					category: newChallenge.category,
+					...(categoryId ? { category_id: categoryId } : {}),
+					...(categoryName ? { category: categoryName } : {}),
 					challenge_type: 'docker',
 					container_image: newChallenge.docker_image,
 					container_platform: newChallenge.container_platform,
@@ -454,6 +522,8 @@
 				name: '',
 				description: '',
 				category: '',
+				category_id: '',
+				newCategoryName: '',
 				difficulty: 'easy',
 				base_points: 100,
 				flag: '',
@@ -1536,13 +1606,36 @@
 
 						<div>
 							<label class="block text-sm font-medium text-stone-300 mb-2">Category *</label>
-							<input
-								type="text"
-								bind:value={newChallenge.category}
-								required
-								class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
-								placeholder="Web, Crypto, Pwn..."
-							/>
+							{#if categories.length > 0}
+								<select
+									bind:value={newChallenge.category_id}
+									required={newChallenge.category_id !== '__new__'}
+									class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+								>
+									<option value="" disabled>Select a category...</option>
+									{#each categories as cat}
+										<option value={cat.id}>{cat.name}</option>
+									{/each}
+									<option value="__new__">+ Add new category...</option>
+								</select>
+								{#if newChallenge.category_id === '__new__'}
+									<input
+										type="text"
+										bind:value={newChallenge.newCategoryName}
+										required
+										class="w-full mt-2 px-4 py-3 bg-black border border-stone-600 rounded-xl text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 transition-all"
+										placeholder="New category name"
+									/>
+								{/if}
+							{:else}
+								<input
+									type="text"
+									bind:value={newChallenge.category}
+									required
+									class="w-full px-4 py-3 bg-black border border-stone-700 rounded-xl text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-2 focus:ring-stone-500/20 transition-all"
+									placeholder="Web, Crypto, Pwn..."
+								/>
+							{/if}
 						</div>
 
 						<div>
@@ -1905,21 +1998,30 @@
 		aria-modal="true"
 	>
 		<div 
-			class="bg-stone-950 border border-stone-800 rounded-lg w-full max-w-lg"
+			class="bg-stone-950 border border-stone-800 rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto"
 			on:click|stopPropagation
 			on:keydown|stopPropagation
 			role="document"
 		>
-			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between">
-				<h2 class="text-lg font-medium text-white">Edit Challenge</h2>
+			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between sticky top-0 bg-stone-950 z-10">
+				<div>
+					<h2 class="text-lg font-medium text-white">Edit Challenge</h2>
+					<p class="text-xs text-stone-500 mt-0.5">
+						{editingChallenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'} ·
+						<span class="{editingChallenge.status === 'published' ? 'text-green-400' : 'text-yellow-400'}">{editingChallenge.status}</span>
+						· {editingChallenge.slug}
+					</p>
+				</div>
 				<button on:click={() => { showEditModal = false; editingChallenge = null; }} class="text-stone-400 hover:text-white transition">
 					<Icon icon="mdi:close" class="w-5 h-5" />
 				</button>
 			</div>
 
-			<form on:submit|preventDefault={handleEditChallenge} class="p-6 space-y-4">
+			<form on:submit|preventDefault={handleEditChallenge} class="p-6 space-y-5">
+
+				<!-- ── Core ─────────────────────────────────────── -->
 				<div>
-					<label class="block text-xs text-stone-500 mb-1.5">Name</label>
+					<label class="block text-xs text-stone-500 mb-1.5">Name *</label>
 					<input
 						type="text"
 						bind:value={editingChallenge.name}
@@ -1932,12 +2034,34 @@
 					<label class="block text-xs text-stone-500 mb-1.5">Description</label>
 					<textarea
 						bind:value={editingChallenge.description}
-						rows="3"
+						rows="4"
 						class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700 resize-none"
 					></textarea>
 				</div>
 
+				<!-- ── Category / Difficulty / Points / Author ─── -->
 				<div class="grid grid-cols-2 gap-4">
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Category</label>
+						{#if categories.length > 0}
+							<select
+								bind:value={editingChallenge.category_id}
+								class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+							>
+								<option value="">Uncategorised</option>
+								{#each categories as cat}
+									<option value={cat.id}>{cat.name}</option>
+								{/each}
+							</select>
+						{:else}
+							<input
+								type="text"
+								bind:value={editingChallenge.category_name}
+								placeholder="Category name"
+								class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+							/>
+						{/if}
+					</div>
 					<div>
 						<label class="block text-xs text-stone-500 mb-1.5">Difficulty</label>
 						<select
@@ -1956,46 +2080,183 @@
 							type="number"
 							bind:value={editingChallenge.base_points}
 							required
+							min="1"
+							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+						/>
+					</div>
+					<div>
+						<label class="block text-xs text-stone-500 mb-1.5">Author Name</label>
+						<input
+							type="text"
+							bind:value={editingChallenge.author_name}
+							placeholder="e.g. abu"
 							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
 						/>
 					</div>
 				</div>
 
-				<div class="py-3 px-4 bg-stone-900/50 rounded border border-stone-800">
-					<div class="flex items-center justify-between">
-						<div>
-							<p class="text-sm text-white">{editingChallenge.name}</p>
-							<p class="text-xs text-stone-500">Type: {editingChallenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'}</p>
-						</div>
-						<span class="text-xs {editingChallenge.status === 'published' ? 'text-green-400' : 'text-yellow-400'}">
-							{editingChallenge.status}
-						</span>
-					</div>
-				</div>
+				<!-- ── Docker-specific ───────────────────────────── -->
+				{#if editingChallenge.resource_type !== 'vm'}
+					<div class="border border-stone-800 rounded-lg p-4 space-y-4">
+						<h3 class="text-xs font-semibold text-stone-400 uppercase tracking-wider">Container Settings</h3>
 
+						<div class="grid grid-cols-3 gap-3">
+							<div class="col-span-2">
+								<label class="block text-xs text-stone-500 mb-1.5">Docker Image</label>
+								<input
+									type="text"
+									bind:value={editingChallenge.container_image}
+									placeholder="ghcr.io/org/image"
+									class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+								/>
+							</div>
+							<div>
+								<label class="block text-xs text-stone-500 mb-1.5">Tag</label>
+								<input
+									type="text"
+									bind:value={editingChallenge.container_tag}
+									placeholder="latest"
+									class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+								/>
+							</div>
+						</div>
+
+						<div class="grid grid-cols-3 gap-3">
+							<div>
+								<label class="block text-xs text-stone-500 mb-1.5">Platform</label>
+								<input
+									type="text"
+									bind:value={editingChallenge.container_platform}
+									placeholder="linux/amd64"
+									class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+								/>
+							</div>
+							<div>
+								<label class="block text-xs text-stone-500 mb-1.5">CPU Limit</label>
+								<input
+									type="text"
+									bind:value={editingChallenge.cpu_limit}
+									placeholder="1"
+									class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+								/>
+							</div>
+							<div>
+								<label class="block text-xs text-stone-500 mb-1.5">Memory Limit</label>
+								<input
+									type="text"
+									bind:value={editingChallenge.memory_limit}
+									placeholder="512m"
+									class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+								/>
+							</div>
+						</div>
+
+						<!-- Exposed Ports -->
+						<div>
+							<div class="flex items-center justify-between mb-2">
+								<label class="text-xs text-stone-500">Exposed Ports</label>
+								<button
+									type="button"
+									on:click={() => { editingChallenge.exposed_ports = [...(editingChallenge.exposed_ports || []), { port: 0, protocol: 'tcp', service: 'tcp' }]; }}
+									class="text-xs text-stone-400 hover:text-white transition flex items-center gap-1"
+								>
+									<Icon icon="mdi:plus" class="w-3.5 h-3.5" /> Add Port
+								</button>
+							</div>
+							{#each (editingChallenge.exposed_ports || []) as ep, i}
+								<div class="flex items-center gap-2 mb-2">
+									<input
+										type="number"
+										bind:value={ep.port}
+										placeholder="Port"
+										min="1" max="65535"
+										class="w-20 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs focus:outline-none focus:border-stone-700"
+									/>
+									<select
+										bind:value={ep.protocol}
+										class="w-20 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs focus:outline-none focus:border-stone-700"
+									>
+										<option value="tcp">TCP</option>
+										<option value="udp">UDP</option>
+									</select>
+									<input
+										type="text"
+										bind:value={ep.service}
+										placeholder="Label"
+										class="flex-1 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs focus:outline-none focus:border-stone-700"
+									/>
+									<button
+										type="button"
+										on:click={() => { editingChallenge.exposed_ports = editingChallenge.exposed_ports.filter((_x, idx) => idx !== i); }}
+										class="p-1 text-stone-600 hover:text-red-400 transition"
+									>
+										<Icon icon="mdi:close" class="w-3.5 h-3.5" />
+									</button>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				<!-- ── VM-specific ───────────────────────────────── -->
 				{#if editingChallenge.resource_type === 'vm'}
-					<div>
+					<div class="border border-stone-800 rounded-lg p-4">
+						<h3 class="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-3">VM Settings</h3>
 						<label class="block text-xs text-stone-500 mb-1.5">VM Template</label>
 						<select
 							bind:value={editingChallenge.vm_template_id}
 							class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
 						>
-							<option value="">Select a template...</option>
+							<option value="">No template / unchanged</option>
 							{#each templates as template}
 								<option value={template.id}>{template.name} ({template.vcpu}vCPU / {template.memory_mb}MB)</option>
 							{/each}
 						</select>
-						<p class="text-xs text-stone-500 mt-1">Change the VM template for this challenge</p>
 					</div>
 				{/if}
 
+				<!-- ── Timer / Instance Settings ─────────────────── -->
+				<div class="border border-stone-800 rounded-lg p-4 space-y-3">
+					<h3 class="text-xs font-semibold text-stone-400 uppercase tracking-wider">Instance Settings</h3>
+					<div class="grid grid-cols-3 gap-3">
+						<div>
+							<label class="block text-xs text-stone-500 mb-1.5">Timeout (min)</label>
+							<input
+								type="number"
+								bind:value={editingChallenge.instance_timeout}
+								min="1"
+								class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+							/>
+						</div>
+						<div>
+							<label class="block text-xs text-stone-500 mb-1.5">Max Extensions</label>
+							<input
+								type="number"
+								bind:value={editingChallenge.max_extensions}
+								min="0"
+								class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+							/>
+						</div>
+						<div>
+							<label class="block text-xs text-stone-500 mb-1.5">Cooldown (min)</label>
+							<input
+								type="number"
+								bind:value={editingChallenge.cooldown_minutes}
+								min="0"
+								class="w-full px-3 py-2 bg-black border border-stone-800 rounded text-white text-sm focus:outline-none focus:border-stone-700"
+							/>
+						</div>
+					</div>
+				</div>
+
+				<!-- ── Actions ───────────────────────────────────── -->
 				<div class="flex gap-3 pt-2">
 					<button
 						type="submit"
 						disabled={actionLoading === editingChallenge.id}
 						class="flex-1 py-2.5 bg-white text-black text-sm font-medium rounded hover:bg-stone-200 transition disabled:opacity-50"
 					>
-						{actionLoading === editingChallenge.id ? 'Saving...' : 'Save'}
+						{actionLoading === editingChallenge.id ? 'Saving...' : 'Save Changes'}
 					</button>
 					<button
 						type="button"
