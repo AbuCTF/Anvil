@@ -300,7 +300,7 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			ContainerPlatform *string
 			CPULimit          *string
 			MemoryLimit       *string
-			ExposedPorts      *[]byte
+			ExposedPorts      []byte
 			InstanceTimeout   *int
 			MaxExtensions     *int
 			CooldownMinutes   *int
@@ -322,8 +322,8 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 
 		// Parse exposed ports JSON
 		var exposedPorts interface{}
-		if ch.ExposedPorts != nil {
-			_ = json.Unmarshal(*ch.ExposedPorts, &exposedPorts)
+		if len(ch.ExposedPorts) > 0 {
+			_ = json.Unmarshal(ch.ExposedPorts, &exposedPorts)
 		}
 
 		challenges = append(challenges, gin.H{
@@ -996,7 +996,7 @@ func (h *AdminChallengeHandler) ListFlags(c *gin.Context) {
 	challengeID := c.Param("id")
 
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, name, flag, points, sort_order, is_case_sensitive
+		`SELECT id, name, flag_hash, points, sort_order, is_case_sensitive
 		 FROM flags WHERE challenge_id = $1 ORDER BY sort_order`, challengeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})

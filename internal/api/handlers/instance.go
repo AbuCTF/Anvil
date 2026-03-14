@@ -371,6 +371,13 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		resourceID = vmInfo.VMID
 	} else {
 		// Docker container challenge
+		if challenge.ContainerImage == "" {
+			h.db.Pool.Exec(c.Request.Context(),
+				`UPDATE instances SET status = 'failed', error_message = 'No container image configured' WHERE id = $1`, instanceID)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no container image configured for this challenge"})
+			return
+		}
+
 		containerReq := container.CreateInstanceRequest{
 			InstanceID:    instanceID,
 			ChallengeSlug: req.ChallengeSlug,
