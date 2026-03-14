@@ -90,6 +90,37 @@
 	let ovaFile: File | null = null;
 	let uploadProgress = 0;
 
+	// File attachments for challenge creation
+	interface PendingAttachment {
+		file: File;
+		description: string;
+	}
+	let pendingAttachments: PendingAttachment[] = [];
+	let attachmentUploadStatus = '';
+
+	function addPendingAttachment(event: Event) {
+		const input = event.target as HTMLInputElement;
+		if (input.files) {
+			for (const file of Array.from(input.files)) {
+				pendingAttachments = [...pendingAttachments, { file, description: '' }];
+			}
+			// Reset the input so the same file can be re-added if needed
+			input.value = '';
+		}
+	}
+
+	function removePendingAttachment(index: number) {
+		pendingAttachments = pendingAttachments.filter((_, i) => i !== index);
+	}
+
+	function formatFileSize(bytes: number): string {
+		if (bytes === 0) return '0 B';
+		const k = 1024;
+		const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+		const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+		return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+	}
+
 	const difficultyConfig: Record<string, { color: string; bg: string }> = {
 		easy: { color: 'text-green-400', bg: 'bg-green-500/10' },
 		medium: { color: 'text-yellow-400', bg: 'bg-yellow-500/10' },
@@ -430,6 +461,7 @@
 		uploadLoading = true;
 		uploadError = '';
 		uploadProgress = 0;
+		attachmentUploadStatus = '';
 
 		// Resolve the category: either an existing ID or a new category name
 		let categoryId: string | undefined;
@@ -453,10 +485,12 @@
 		}
 
 		try {
+			let createdChallengeId: string | undefined;
+
 			if (newChallenge.type === 'ova') {
 				if (newChallenge.vm_source === 'template' && newChallenge.vm_template_id) {
 					// Create VM challenge using existing template
-					await api.createAdminChallenge({
+					const result = await api.createAdminChallenge({
 						name: newChallenge.name,
 						description: newChallenge.description,
 						difficulty: newChallenge.difficulty,
@@ -469,6 +503,7 @@
 						memory_mb: 1024,
 						flags: newChallenge.flags
 					});
+					createdChallengeId = result?.id;
 				} else if (ovaFile) {
 					// OVA upload using FormData
 					const formData = new FormData();
@@ -481,15 +516,16 @@
 					else if (categoryName) formData.append('category', categoryName);
 					formData.append('flags', JSON.stringify(newChallenge.flags));
 
-					await api.uploadOvaChallenge(formData, (progress) => {
+					const result = await api.uploadOvaChallenge(formData, (progress) => {
 						uploadProgress = progress;
 					});
+					createdChallengeId = result?.id;
 				} else {
 					throw new Error('Please select a template or upload an OVA file');
 				}
 			} else {
 				// Container challenge
-				await api.createAdminChallenge({
+				const result = await api.createAdminChallenge({
 					name: newChallenge.name,
 					description: newChallenge.description,
 					difficulty: newChallenge.difficulty,
@@ -512,8 +548,29 @@
 					max_extensions: newChallenge.max_extensions,
 					cooldown_minutes: newChallenge.cooldown_minutes
 				});
+				createdChallengeId = result?.id;
 			}
 
+			// Upload any pending file attachments
+			const failedFiles: string[] = [];
+			if (createdChallengeId && pendingAttachments.length > 0) {
+				for (let i = 0; i < pendingAttachments.length; i++) {
+					const { file, description } = pendingAttachments[i];
+					attachmentUploadStatus = `Uploading file ${i + 1} of ${pendingAttachments.length}: ${file.name}`;
+					const fd = new FormData();
+					fd.append('file', file);
+					if (description) fd.append('description', description);
+					try {
+						await api.uploadAttachment(createdChallengeId, fd);
+					} catch (uploadErr) {
+						console.warn(`Failed to upload attachment "${file.name}":`, uploadErr);
+						failedFiles.push(file.name);
+					}
+				}
+				attachmentUploadStatus = '';
+			}
+
+			// Challenge was created — close modal and reset form regardless of attachment failures
 			showCreateModal = false;
 			await loadDashboard();
 			
@@ -544,10 +601,21 @@
 				cooldown_minutes: 15
 			};
 			ovaFile = null;
+			pendingAttachments = [];
+
+			if (failedFiles.length > 0) {
+				// Challenge was created — surface file upload failures as a page-level warning
+				// so the admin can re-upload from the challenge detail page
+				const maxShown = 3;
+				const shown = failedFiles.slice(0, maxShown).join(', ');
+				const extra = failedFiles.length > maxShown ? ` and ${failedFiles.length - maxShown} more` : '';
+				error = `Challenge created, but ${failedFiles.length} file(s) failed to upload: ${shown}${extra}. You can re-upload them from the challenge detail page.`;
+			}
 		} catch (e) {
 			uploadError = e instanceof Error ? e.message : 'Failed to create challenge';
 		} finally {
 			uploadLoading = false;
+			attachmentUploadStatus = '';
 		}
 	}
 </script>
@@ -1956,7 +2024,58 @@
 						</div>
 					{/if}
 
-					<!-- Actions -->
+					<!-- File Attachments -->
+				<div class="pt-4 border-t border-stone-800 space-y-3">
+					<div class="flex items-center justify-between">
+						<label class="block text-sm font-medium text-stone-300">File Attachments <span class="text-stone-500 font-normal">(optional)</span></label>
+						<label class="text-xs text-stone-400 hover:text-white transition cursor-pointer flex items-center gap-1">
+							<Icon icon="mdi:paperclip" class="w-3.5 h-3.5" />
+							Add Files
+							<input
+								type="file"
+								multiple
+								on:change={addPendingAttachment}
+								class="hidden"
+							/>
+						</label>
+					</div>
+					{#if pendingAttachments.length > 0}
+						<div class="space-y-2">
+							{#each pendingAttachments as attachment, i}
+								<div class="flex items-center gap-2 p-2 bg-black border border-stone-800 rounded-lg">
+									<Icon icon="mdi:file-outline" class="w-4 h-4 text-stone-400 shrink-0" />
+									<div class="min-w-0 flex-1">
+										<p class="text-xs text-stone-300 truncate">{attachment.file.name}</p>
+										<p class="text-xs text-stone-600">{formatFileSize(attachment.file.size)}</p>
+									</div>
+									<input
+										type="text"
+										bind:value={attachment.description}
+										placeholder="Description (optional)"
+										class="flex-1 min-w-0 px-2 py-1 bg-stone-900 border border-stone-700 rounded text-xs text-white placeholder-stone-600 focus:outline-none focus:border-stone-500"
+									/>
+									<button
+										type="button"
+										on:click={() => removePendingAttachment(i)}
+										class="p-1 text-stone-500 hover:text-red-400 transition shrink-0"
+									>
+										<Icon icon="mdi:close" class="w-3.5 h-3.5" />
+									</button>
+								</div>
+							{/each}
+						</div>
+					{:else}
+						<p class="text-xs text-stone-600">No files selected. Files can also be added after creating the challenge.</p>
+					{/if}
+					{#if attachmentUploadStatus}
+						<p class="text-xs text-stone-400 flex items-center gap-1.5">
+							<Icon icon="mdi:loading" class="w-3.5 h-3.5 animate-spin" />
+							{attachmentUploadStatus}
+						</p>
+					{/if}
+				</div>
+
+				<!-- Actions -->
 					<div class="flex gap-3 pt-4">
 						<button
 							type="submit"
@@ -1965,7 +2084,13 @@
 						>
 							{#if uploadLoading}
 								<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />
-								{uploadProgress > 0 ? `Uploading ${uploadProgress}%` : 'Creating...'}
+								{#if attachmentUploadStatus}
+									Uploading files...
+								{:else if uploadProgress > 0}
+									Uploading {uploadProgress}%
+								{:else}
+									Creating...
+								{/if}
 							{:else}
 								<Icon icon="mdi:plus" class="w-5 h-5" />
 								Create Challenge
