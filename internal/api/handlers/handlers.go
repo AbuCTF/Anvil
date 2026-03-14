@@ -390,11 +390,10 @@ func (h *AdminInstanceHandler) ForceStop(c *gin.Context) {
 
 	var containerID *string
 	var resourceType string
-	var assignedPortsJSON []byte
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT i.container_id, c.resource_type, i.assigned_ports FROM instances i
+		`SELECT i.container_id, c.resource_type FROM instances i
 		 JOIN challenges c ON i.challenge_id = c.id WHERE i.id = $1`,
-		instanceID).Scan(&containerID, &resourceType, &assignedPortsJSON)
+		instanceID).Scan(&containerID, &resourceType)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
 		return
@@ -419,11 +418,6 @@ func (h *AdminInstanceHandler) ForceStop(c *gin.Context) {
 				// Continue anyway
 			}
 		}
-	}
-
-	// Release any host ports back to the pool before deleting the DB record
-	if pr, ok := h.containerSvc.(HostPortReleaser); ok {
-		releaseHostPorts(pr, assignedPortsJSON, h.logger)
 	}
 
 	// Delete from database

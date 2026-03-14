@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -112,8 +111,6 @@ func main() {
 
 	// Container instance expiry goroutine — runs every minute and stops/removes
 	// Docker containers whose timer has expired.  It mirrors what the user-facing
-	// Stop handler does: stop the container, release any allocated host ports,
-	// record a cooldown, then mark the instance as 'expired' in the DB.
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
@@ -122,14 +119,13 @@ func main() {
 
 			// Find all expired container instances that are still running.
 			type expiredInst struct {
-				ID            string
-				ContainerID   string
-				UserID        string
-				ChallengeID   string
-				AssignedPorts []byte
+				ID          string
+				ContainerID string
+				UserID      string
+				ChallengeID string
 			}
 			rows, err := db.Pool.Query(ctx, `
-				SELECT i.id, i.container_id, i.user_id::text, i.challenge_id, i.assigned_ports
+				SELECT i.id, i.container_id, i.user_id::text, i.challenge_id
 				FROM instances i
 				JOIN challenges c ON i.challenge_id = c.id
 				WHERE i.expires_at < NOW()
@@ -146,7 +142,7 @@ func main() {
 			var expired []expiredInst
 			for rows.Next() {
 				var inst expiredInst
-				if scanErr := rows.Scan(&inst.ID, &inst.ContainerID, &inst.UserID, &inst.ChallengeID, &inst.AssignedPorts); scanErr == nil {
+				if scanErr := rows.Scan(&inst.ID, &inst.ContainerID, &inst.UserID, &inst.ChallengeID); scanErr == nil {
 					expired = append(expired, inst)
 				}
 			}
@@ -163,23 +159,6 @@ func main() {
 				if stopErr := containerSvc.StopInstance(ctx, inst.ContainerID); stopErr != nil {
 					sugar.Warnf("Failed to stop expired container %s: %v", shortID, stopErr)
 					// Continue: mark as expired in DB anyway so it doesn't stay 'running'
-				}
-
-				// Release any allocated host ports back to the pool.
-				if len(inst.AssignedPorts) > 0 {
-					var ports map[string]int
-					if jsonErr := json.Unmarshal(inst.AssignedPorts, &ports); jsonErr == nil {
-						for portKey := range ports {
-							var hp int
-							if n, err := fmt.Sscanf(portKey, "%d/", &hp); n != 1 || err != nil {
-								sugar.Warnf("Failed to parse port key %q for instance %s: %v", portKey, inst.ID, err)
-								continue
-							}
-							if hp > 0 {
-								containerSvc.ReleaseHostPort(hp)
-							}
-						}
-					}
 				}
 
 				// Look up the challenge cooldown (default 15 min).

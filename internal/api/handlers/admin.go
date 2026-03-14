@@ -35,8 +35,6 @@ func NewAdminService(cfg *config.Config, db *database.DB, containerSvc *containe
 	return &AdminService{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
 }
 
-// ===== Admin User Handlers =====
-
 // ListUsers returns all users (admin)
 func (h *AdminUserHandler) List(c *gin.Context) {
 	query := `
@@ -194,8 +192,6 @@ func (h *AdminUserHandler) Delete(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "user deleted"})
 }
-
-// ===== Admin Challenge Handlers =====
 
 // FlagInput represents a flag in the create challenge request
 type FlagInput struct {
@@ -978,8 +974,6 @@ func (h *AdminChallengeHandler) Archive(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "challenge archived"})
 }
 
-// ===== Flag Management =====
-
 // CreateFlagRequest represents the request to create a flag
 type CreateFlagRequest struct {
 	Name              string `json:"name" binding:"required"`
@@ -1430,8 +1424,6 @@ func (h *AdminChallengeHandler) ListInstanceFlags(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"instance_flags": results, "total": len(results)})
 }
-
-// ===== Stats Handler =====
 
 // GetStats returns platform statistics
 func (h *StatsHandler) Get(c *gin.Context) {

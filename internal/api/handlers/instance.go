@@ -416,43 +416,6 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			}
 		}
 
-		// Allocate host ports when port-mapping mode is enabled.
-		// Each exposed port gets a unique host port so that containers sharing
-		// the same internal port never conflict.
-		if h.containerSvc.HostPortMappingEnabled() && len(portConfigs) > 0 {
-			allocatedPorts := make([]int, 0, len(portConfigs))
-			allOK := true
-			for _, pc := range portConfigs {
-				hp, err := h.containerSvc.AllocateHostPort()
-				if err != nil {
-					h.logger.Error("failed to allocate host port", zap.Error(err))
-					// Roll back already-allocated ports
-					for _, p := range allocatedPorts {
-						h.containerSvc.ReleaseHostPort(p)
-					}
-					h.db.Pool.Exec(c.Request.Context(),
-						`UPDATE instances SET status = 'failed', error_message = $2 WHERE id = $1`,
-						instanceID, "no host ports available: "+err.Error())
-					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "no host ports available: " + err.Error()})
-					allOK = false
-					break
-				}
-				allocatedPorts = append(allocatedPorts, hp)
-				proto := pc.Protocol
-				if proto == "" {
-					proto = "tcp"
-				}
-				containerReq.HostPortBindings = append(containerReq.HostPortBindings, container.HostPortBinding{
-					ContainerPort: pc.Port,
-					HostPort:      hp,
-					Protocol:      proto,
-				})
-			}
-			if !allOK {
-				return
-			}
-		}
-
 		// Generate per-instance flags for dynamic-flag challenges and inject as env vars
 		envVars, err := h.generateAndStoreDynamicFlags(c.Request.Context(), instanceID, uid, challenge.ID)
 		if err != nil {
@@ -464,10 +427,6 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		containerInfo, err := h.containerSvc.CreateInstance(c.Request.Context(), containerReq)
 		if err != nil {
 			h.logger.Error("failed to create container", zap.Error(err))
-			// Release any allocated host ports on failure
-			for _, hpb := range containerReq.HostPortBindings {
-				h.containerSvc.ReleaseHostPort(hpb.HostPort)
-			}
 			h.db.Pool.Exec(c.Request.Context(),
 				`UPDATE instances SET status = 'failed', error_message = $2 WHERE id = $1`, instanceID, err.Error())
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start container"})
@@ -475,31 +434,15 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		}
 
 		resourceID = containerInfo.ContainerID
+		instanceIP = containerInfo.IPAddress
 
-		// Determine the IP / host that users will connect to.
-		// In port-mapping mode with a configured BindIP (VPN interface IP, e.g. wg0's
-		// 10.8.0.1), present that IP so users connect via VPN to the mapped host port.
-		// In VPN-only mode (no port mapping), use the container's private bridge IP
-		// directly — each container has a unique IP so there is no port conflict.
-		if h.containerSvc.HostPortMappingEnabled() && h.config.Container.BindIP != "" {
-			instanceIP = h.config.Container.BindIP
-		} else {
-			instanceIP = containerInfo.IPAddress
-		}
-
-		// Build port map: key = "host_port/svc" (the port the user connects to),
-		// value = container port (for reference).
 		portMappings = make(map[string]int)
 		for i, ep := range containerReq.ExposedPorts {
 			svcType := "tcp"
 			if i < len(portConfigs) && portConfigs[i].Service != "" {
 				svcType = portConfigs[i].Service
 			}
-			userPort := ep.Port // VPN-only mode: internal port == user-facing port
-			if i < len(containerReq.HostPortBindings) {
-				userPort = containerReq.HostPortBindings[i].HostPort
-			}
-			portMappings[fmt.Sprintf("%d/%s", userPort, svcType)] = ep.Port
+			portMappings[fmt.Sprintf("%d/%s", ep.Port, svcType)] = ep.Port
 		}
 	}
 
@@ -662,21 +605,19 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 
 	h.logger.Info("Stop handler called", zap.String("user_id", uid.String()), zap.String("instance_id", instanceID))
 
-	// Get instance with challenge info for cooldown; also fetch assigned_ports so
-	// we can release host ports from the pool before the record is deleted.
+	// Get instance with challenge info for cooldown
 	var inst struct {
-		ContainerID   *string
-		Status        string
-		ChallengeID   string
-		ResourceType  string
-		AssignedPorts []byte
+		ContainerID  *string
+		Status       string
+		ChallengeID  string
+		ResourceType string
 	}
 	err := h.db.Pool.QueryRow(ctx,
-		`SELECT i.container_id, i.status, i.challenge_id, c.resource_type, i.assigned_ports
+		`SELECT i.container_id, i.status, i.challenge_id, c.resource_type
 		 FROM instances i
 		 JOIN challenges c ON i.challenge_id = c.id
 		 WHERE i.id = $1 AND i.user_id = $2`,
-		instanceID, uid).Scan(&inst.ContainerID, &inst.Status, &inst.ChallengeID, &inst.ResourceType, &inst.AssignedPorts)
+		instanceID, uid).Scan(&inst.ContainerID, &inst.Status, &inst.ChallengeID, &inst.ResourceType)
 	if err != nil {
 		h.logger.Error("instance query failed in Stop handler", zap.Error(err), zap.String("instance_id", instanceID), zap.String("user_id", uid.String()))
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
@@ -712,9 +653,6 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 			h.logger.Info("Container stopped successfully, proceeding to delete database record", zap.String("instance_id", instanceID), zap.String("container_id", *inst.ContainerID))
 		}
 	}
-
-	// Release any allocated host ports back to the pool
-	releaseHostPorts(h.containerSvc, inst.AssignedPorts, h.logger)
 
 	// Delete instance immediately (CTF instances are ephemeral, cooldown tracked separately)
 	h.logger.Info("attempting to delete instance from database", zap.String("instance_id", instanceID))
@@ -925,35 +863,4 @@ func (h *InstanceHandler) generateAndStoreDynamicFlags(
 	}
 
 	return envVars, nil
-}
-
-// HostPortReleaser is implemented by any service that manages a host port pool.
-type HostPortReleaser interface {
-	ReleaseHostPort(port int)
-}
-
-// releaseHostPorts parses the assigned_ports JSON (map["host_port/svc" → container_port])
-// stored in the DB and returns every host port to the in-memory pool.
-// It is a no-op when svc is nil or port mapping is disabled.
-func releaseHostPorts(svc HostPortReleaser, portsJSON []byte, logger *zap.Logger) {
-	if svc == nil || len(portsJSON) == 0 {
-		return
-	}
-	var ports map[string]int
-	if err := json.Unmarshal(portsJSON, &ports); err != nil {
-		logger.Warn("failed to parse assigned_ports for host port release", zap.Error(err))
-		return
-	}
-	for portKey := range ports {
-		// portKey format: "host_port/svc" (e.g. "32001/tcp")
-		var hostPort int
-		if n, err := fmt.Sscanf(portKey, "%d/", &hostPort); err != nil || n != 1 {
-			logger.Warn("failed to parse port key during host port release",
-				zap.String("port_key", portKey), zap.Error(err))
-			continue
-		}
-		if hostPort > 0 {
-			svc.ReleaseHostPort(hostPort)
-		}
-	}
 }

@@ -46,15 +46,6 @@ container:
   health_check_interval: 30s
   labels:
     managed-by: anvil
-  # Host port mapping — set these when challenge images share the same internal
-  # port and you want each instance to get a unique, non-conflicting host port.
-  # bind_ip should be your WireGuard interface IP (e.g. "10.8.0.1") so that
-  # bindings are only reachable over VPN and never exposed to the internet.
-  # Users connect to  bind_ip:mapped_port  instead of the container's bridge IP.
-  # Leave host_port_min / host_port_max at 0 to keep VPN-only direct-container-IP mode.
-  bind_ip: ""          # e.g. "10.8.0.1" (wg0 IP) — leave empty to bind on all interfaces
-  host_port_min: 0     # start of host port pool (0 = VPN-only mode, no port mapping)
-  host_port_max: 0     # end of host port pool (inclusive)
 
 vpn:
   enabled: true

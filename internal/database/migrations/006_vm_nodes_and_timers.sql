@@ -1,10 +1,6 @@
 -- 006_vm_nodes_and_timers.sql
 -- Adds support for multi-node VM orchestration, challenge-specific timers, and cooldown periods
 
--- ============================================================================
--- VM NODES (Worker nodes that can run VMs)
--- ============================================================================
-
 DO $$ BEGIN
     CREATE TYPE node_status AS ENUM (
         'online',
@@ -83,25 +79,15 @@ CREATE INDEX IF NOT EXISTS idx_vm_nodes_status ON vm_nodes(status);
 CREATE INDEX IF NOT EXISTS idx_vm_nodes_priority ON vm_nodes(priority DESC);
 CREATE INDEX IF NOT EXISTS idx_vm_nodes_region ON vm_nodes(region);
 
--- ============================================================================
--- CHALLENGE TIMER SETTINGS
--- ============================================================================
-
--- Add timer and cooldown columns to challenges table
 ALTER TABLE challenges ADD COLUMN IF NOT EXISTS vm_timeout_minutes INTEGER;
 ALTER TABLE challenges ADD COLUMN IF NOT EXISTS vm_max_extensions INTEGER DEFAULT 2;
 ALTER TABLE challenges ADD COLUMN IF NOT EXISTS vm_extension_minutes INTEGER DEFAULT 30;
 ALTER TABLE challenges ADD COLUMN IF NOT EXISTS cooldown_minutes INTEGER DEFAULT 10;
 
--- Add default timeout based on difficulty
 COMMENT ON COLUMN challenges.vm_timeout_minutes IS 'VM instance timeout in minutes. If NULL, uses difficulty-based default: easy=60, medium=120, hard=180, insane=240';
 COMMENT ON COLUMN challenges.vm_max_extensions IS 'Maximum number of time extensions allowed';
 COMMENT ON COLUMN challenges.vm_extension_minutes IS 'Minutes added per extension';
 COMMENT ON COLUMN challenges.cooldown_minutes IS 'Cooldown period in minutes after instance expires before user can start another';
-
--- ============================================================================
--- USER COOLDOWNS
--- ============================================================================
 
 CREATE TABLE IF NOT EXISTS user_cooldowns (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -123,20 +109,10 @@ CREATE TABLE IF NOT EXISTS user_cooldowns (
 CREATE INDEX IF NOT EXISTS idx_user_cooldowns_user ON user_cooldowns(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_cooldowns_until ON user_cooldowns(cooldown_until);
 
--- ============================================================================
--- UPDATE VM_INSTANCES TABLE
--- ============================================================================
-
--- Add node reference to vm_instances
 ALTER TABLE vm_instances ADD COLUMN IF NOT EXISTS node_id UUID REFERENCES vm_nodes(id);
 CREATE INDEX IF NOT EXISTS idx_vm_instances_node ON vm_instances(node_id);
 
--- Add cooldown tracking
 ALTER TABLE vm_instances ADD COLUMN IF NOT EXISTS cooldown_applied BOOLEAN DEFAULT FALSE;
-
--- ============================================================================
--- NODE HEALTH HISTORY (for monitoring)
--- ============================================================================
 
 CREATE TABLE IF NOT EXISTS node_health_history (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -169,13 +145,6 @@ CREATE TABLE IF NOT EXISTS node_health_history (
 CREATE INDEX IF NOT EXISTS idx_node_health_node ON node_health_history(node_id);
 CREATE INDEX IF NOT EXISTS idx_node_health_time ON node_health_history(recorded_at);
 
--- Partition or auto-cleanup old health data (keep 7 days)
--- This could be done via pg_cron or application cleanup job
-
--- ============================================================================
--- PLATFORM SETTINGS FOR MULTI-NODE
--- ============================================================================
-
 INSERT INTO platform_settings (key, value, description) VALUES
     ('vm_default_timeout_easy', '60', 'Default VM timeout in minutes for easy challenges'),
     ('vm_default_timeout_medium', '120', 'Default VM timeout in minutes for medium challenges'),
@@ -188,10 +157,6 @@ INSERT INTO platform_settings (key, value, description) VALUES
     ('multi_node_enabled', 'false', 'Enable multi-node VM orchestration'),
     ('vm_image_sync_enabled', 'false', 'Enable automatic VM image sync to worker nodes')
 ON CONFLICT (key) DO NOTHING;
-
--- ============================================================================
--- FUNCTIONS
--- ============================================================================
 
 -- Function to get effective timeout for a challenge
 CREATE OR REPLACE FUNCTION get_challenge_timeout_minutes(p_challenge_id UUID)
@@ -273,19 +238,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- ============================================================================
--- TRIGGERS
--- ============================================================================
-
 DO $$ BEGIN
     CREATE TRIGGER update_vm_nodes_updated_at BEFORE UPDATE ON vm_nodes
         FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
-
--- ============================================================================
--- INSERT PRIMARY NODE (current server)
--- ============================================================================
 
 -- This will be populated by the application on startup
 -- INSERT INTO vm_nodes (name, hostname, ip_address, total_vcpu, total_memory_mb, total_disk_gb, is_primary, status)

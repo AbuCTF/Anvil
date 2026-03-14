@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -30,12 +28,7 @@ type Service struct {
 	client *client.Client
 	logger *zap.Logger
 
-	// Network management
 	networkID string
-
-	// Host port pool — only used when HostPortMin > 0
-	mu            sync.Mutex
-	usedHostPorts map[int]bool
 }
 
 // NewService creates a new container service
@@ -56,21 +49,15 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 	}
 
 	s := &Service{
-		config:        cfg,
-		client:        cli,
-		logger:        logger,
-		usedHostPorts: make(map[int]bool),
+		config: cfg,
+		client: cli,
+		logger: logger,
 	}
 
-	// Ensure network exists
 	if err := s.ensureNetwork(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to ensure network: %w", err)
 	}
 
-	// Rebuild in-memory host port pool from any containers already running
-	s.loadUsedHostPorts(context.Background())
-
-	// Start cleanup goroutine
 	go s.cleanupLoop()
 
 	return s, nil
@@ -134,10 +121,6 @@ type CreateInstanceRequest struct {
 	Registry        string
 	Platform        string // e.g. "linux/amd64" for cross-arch emulation
 	ExposedPorts    []ExposedPort
-	// HostPortBindings maps each ExposedPort to a pre-allocated host port.
-	// Must be the same length as ExposedPorts when set.
-	// Leave nil to use VPN-only direct-container-IP access (no -p binding).
-	HostPortBindings []HostPortBinding
 	CPULimit        string
 	MemoryLimit     string
 	Labels          map[string]string
@@ -150,21 +133,11 @@ type ExposedPort struct {
 	Protocol string
 }
 
-// HostPortBinding maps a container port to a specific host port.
-type HostPortBinding struct {
-	ContainerPort int
-	HostPort      int
-	Protocol      string // "tcp" or "udp"; defaults to "tcp"
-}
-
 // CreateInstanceResponse contains the response from creating a container
 type CreateInstanceResponse struct {
 	ContainerID   string
 	ContainerName string
 	IPAddress     string
-	// HostPorts maps container port to the allocated host port (only set when
-	// HostPortBindings were requested).
-	HostPorts map[int]int
 }
 
 // CreateInstance creates a new challenge container
@@ -188,29 +161,15 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		return nil, fmt.Errorf("failed to pull image: %w", err)
 	}
 
-	// Build exposed ports set and optional host port bindings
+	// Build exposed ports set
 	exposedPorts := make(nat.PortSet)
-	portBindings := nat.PortMap{}
-	for i, p := range req.ExposedPorts {
+	for _, p := range req.ExposedPorts {
 		protocol := p.Protocol
 		if protocol == "" {
 			protocol = "tcp"
 		}
 		containerPort := nat.Port(fmt.Sprintf("%d/%s", p.Port, protocol))
 		exposedPorts[containerPort] = struct{}{}
-
-		if i < len(req.HostPortBindings) {
-			hpb := req.HostPortBindings[i]
-			hProto := hpb.Protocol
-			if hProto == "" {
-				hProto = "tcp"
-			}
-			hostContainerPort := nat.Port(fmt.Sprintf("%d/%s", hpb.ContainerPort, hProto))
-			bindIP := s.config.BindIP // VPN interface IP (e.g. "10.8.0.1"); empty = all interfaces
-			portBindings[hostContainerPort] = []nat.PortBinding{
-				{HostIP: bindIP, HostPort: strconv.Itoa(hpb.HostPort)},
-			}
-		}
 	}
 
 	// Container name
@@ -251,7 +210,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}
 	hostCfg := &container.HostConfig{
 		NetworkMode:  container.NetworkMode(s.config.NetworkName),
-		PortBindings: portBindings,
+		PortBindings: nat.PortMap{},
 		Resources: container.Resources{
 			NanoCPUs: cpuLimit,
 			Memory:   memoryLimit,
@@ -331,31 +290,20 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	)
 
 	// Build host port map for the response
-	var hostPorts map[int]int
-	if len(req.HostPortBindings) > 0 {
-		hostPorts = make(map[int]int, len(req.HostPortBindings))
-		for _, hpb := range req.HostPortBindings {
-			hostPorts[hpb.ContainerPort] = hpb.HostPort
-		}
-	}
-
 	return &CreateInstanceResponse{
 		ContainerID:   resp.ID,
 		ContainerName: containerName,
 		IPAddress:     ipAddress,
-		HostPorts:     hostPorts,
 	}, nil
 }
 
-// StopInstance stops and removes a container, freeing any host port bindings.
+// StopInstance stops and removes a container.
 func (s *Service) StopInstance(ctx context.Context, containerID string) error {
 	timeout := 10 // seconds
 	if err := s.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
-		// Best-effort: proceed to force-remove even if stop fails
 		s.logger.Warn("ContainerStop returned error; force-removing anyway",
 			zap.String("container", containerID), zap.Error(err))
 	}
-	// Remove the container so that host port bindings are released immediately
 	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true, RemoveVolumes: true})
 }
 
@@ -441,74 +389,6 @@ func (s *Service) cleanupLoop() {
 		}
 		cancel()
 	}
-}
-
-// ============================================================================
-// Host port pool — used for -p host_port:container_port binding mode
-// ============================================================================
-
-// AllocateHostPort picks a free port from the configured range and marks it as
-// in-use. Returns an error when the pool is exhausted or is not configured.
-func (s *Service) AllocateHostPort() (int, error) {
-	if s.config.HostPortMin <= 0 || s.config.HostPortMax <= 0 {
-		return 0, fmt.Errorf("host port pool is not configured (set host_port_min / host_port_max)")
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for port := s.config.HostPortMin; port <= s.config.HostPortMax; port++ {
-		if !s.usedHostPorts[port] {
-			s.usedHostPorts[port] = true
-			return port, nil
-		}
-	}
-	return 0, fmt.Errorf("host port pool exhausted (range %d-%d)", s.config.HostPortMin, s.config.HostPortMax)
-}
-
-// ReleaseHostPort returns a port to the pool so it can be reused.
-func (s *Service) ReleaseHostPort(port int) {
-	s.mu.Lock()
-	delete(s.usedHostPorts, port)
-	s.mu.Unlock()
-}
-
-// HostPortMappingEnabled returns true when the host port pool is configured.
-func (s *Service) HostPortMappingEnabled() bool {
-	return s.config.HostPortMin > 0 && s.config.HostPortMax > 0
-}
-
-// loadUsedHostPorts scans currently running Anvil containers and marks their
-// host port bindings as in-use so we never double-allocate on restart.
-func (s *Service) loadUsedHostPorts(ctx context.Context) {
-	if !s.HostPortMappingEnabled() {
-		return
-	}
-
-	containers, err := s.client.ContainerList(ctx, container.ListOptions{
-		All:     true,
-		Filters: filters.NewArgs(filters.Arg("label", "managed-by=anvil")),
-	})
-	if err != nil {
-		s.logger.Warn("failed to list containers while initialising host port pool", zap.Error(err))
-		return
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, c := range containers {
-		for _, pm := range c.Ports {
-			if pm.PublicPort > 0 {
-				s.usedHostPorts[int(pm.PublicPort)] = true
-			}
-		}
-	}
-
-	s.logger.Info("host port pool initialised",
-		zap.Int("in_use", len(s.usedHostPorts)),
-		zap.Int("range_start", s.config.HostPortMin),
-		zap.Int("range_end", s.config.HostPortMax),
-	)
 }
 
 // pullImage pulls a Docker image
