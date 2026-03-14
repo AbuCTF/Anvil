@@ -171,7 +171,11 @@ func main() {
 					if jsonErr := json.Unmarshal(inst.AssignedPorts, &ports); jsonErr == nil {
 						for portKey := range ports {
 							var hp int
-							if n, _ := fmt.Sscanf(portKey, "%d/", &hp); n == 1 && hp > 0 {
+							if n, err := fmt.Sscanf(portKey, "%d/", &hp); n != 1 || err != nil {
+								sugar.Warnf("Failed to parse port key %q for instance %s: %v", portKey, inst.ID, err)
+								continue
+							}
+							if hp > 0 {
 								containerSvc.ReleaseHostPort(hp)
 							}
 						}
