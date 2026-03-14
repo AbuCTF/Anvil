@@ -477,10 +477,12 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		resourceID = containerInfo.ContainerID
 
 		// Determine the IP / host that users will connect to.
-		// In host-port-mapping mode we use the configured HostIP (public IP of the
-		// server); in VPN-only mode we keep the container's private bridge IP.
-		if h.containerSvc.HostPortMappingEnabled() && h.config.Container.HostIP != "" {
-			instanceIP = h.config.Container.HostIP
+		// In port-mapping mode with a configured BindIP (VPN interface IP, e.g. wg0's
+		// 10.8.0.1), present that IP so users connect via VPN to the mapped host port.
+		// In VPN-only mode (no port mapping), use the container's private bridge IP
+		// directly — each container has a unique IP so there is no port conflict.
+		if h.containerSvc.HostPortMappingEnabled() && h.config.Container.BindIP != "" {
+			instanceIP = h.config.Container.BindIP
 		} else {
 			instanceIP = containerInfo.IPAddress
 		}

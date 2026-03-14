@@ -206,8 +206,9 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 				hProto = "tcp"
 			}
 			hostContainerPort := nat.Port(fmt.Sprintf("%d/%s", hpb.ContainerPort, hProto))
+			bindIP := s.config.BindIP // VPN interface IP (e.g. "10.8.0.1"); empty = all interfaces
 			portBindings[hostContainerPort] = []nat.PortBinding{
-				{HostIP: "0.0.0.0", HostPort: strconv.Itoa(hpb.HostPort)},
+				{HostIP: bindIP, HostPort: strconv.Itoa(hpb.HostPort)},
 			}
 		}
 	}

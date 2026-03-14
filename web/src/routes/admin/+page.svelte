@@ -1741,7 +1741,7 @@
 									{/each}
 								</div>
 								<p class="text-stone-500 text-xs mt-1.5">
-									Enter the port your container listens on internally (e.g. 5001). When host port mapping is enabled (<code class="text-stone-500">host_port_min</code> / <code class="text-stone-500">host_port_max</code> in config), a unique host port is automatically assigned per instance so containers sharing the same internal port never conflict — users connect to <code class="text-stone-500">server_ip:host_port</code>. Without host port mapping, users connect via VPN directly to the container IP and this port.
+									Enter the port your container listens on internally (e.g. 5001). When host port mapping is enabled (<code class="text-stone-500">host_port_min</code> / <code class="text-stone-500">host_port_max</code> in config), a unique host port is automatically assigned per instance so containers sharing the same internal port never conflict — set <code class="text-stone-500">bind_ip</code> to your WireGuard interface IP (e.g. <code class="text-stone-500">10.8.0.1</code>) so that mapped ports are only reachable over VPN. Without host port mapping, users connect via VPN directly to the container's bridge IP and this port.
 									Choose <strong class="text-stone-400">TCP</strong> for netcat-style services or <strong class="text-stone-400">HTTP</strong> for web challenges (shows a clickable URL).
 								</p>
 							</div>

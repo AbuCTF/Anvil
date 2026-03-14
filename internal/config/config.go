@@ -78,10 +78,16 @@ type ContainerConfig struct {
 
 	// Host port mapping — enables -p host_port:container_port bindings so that
 	// multiple challenges sharing the same internal port never conflict.
-	// Users connect to HostIP:allocated_host_port instead of the container IP.
+	// Users connect to BindIP:allocated_host_port instead of the container IP.
+	//
+	// BindIP should be set to the WireGuard (or other VPN) interface IP
+	// (e.g. "10.8.0.1") so that the bound ports are only reachable over VPN
+	// and never exposed to the public internet.
+	// Leave BindIP empty to bind on all interfaces (0.0.0.0).
+	//
 	// Set HostPortMin / HostPortMax to 0 (default) to keep the original
-	// VPN-only direct-container-IP access mode.
-	HostIP      string `mapstructure:"host_ip"`       // Public IP / hostname shown to users
+	// VPN-only direct-container-IP access mode (no port mapping).
+	BindIP      string `mapstructure:"bind_ip"`       // VPN interface IP to bind to (e.g. "10.8.0.1")
 	HostPortMin int    `mapstructure:"host_port_min"` // First port in pool (0 = disabled)
 	HostPortMax int    `mapstructure:"host_port_max"` // Last port in pool (inclusive)
 }

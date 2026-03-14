@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -108,6 +109,99 @@ func main() {
 	}
 
 	// Start background cleanup goroutines
+
+	// Container instance expiry goroutine — runs every minute and stops/removes
+	// Docker containers whose timer has expired.  It mirrors what the user-facing
+	// Stop handler does: stop the container, release any allocated host ports,
+	// record a cooldown, then mark the instance as 'expired' in the DB.
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+
+			// Find all expired container instances that are still running.
+			type expiredInst struct {
+				ID            string
+				ContainerID   string
+				UserID        string
+				ChallengeID   string
+				AssignedPorts []byte
+			}
+			rows, err := db.Pool.Query(ctx, `
+				SELECT i.id, i.container_id, i.user_id::text, i.challenge_id, i.assigned_ports
+				FROM instances i
+				JOIN challenges c ON i.challenge_id = c.id
+				WHERE i.expires_at < NOW()
+				  AND i.status IN ('running', 'creating', 'pending')
+				  AND c.resource_type = 'container'
+				  AND i.container_id IS NOT NULL AND i.container_id <> ''
+			`)
+			if err != nil {
+				sugar.Errorf("Container expiry query failed: %v", err)
+				cancel()
+				continue
+			}
+
+			var expired []expiredInst
+			for rows.Next() {
+				var inst expiredInst
+				if scanErr := rows.Scan(&inst.ID, &inst.ContainerID, &inst.UserID, &inst.ChallengeID, &inst.AssignedPorts); scanErr == nil {
+					expired = append(expired, inst)
+				}
+			}
+			rows.Close()
+
+			for _, inst := range expired {
+				shortID := inst.ContainerID
+				if len(shortID) > 12 {
+					shortID = shortID[:12]
+				}
+				sugar.Infof("Expiring container instance %s (container %s)", inst.ID, shortID)
+
+				// Stop and remove the Docker container.
+				if stopErr := containerSvc.StopInstance(ctx, inst.ContainerID); stopErr != nil {
+					sugar.Warnf("Failed to stop expired container %s: %v", shortID, stopErr)
+					// Continue: mark as expired in DB anyway so it doesn't stay 'running'
+				}
+
+				// Release any allocated host ports back to the pool.
+				if len(inst.AssignedPorts) > 0 {
+					var ports map[string]int
+					if jsonErr := json.Unmarshal(inst.AssignedPorts, &ports); jsonErr == nil {
+						for portKey := range ports {
+							var hp int
+							if n, _ := fmt.Sscanf(portKey, "%d/", &hp); n == 1 && hp > 0 {
+								containerSvc.ReleaseHostPort(hp)
+							}
+						}
+					}
+				}
+
+				// Look up the challenge cooldown (default 15 min).
+				var cooldownMinutes int
+				if scanErr := db.Pool.QueryRow(ctx,
+					`SELECT COALESCE(cooldown_minutes, 15) FROM challenges WHERE id = $1`,
+					inst.ChallengeID).Scan(&cooldownMinutes); scanErr != nil {
+					cooldownMinutes = 15
+				}
+				cooldownUntil := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
+				db.Pool.Exec(ctx,
+					`INSERT INTO user_cooldowns (id, user_id, challenge_id, cooldown_until, created_at)
+					 VALUES (uuid_generate_v4(), $1::uuid, $2, $3, NOW())
+					 ON CONFLICT (user_id, challenge_id) DO UPDATE SET cooldown_until = $3`,
+					inst.UserID, inst.ChallengeID, cooldownUntil)
+
+				// Mark the instance as expired so the UI shows the correct state.
+				db.Pool.Exec(ctx,
+					`UPDATE instances SET status = 'expired', updated_at = NOW() WHERE id = $1`,
+					inst.ID)
+			}
+
+			cancel()
+		}
+	}()
+
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
 		defer ticker.Stop()
