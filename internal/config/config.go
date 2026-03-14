@@ -75,6 +75,15 @@ type ContainerConfig struct {
 	CleanupInterval     time.Duration     `mapstructure:"cleanup_interval"`
 	HealthCheckInterval time.Duration     `mapstructure:"health_check_interval"`
 	Labels              map[string]string `mapstructure:"labels"`
+
+	// Host port mapping — enables -p host_port:container_port bindings so that
+	// multiple challenges sharing the same internal port never conflict.
+	// Users connect to HostIP:allocated_host_port instead of the container IP.
+	// Set HostPortMin / HostPortMax to 0 (default) to keep the original
+	// VPN-only direct-container-IP access mode.
+	HostIP      string `mapstructure:"host_ip"`       // Public IP / hostname shown to users
+	HostPortMin int    `mapstructure:"host_port_min"` // First port in pool (0 = disabled)
+	HostPortMax int    `mapstructure:"host_port_max"` // Last port in pool (inclusive)
 }
 
 type VPNConfig struct {

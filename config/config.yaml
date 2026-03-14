@@ -46,6 +46,12 @@ container:
   health_check_interval: 30s
   labels:
     managed-by: anvil
+  # Host port mapping — set these when challenge images share the same internal
+  # port and you want users to connect without VPN (server_ip:host_port).
+  # Leave host_port_min / host_port_max at 0 to keep VPN-only direct-IP mode.
+  host_ip: ""          # e.g. "1.2.3.4" or "ctf.example.com" — shown to users
+  host_port_min: 0     # start of host port pool (0 = VPN-only mode)
+  host_port_max: 0     # end of host port pool (inclusive)
 
 vpn:
   enabled: true
