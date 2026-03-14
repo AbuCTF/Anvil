@@ -1,10 +1,6 @@
 -- 007_dynamic_flags.sql
 -- Per-instance dynamic flag support for Docker challenges
 
--- ============================================================================
--- EXTEND FLAGS TABLE
--- ============================================================================
-
 -- flag_type: 'static' (pre-hashed value stored in flag_hash) or
 --            'dynamic' (Anvil generates PREFIX{uuid} per instance and injects
 --                       it as the FLAG env var; flag_hash unused)
@@ -13,10 +9,6 @@ ALTER TABLE flags ADD COLUMN IF NOT EXISTS flag_type VARCHAR(20) DEFAULT 'static
 -- e.g. "H7CTF"  →  "H7CTF{<uuid>}"
 -- If null, defaults to "FLAG"
 ALTER TABLE flags ADD COLUMN IF NOT EXISTS dynamic_flag_prefix VARCHAR(100);
-
--- ============================================================================
--- INSTANCE FLAGS
--- ============================================================================
 
 -- Stores the unique flag value generated for each (instance, flag) pair.
 CREATE TABLE IF NOT EXISTS instance_flags (
@@ -37,10 +29,6 @@ CREATE INDEX IF NOT EXISTS idx_instance_flags_instance
 -- Fast lookup on submission: find any instance that generated this exact value
 CREATE INDEX IF NOT EXISTS idx_instance_flags_value
     ON instance_flags(flag_value);
-
--- ============================================================================
--- FLAG SHARE EVENTS
--- ============================================================================
 
 -- Logged whenever a user submits a dynamic flag that was generated for a
 -- *different* user's instance. The submission is accepted transparently

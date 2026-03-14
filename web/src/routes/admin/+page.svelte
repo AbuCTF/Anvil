@@ -1710,8 +1710,10 @@
 									<button
 										type="button"
 										on:click={() => newChallenge.exposed_ports = [...newChallenge.exposed_ports, { port: 0, protocol: 'tcp', service: 'tcp' }]}
-										class="text-xs text-stone-400 hover:text-white transition"
-									>+ Add Port</button>
+										class="text-xs text-stone-400 hover:text-white transition flex items-center gap-1"
+									>
+										<Icon icon="mdi:plus" class="w-3.5 h-3.5" /> Add Port
+									</button>
 								</div>
 								<div class="space-y-2">
 									{#each newChallenge.exposed_ports as ep, i}
@@ -1720,22 +1722,15 @@
 												type="number"
 												bind:value={ep.port}
 												min="1" max="65535"
-												class="flex-1 px-3 py-2 bg-black border border-stone-700 rounded-lg text-white font-mono text-sm focus:outline-none focus:border-stone-500 transition-all"
+												class="w-28 px-3 py-2 bg-black border border-stone-700 rounded-lg text-white font-mono text-sm focus:outline-none focus:border-stone-500 transition-all"
 												placeholder="1337"
 											/>
 											<select
-												bind:value={ep.protocol}
-												class="px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
-											>
-												<option value="tcp">TCP</option>
-												<option value="udp">UDP</option>
-											</select>
-											<select
 												bind:value={ep.service}
-												class="px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500"
+												class="flex-1 px-3 py-2 bg-black border border-stone-700 rounded-lg text-white text-sm focus:outline-none focus:border-stone-500 transition-all"
 											>
-												<option value="tcp">nc (TCP)</option>
-												<option value="http">HTTP</option>
+												<option value="tcp">TCP — nc (netcat)</option>
+												<option value="http">HTTP — web browser</option>
 											</select>
 											{#if newChallenge.exposed_ports.length > 1}
 												<button type="button" on:click={() => newChallenge.exposed_ports = newChallenge.exposed_ports.filter((_, idx) => idx !== i)} class="p-1.5 text-stone-500 hover:text-red-400 transition">
@@ -1745,7 +1740,10 @@
 										</div>
 									{/each}
 								</div>
-								<p class="text-stone-500 text-xs mt-1.5">Ports the challenge service listens on. Service type controls how the connect command is shown to users.</p>
+								<p class="text-stone-500 text-xs mt-1.5">
+									Enter the port your container listens on internally (e.g. 5001). Users connect via VPN directly to the container's bridge IP on this port.
+									Choose <strong class="text-stone-400">TCP</strong> for netcat-style services or <strong class="text-stone-400">HTTP</strong> for web challenges (shows a clickable URL).
+								</p>
 							</div>
 
 							<!-- Flags -->
@@ -2173,18 +2171,12 @@
 										class="w-20 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs focus:outline-none focus:border-stone-700"
 									/>
 									<select
-										bind:value={ep.protocol}
-										class="w-20 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs focus:outline-none focus:border-stone-700"
-									>
-										<option value="tcp">TCP</option>
-										<option value="udp">UDP</option>
-									</select>
-									<input
-										type="text"
 										bind:value={ep.service}
-										placeholder="Label"
 										class="flex-1 px-2 py-1.5 bg-black border border-stone-800 rounded text-white text-xs focus:outline-none focus:border-stone-700"
-									/>
+									>
+										<option value="tcp">TCP — nc (netcat)</option>
+										<option value="http">HTTP — web browser</option>
+									</select>
 									<button
 										type="button"
 										on:click={() => { editingChallenge.exposed_ports = editingChallenge.exposed_ports.filter((_x, idx) => idx !== i); }}
@@ -2194,6 +2186,7 @@
 									</button>
 								</div>
 							{/each}
+							<p class="text-stone-600 text-xs mt-1">Port your container listens on internally. TCP shows <code class="text-stone-500">nc host port</code>; HTTP shows a clickable URL.</p>
 						</div>
 					</div>
 				{/if}

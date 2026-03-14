@@ -1,17 +1,10 @@
 -- 002_vm_and_uploads.sql
 -- Adds support for VM-based challenges and file uploads
 
--- ============================================================================
--- RESOURCE TYPES
--- ============================================================================
-
--- Resource type enum (Docker containers vs VMs)
 CREATE TYPE resource_type AS ENUM ('docker', 'vm');
 
--- Image format enum for VMs
 CREATE TYPE vm_image_format AS ENUM ('ova', 'vmdk', 'qcow2', 'vdi', 'raw', 'iso');
 
--- Upload status enum
 CREATE TYPE upload_status AS ENUM (
     'pending',
     'uploading', 
@@ -21,10 +14,6 @@ CREATE TYPE upload_status AS ENUM (
     'failed',
     'cancelled'
 );
-
--- ============================================================================
--- FILE UPLOADS
--- ============================================================================
 
 CREATE TABLE uploads (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -77,7 +66,6 @@ CREATE INDEX idx_uploads_status ON uploads(status);
 CREATE INDEX idx_uploads_expires ON uploads(expires_at);
 CREATE INDEX idx_uploads_storage_key ON uploads(storage_key);
 
--- Upload chunks tracking (for resumable uploads)
 CREATE TABLE upload_chunks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     upload_id UUID NOT NULL REFERENCES uploads(id) ON DELETE CASCADE,
@@ -90,10 +78,6 @@ CREATE TABLE upload_chunks (
 );
 
 CREATE INDEX idx_upload_chunks_upload ON upload_chunks(upload_id);
-
--- ============================================================================
--- VM TEMPLATES
--- ============================================================================
 
 CREATE TABLE vm_templates (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -148,11 +132,6 @@ CREATE INDEX idx_vm_templates_author ON vm_templates(author_id);
 CREATE INDEX idx_vm_templates_active ON vm_templates(is_active);
 CREATE INDEX idx_vm_templates_os ON vm_templates(os_type, os_variant);
 
--- ============================================================================
--- CHALLENGE RESOURCES
--- ============================================================================
-
--- Link challenges to their resources (Docker images OR VM templates)
 CREATE TABLE challenge_resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     challenge_id UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
@@ -196,11 +175,6 @@ CREATE INDEX idx_challenge_resources_challenge ON challenge_resources(challenge_
 CREATE INDEX idx_challenge_resources_type ON challenge_resources(resource_type);
 CREATE INDEX idx_challenge_resources_vm ON challenge_resources(vm_template_id);
 
--- ============================================================================
--- VM INSTANCES
--- ============================================================================
-
--- VM instance status
 CREATE TYPE vm_instance_status AS ENUM (
     'provisioning',
     'starting',
@@ -273,10 +247,6 @@ CREATE INDEX idx_vm_instances_status ON vm_instances(status);
 CREATE INDEX idx_vm_instances_expires ON vm_instances(expires_at);
 CREATE INDEX idx_vm_instances_host ON vm_instances(host_node);
 
--- ============================================================================
--- DOCKER BUILD QUEUE (for Dockerfile-based challenges)
--- ============================================================================
-
 CREATE TYPE build_status AS ENUM (
     'queued',
     'building',
@@ -326,33 +296,18 @@ CREATE INDEX idx_docker_builds_challenge ON docker_builds(challenge_id);
 CREATE INDEX idx_docker_builds_status ON docker_builds(status);
 CREATE INDEX idx_docker_builds_queued ON docker_builds(queued_at);
 
--- ============================================================================
--- UPDATE CHALLENGES TABLE
--- ============================================================================
-
--- Add resource_type column to challenges for quick filtering
 ALTER TABLE challenges ADD COLUMN IF NOT EXISTS resource_type resource_type DEFAULT 'docker';
 
--- Add flag to indicate if challenge supports multiple resource types
 ALTER TABLE challenges ADD COLUMN IF NOT EXISTS supports_vm BOOLEAN DEFAULT FALSE;
 ALTER TABLE challenges ADD COLUMN IF NOT EXISTS supports_docker BOOLEAN DEFAULT TRUE;
 
 CREATE INDEX idx_challenges_resource_type ON challenges(resource_type);
 
--- ============================================================================
--- UPDATE INSTANCES TABLE
--- ============================================================================
-
--- Add resource reference to instances
 ALTER TABLE instances ADD COLUMN IF NOT EXISTS resource_id UUID REFERENCES challenge_resources(id);
 ALTER TABLE instances ADD COLUMN IF NOT EXISTS resource_type resource_type DEFAULT 'docker';
 
 CREATE INDEX idx_instances_resource ON instances(resource_id);
 CREATE INDEX idx_instances_resource_type ON instances(resource_type);
-
--- ============================================================================
--- PLATFORM SETTINGS FOR VM SUPPORT
--- ============================================================================
 
 INSERT INTO platform_settings (key, value, description) VALUES
     ('vm_enabled', 'true', 'Enable VM-based challenges'),
@@ -367,10 +322,6 @@ INSERT INTO platform_settings (key, value, description) VALUES
     ('upload_chunk_size', '10485760', 'Upload chunk size in bytes (10MB)'),
     ('upload_expiry_hours', '24', 'Hours before incomplete uploads expire')
 ON CONFLICT (key) DO NOTHING;
-
--- ============================================================================
--- TRIGGERS
--- ============================================================================
 
 CREATE TRIGGER update_uploads_updated_at BEFORE UPDATE ON uploads
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

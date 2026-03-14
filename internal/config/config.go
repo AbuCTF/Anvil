@@ -93,22 +93,18 @@ type PlatformConfig struct {
 	Name        string `mapstructure:"name"`
 	Description string `mapstructure:"description"`
 
-	// Registration settings
 	RegistrationMode   string `mapstructure:"registration_mode"` // open, invite, token, disabled
 	RequireEmailVerify bool   `mapstructure:"require_email_verify"`
 
-	// Scoring settings
 	ScoringEnabled    bool   `mapstructure:"scoring_enabled"`
 	ScoreboardEnabled bool   `mapstructure:"scoreboard_enabled"`
 	ScoreboardPublic  bool   `mapstructure:"scoreboard_public"`
 	ScoringMode       string `mapstructure:"scoring_mode"` // static, dynamic, time_decay
 
-	// Challenge settings
 	FlagSubmissionEnabled bool `mapstructure:"flag_submission_enabled"`
 	HintsEnabled          bool `mapstructure:"hints_enabled"`
 	WriteupSubmission     bool `mapstructure:"writeup_submission"`
 
-	// Instance settings
 	DefaultInstanceTimeout time.Duration `mapstructure:"default_instance_timeout"`
 	MaxInstanceExtensions  int           `mapstructure:"max_instance_extensions"`
 	ExtensionDuration      time.Duration `mapstructure:"extension_duration"`
@@ -119,7 +115,6 @@ type RateLimitConfig struct {
 	RequestsPerMinute int  `mapstructure:"requests_per_minute"`
 	BurstSize         int  `mapstructure:"burst_size"`
 
-	// Specific endpoint limits
 	Login          RateLimit `mapstructure:"login"`
 	FlagSubmission RateLimit `mapstructure:"flag_submission"`
 	InstanceStart  RateLimit `mapstructure:"instance_start"`
@@ -135,27 +130,22 @@ type RateLimit struct {
 func Load() (*Config, error) {
 	v := viper.New()
 
-	// Set config file details
 	v.SetConfigName("config")
 	v.SetConfigType("yaml")
 	v.AddConfigPath(".")
 	v.AddConfigPath("./config")
 	v.AddConfigPath("/etc/anvil")
 
-	// Environment variables
 	v.SetEnvPrefix("ANVIL")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
-	// Set defaults
 	setDefaults(v)
 
-	// Read config file (optional)
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, fmt.Errorf("error reading config file: %w", err)
 		}
-		// Config file not found, using defaults + env vars
 	}
 
 	var cfg Config
@@ -167,17 +157,14 @@ func Load() (*Config, error) {
 }
 
 func setDefaults(v *viper.Viper) {
-	// Environment
 	v.SetDefault("environment", "development")
 
-	// Server defaults
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.host", "0.0.0.0")
 	v.SetDefault("server.read_timeout", "15s")
 	v.SetDefault("server.write_timeout", "15s")
 	v.SetDefault("server.shutdown_timeout", "30s")
 
-	// Database defaults
 	v.SetDefault("database.host", "localhost")
 	v.SetDefault("database.port", 5432)
 	v.SetDefault("database.user", "anvil")
@@ -187,19 +174,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.max_open_conns", 25)
 	v.SetDefault("database.max_idle_conns", 5)
 
-	// Redis defaults
 	v.SetDefault("redis.host", "localhost")
 	v.SetDefault("redis.port", 6379)
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.db", 0)
 
-	// JWT defaults
 	v.SetDefault("jwt.secret", "change-me-in-production-please")
 	v.SetDefault("jwt.access_expiry", "15m")
 	v.SetDefault("jwt.refresh_expiry", "7d")
 	v.SetDefault("jwt.issuer", "anvil")
 
-	// Container defaults
 	v.SetDefault("container.runtime", "docker")
 	v.SetDefault("container.network_name", "anvil-challenges")
 	v.SetDefault("container.network_subnet", "172.20.0.0/16")
@@ -208,7 +192,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("container.cleanup_interval", "5m")
 	v.SetDefault("container.health_check_interval", "30s")
 
-	// VPN defaults
 	v.SetDefault("vpn.enabled", true)
 	v.SetDefault("vpn.interface", "wg0")
 	v.SetDefault("vpn.listen_port", 51820)
@@ -216,7 +199,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("vpn.dns", "1.1.1.1")
 	v.SetDefault("vpn.mtu", 1420)
 
-	// Platform defaults
 	v.SetDefault("platform.name", "Anvil")
 	v.SetDefault("platform.description", "Forge your skills")
 	v.SetDefault("platform.registration_mode", "open")
@@ -232,7 +214,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("platform.max_instance_extensions", 3)
 	v.SetDefault("platform.extension_duration", "30m")
 
-	// Rate limiting defaults
 	v.SetDefault("rate_limit.enabled", true)
 	v.SetDefault("rate_limit.requests_per_minute", 60)
 	v.SetDefault("rate_limit.burst_size", 10)

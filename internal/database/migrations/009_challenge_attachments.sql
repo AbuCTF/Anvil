@@ -1,10 +1,6 @@
 -- 009_challenge_attachments.sql
 -- Adds file attachment support per challenge and flag submission brute-force tracking
 
--- ============================================================================
--- CHALLENGE ATTACHMENTS
--- ============================================================================
-
 CREATE TABLE challenge_attachments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     challenge_id UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
@@ -32,10 +28,6 @@ CREATE INDEX idx_challenge_attachments_uploaded_by ON challenge_attachments(uplo
 CREATE TRIGGER update_challenge_attachments_updated_at
     BEFORE UPDATE ON challenge_attachments
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- ============================================================================
--- FLAG SUBMISSION BRUTE-FORCE PROTECTION
--- ============================================================================
 
 -- Track consecutive wrong attempts per (user, challenge) for lockout
 CREATE TABLE flag_attempt_lockouts (

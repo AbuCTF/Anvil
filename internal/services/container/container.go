@@ -28,7 +28,6 @@ type Service struct {
 	client *client.Client
 	logger *zap.Logger
 
-	// Network management
 	networkID string
 }
 
@@ -55,12 +54,10 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 		logger: logger,
 	}
 
-	// Ensure network exists
 	if err := s.ensureNetwork(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to ensure network: %w", err)
 	}
 
-	// Start cleanup goroutine
 	go s.cleanupLoop()
 
 	return s, nil
@@ -164,7 +161,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		return nil, fmt.Errorf("failed to pull image: %w", err)
 	}
 
-	// Build exposed ports set (no host port bindings — VPN-only access)
+	// Build exposed ports set
 	exposedPorts := make(nat.PortSet)
 	for _, p := range req.ExposedPorts {
 		protocol := p.Protocol
@@ -212,7 +209,8 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		Env:          req.EnvironmentVars,
 	}
 	hostCfg := &container.HostConfig{
-		NetworkMode: container.NetworkMode(s.config.NetworkName),
+		NetworkMode:  container.NetworkMode(s.config.NetworkName),
+		PortBindings: nat.PortMap{},
 		Resources: container.Resources{
 			NanoCPUs: cpuLimit,
 			Memory:   memoryLimit,
@@ -291,6 +289,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		zap.String("network", s.config.NetworkName),
 	)
 
+	// Build host port map for the response
 	return &CreateInstanceResponse{
 		ContainerID:   resp.ID,
 		ContainerName: containerName,
@@ -298,10 +297,14 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}, nil
 }
 
-// StopInstance stops a container
+// StopInstance stops and removes a container.
 func (s *Service) StopInstance(ctx context.Context, containerID string) error {
 	timeout := 10 // seconds
-	return s.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout})
+	if err := s.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+		s.logger.Warn("ContainerStop returned error; force-removing anyway",
+			zap.String("container", containerID), zap.Error(err))
+	}
+	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true, RemoveVolumes: true})
 }
 
 // StartInstance starts a stopped container

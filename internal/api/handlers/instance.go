@@ -432,11 +432,10 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to start container"})
 			return
 		}
-		instanceIP = containerInfo.IPAddress
-		resourceID = containerInfo.ContainerID
 
-		// Store native ports for VPN access (not host-mapped ports)
-		// Port key uses service type (tcp/http) so frontend knows how to display
+		resourceID = containerInfo.ContainerID
+		instanceIP = containerInfo.IPAddress
+
 		portMappings = make(map[string]int)
 		for i, ep := range containerReq.ExposedPorts {
 			svcType := "tcp"
@@ -614,7 +613,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		ResourceType string
 	}
 	err := h.db.Pool.QueryRow(ctx,
-		`SELECT i.container_id, i.status, i.challenge_id, c.resource_type 
+		`SELECT i.container_id, i.status, i.challenge_id, c.resource_type
 		 FROM instances i
 		 JOIN challenges c ON i.challenge_id = c.id
 		 WHERE i.id = $1 AND i.user_id = $2`,

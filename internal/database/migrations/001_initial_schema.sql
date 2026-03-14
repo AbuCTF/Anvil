@@ -5,20 +5,12 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- ============================================================================
--- USERS & AUTHENTICATION
--- ============================================================================
-
--- User roles enum
 CREATE TYPE user_role AS ENUM ('user', 'author', 'admin');
 
--- User status enum  
 CREATE TYPE user_status AS ENUM ('active', 'suspended', 'banned');
 
--- Registration mode enum (for platform config)
 CREATE TYPE registration_mode AS ENUM ('open', 'invite', 'token', 'disabled');
 
--- Users table
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     username VARCHAR(50) UNIQUE NOT NULL,
@@ -49,7 +41,6 @@ CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_users_total_score ON users(total_score DESC);
 
--- Team tokens (for token-based registration)
 CREATE TABLE team_tokens (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     token VARCHAR(50) UNIQUE NOT NULL,
@@ -63,7 +54,6 @@ CREATE TABLE team_tokens (
 
 CREATE INDEX idx_team_tokens_token ON team_tokens(token);
 
--- Invite codes
 CREATE TABLE invite_codes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     code VARCHAR(50) UNIQUE NOT NULL,
@@ -76,7 +66,6 @@ CREATE TABLE invite_codes (
 
 CREATE INDEX idx_invite_codes_code ON invite_codes(code);
 
--- Sessions (for token-based auth without full registration)
 CREATE TABLE sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -96,7 +85,6 @@ CREATE INDEX idx_sessions_token ON sessions(session_token);
 CREATE INDEX idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX idx_sessions_expires ON sessions(expires_at);
 
--- Refresh tokens
 CREATE TABLE refresh_tokens (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -109,17 +97,10 @@ CREATE TABLE refresh_tokens (
 CREATE INDEX idx_refresh_tokens_user ON refresh_tokens(user_id);
 CREATE INDEX idx_refresh_tokens_hash ON refresh_tokens(token_hash);
 
--- ============================================================================
--- CHALLENGES
--- ============================================================================
-
--- Challenge difficulty enum
 CREATE TYPE challenge_difficulty AS ENUM ('easy', 'medium', 'hard', 'insane');
 
--- Challenge status enum
 CREATE TYPE challenge_status AS ENUM ('draft', 'published', 'archived');
 
--- Categories
 CREATE TABLE categories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(100) UNIQUE NOT NULL,
@@ -131,7 +112,6 @@ CREATE TABLE categories (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Challenges (parent container for B2R machines)
 CREATE TABLE challenges (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     
@@ -186,7 +166,6 @@ CREATE INDEX idx_challenges_category ON challenges(category_id);
 CREATE INDEX idx_challenges_difficulty ON challenges(difficulty);
 CREATE INDEX idx_challenges_author ON challenges(author_id);
 
--- Flags (sub-challenges within a B2R machine)
 CREATE TABLE flags (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     challenge_id UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
@@ -218,7 +197,6 @@ CREATE TABLE flags (
 
 CREATE INDEX idx_flags_challenge ON flags(challenge_id);
 
--- Hints
 CREATE TABLE hints (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     challenge_id UUID NOT NULL REFERENCES challenges(id) ON DELETE CASCADE,
@@ -237,11 +215,6 @@ CREATE TABLE hints (
 
 CREATE INDEX idx_hints_challenge ON hints(challenge_id);
 
--- ============================================================================
--- INSTANCES (Running containers)
--- ============================================================================
-
--- Instance status enum
 CREATE TYPE instance_status AS ENUM (
     'pending',     -- Queued for creation
     'creating',    -- Being created
@@ -288,10 +261,6 @@ CREATE INDEX idx_instances_challenge ON instances(challenge_id);
 CREATE INDEX idx_instances_user ON instances(user_id);
 CREATE INDEX idx_instances_status ON instances(status);
 CREATE INDEX idx_instances_expires ON instances(expires_at);
-
--- ============================================================================
--- SUBMISSIONS & SCORING
--- ============================================================================
 
 CREATE TABLE submissions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -340,7 +309,6 @@ CREATE TABLE solved_flags (
     )
 );
 
--- Unique constraint: one solve per user/session per flag
 CREATE UNIQUE INDEX idx_solved_flags_user_flag ON solved_flags(user_id, flag_id) WHERE user_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_solved_flags_session_flag ON solved_flags(session_id, flag_id) WHERE session_id IS NOT NULL;
 
@@ -363,10 +331,6 @@ CREATE TABLE hint_unlocks (
 
 CREATE UNIQUE INDEX idx_hint_unlocks_user ON hint_unlocks(user_id, hint_id) WHERE user_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_hint_unlocks_session ON hint_unlocks(session_id, hint_id) WHERE session_id IS NOT NULL;
-
--- ============================================================================
--- VPN
--- ============================================================================
 
 CREATE TABLE vpn_configs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -397,10 +361,6 @@ CREATE UNIQUE INDEX idx_vpn_configs_session ON vpn_configs(session_id) WHERE ses
 CREATE UNIQUE INDEX idx_vpn_configs_ip ON vpn_configs(assigned_ip);
 CREATE INDEX idx_vpn_configs_public_key ON vpn_configs(public_key);
 
--- ============================================================================
--- PLATFORM CONFIGURATION
--- ============================================================================
-
 CREATE TABLE platform_settings (
     key VARCHAR(100) PRIMARY KEY,
     value JSONB NOT NULL,
@@ -409,7 +369,6 @@ CREATE TABLE platform_settings (
     updated_by UUID REFERENCES users(id)
 );
 
--- Insert default settings
 INSERT INTO platform_settings (key, value, description) VALUES
     ('platform_name', '"Anvil"', 'Platform display name'),
     ('platform_description', '"Forge your skills"', 'Platform tagline'),
@@ -427,10 +386,6 @@ INSERT INTO platform_settings (key, value, description) VALUES
     ('extension_duration', '1800', 'Extension duration in seconds'),
     ('maintenance_mode', 'false', 'Platform maintenance mode'),
     ('maintenance_message', '""', 'Maintenance mode message');
-
--- ============================================================================
--- AUDIT LOG
--- ============================================================================
 
 CREATE TABLE audit_log (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -450,11 +405,6 @@ CREATE INDEX idx_audit_log_action ON audit_log(action);
 CREATE INDEX idx_audit_log_entity ON audit_log(entity_type, entity_id);
 CREATE INDEX idx_audit_log_created ON audit_log(created_at);
 
--- ============================================================================
--- HELPER FUNCTIONS
--- ============================================================================
-
--- Function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -463,7 +413,6 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Apply triggers
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
@@ -479,7 +428,6 @@ CREATE TRIGGER update_instances_updated_at BEFORE UPDATE ON instances
 CREATE TRIGGER update_vpn_configs_updated_at BEFORE UPDATE ON vpn_configs
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Function to hash flags
 CREATE OR REPLACE FUNCTION hash_flag(flag TEXT)
 RETURNS VARCHAR(255) AS $$
 BEGIN
@@ -487,7 +435,6 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Function to verify flag
 CREATE OR REPLACE FUNCTION verify_flag(submitted TEXT, stored_hash VARCHAR(255))
 RETURNS BOOLEAN AS $$
 BEGIN

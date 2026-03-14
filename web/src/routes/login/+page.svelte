@@ -98,15 +98,6 @@
 					{/if}
 				</button>
 			</form>
-
-			<div class="my-4 border-t border-stone-800"></div>
-
-			<a
-				href="/token"
-				class="w-full flex justify-center items-center py-2.5 bg-stone-900 text-stone-300 font-medium hover:bg-stone-800 border border-stone-700 rounded transition"
-			>
-				Team Token Login
-			</a>
 		</div>
 	</div>
 </div>
