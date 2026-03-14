@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
 	"github.com/gin-gonic/gin"
@@ -48,13 +50,19 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 
 // ChallengeHandler - methods implemented in challenge.go
 type ChallengeHandler struct {
-	config *config.Config
-	db     *database.DB
-	logger *zap.Logger
+	config         *config.Config
+	db             *database.DB
+	logger         *zap.Logger
+	attachmentHdlr *AttachmentHandler
 }
 
 func NewChallengeHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *ChallengeHandler {
 	return &ChallengeHandler{config: cfg, db: db, logger: logger}
+}
+
+// NewChallengeHandlerWithAttachments creates a ChallengeHandler with attachment support.
+func NewChallengeHandlerWithAttachments(cfg *config.Config, db *database.DB, logger *zap.Logger, ah *AttachmentHandler) *ChallengeHandler {
+	return &ChallengeHandler{config: cfg, db: db, logger: logger, attachmentHdlr: ah}
 }
 
 // ScoreboardHandler - methods implemented in scoreboard.go
@@ -174,13 +182,99 @@ func (h *CategoryHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"categories": categories})
 }
 func (h *CategoryHandler) Create(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	var req struct {
+		Name        string `json:"name" binding:"required"`
+		Description string `json:"description"`
+		Color       string `json:"color"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	id := uuid.New().String()
+	safeSlug := buildCategorySlug(req.Name)
+	if safeSlug == "" {
+		safeSlug = id[:8]
+	}
+
+	_, err := h.db.Pool.Exec(c.Request.Context(),
+		`INSERT INTO categories (id, name, slug, description, color)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		id, req.Name, safeSlug, req.Description, req.Color,
+	)
+	if err != nil {
+		h.logger.Error("failed to create category", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create category"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":          id,
+		"name":        req.Name,
+		"slug":        safeSlug,
+		"description": req.Description,
+		"color":       req.Color,
+	})
+}
+
+// buildCategorySlug converts a human-readable name into a URL-safe slug.
+// Non-alphanumeric characters are replaced by dashes; consecutive dashes are
+// collapsed and leading/trailing dashes are trimmed.
+func buildCategorySlug(name string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 func (h *CategoryHandler) Update(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	id := c.Param("id")
+	var req struct {
+		Name        string `json:"name" binding:"required"`
+		Description string `json:"description"`
+		Color       string `json:"color"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	_, err := h.db.Pool.Exec(c.Request.Context(),
+		`UPDATE categories SET name=$1, description=$2, color=$3 WHERE id=$4`,
+		req.Name, req.Description, req.Color, id,
+	)
+	if err != nil {
+		h.logger.Error("failed to update category", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update category"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "category updated"})
 }
 func (h *CategoryHandler) Delete(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	id := c.Param("id")
+
+	// Null out category_id on challenges that reference this category
+	_, _ = h.db.Pool.Exec(c.Request.Context(),
+		`UPDATE challenges SET category_id = NULL WHERE category_id = $1`, id)
+
+	_, err := h.db.Pool.Exec(c.Request.Context(),
+		`DELETE FROM categories WHERE id = $1`, id)
+	if err != nil {
+		h.logger.Error("failed to delete category", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete category"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "category deleted"})
 }
 
 // AdminInstanceHandler for admin instance management
@@ -538,6 +632,17 @@ func NewStatsHandler(db *database.DB, logger *zap.Logger) *StatsHandler {
 }
 
 // Get method is implemented in admin.go
+
+// AttachmentHandler handles challenge file attachment operations
+type AttachmentHandler struct {
+	db         *database.DB
+	storageSvc storage.StorageBackend
+	logger     *zap.Logger
+}
+
+func NewAttachmentHandler(db *database.DB, storageSvc storage.StorageBackend, logger *zap.Logger) *AttachmentHandler {
+	return &AttachmentHandler{db: db, storageSvc: storageSvc, logger: logger}
+}
 
 // logAdminAction logs an admin action to the audit log
 func logAdminAction(db *database.DB, c *gin.Context, userID, action, resourceType, resourceID string, metadata map[string]interface{}) {

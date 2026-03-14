@@ -259,10 +259,16 @@ type CreateChallengeRequest struct {
 // ListChallenges returns all challenges (admin)
 func (h *AdminChallengeHandler) List(c *gin.Context) {
 	query := `
-		SELECT id, name, slug, description, difficulty, status, base_points,
-		       total_solves, total_flags, resource_type, created_at
-		FROM challenges
-		ORDER BY created_at DESC
+		SELECT c.id, c.name, c.slug, c.description, c.difficulty, c.status, c.base_points,
+		       c.total_solves, c.total_flags, c.resource_type, c.created_at,
+		       c.category_id, cat.name AS category_name,
+		       c.container_image, c.container_tag, c.container_platform,
+		       c.cpu_limit, c.memory_limit, c.exposed_ports,
+		       c.instance_timeout, c.max_extensions, c.cooldown_minutes,
+		       c.author_name
+		FROM challenges c
+		LEFT JOIN categories cat ON cat.id = c.category_id
+		ORDER BY c.created_at DESC
 	`
 
 	rows, err := h.db.Pool.Query(c.Request.Context(), query)
@@ -276,36 +282,74 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 	var challenges []gin.H
 	for rows.Next() {
 		var ch struct {
-			ID           string
-			Name         string
-			Slug         string
-			Description  *string
-			Difficulty   string
-			Status       string
-			BasePoints   int
-			TotalSolves  int
-			TotalFlags   int
-			ResourceType string
-			CreatedAt    time.Time
+			ID                string
+			Name              string
+			Slug              string
+			Description       *string
+			Difficulty        string
+			Status            string
+			BasePoints        int
+			TotalSolves       int
+			TotalFlags        int
+			ResourceType      string
+			CreatedAt         time.Time
+			CategoryID        *string
+			CategoryName      *string
+			ContainerImage    *string
+			ContainerTag      *string
+			ContainerPlatform *string
+			CPULimit          *string
+			MemoryLimit       *string
+			ExposedPorts      *[]byte
+			InstanceTimeout   *int
+			MaxExtensions     *int
+			CooldownMinutes   *int
+			AuthorName        *string
 		}
 
-		if err := rows.Scan(&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
-			&ch.Status, &ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.ResourceType, &ch.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
+			&ch.Status, &ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.ResourceType, &ch.CreatedAt,
+			&ch.CategoryID, &ch.CategoryName,
+			&ch.ContainerImage, &ch.ContainerTag, &ch.ContainerPlatform,
+			&ch.CPULimit, &ch.MemoryLimit, &ch.ExposedPorts,
+			&ch.InstanceTimeout, &ch.MaxExtensions, &ch.CooldownMinutes,
+			&ch.AuthorName,
+		); err != nil {
+			h.logger.Warn("failed to scan challenge row", zap.Error(err))
 			continue
 		}
 
+		// Parse exposed ports JSON
+		var exposedPorts interface{}
+		if ch.ExposedPorts != nil {
+			_ = json.Unmarshal(*ch.ExposedPorts, &exposedPorts)
+		}
+
 		challenges = append(challenges, gin.H{
-			"id":            ch.ID,
-			"name":          ch.Name,
-			"slug":          ch.Slug,
-			"description":   ch.Description,
-			"difficulty":    ch.Difficulty,
-			"status":        ch.Status,
-			"base_points":   ch.BasePoints,
-			"total_solves":  ch.TotalSolves,
-			"total_flags":   ch.TotalFlags,
-			"resource_type": ch.ResourceType,
-			"created_at":    ch.CreatedAt.Unix(),
+			"id":                 ch.ID,
+			"name":               ch.Name,
+			"slug":               ch.Slug,
+			"description":        ch.Description,
+			"difficulty":         ch.Difficulty,
+			"status":             ch.Status,
+			"base_points":        ch.BasePoints,
+			"total_solves":       ch.TotalSolves,
+			"total_flags":        ch.TotalFlags,
+			"resource_type":      ch.ResourceType,
+			"created_at":         ch.CreatedAt.Unix(),
+			"category_id":        ch.CategoryID,
+			"category_name":      ch.CategoryName,
+			"container_image":    ch.ContainerImage,
+			"container_tag":      ch.ContainerTag,
+			"container_platform": ch.ContainerPlatform,
+			"cpu_limit":          ch.CPULimit,
+			"memory_limit":       ch.MemoryLimit,
+			"exposed_ports":      exposedPorts,
+			"instance_timeout":   ch.InstanceTimeout,
+			"max_extensions":     ch.MaxExtensions,
+			"cooldown_minutes":   ch.CooldownMinutes,
+			"author_name":        ch.AuthorName,
 		})
 	}
 
@@ -804,11 +848,11 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 			`UPDATE challenges SET
 				name = $1, description = $2, difficulty = $3, category_id = $4,
 				base_points = $5, instance_timeout = $6, max_extensions = $7,
-				author_name = $8, resource_type = $9, updated_at = NOW()
-			WHERE id = $10`,
+				cooldown_minutes = $8, author_name = $9, resource_type = $10, updated_at = NOW()
+			WHERE id = $11`,
 			req.Name, req.Description, req.Difficulty, req.CategoryID,
 			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
-			req.AuthorName, req.ResourceType, challengeID,
+			req.CooldownMinutes, req.AuthorName, req.ResourceType, challengeID,
 		)
 
 		// Update VM template association if provided
@@ -826,19 +870,25 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		}
 	} else {
 		// Docker challenge - update container fields
+		portsJSON, marshalErr := json.Marshal(req.ExposedPorts)
+		if marshalErr != nil {
+			h.logger.Error("failed to marshal exposed ports", zap.Error(marshalErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process exposed ports"})
+			return
+		}
 		_, err = h.db.Pool.Exec(c.Request.Context(),
 			`UPDATE challenges SET
 				name = $1, description = $2, difficulty = $3, category_id = $4,
 				container_image = $5, container_tag = $6, container_platform = $7,
-				cpu_limit = $8, memory_limit = $9,
-				base_points = $10, instance_timeout = $11, max_extensions = $12,
-				author_name = $13, updated_at = NOW()
-			WHERE id = $14`,
+				cpu_limit = $8, memory_limit = $9, exposed_ports = $10,
+				base_points = $11, instance_timeout = $12, max_extensions = $13,
+				cooldown_minutes = $14, author_name = $15, updated_at = NOW()
+			WHERE id = $16`,
 			req.Name, req.Description, req.Difficulty, req.CategoryID,
 			req.ContainerImage, req.ContainerTag, req.ContainerPlatform,
-			req.CPULimit, req.MemoryLimit,
+			req.CPULimit, req.MemoryLimit, portsJSON,
 			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
-			req.AuthorName, challengeID,
+			req.CooldownMinutes, req.AuthorName, challengeID,
 		)
 	}
 	if err != nil {

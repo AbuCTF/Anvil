@@ -100,6 +100,7 @@ func NewLocalStorage(basePath string, logger *zap.Logger) (*LocalStorage, error)
 	dirs := []string{
 		basePath,
 		filepath.Join(basePath, "challenges"),
+		filepath.Join(basePath, "challenge-attachments"),
 		filepath.Join(basePath, "vms"),
 		filepath.Join(basePath, "docker"),
 		filepath.Join(basePath, "temp"),

@@ -9,6 +9,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/upload"
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
@@ -23,6 +24,7 @@ type Server struct {
 	containerSvc *container.Service
 	vmSvc        *vm.Service
 	uploadSvc    *upload.Service
+	storageSvc   storage.StorageBackend
 	vpnSvc       *vpn.Service
 	logger       *zap.Logger
 	router       *gin.Engine
@@ -35,6 +37,7 @@ func NewServer(
 	containerSvc *container.Service,
 	vmSvc *vm.Service,
 	uploadSvc *upload.Service,
+	storageSvc storage.StorageBackend,
 	vpnSvc *vpn.Service,
 	logger *zap.Logger,
 ) *Server {
@@ -49,6 +52,7 @@ func NewServer(
 		containerSvc: containerSvc,
 		vmSvc:        vmSvc,
 		uploadSvc:    uploadSvc,
+		storageSvc:   storageSvc,
 		vpnSvc:       vpnSvc,
 		logger:       logger,
 	}
@@ -109,9 +113,12 @@ func (s *Server) setupRouter() {
 			challengesPublic := v1.Group("")
 			challengesPublic.Use(middleware.OptionalAuth(s.config, s.db))
 			{
-				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.logger)
+				attachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger)
+				challengeHandler := handlers.NewChallengeHandlerWithAttachments(s.config, s.db, s.logger, attachmentHandler)
 				challengesPublic.GET("/challenges", challengeHandler.List)
 				challengesPublic.GET("/challenges/:slug", challengeHandler.Get)
+				// File attachment downloads
+				challengesPublic.GET("/challenges/:slug/attachments/:attachment_id/download", attachmentHandler.Download)
 			}
 
 			// Public scoreboard (if enabled)
@@ -252,6 +259,12 @@ func (s *Server) setupRouter() {
 				challenges.POST("/:id/hints", adminChallengeHandler.CreateHint)
 				challenges.PUT("/:id/hints/:hint_id", adminChallengeHandler.UpdateHint)
 				challenges.DELETE("/:id/hints/:hint_id", adminChallengeHandler.DeleteHint)
+
+				// Attachment management (admin: upload/list/delete; download is public)
+				adminAttachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger)
+				challenges.GET("/:id/attachments", adminAttachmentHandler.List)
+				challenges.POST("/:id/attachments", adminAttachmentHandler.Upload)
+				challenges.DELETE("/:id/attachments/:attachment_id", adminAttachmentHandler.Delete)
 			}
 
 			// Category management

@@ -34,6 +34,52 @@
 	let newFlag = { name: '', flag: '', points: 100 };
 	let savingFlag = false;
 
+	// Attachment management (admin)
+	let attachmentUploading = false;
+	let attachmentUploadProgress = 0;
+	let attachmentFileInput: HTMLInputElement;
+	let attachmentDescription = '';
+
+	async function uploadAttachment() {
+		if (!attachmentFileInput?.files?.[0] || !challenge?.id) return;
+		const file = attachmentFileInput.files[0];
+		attachmentUploading = true;
+		attachmentUploadProgress = 0;
+		try {
+			const fd = new FormData();
+			fd.append('file', file);
+			if (attachmentDescription) fd.append('description', attachmentDescription);
+			await api.uploadAttachment(challenge.id, fd, (p) => { attachmentUploadProgress = p; });
+			// Reload challenge to refresh attachment list
+			await loadChallenge();
+			attachmentDescription = '';
+			if (attachmentFileInput) attachmentFileInput.value = '';
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Upload failed';
+		} finally {
+			attachmentUploading = false;
+		}
+	}
+
+	async function deleteAttachment(attachmentId: string) {
+		if (!challenge?.id) return;
+		if (!confirm('Delete this attachment?')) return;
+		try {
+			await api.deleteAttachment(challenge.id, attachmentId);
+			await loadChallenge();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to delete attachment';
+		}
+	}
+
+	function formatFileSize(bytes: number): string {
+		if (bytes === 0) return '0 B';
+		const k = 1024;
+		const sizes = ['B', 'KB', 'MB', 'GB'];
+		const i = Math.floor(Math.log(bytes) / Math.log(k));
+		return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+	}
+
 	const slug = $page.params.slug;
 	
 	$: if (!slug) {
@@ -125,10 +171,12 @@
 				flagInput = '';
 				await loadChallenge();
 			}
-		} catch (e) {
+		} catch (e: unknown) {
+			// Handle brute-force lockout (429)
+			const msg = e instanceof Error ? e.message : 'Submission failed';
 			submitResult = {
 				correct: false,
-				message: e instanceof Error ? e.message : 'Submission failed'
+				message: msg
 			};
 		} finally {
 			submitting = false;
@@ -618,6 +666,110 @@
 										{/if}
 									</div>
 								{/each}
+							</div>
+						</div>
+					{/if}
+
+					<!-- File Attachments -->
+					{#if (challenge.attachments && challenge.attachments.length > 0) || isEditing}
+						<div>
+							<h2 class="text-xs font-medium text-stone-500 uppercase tracking-wider mb-3">Files</h2>
+							<div class="space-y-2">
+								{#each challenge.attachments as attachment}
+									<div class="flex items-center justify-between py-2.5 px-4 bg-stone-950 border border-stone-800 rounded-lg group">
+										<div class="flex items-center gap-3 min-w-0">
+											<Icon icon="mdi:file-outline" class="w-4 h-4 text-stone-400 shrink-0" />
+											<div class="min-w-0">
+												<p class="text-sm text-stone-300 truncate">{attachment.filename}</p>
+												<p class="text-xs text-stone-600">{formatFileSize(attachment.file_size)}</p>
+											</div>
+										</div>
+										<div class="flex items-center gap-2 shrink-0">
+											<a
+												href="/api/v1/challenges/{challenge.slug}/attachments/{attachment.id}/download"
+												download={attachment.filename}
+												class="text-xs px-2.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white rounded transition flex items-center gap-1"
+											>
+												<Icon icon="mdi:download" class="w-3.5 h-3.5" />
+												Download
+											</a>
+											{#if isEditing && isAdmin}
+												<button
+													on:click={() => deleteAttachment(attachment.id)}
+													class="text-xs text-red-500 hover:text-red-400 transition opacity-0 group-hover:opacity-100"
+												>
+													<Icon icon="mdi:trash-can-outline" class="w-4 h-4" />
+												</button>
+											{/if}
+										</div>
+									</div>
+								{/each}
+
+								<!-- Admin upload form -->
+								{#if isEditing && isAdmin}
+									<div class="py-3 px-4 bg-stone-950 border border-dashed border-stone-700 rounded-lg space-y-3">
+										<p class="text-xs text-stone-500 font-medium">Upload File</p>
+										<input
+											type="file"
+											bind:this={attachmentFileInput}
+											class="block w-full text-xs text-stone-400 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-stone-800 file:text-stone-300 hover:file:bg-stone-700 cursor-pointer"
+										/>
+										<input
+											type="text"
+											bind:value={attachmentDescription}
+											placeholder="Description (optional)"
+											class="block w-full px-3 py-1.5 bg-black border border-stone-700 rounded text-xs text-white placeholder-stone-600 focus:outline-none focus:border-stone-500"
+										/>
+										{#if attachmentUploading}
+											<div class="space-y-1">
+												<div class="h-1 bg-stone-800 rounded-full overflow-hidden">
+													<div class="h-full bg-white rounded-full transition-all" style="width: {attachmentUploadProgress}%"></div>
+												</div>
+												<p class="text-xs text-stone-500 text-right">{attachmentUploadProgress}%</p>
+											</div>
+										{/if}
+										<button
+											on:click={uploadAttachment}
+											disabled={attachmentUploading || !attachmentFileInput?.files?.length}
+											class="text-xs px-3 py-1.5 bg-white text-black font-medium rounded hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+										>
+											{attachmentUploading ? 'Uploading...' : 'Upload'}
+										</button>
+									</div>
+								{/if}
+							</div>
+						</div>
+					{:else if isEditing && isAdmin}
+						<div>
+							<h2 class="text-xs font-medium text-stone-500 uppercase tracking-wider mb-3">Files</h2>
+							<div class="py-3 px-4 bg-stone-950 border border-dashed border-stone-700 rounded-lg space-y-3">
+								<p class="text-xs text-stone-500 font-medium">Upload File</p>
+								<input
+									type="file"
+									bind:this={attachmentFileInput}
+									class="block w-full text-xs text-stone-400 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-xs file:bg-stone-800 file:text-stone-300 hover:file:bg-stone-700 cursor-pointer"
+								/>
+								<input
+									type="text"
+									bind:value={attachmentDescription}
+									placeholder="Description (optional)"
+									class="block w-full px-3 py-1.5 bg-black border border-stone-700 rounded text-xs text-white placeholder-stone-600 focus:outline-none focus:border-stone-500"
+								/>
+								{#if attachmentUploading}
+									<div class="space-y-1">
+										<div class="h-1 bg-stone-800 rounded-full overflow-hidden">
+											<div class="h-full bg-white rounded-full transition-all" style="width: {attachmentUploadProgress}%"></div>
+										</div>
+										<p class="text-xs text-stone-500 text-right">{attachmentUploadProgress}%</p>
+									</div>
+								{/if}
+								<button
+									on:click={uploadAttachment}
+									disabled={attachmentUploading || !attachmentFileInput?.files?.length}
+									class="text-xs px-3 py-1.5 bg-white text-black font-medium rounded hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+								>
+									{attachmentUploading ? 'Uploading...' : 'Upload'}
+								</button>
 							</div>
 						</div>
 					{/if}
