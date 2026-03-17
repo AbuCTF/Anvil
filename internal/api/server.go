@@ -114,7 +114,7 @@ func (s *Server) setupRouter() {
 			challengesPublic.Use(middleware.OptionalAuth(s.config, s.db))
 			{
 				attachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger)
-				challengeHandler := handlers.NewChallengeHandlerWithAttachments(s.config, s.db, s.logger, attachmentHandler)
+				challengeHandler := handlers.NewChallengeHandlerWithAttachments(s.config, s.db, s.containerSvc, s.vmSvc, s.logger, attachmentHandler)
 				challengesPublic.GET("/challenges", challengeHandler.List)
 				challengesPublic.GET("/challenges/:slug", challengeHandler.Get)
 				// File attachment downloads
@@ -145,7 +145,7 @@ func (s *Server) setupRouter() {
 			// Challenge interactions
 			challenges := protected.Group("/challenges")
 			{
-				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.logger)
+				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
 				challenges.GET("/:slug/flags", challengeHandler.GetFlags)
 				challenges.POST("/:slug/submit", middleware.RateLimitEndpoint(
 					s.config.RateLimit.FlagSubmission,

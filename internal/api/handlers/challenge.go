@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
@@ -435,7 +436,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		retryAfter := int(time.Until(*lockedUntil).Seconds()) + 1
 		c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
 		c.JSON(http.StatusTooManyRequests, gin.H{
-			"error":       "Too many incorrect attempts. Please wait before trying again.",
+			"error":        "Too many incorrect attempts. Please wait before trying again.",
 			"locked_until": lockedUntil.Unix(),
 			"retry_after":  retryAfter,
 		})
@@ -765,7 +766,85 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		"total_flags":  totalFlags,
 	}
 
+	// Auto-stop and remove instance when challenge is fully solved
+	if solvedFlags >= totalFlags && totalFlags > 0 {
+		go h.cleanupSolvedInstance(challengeID, uid)
+	}
+
 	c.JSON(http.StatusOK, response)
+}
+
+// cleanupSolvedInstance stops and removes the user's active instance for
+// a fully-solved challenge. Runs in a background goroutine so the flag
+// submission response is not delayed.
+func (h *ChallengeHandler) cleanupSolvedInstance(challengeID string, userID uuid.UUID) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Find the user's active instance for this challenge
+	var instanceID, containerID, resourceType string
+	err := h.db.Pool.QueryRow(ctx,
+		`SELECT i.id, COALESCE(i.container_id, ''), c.resource_type
+		 FROM instances i
+		 JOIN challenges c ON i.challenge_id = c.id
+		 WHERE i.user_id = $1 AND i.challenge_id = $2
+		   AND i.status NOT IN ('stopped', 'failed', 'expired')
+		   AND i.expires_at > NOW()
+		 ORDER BY i.created_at DESC LIMIT 1`,
+		userID, challengeID).Scan(&instanceID, &containerID, &resourceType)
+	if err != nil {
+		// No active instance found — nothing to clean up
+		return
+	}
+
+	h.logger.Info("auto-stopping instance for fully solved challenge",
+		zap.String("instance_id", instanceID),
+		zap.String("user_id", userID.String()),
+		zap.String("challenge_id", challengeID),
+		zap.String("resource_type", resourceType))
+
+	// Stop the container or VM
+	if containerID != "" {
+		if resourceType == "vm" && h.vmSvc != nil {
+			if err := h.vmSvc.DestroyInstanceByName(ctx, containerID); err != nil {
+				h.logger.Error("auto-stop: failed to destroy VM",
+					zap.Error(err), zap.String("vm_name", containerID))
+			}
+		} else if h.containerSvc != nil {
+			if err := h.containerSvc.StopInstance(ctx, containerID); err != nil {
+				h.logger.Error("auto-stop: failed to stop container",
+					zap.Error(err), zap.String("container_id", containerID))
+			}
+		}
+	}
+
+	// Delete the instance record from the database
+	_, err = h.db.Pool.Exec(ctx, `DELETE FROM instances WHERE id = $1`, instanceID)
+	if err != nil {
+		h.logger.Error("auto-stop: failed to delete instance", zap.Error(err),
+			zap.String("instance_id", instanceID))
+		return
+	}
+
+	// Decrement VM node counters if applicable
+	if resourceType == "vm" {
+		h.db.Pool.Exec(ctx,
+			`UPDATE vm_nodes SET
+			 used_vcpu = GREATEST(0, used_vcpu - 1),
+			 used_memory_mb = GREATEST(0, used_memory_mb - 1024),
+			 active_vms = GREATEST(0, active_vms - 1),
+			 updated_at = NOW()
+			 WHERE name = 'core'`)
+	}
+
+	// Clear cooldown so the user doesn't get penalized for an auto-stop
+	h.db.Pool.Exec(ctx,
+		`DELETE FROM user_cooldowns WHERE user_id = $1 AND challenge_id = $2`,
+		userID, challengeID)
+
+	h.logger.Info("auto-stop: instance cleaned up successfully",
+		zap.String("instance_id", instanceID),
+		zap.String("user_id", userID.String()))
 }
 
 // GetHints returns hints for a challenge

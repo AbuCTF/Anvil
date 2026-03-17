@@ -64,14 +64,6 @@
 				{challenge.difficulty}
 			</span>
 
-			{#if challenge.category}
-				<span
-					class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-stone-900 text-stone-400 border border-stone-800"
-				>
-					{challenge.category}
-				</span>
-			{/if}
-
 			<!-- VM or Docker badge -->
 			<span
 				class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium border {challenge.resource_type ===

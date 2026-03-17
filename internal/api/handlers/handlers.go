@@ -52,17 +52,19 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 type ChallengeHandler struct {
 	config         *config.Config
 	db             *database.DB
+	containerSvc   *container.Service
+	vmSvc          *vm.Service
 	logger         *zap.Logger
 	attachmentHdlr *AttachmentHandler
 }
 
-func NewChallengeHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *ChallengeHandler {
-	return &ChallengeHandler{config: cfg, db: db, logger: logger}
+func NewChallengeHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, vmSvc *vm.Service, logger *zap.Logger) *ChallengeHandler {
+	return &ChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger}
 }
 
 // NewChallengeHandlerWithAttachments creates a ChallengeHandler with attachment support.
-func NewChallengeHandlerWithAttachments(cfg *config.Config, db *database.DB, logger *zap.Logger, ah *AttachmentHandler) *ChallengeHandler {
-	return &ChallengeHandler{config: cfg, db: db, logger: logger, attachmentHdlr: ah}
+func NewChallengeHandlerWithAttachments(cfg *config.Config, db *database.DB, containerSvc *container.Service, vmSvc *vm.Service, logger *zap.Logger, ah *AttachmentHandler) *ChallengeHandler {
+	return &ChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger, attachmentHdlr: ah}
 }
 
 // ScoreboardHandler - methods implemented in scoreboard.go
@@ -449,9 +451,64 @@ func (h *AdminInstanceHandler) ForceDelete(c *gin.Context) {
 }
 
 func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	// Find expired container instances that still need Docker cleanup.
+	rows, err := h.db.Pool.Query(ctx, `
+		SELECT i.id, i.container_id, c.resource_type
+		FROM instances i
+		JOIN challenges c ON i.challenge_id = c.id
+		WHERE i.expires_at < NOW()
+		  AND i.status IN ('running', 'pending', 'creating')
+		  AND i.container_id IS NOT NULL AND i.container_id <> ''
+	`)
+	if err != nil {
+		h.logger.Error("failed to query expired instances for cleanup", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query expired instances"})
+		return
+	}
+
+	type expiredInst struct {
+		ID           string
+		ContainerID  string
+		ResourceType string
+	}
+	var toStop []expiredInst
+	for rows.Next() {
+		var inst expiredInst
+		if scanErr := rows.Scan(&inst.ID, &inst.ContainerID, &inst.ResourceType); scanErr == nil {
+			toStop = append(toStop, inst)
+		}
+	}
+	rows.Close()
+
+	// Stop the actual containers/VMs before marking as expired in DB.
+	var stoppedCount int64
+	for _, inst := range toStop {
+		if inst.ResourceType == "vm" {
+			if vmSvc, ok := h.vmSvc.(interface {
+				DestroyInstanceByName(context.Context, string) error
+			}); ok {
+				if err := vmSvc.DestroyInstanceByName(ctx, inst.ContainerID); err != nil {
+					h.logger.Warn("cleanup: failed to destroy VM", zap.Error(err), zap.String("vm_name", inst.ContainerID))
+				} else {
+					stoppedCount++
+				}
+			}
+		} else if containerSvc, ok := h.containerSvc.(interface {
+			StopInstance(context.Context, string) error
+		}); ok {
+			if err := containerSvc.StopInstance(ctx, inst.ContainerID); err != nil {
+				h.logger.Warn("cleanup: failed to stop container", zap.Error(err), zap.String("container_id", inst.ContainerID))
+			} else {
+				stoppedCount++
+			}
+		}
+	}
+
 	// Mark all expired instances
-	result, err := h.db.Pool.Exec(c.Request.Context(), `
-		UPDATE instances 
+	result, err := h.db.Pool.Exec(ctx, `
+		UPDATE instances
 		SET status = 'expired', updated_at = NOW()
 		WHERE expires_at < NOW() AND status IN ('running', 'pending', 'creating')
 	`)
@@ -464,9 +521,9 @@ func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 	expiredCount := result.RowsAffected()
 
 	// Delete old failed/stopped/expired instances
-	result, err = h.db.Pool.Exec(c.Request.Context(), `
-		DELETE FROM instances 
-		WHERE status IN ('failed', 'stopped', 'expired') 
+	result, err = h.db.Pool.Exec(ctx, `
+		DELETE FROM instances
+		WHERE status IN ('failed', 'stopped', 'expired')
 		  AND created_at < NOW() - INTERVAL '1 hour'
 	`)
 	if err != nil {
@@ -478,9 +535,10 @@ func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 	deletedCount := result.RowsAffected()
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":        "cleanup completed",
-		"marked_expired": expiredCount,
-		"deleted":        deletedCount,
+		"message":           "cleanup completed",
+		"resources_stopped": stoppedCount,
+		"marked_expired":    expiredCount,
+		"deleted":           deletedCount,
 	})
 }
 

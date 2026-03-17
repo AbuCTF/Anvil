@@ -130,7 +130,7 @@ func main() {
 				JOIN challenges c ON i.challenge_id = c.id
 				WHERE i.expires_at < NOW()
 				  AND i.status IN ('running', 'creating', 'pending')
-				  AND c.resource_type = 'container'
+				  AND c.resource_type = 'docker'
 				  AND i.container_id IS NOT NULL AND i.container_id <> ''
 			`)
 			if err != nil {
@@ -181,6 +181,45 @@ func main() {
 					inst.ID)
 			}
 
+			// Orphaned container cleanup: find Docker containers that are running
+			// but have no matching active DB record, and stop/remove them.
+			if containerSvc != nil {
+				allContainers, listErr := containerSvc.ListInstances(ctx)
+				if listErr != nil {
+					sugar.Warnf("Failed to list Docker containers for orphan cleanup: %v", listErr)
+				} else if len(allContainers) > 0 {
+					// Build a set of container IDs that are tracked as active in the DB.
+					activeRows, activeErr := db.Pool.Query(ctx, `
+						SELECT container_id FROM instances
+						WHERE status IN ('running', 'creating', 'pending')
+						  AND container_id IS NOT NULL AND container_id <> ''
+					`)
+					if activeErr == nil {
+						activeIDs := make(map[string]bool)
+						for activeRows.Next() {
+							var cid string
+							if scanErr := activeRows.Scan(&cid); scanErr == nil {
+								activeIDs[cid] = true
+							}
+						}
+						activeRows.Close()
+
+						for _, ctr := range allContainers {
+							if !activeIDs[ctr.ID] {
+								shortCID := ctr.ID
+								if len(shortCID) > 12 {
+									shortCID = shortCID[:12]
+								}
+								sugar.Infof("Removing orphaned container %s (names: %v)", shortCID, ctr.Names)
+								if stopErr := containerSvc.StopInstance(ctx, ctr.ID); stopErr != nil {
+									sugar.Warnf("Failed to remove orphaned container %s: %v", shortCID, stopErr)
+								}
+							}
+						}
+					}
+				}
+			}
+
 			cancel()
 		}
 	}()
@@ -203,11 +242,15 @@ func main() {
 					  AND c.resource_type = 'vm'
 				`).Scan(&expiringCount)
 
-				// Clean up expired DB instances
+				// Clean up expired DB instances (VM only — container expiry is handled
+				// by the 1-minute goroutine above which stops Docker containers first)
 				if _, err := db.Pool.Exec(ctx, `
-					UPDATE instances 
+					UPDATE instances
 					SET status = 'expired', updated_at = NOW()
 					WHERE expires_at < NOW() AND status IN ('running', 'pending', 'creating')
+					  AND challenge_id IN (
+					    SELECT id FROM challenges WHERE resource_type = 'vm'
+					  )
 				`); err != nil {
 					sugar.Errorf("Failed to mark expired instances: %v", err)
 				} else if expiringCount > 0 {
