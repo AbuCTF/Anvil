@@ -679,6 +679,19 @@ func (h *VMTemplateHandler) ListActiveDockerInstances(c *gin.Context) {
 	}
 	defer rows.Close()
 
+	type InstanceResponse struct {
+		ID            string  `json:"id"`
+		UserID        string  `json:"user_id"`
+		Username      string  `json:"username"`
+		ChallengeID   string  `json:"challenge_id"`
+		ChallengeName string  `json:"challenge_name"`
+		VMName        string  `json:"vm_name"`
+		Status        string  `json:"status"`
+		IPAddress     *string `json:"ip_address"`
+		CreatedAt     int64   `json:"created_at"`
+		ExpiresAt     int64   `json:"expires_at"`
+	}
+
 	var instances []InstanceResponse
 	for rows.Next() {
 		var inst InstanceResponse
