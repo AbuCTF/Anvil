@@ -336,6 +336,11 @@ func (h *VPNHandler) generateWireGuardConfig(privateKey, ipAddress string) strin
 		allowedIPs += ", " + h.config.Container.NetworkSubnet
 	}
 
+	keepaliveSeconds := int(h.config.VPN.KeepaliveInterval / time.Second)
+	if keepaliveSeconds <= 0 {
+		keepaliveSeconds = 8
+	}
+
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/32
@@ -344,7 +349,7 @@ Address = %s/32
 PublicKey = %s
 AllowedIPs = %s
 Endpoint = %s
-PersistentKeepalive = 25
+PersistentKeepalive = %d
 `,
 		privateKey,
 		ipAddress,
@@ -352,5 +357,6 @@ PersistentKeepalive = 25
 		h.config.VPN.PublicKey,
 		allowedIPs,
 		endpoint,
+		keepaliveSeconds,
 	)
 }

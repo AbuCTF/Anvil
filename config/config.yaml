@@ -57,6 +57,8 @@ vpn:
   address_range: "10.10.0.0/16"
   dns: "1.1.1.1"
   mtu: 1420
+  keepalive_interval: 8s
+  online_window: 35s
 
 platform:
   name: "Anvil"

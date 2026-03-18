@@ -87,6 +87,7 @@ type VPNConfig struct {
 	AddressRange   string        `mapstructure:"address_range"` // e.g., "10.10.0.0/16"
 	DNS            string        `mapstructure:"dns"`
 	MTU            int           `mapstructure:"mtu"`
+	KeepaliveInterval time.Duration `mapstructure:"keepalive_interval"`
 	OnlineWindow   time.Duration `mapstructure:"online_window"`
 }
 
@@ -199,6 +200,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("vpn.address_range", "10.10.0.0/16")
 	v.SetDefault("vpn.dns", "1.1.1.1")
 	v.SetDefault("vpn.mtu", 1420)
+	v.SetDefault("vpn.keepalive_interval", "8s")
 	v.SetDefault("vpn.online_window", "35s")
 
 	v.SetDefault("platform.name", "Anvil")

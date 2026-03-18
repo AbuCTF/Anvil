@@ -195,6 +195,11 @@ func (s *Service) GenerateClientConfig(privateKey, assignedIP string) string {
 		dnsLine = fmt.Sprintf("DNS = %s\n", s.config.DNS)
 	}
 
+	keepaliveSeconds := int(s.config.KeepaliveInterval / time.Second)
+	if keepaliveSeconds <= 0 {
+		keepaliveSeconds = 8
+	}
+
 	return fmt.Sprintf(`[Interface]
 PrivateKey = %s
 Address = %s/32
@@ -204,7 +209,7 @@ Address = %s/32
 PublicKey = %s
 AllowedIPs = %s
 Endpoint = %s:%d
-PersistentKeepalive = 25
+PersistentKeepalive = %d
 `,
 		privateKey,
 		assignedIP,
@@ -214,6 +219,7 @@ PersistentKeepalive = 25
 		allowedIPs,
 		s.config.PublicEndpoint,
 		s.config.ListenPort,
+		keepaliveSeconds,
 	)
 }
 
