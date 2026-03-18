@@ -4,7 +4,7 @@ Requires=wg-status-sync.service
 
 [Timer]
 OnBootSec=10s
-OnUnitActiveSec=10s
+OnUnitActiveSec=5s
 AccuracySec=1s
 
 [Install]

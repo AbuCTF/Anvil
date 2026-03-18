@@ -78,15 +78,16 @@ type ContainerConfig struct {
 }
 
 type VPNConfig struct {
-	Enabled        bool   `mapstructure:"enabled"`
-	Interface      string `mapstructure:"interface"`
-	ListenPort     int    `mapstructure:"listen_port"`
-	PublicEndpoint string `mapstructure:"public_endpoint"`
-	PrivateKey     string `mapstructure:"private_key"`
-	PublicKey      string `mapstructure:"public_key"`
-	AddressRange   string `mapstructure:"address_range"` // e.g., "10.10.0.0/16"
-	DNS            string `mapstructure:"dns"`
-	MTU            int    `mapstructure:"mtu"`
+	Enabled        bool          `mapstructure:"enabled"`
+	Interface      string        `mapstructure:"interface"`
+	ListenPort     int           `mapstructure:"listen_port"`
+	PublicEndpoint string        `mapstructure:"public_endpoint"`
+	PrivateKey     string        `mapstructure:"private_key"`
+	PublicKey      string        `mapstructure:"public_key"`
+	AddressRange   string        `mapstructure:"address_range"` // e.g., "10.10.0.0/16"
+	DNS            string        `mapstructure:"dns"`
+	MTU            int           `mapstructure:"mtu"`
+	OnlineWindow   time.Duration `mapstructure:"online_window"`
 }
 
 type PlatformConfig struct {
@@ -198,6 +199,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("vpn.address_range", "10.10.0.0/16")
 	v.SetDefault("vpn.dns", "1.1.1.1")
 	v.SetDefault("vpn.mtu", 1420)
+	v.SetDefault("vpn.online_window", "35s")
 
 	v.SetDefault("platform.name", "Anvil")
 	v.SetDefault("platform.description", "Forge your skills")

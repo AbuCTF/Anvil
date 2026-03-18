@@ -211,9 +211,11 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 	if lastHandshake != nil && !lastHandshake.IsZero() {
 		ts := lastHandshake.Unix()
 		lastHandshakeUnix = &ts
-		// PersistentKeepalive=25s means handshakes every ~2 min when connected.
-		// 5 min threshold: if no handshake for this long, peer is offline.
-		connected = time.Since(*lastHandshake) < 5*time.Minute
+		onlineWindow := h.config.VPN.OnlineWindow
+		if onlineWindow <= 0 {
+			onlineWindow = 45 * time.Second
+		}
+		connected = time.Since(*lastHandshake) < onlineWindow
 	}
 
 	c.JSON(http.StatusOK, VPNStatusResponse{

@@ -1,7 +1,7 @@
 #!/bin/bash
 # WireGuard Status Sync Script
 # Updates vpn_configs table with real-time peer status from WireGuard
-# Run via cron or systemd timer every 30 seconds
+# Run via systemd timer every 5 seconds
 
 set -euo pipefail
 

@@ -18,14 +18,14 @@
 	onMount(async () => {
 		await loadVPNData();
 		
-		// Poll status every 10 seconds
+		// Poll status frequently for responsive connect/disconnect state.
 		statusInterval = setInterval(async () => {
 			try {
 				vpnStatus = await api.getVPNStatus();
 			} catch (e) {
 				// Silently fail status checks
 			}
-		}, 10000);
+		}, 3000);
 	});
 
 	onDestroy(() => {
