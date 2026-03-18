@@ -129,9 +129,38 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 	}
 
 	if req.Role != nil {
-		_, err := h.db.Pool.Exec(c.Request.Context(),
+		newRole := strings.ToLower(strings.TrimSpace(*req.Role))
+		if newRole != "admin" && newRole != "user" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid role: must be 'admin' or 'user'"})
+			return
+		}
+
+		var currentRole string
+		err := h.db.Pool.QueryRow(c.Request.Context(),
+			`SELECT role FROM users WHERE id = $1`,
+			userID,
+		).Scan(&currentRole)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+
+		if currentRole == "admin" && newRole != "admin" {
+			adminCount, err := h.countAdminUsers(c.Request.Context())
+			if err != nil {
+				h.logger.Error("failed to count admins", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user"})
+				return
+			}
+			if adminCount <= 1 {
+				c.JSON(http.StatusConflict, gin.H{"error": "cannot demote the last admin"})
+				return
+			}
+		}
+
+		_, err = h.db.Pool.Exec(c.Request.Context(),
 			`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`,
-			*req.Role, userID)
+			newRole, userID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user"})
 			return
@@ -183,7 +212,30 @@ func (h *AdminUserHandler) Unban(c *gin.Context) {
 func (h *AdminUserHandler) Delete(c *gin.Context) {
 	userID := c.Param("id")
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
+	var currentRole string
+	err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT role FROM users WHERE id = $1`,
+		userID,
+	).Scan(&currentRole)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	if currentRole == "admin" {
+		adminCount, err := h.countAdminUsers(c.Request.Context())
+		if err != nil {
+			h.logger.Error("failed to count admins", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
+			return
+		}
+		if adminCount <= 1 {
+			c.JSON(http.StatusConflict, gin.H{"error": "cannot delete the last admin"})
+			return
+		}
+	}
+
+	_, err = h.db.Pool.Exec(c.Request.Context(),
 		`DELETE FROM users WHERE id = $1`, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
@@ -191,6 +243,15 @@ func (h *AdminUserHandler) Delete(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "user deleted"})
+}
+
+func (h *AdminUserHandler) countAdminUsers(ctx context.Context) (int, error) {
+	var count int
+	err := h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // FlagInput represents a flag in the create challenge request

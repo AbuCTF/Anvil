@@ -1309,7 +1309,7 @@
 												class="text-xs text-red-400 hover:text-red-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
 												title="Force stop and remove this instance"
 											>
-													{actionLoading === instance.id ? 'Stopping...' : 'Stop & Remove'}
+													{actionLoading === instance.id ? 'Stopping...' : 'Terminate'}
 											</button>
 										</td>
 									</tr>
@@ -1361,7 +1361,7 @@
 												class="text-xs text-red-400 hover:text-red-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
 												title="Force stop and remove this Docker instance"
 											>
-													{actionLoading === instance.id ? 'Stopping...' : 'Stop & Remove'}
+													{actionLoading === instance.id ? 'Stopping...' : 'Terminate'}
 											</button>
 										</td>
 									</tr>
