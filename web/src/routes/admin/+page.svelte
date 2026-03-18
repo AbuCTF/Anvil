@@ -21,6 +21,7 @@
 	let nodes: any[] = [];
 	let templates: any[] = [];
 	let activeInstances: any[] = [];
+	let activeDockerInstances: any[] = [];
 
 	// Audit data
 	let intelLoading = false;
@@ -272,22 +273,25 @@
 
 			// Load infrastructure data in parallel
 			try {
-				const [infraRes, nodesRes, templatesRes, instancesRes] = await Promise.all([
+				const [infraRes, nodesRes, templatesRes, instancesRes, dockerInstancesRes] = await Promise.all([
 					api.getInfrastructureStats(),
 					api.getNodes(),
 					api.getVMTemplates(),
-					api.getActiveInstances()
+					api.getActiveInstances(),
+					api.getActiveDockerInstances()
 				]);
 				infraStats = infraRes;
 				nodes = nodesRes.nodes || [];
 				templates = templatesRes.templates || [];
 				activeInstances = instancesRes.instances || [];
+				activeDockerInstances = dockerInstancesRes.instances || [];
 			} catch {
 				// Infrastructure endpoints may not be available yet
 				infraStats = null;
 				nodes = [];
 				templates = [];
 				activeInstances = [];
+				activeDockerInstances = [];
 			}
 
 			// Load platform settings
@@ -429,7 +433,7 @@
 	}
 
 	async function deleteInstance(instanceId: string) {
-		if (!confirm('Force stop this instance? The user will lose their session.')) return;
+		if (!confirm('Force stop and remove this VM instance? The user will lose their session.')) return;
 		actionLoading = instanceId;
 		try {
 			const response = await fetch(`/api/v1/admin/instances/${instanceId}/stop`, {
@@ -450,6 +454,57 @@
 		} catch (e) {
 			actionLoading = '';
 			alert(e instanceof Error ? e.message : 'Failed to stop instance');
+		}
+	}
+
+	async function deleteDockerInstance(instanceId: string) {
+		if (!confirm('Force stop and remove this Docker instance? The user will lose their session.')) return;
+		actionLoading = instanceId;
+		try {
+			const response = await fetch(`/api/v1/admin/instances/${instanceId}/stop`, {
+				method: 'POST',
+				headers: {
+					'Authorization': `Bearer ${$auth.accessToken}`,
+					'Content-Type': 'application/json'
+				}
+			});
+			if (!response.ok) {
+				const error = await response.json().catch(() => ({ error: 'Failed to stop Docker instance' }));
+				throw new Error(error.error || 'Failed to stop Docker instance');
+			}
+			// Clear loading immediately when successful
+			actionLoading = '';
+			// Then refresh dashboard
+			await loadDashboard();
+		} catch (e) {
+			actionLoading = '';
+			alert(e instanceof Error ? e.message : 'Failed to stop Docker instance');
+		}
+	}
+
+	async function deleteUser(userId: string) {
+		if (!confirm('Delete this user? This action cannot be undone.')) return;
+		actionLoading = userId;
+		try {
+			await api.deleteAdminUser(userId);
+			await loadDashboard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to delete user');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
+	async function changeUserRole(userId: string, newRole: string) {
+		if (!confirm(`Change user role to ${newRole}?`)) return;
+		actionLoading = userId;
+		try {
+			await api.updateAdminUser(userId, { role: newRole });
+			await loadDashboard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to change user role');
+		} finally {
+			actionLoading = '';
 		}
 	}
 
@@ -963,6 +1018,25 @@
 								<span>{user.total_score || 0} points</span>
 								<span>Joined {formatDate(user.created_at)}</span>
 							</div>
+							<div class="flex items-center justify-between mt-3 pt-3 border-t border-stone-800">
+								<select
+									value={user.role}
+									on:change={(e) => changeUserRole(user.id, e.target.value)}
+									disabled={actionLoading === user.id}
+									class="text-xs bg-stone-900 border border-stone-700 rounded px-2 py-1 text-white focus:outline-none focus:border-stone-500"
+								>
+									<option value="user">User</option>
+									<option value="admin">Admin</option>
+								</select>
+								<button
+									on:click={() => deleteUser(user.id)}
+									disabled={actionLoading === user.id}
+									class="text-xs text-red-400 hover:text-red-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+									title="Delete user"
+								>
+									{actionLoading === user.id ? 'Deleting...' : 'Delete'}
+								</button>
+							</div>
 						</div>
 					{/each}
 					{#if users.length === 0}
@@ -982,6 +1056,7 @@
 								<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Role</th>
 								<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Score</th>
 								<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Joined</th>
+								<th class="px-4 py-3 text-left text-xs font-medium text-stone-500 uppercase tracking-wider">Actions</th>
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-stone-800">
@@ -1007,11 +1082,32 @@
 									<td class="px-4 py-3">
 										<span class="text-xs text-stone-500">{formatDate(user.created_at)}</span>
 									</td>
+									<td class="px-4 py-3">
+										<div class="flex items-center space-x-3">
+											<select
+												value={user.role}
+												on:change={(e) => changeUserRole(user.id, e.target.value)}
+												disabled={actionLoading === user.id}
+												class="text-xs bg-stone-900 border border-stone-700 rounded px-2 py-1 text-white focus:outline-none focus:border-stone-500"
+											>
+												<option value="user">User</option>
+												<option value="admin">Admin</option>
+											</select>
+											<button
+												on:click={() => deleteUser(user.id)}
+												disabled={actionLoading === user.id}
+												class="text-xs text-red-400 hover:text-red-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+												title="Delete user"
+											>
+												{actionLoading === user.id ? 'Deleting...' : 'Delete'}
+											</button>
+										</div>
+									</td>
 								</tr>
 							{/each}
 							{#if users.length === 0}
 								<tr>
-									<td colspan="5" class="px-4 py-12 text-center">
+									<td colspan="6" class="px-4 py-12 text-center">
 										<p class="text-sm text-stone-500">No users yet</p>
 									</td>
 								</tr>
@@ -1211,9 +1307,9 @@
 												on:click={() => deleteInstance(instance.id)}
 												disabled={actionLoading === instance.id}
 												class="text-xs text-red-400 hover:text-red-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
-												title="Force stop this instance"
+												title="Force stop and remove this instance"
 											>
-												{actionLoading === instance.id ? 'Stopping...' : 'Stop'}
+													{actionLoading === instance.id ? 'Stopping...' : 'Stop & Remove'}
 											</button>
 										</td>
 									</tr>
@@ -1224,6 +1320,58 @@
 						<div class="px-4 py-8 text-center">
 							<Icon icon="mdi:desktop-mac-dashboard" class="w-8 h-8 text-stone-700 mx-auto mb-2" />
 							<p class="text-sm text-stone-500">No active VM instances</p>
+						</div>
+					{/if}
+				</div>
+
+				<!-- Active Docker Instances -->
+				<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
+					<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between">
+						<h3 class="text-xs font-medium text-stone-500 uppercase tracking-wider">Active Docker Instances</h3>
+						<span class="text-xs text-stone-400">{activeDockerInstances.length} running</span>
+					</div>
+					{#if activeDockerInstances.length > 0}
+						<table class="w-full">
+							<thead>
+								<tr class="border-b border-stone-800">
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">User</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Challenge</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">IP</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Status</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Expires</th>
+									<th class="px-4 py-2 text-left text-xs font-medium text-stone-500 uppercase">Actions</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-stone-800">
+								{#each activeDockerInstances as instance}
+									<tr class="hover:bg-stone-900/50">
+										<td class="px-4 py-2 text-sm text-white">{instance.username}</td>
+										<td class="px-4 py-2 text-sm text-stone-300">{instance.challenge_name}</td>
+										<td class="px-4 py-2 text-sm text-stone-400 font-mono">{instance.ip_address || '-'}</td>
+										<td class="px-4 py-2">
+											<span class="text-xs {instance.status === 'running' ? 'text-green-400' : 'text-yellow-400'}">{instance.status}</span>
+										</td>
+										<td class="px-4 py-2 text-xs text-stone-500">
+											{instance.expires_at ? new Date(instance.expires_at * 1000).toLocaleTimeString() : '-'}
+										</td>
+										<td class="px-4 py-2">
+											<button
+												on:click={() => deleteDockerInstance(instance.id)}
+												disabled={actionLoading === instance.id}
+												class="text-xs text-red-400 hover:text-red-300 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+												title="Force stop and remove this Docker instance"
+											>
+													{actionLoading === instance.id ? 'Stopping...' : 'Stop & Remove'}
+											</button>
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					{:else}
+						<div class="px-4 py-8 text-center">
+							<Icon icon="mdi:docker" class="w-8 h-8 text-stone-700 mx-auto mb-2" />
+							<p class="text-sm text-stone-500">No active Docker instances</p>
 						</div>
 					{/if}
 				</div>

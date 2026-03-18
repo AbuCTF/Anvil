@@ -570,6 +570,10 @@ class ApiClient {
 		return this.request<{ instances: any[] }>('/admin/infrastructure/instances');
 	}
 
+	async getActiveDockerInstances() {
+		return this.request<{ instances: any[] }>('/admin/infrastructure/docker-instances');
+	}
+
 	// Platform Settings
 	async getPlatformSettings() {
 		return this.request<{ settings: Record<string, any> }>('/admin/settings');

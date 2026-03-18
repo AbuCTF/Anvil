@@ -161,7 +161,6 @@
 		<div class="mb-8 flex items-center justify-between">
 			<div>
 				<h1 class="text-3xl font-bold text-white">My Instances</h1>
-				<p class="text-stone-400 mt-2">Manage your running challenge instances</p>
 			</div>
 			<a 
 				href="/challenges"
@@ -193,15 +192,11 @@
 		{:else if instances.length === 0}
 			<div class="bg-stone-950 border border-stone-800 rounded-lg p-12 text-center">
 				<Icon icon="mdi:server-off" class="w-16 h-16 text-stone-700 mx-auto mb-4" />
-				<h2 class="text-xl font-semibold text-white mb-2">No Active Instances</h2>
-				<p class="text-stone-500 mb-6">
-					Start an instance from a challenge to begin
-				</p>
-				<a 
+				<h2 class="text-xl font-semibold text-white mb-6">No Active Instances</h2>
+				<a
 					href="/challenges"
 					class="inline-flex items-center space-x-2 px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-stone-200 transition"
 				>
-					<Icon icon="mdi:flag" class="w-5 h-5" />
 					<span>Browse Challenges</span>
 				</a>
 			</div>

@@ -659,3 +659,49 @@ func (h *VMTemplateHandler) ListActiveInstances(c *gin.Context) {
 		"total":     len(instances),
 	})
 }
+
+// ListActiveDockerInstances returns all running Docker instances
+// GET /api/v1/admin/infrastructure/docker-instances
+func (h *VMTemplateHandler) ListActiveDockerInstances(c *gin.Context) {
+	rows, err := h.db.Pool.Query(c.Request.Context(), `
+		SELECT i.id, i.user_id, u.username, i.challenge_id, ch.name,
+		       i.container_id, i.status, i.ip_address, i.created_at, i.expires_at
+		FROM instances i
+		JOIN users u ON i.user_id = u.id
+		JOIN challenges ch ON i.challenge_id = ch.id
+		WHERE i.status = 'running' AND ch.resource_type != 'vm'
+		ORDER BY i.created_at DESC
+	`)
+	if err != nil {
+		h.logger.Error("failed to list docker instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch docker instances"})
+		return
+	}
+	defer rows.Close()
+
+	var instances []InstanceResponse
+	for rows.Next() {
+		var inst InstanceResponse
+		var createdAt, expiresAt time.Time
+
+		if err := rows.Scan(
+			&inst.ID, &inst.UserID, &inst.Username, &inst.ChallengeID, &inst.ChallengeName,
+			&inst.VMName, &inst.Status, &inst.IPAddress, &createdAt, &expiresAt,
+		); err != nil {
+			continue
+		}
+
+		inst.CreatedAt = createdAt.Unix()
+		inst.ExpiresAt = expiresAt.Unix()
+		instances = append(instances, inst)
+	}
+
+	if instances == nil {
+		instances = []InstanceResponse{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"instances": instances,
+		"total":     len(instances),
+	})
+}

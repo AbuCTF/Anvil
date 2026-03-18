@@ -352,6 +352,7 @@ func (s *Server) setupRouter() {
 
 				templateHandler := handlers.NewVMTemplateHandler(s.config, s.db, s.logger)
 				infrastructure.GET("/instances", templateHandler.ListActiveInstances)
+				infrastructure.GET("/docker-instances", templateHandler.ListActiveDockerInstances)
 			}
 		}
 	}

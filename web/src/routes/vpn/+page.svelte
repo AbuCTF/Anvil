@@ -316,17 +316,11 @@
 
 			<!-- Setup Instructions -->
 			<div class="bg-stone-950 border border-stone-800 rounded-lg p-6">
-				<h2 class="text-xl font-bold text-white mb-6 flex items-center space-x-2">
-					<Icon icon="mdi:book-open-variant" class="w-6 h-6" />
-					<span>Setup Instructions</span>
-				</h2>
+				<h2 class="text-xl font-bold text-white mb-6">Setup Instructions</h2>
 
 				<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
 					<div class="space-y-4">
-						<div class="flex items-center space-x-2 text-white font-semibold">
-							<Icon icon="mdi:linux" class="w-6 h-6" />
-							<h3>Linux</h3>
-						</div>
+						<h3 class="text-white font-semibold">GNU/Linux</h3>
 						<div class="bg-black border border-stone-800 rounded-lg p-4 space-y-3 text-sm">
 							<div>
 								<p class="text-stone-500 text-xs mb-1">Install WireGuard</p>
@@ -344,10 +338,7 @@
 					</div>
 
 					<div class="space-y-4">
-						<div class="flex items-center space-x-2 text-white font-semibold">
-							<Icon icon="mdi:apple" class="w-6 h-6" />
-							<h3>macOS</h3>
-						</div>
+						<h3 class="text-white font-semibold">macOS</h3>
 						<div class="bg-black border border-stone-800 rounded-lg p-4 space-y-3 text-sm">
 							<div class="flex items-start space-x-2">
 								<span class="text-stone-500 flex-shrink-0">1.</span>
@@ -365,10 +356,7 @@
 					</div>
 
 					<div class="space-y-4">
-						<div class="flex items-center space-x-2 text-white font-semibold">
-							<Icon icon="mdi:microsoft-windows" class="w-6 h-6" />
-							<h3>Windows</h3>
-						</div>
+						<h3 class="text-white font-semibold">Windows</h3>
 						<div class="bg-black border border-stone-800 rounded-lg p-4 space-y-3 text-sm">
 							<div class="flex items-start space-x-2">
 								<span class="text-stone-500 flex-shrink-0">1.</span>
@@ -376,7 +364,7 @@
 							</div>
 							<div class="flex items-start space-x-2">
 								<span class="text-stone-500 flex-shrink-0">2.</span>
-								<p class="text-stone-300">Click "Add Tunnel" → "Import from file"</p>
+								<p class="text-stone-300">Click "Add Tunnel", then choose "Import from file"</p>
 							</div>
 							<div class="flex items-start space-x-2">
 								<span class="text-stone-500 flex-shrink-0">3.</span>
