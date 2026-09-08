@@ -126,6 +126,12 @@ func (s *Server) setupRouter() {
 
 			// Public stats
 			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
+
+			// Game (Attack-Defense + KotH) read endpoints
+			gameRead := handlers.NewGameHandler(s.config, s.db, s.logger)
+			public.GET("/game/scoreboard", gameRead.Scoreboard)
+			public.GET("/game/hills", gameRead.Hills)
+			public.GET("/game/status", gameRead.Status)
 		}
 
 		// Protected routes (require authentication)
