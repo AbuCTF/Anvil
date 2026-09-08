@@ -98,7 +98,7 @@ func (c *Controller) runKoth(ctx context.Context, tick int) {
 
 func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
 	rows, err := c.db.Pool.Query(ctx,
-		`SELECT id, host::text, port, checker_ref FROM game_koth_hills
+		`SELECT id, host(host), port, checker_ref FROM game_koth_hills
 		 WHERE enabled = TRUE AND host IS NOT NULL AND port IS NOT NULL
 		   AND checker_ref IS NOT NULL AND checker_ref <> ''`)
 	if err != nil {

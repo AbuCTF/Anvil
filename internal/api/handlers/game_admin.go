@@ -80,7 +80,7 @@ func (h *GameAdminHandler) CreateTeam(c *gin.Context) {
 
 func (h *GameAdminHandler) ListTeams(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, name, slug, vulnbox_ip::text, is_nop, status FROM game_teams ORDER BY name`)
+		`SELECT id, name, slug, host(vulnbox_ip), is_nop, status FROM game_teams ORDER BY name`)
 	if err != nil {
 		h.fail(c, "list teams", err)
 		return
@@ -259,7 +259,7 @@ func (h *GameAdminHandler) CreateHill(c *gin.Context) {
 
 func (h *GameAdminHandler) ListHills(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, name, slug, host::text, port, checker_ref, reset_seconds, enabled
+		`SELECT id, name, slug, host(host), port, checker_ref, reset_seconds, enabled
 		 FROM game_koth_hills ORDER BY sort_order, name`)
 	if err != nil {
 		h.fail(c, "list hills", err)

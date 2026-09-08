@@ -133,7 +133,7 @@ func (d *Dispatcher) enabledServices(ctx context.Context) ([]serviceTarget, erro
 
 func (d *Dispatcher) teamTargets(ctx context.Context) ([]teamTarget, error) {
 	rows, err := d.db.Pool.Query(ctx,
-		`SELECT id, vulnbox_ip::text FROM game_teams
+		`SELECT id, host(vulnbox_ip) FROM game_teams
 		 WHERE status = 'active' AND vulnbox_ip IS NOT NULL`)
 	if err != nil {
 		return nil, err
