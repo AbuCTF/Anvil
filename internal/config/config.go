@@ -19,6 +19,7 @@ type Config struct {
 	VPN         VPNConfig       `mapstructure:"vpn"`
 	Platform    PlatformConfig  `mapstructure:"platform"`
 	RateLimit   RateLimitConfig `mapstructure:"rate_limit"`
+	Game        GameConfig      `mapstructure:"game"`
 }
 
 type ServerConfig struct {
@@ -78,17 +79,17 @@ type ContainerConfig struct {
 }
 
 type VPNConfig struct {
-	Enabled        bool          `mapstructure:"enabled"`
-	Interface      string        `mapstructure:"interface"`
-	ListenPort     int           `mapstructure:"listen_port"`
-	PublicEndpoint string        `mapstructure:"public_endpoint"`
-	PrivateKey     string        `mapstructure:"private_key"`
-	PublicKey      string        `mapstructure:"public_key"`
-	AddressRange   string        `mapstructure:"address_range"` // e.g., "10.10.0.0/16"
-	DNS            string        `mapstructure:"dns"`
-	MTU            int           `mapstructure:"mtu"`
+	Enabled           bool          `mapstructure:"enabled"`
+	Interface         string        `mapstructure:"interface"`
+	ListenPort        int           `mapstructure:"listen_port"`
+	PublicEndpoint    string        `mapstructure:"public_endpoint"`
+	PrivateKey        string        `mapstructure:"private_key"`
+	PublicKey         string        `mapstructure:"public_key"`
+	AddressRange      string        `mapstructure:"address_range"` // e.g., "10.10.0.0/16"
+	DNS               string        `mapstructure:"dns"`
+	MTU               int           `mapstructure:"mtu"`
 	KeepaliveInterval time.Duration `mapstructure:"keepalive_interval"`
-	OnlineWindow   time.Duration `mapstructure:"online_window"`
+	OnlineWindow      time.Duration `mapstructure:"online_window"`
 }
 
 type PlatformConfig struct {
@@ -126,6 +127,36 @@ type RateLimitConfig struct {
 type RateLimit struct {
 	Requests int           `mapstructure:"requests"`
 	Window   time.Duration `mapstructure:"window"`
+}
+
+// GameConfig tunes the Attack-Defense + KotH engine. Off by default.
+type GameConfig struct {
+	Enabled        bool          `mapstructure:"enabled"`
+	TickInterval   time.Duration `mapstructure:"tick_interval"`
+	FlagValidTicks int           `mapstructure:"flag_valid_ticks"`
+
+	Koth    KothConfig    `mapstructure:"koth"`
+	Scoring ScoringConfig `mapstructure:"scoring"`
+	Webhook WebhookConfig `mapstructure:"webhook"`
+}
+
+type KothConfig struct {
+	RoundInterval time.Duration `mapstructure:"round_interval"`
+	ResetEnabled  bool          `mapstructure:"reset_enabled"`
+}
+
+type ScoringConfig struct {
+	AttackBase    float64 `mapstructure:"attack_base"`
+	DefenseFactor float64 `mapstructure:"defense_factor"`
+	SLAPoints     float64 `mapstructure:"sla_points"`
+	KothHold      float64 `mapstructure:"koth_hold"`
+	KothRank      []int   `mapstructure:"koth_rank"`
+}
+
+type WebhookConfig struct {
+	Enabled bool   `mapstructure:"enabled"`
+	URL     string `mapstructure:"url"`
+	Secret  string `mapstructure:"secret"`
 }
 
 // Load reads configuration from file and environment variables
@@ -229,4 +260,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rate_limit.instance_start.window", "10m")
 	v.SetDefault("rate_limit.vpn_config_gen.requests", 2)
 	v.SetDefault("rate_limit.vpn_config_gen.window", "1h")
+
+	v.SetDefault("game.enabled", false)
+	v.SetDefault("game.tick_interval", "2m")
+	v.SetDefault("game.flag_valid_ticks", 10)
+	v.SetDefault("game.koth.round_interval", "15m")
+	v.SetDefault("game.koth.reset_enabled", true)
+	v.SetDefault("game.scoring.attack_base", 100)
+	v.SetDefault("game.scoring.defense_factor", 1.0)
+	v.SetDefault("game.scoring.sla_points", 10)
+	v.SetDefault("game.scoring.koth_hold", 5)
+	v.SetDefault("game.scoring.koth_rank", []int{12, 7, 4, 2, 1})
+	v.SetDefault("game.webhook.enabled", false)
 }
