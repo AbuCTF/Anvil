@@ -2,6 +2,7 @@ package game
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -16,6 +17,7 @@ type Controller struct {
 	db         *database.DB
 	logger     *zap.Logger
 	dispatcher *Dispatcher
+	emitClient *http.Client
 }
 
 func NewController(cfg config.GameConfig, db *database.DB, logger *zap.Logger) *Controller {
@@ -29,6 +31,7 @@ func NewController(cfg config.GameConfig, db *database.DB, logger *zap.Logger) *
 			flagPrefix:     cfg.FlagPrefix,
 			flagValidTicks: cfg.FlagValidTicks,
 		},
+		emitClient: &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -75,6 +78,7 @@ func (c *Controller) runTick(parent context.Context, tick int) {
 	c.dispatcher.dispatch(ctx, tick)
 	c.runKoth(ctx, tick)
 	c.recomputeStandings(ctx)
+	c.emitStandings(ctx, tick)
 
 	if err := c.closeTick(ctx, tick); err != nil {
 		c.logger.Error("close tick failed", zap.Int("tick", tick), zap.Error(err))

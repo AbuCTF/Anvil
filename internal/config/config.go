@@ -158,6 +158,7 @@ type WebhookConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	URL     string `mapstructure:"url"`
 	Secret  string `mapstructure:"secret"`
+	ID      string `mapstructure:"id"`
 }
 
 // Load reads configuration from file and environment variables
