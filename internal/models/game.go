@@ -138,6 +138,7 @@ type GameKothHill struct {
 	Name         string    `json:"name" db:"name"`
 	Slug         string    `json:"slug" db:"slug"`
 	Category     *string   `json:"category,omitempty" db:"category"`
+	Host         *string   `json:"host,omitempty" db:"host"`
 	Port         *int      `json:"port,omitempty" db:"port"`
 	CheckerRef   *string   `json:"checker_ref,omitempty" db:"checker_ref"`
 	ResetSeconds int       `json:"reset_seconds" db:"reset_seconds"`

@@ -4,6 +4,7 @@ package game
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -72,8 +73,8 @@ func seedTeam(t *testing.T, db *database.DB, name string) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	_, err := db.Pool.Exec(context.Background(),
-		`INSERT INTO game_teams (id, name, slug, status, is_nop, vulnbox_ip)
-		 VALUES ($1, $2, $2, 'active', false, '127.0.0.1')`, id, name)
+		`INSERT INTO game_teams (id, name, slug, token, status, is_nop, vulnbox_ip)
+		 VALUES ($1, $2, $2, $2, 'active', false, '127.0.0.1')`, id, name)
 	if err != nil {
 		t.Fatalf("seed team %s: %v", name, err)
 	}
@@ -92,17 +93,76 @@ func seedService(t *testing.T, db *database.DB, checker string) uuid.UUID {
 	return id
 }
 
+func kothChecker(t *testing.T, controllerToken string) string {
+	t.Helper()
+	body := fmt.Sprintf("#!/bin/sh\nline=$(cat)\ncase \"$line\" in\n  *'\"action\":\"control\"'*) printf '{\"controller\":\"%s\"}' ;;\n  *) printf '{}' ;;\nesac\n", controllerToken)
+	p := filepath.Join(t.TempDir(), "koth.sh")
+	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func seedHill(t *testing.T, db *database.DB, checker string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	_, err := db.Pool.Exec(context.Background(),
+		`INSERT INTO game_koth_hills (id, name, slug, host, port, checker_ref, reset_seconds, enabled)
+		 VALUES ($1, 'Hill', 'hill', '127.0.0.1', 1, $2, 900, true)`, id, checker)
+	if err != nil {
+		t.Fatalf("seed hill: %v", err)
+	}
+	return id
+}
+
+func TestIntegrationKoth(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	a := seedTeam(t, db, "alpha")
+	seedTeam(t, db, "bravo")
+	seedHill(t, db, kothChecker(t, "alpha"))
+
+	ctrl := testController(db) // round = 2 ticks
+	ctrl.runTick(ctx, 1)
+	ctrl.runTick(ctx, 2)
+	ctrl.runTick(ctx, 3) // enters round 2 -> closes round 1
+
+	if n := count(t, db, `SELECT COUNT(*) FROM game_koth_control WHERE controller_team_id IS NOT NULL`); n != 3 {
+		t.Fatalf("expected 3 control records for alpha, got %d", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_koth_rounds WHERE round_number = 1 AND status = 'closed'`); n != 1 {
+		t.Fatalf("round 1 should be closed exactly once")
+	}
+
+	var bonus float64
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(points), 0) FROM game_score_events WHERE team_id = $1 AND stream = 'KOTH'`, a).
+		Scan(&bonus); err != nil {
+		t.Fatal(err)
+	}
+	if bonus != 12 {
+		t.Errorf("alpha round-1 rank bonus: got %v want 12", bonus)
+	}
+
+	// koth = per-tick hold (5 x 3 ticks) + round-1 rank bonus (12) = 27
+	if s := getStanding(t, db, a); s.koth != 27 {
+		t.Errorf("alpha koth standing: got %v want 27", s.koth)
+	}
+}
+
 type standingRow struct {
-	attack, defense, sla, total float64
-	rank                        int
+	attack, defense, sla, koth, total float64
+	rank                              int
 }
 
 func getStanding(t *testing.T, db *database.DB, team uuid.UUID) standingRow {
 	t.Helper()
 	var s standingRow
 	err := db.Pool.QueryRow(context.Background(),
-		`SELECT attack, defense, sla, total, COALESCE(rank, 0) FROM game_standings WHERE team_id = $1`, team).
-		Scan(&s.attack, &s.defense, &s.sla, &s.total, &s.rank)
+		`SELECT attack, defense, sla, koth, total, COALESCE(rank, 0) FROM game_standings WHERE team_id = $1`, team).
+		Scan(&s.attack, &s.defense, &s.sla, &s.koth, &s.total, &s.rank)
 	if err != nil {
 		t.Fatalf("get standing: %v", err)
 	}
@@ -115,6 +175,7 @@ func testController(db *database.DB) *Controller {
 		TickInterval:   time.Minute,
 		FlagValidTicks: 10,
 		FlagPrefix:     "H7CTF",
+		Koth:           config.KothConfig{RoundInterval: 2 * time.Minute, ResetEnabled: true},
 		Scoring: config.ScoringConfig{
 			AttackBase:    100,
 			DefenseFactor: 1,

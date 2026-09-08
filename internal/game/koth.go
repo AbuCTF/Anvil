@@ -1,0 +1,219 @@
+package game
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os/exec"
+
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+)
+
+// kothControlReply is read from a hill checker's stdout for the "control" action.
+type kothControlReply struct {
+	Controller string `json:"controller"`
+	Message    string `json:"message"`
+}
+
+// hillChecker execs a hill's checker executable. It handles "control" (which
+// team marker currently holds the hill) and "reset" (restore the hill clean).
+type hillChecker struct {
+	command string
+}
+
+func (h hillChecker) run(ctx context.Context, action string, t Target) ([]byte, error) {
+	task, _ := json.Marshal(checkerTask{Action: action, Host: t.Host, Port: t.Port})
+	cmd := exec.CommandContext(ctx, h.command)
+	cmd.Stdin = bytes.NewReader(task)
+	return cmd.Output()
+}
+
+func (h hillChecker) controller(ctx context.Context, t Target) string {
+	out, err := h.run(ctx, "control", t)
+	if err != nil {
+		return ""
+	}
+	var reply kothControlReply
+	if json.Unmarshal(bytes.TrimSpace(out), &reply) != nil {
+		return ""
+	}
+	return reply.Controller
+}
+
+func (h hillChecker) reset(ctx context.Context, t Target) error {
+	_, err := h.run(ctx, "reset", t)
+	return err
+}
+
+type hill struct {
+	id      uuid.UUID
+	target  Target
+	checker hillChecker
+}
+
+func (c *Controller) ticksPerRound() int {
+	if c.cfg.TickInterval <= 0 {
+		return 1
+	}
+	n := int(c.cfg.Koth.RoundInterval / c.cfg.TickInterval)
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+func (c *Controller) roundForTick(tick int) int {
+	if tick < 1 {
+		return 1
+	}
+	return (tick-1)/c.ticksPerRound() + 1
+}
+
+// runKoth records who holds each hill this tick and, at a round boundary, closes
+// the previous round (rank bonus) and resets the hills.
+func (c *Controller) runKoth(ctx context.Context, tick int) {
+	hills, err := c.enabledHills(ctx)
+	if err != nil {
+		c.logger.Error("koth: load hills", zap.Error(err))
+		return
+	}
+	if len(hills) == 0 {
+		return
+	}
+
+	round := c.roundForTick(tick)
+	c.ensureRound(ctx, round)
+
+	if tick > 1 && round != c.roundForTick(tick-1) {
+		c.closeRound(ctx, round-1)
+		if c.cfg.Koth.ResetEnabled {
+			c.resetHills(ctx, hills)
+		}
+	}
+
+	c.pollHills(ctx, tick, round, hills)
+}
+
+func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
+	rows, err := c.db.Pool.Query(ctx,
+		`SELECT id, host::text, port, checker_ref FROM game_koth_hills
+		 WHERE enabled = TRUE AND host IS NOT NULL AND port IS NOT NULL
+		   AND checker_ref IS NOT NULL AND checker_ref <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []hill
+	for rows.Next() {
+		var id uuid.UUID
+		var host string
+		var port int
+		var checker string
+		if err := rows.Scan(&id, &host, &port, &checker); err != nil {
+			return nil, err
+		}
+		out = append(out, hill{id: id, target: Target{Host: host, Port: port}, checker: hillChecker{command: checker}})
+	}
+	return out, rows.Err()
+}
+
+func (c *Controller) ensureRound(ctx context.Context, round int) {
+	_, err := c.db.Pool.Exec(ctx,
+		`INSERT INTO game_koth_rounds (round_number, started_at, status)
+		 VALUES ($1, NOW(), 'running') ON CONFLICT (round_number) DO NOTHING`, round)
+	if err != nil {
+		c.logger.Warn("koth: ensure round", zap.Error(err))
+	}
+}
+
+func (c *Controller) pollHills(ctx context.Context, tick, round int, hills []hill) {
+	tokens := c.teamTokens(ctx)
+	for _, h := range hills {
+		token := h.checker.controller(ctx, h.target)
+		var controller *uuid.UUID
+		if token != "" {
+			if id, ok := tokens[token]; ok {
+				controller = &id
+			}
+		}
+		_, err := c.db.Pool.Exec(ctx,
+			`INSERT INTO game_koth_control (tick_number, round_number, hill_id, controller_team_id)
+			 VALUES ($1, $2, $3, $4) ON CONFLICT (tick_number, hill_id) DO NOTHING`,
+			tick, round, h.id, controller)
+		if err != nil {
+			c.logger.Warn("koth: record control", zap.Error(err))
+		}
+	}
+}
+
+// closeRound is idempotent: it awards the rank bonus only the first time a
+// running round is closed.
+func (c *Controller) closeRound(ctx context.Context, round int) {
+	tag, err := c.db.Pool.Exec(ctx,
+		`UPDATE game_koth_rounds SET status = 'closed', ends_at = NOW()
+		 WHERE round_number = $1 AND status = 'running'`, round)
+	if err != nil {
+		c.logger.Warn("koth: close round", zap.Error(err))
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		return
+	}
+
+	rows, err := c.db.Pool.Query(ctx,
+		`SELECT controller_team_id, COUNT(*) FROM game_koth_control
+		 WHERE round_number = $1 AND controller_team_id IS NOT NULL
+		 GROUP BY controller_team_id`, round)
+	if err != nil {
+		c.logger.Warn("koth: round holds", zap.Error(err))
+		return
+	}
+	var holds []teamHold
+	for rows.Next() {
+		var th teamHold
+		if rows.Scan(&th.Team, &th.Held) == nil {
+			holds = append(holds, th)
+		}
+	}
+	rows.Close()
+
+	for team, pts := range kothRankPoints(c.cfg.Scoring.KothRank, holds) {
+		_, err := c.db.Pool.Exec(ctx,
+			`INSERT INTO game_score_events (team_id, round_number, stream, points, source)
+			 VALUES ($1, $2, 'KOTH', $3, $4)`,
+			team, round, pts, fmt.Sprintf("koth:round:%d", round))
+		if err != nil {
+			c.logger.Warn("koth: award rank", zap.Error(err))
+		}
+	}
+}
+
+func (c *Controller) resetHills(ctx context.Context, hills []hill) {
+	for _, h := range hills {
+		if err := h.checker.reset(ctx, h.target); err != nil {
+			c.logger.Warn("koth: reset hill", zap.String("hill", h.id.String()), zap.Error(err))
+		}
+	}
+}
+
+func (c *Controller) teamTokens(ctx context.Context) map[string]uuid.UUID {
+	out := make(map[string]uuid.UUID)
+	rows, err := c.db.Pool.Query(ctx,
+		`SELECT token, id FROM game_teams WHERE token IS NOT NULL AND status = 'active'`)
+	if err != nil {
+		c.logger.Warn("koth: load tokens", zap.Error(err))
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var token string
+		var id uuid.UUID
+		if rows.Scan(&token, &id) == nil {
+			out[token] = id
+		}
+	}
+	return out
+}
