@@ -12,6 +12,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/api"
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/anvil-lab/anvil/internal/game"
 	"github.com/anvil-lab/anvil/internal/services/container"
 	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/upload"
@@ -358,6 +359,10 @@ func main() {
 		}()
 	}
 
+	// Game engine (Attack-Defense + KotH) — no-op unless game.enabled.
+	gameCtx, gameCancel := context.WithCancel(context.Background())
+	go game.NewController(cfg.Game, db, logger).Run(gameCtx)
+
 	// Initialize API server
 	server := api.NewServer(cfg, db, containerSvc, vmSvc, uploadSvc, storageSvc, vpnSvc, logger)
 
@@ -384,6 +389,8 @@ func main() {
 	<-quit
 
 	sugar.Info("Shutting down server...")
+
+	gameCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
