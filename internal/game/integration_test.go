@@ -1,0 +1,234 @@
+//go:build integration
+
+package game
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/anvil-lab/anvil/internal/config"
+	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+)
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func testDB(t *testing.T) *database.DB {
+	t.Helper()
+	port, _ := strconv.Atoi(envOr("ANVIL_TEST_DB_PORT", "55432"))
+	dbCfg := config.DatabaseConfig{
+		Host:         envOr("ANVIL_TEST_DB_HOST", "127.0.0.1"),
+		Port:         port,
+		User:         envOr("ANVIL_TEST_DB_USER", "anvil"),
+		Password:     envOr("ANVIL_TEST_DB_PASSWORD", "test"),
+		Database:     envOr("ANVIL_TEST_DB_NAME", "anvil"),
+		SSLMode:      "disable",
+		MaxOpenConns: 10,
+		MaxIdleConns: 2,
+	}
+
+	var db *database.DB
+	var err error
+	for i := 0; i < 40; i++ {
+		if db, err = database.New(dbCfg); err == nil {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatalf("connect after retries (is the test postgres up?): %v", err)
+	}
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	_, err = db.Pool.Exec(context.Background(),
+		`TRUNCATE game_teams, game_services, game_ticks, game_koth_hills, game_koth_rounds, users CASCADE`)
+	if err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	return db
+}
+
+func okChecker(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "ok.sh")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\ncat >/dev/null\nprintf '{\"status\":\"OK\"}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func seedTeam(t *testing.T, db *database.DB, name string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	_, err := db.Pool.Exec(context.Background(),
+		`INSERT INTO game_teams (id, name, slug, status, is_nop, vulnbox_ip)
+		 VALUES ($1, $2, $2, 'active', false, '127.0.0.1')`, id, name)
+	if err != nil {
+		t.Fatalf("seed team %s: %v", name, err)
+	}
+	return id
+}
+
+func seedService(t *testing.T, db *database.DB, checker string) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	_, err := db.Pool.Exec(context.Background(),
+		`INSERT INTO game_services (id, name, slug, category, tier, port, checker_ref, flag_stores, enabled)
+		 VALUES ($1, 'Notes', 'notes', 'misc', 'core', 1, $2, 1, true)`, id, checker)
+	if err != nil {
+		t.Fatalf("seed service: %v", err)
+	}
+	return id
+}
+
+type standingRow struct {
+	attack, defense, sla, total float64
+	rank                        int
+}
+
+func getStanding(t *testing.T, db *database.DB, team uuid.UUID) standingRow {
+	t.Helper()
+	var s standingRow
+	err := db.Pool.QueryRow(context.Background(),
+		`SELECT attack, defense, sla, total, COALESCE(rank, 0) FROM game_standings WHERE team_id = $1`, team).
+		Scan(&s.attack, &s.defense, &s.sla, &s.total, &s.rank)
+	if err != nil {
+		t.Fatalf("get standing: %v", err)
+	}
+	return s
+}
+
+func testController(db *database.DB) *Controller {
+	return NewController(config.GameConfig{
+		Enabled:        true,
+		TickInterval:   time.Minute,
+		FlagValidTicks: 10,
+		FlagPrefix:     "H7CTF",
+		Scoring: config.ScoringConfig{
+			AttackBase:    100,
+			DefenseFactor: 1,
+			SLAPoints:     10,
+			KothHold:      5,
+			KothRank:      []int{12, 7, 4, 2, 1},
+		},
+	}, db, zap.NewNop())
+}
+
+func count(t *testing.T, db *database.DB, q string) int {
+	t.Helper()
+	var n int
+	if err := db.Pool.QueryRow(context.Background(), q).Scan(&n); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	return n
+}
+
+func TestIntegrationADLoop(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	a := seedTeam(t, db, "alpha")
+	b := seedTeam(t, db, "bravo")
+	c := seedTeam(t, db, "charlie")
+	seedService(t, db, okChecker(t))
+
+	ctrl := testController(db)
+	ctrl.runTick(ctx, 1)
+
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flags WHERE tick_number = 1`); n != 3 {
+		t.Fatalf("expected 3 flags planted, got %d", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE status = 'OK'`); n != 3 {
+		t.Fatalf("expected 3 OK sla checks, got %d", n)
+	}
+	if s := getStanding(t, db, a); s.sla <= 0 {
+		t.Fatalf("expected positive SLA after an OK tick, got %v", s.sla)
+	}
+
+	var flagB string
+	if err := db.Pool.QueryRow(ctx, `SELECT flag FROM game_flags WHERE team_id = $1`, b).Scan(&flagB); err != nil {
+		t.Fatalf("read bravo's flag: %v", err)
+	}
+
+	assertOutcome(t, db, a, flagB, SubmitAccepted)
+	assertOutcome(t, db, a, flagB, SubmitDuplicate)
+	assertOutcome(t, db, b, flagB, SubmitOwnFlag)
+	assertOutcome(t, db, a, "H7CTF{NOPE}", SubmitInvalid)
+
+	// A stale flag (past its window) must be rejected as expired.
+	var stale string = "H7CTF{STALE0000}"
+	_, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_flags (tick_number, team_id, service_id, store_index, flag, valid_from_tick, valid_until_tick)
+		 SELECT 1, $1, id, 1, $2, 1, 0 FROM game_services LIMIT 1`, c, stale)
+	if err != nil {
+		t.Fatalf("insert stale flag: %v", err)
+	}
+	assertOutcome(t, db, a, stale, SubmitExpired)
+
+	ctrl.recomputeStandings(ctx)
+
+	sa := getStanding(t, db, a)
+	sb := getStanding(t, db, b)
+	if sa.attack != 100 {
+		t.Errorf("alpha attack: got %v want 100 (sole captor of one flag)", sa.attack)
+	}
+	if sb.defense != -1 {
+		t.Errorf("bravo defense: got %v want -1 (one flag lost to one team)", sb.defense)
+	}
+	if sa.total <= sb.total {
+		t.Errorf("alpha (%.2f) should outrank bravo (%.2f)", sa.total, sb.total)
+	}
+	if sa.rank != 1 {
+		t.Errorf("alpha should be rank 1, got %d", sa.rank)
+	}
+}
+
+func assertOutcome(t *testing.T, db *database.DB, team uuid.UUID, flag string, want SubmitOutcome) {
+	t.Helper()
+	got, err := SubmitFlag(context.Background(), db, team, flag)
+	if err != nil {
+		t.Fatalf("submit %q: %v", flag, err)
+	}
+	if got != want {
+		t.Errorf("submit %q: got %q want %q", flag, got, want)
+	}
+}
+
+func TestIntegrationTeamForUser(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	team := seedTeam(t, db, "alpha")
+	user := uuid.New()
+	_, err := db.Pool.Exec(ctx,
+		`INSERT INTO users (id, username, email, password_hash, role, status)
+		 VALUES ($1, 'p1', 'p1@example.com', 'x', 'user', 'active')`, user)
+	if err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_team_members (team_id, user_id, role) VALUES ($1, $2, 'captain')`, team, user); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+
+	got, ok, err := TeamForUser(ctx, db, user)
+	if err != nil || !ok || got != team {
+		t.Fatalf("TeamForUser: got %v ok=%v err=%v want %v", got, ok, err, team)
+	}
+	if _, ok, _ := TeamForUser(ctx, db, uuid.New()); ok {
+		t.Errorf("unknown user should not resolve to a team")
+	}
+}
