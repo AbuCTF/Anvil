@@ -123,6 +123,23 @@ No host port bindings or NAT. VPN routes both `172.20.0.0/16` (containers) and `
 
 If you change `container.network_subnet` in `config/config.yaml`, update both the WireGuard firewall rules above and the routed client `AllowedIPs` to match.
 
+#### **Game engine (Attack-Defense + KotH)**
+
+Off by default — Anvil is a B2R/Jeopardy platform until `game.enabled` is set. When on, a background controller runs the game clock: each tick it plants a fresh flag into every team's services, records an SLA verdict, and recomputes ranked standings. Migration `010` adds the `game_*` tables.
+
+| `game.*` | What |
+|----------|------|
+| `enabled` | master switch (default `false`) |
+| `tick_interval` | game heartbeat (default `2m`) |
+| `flag_valid_ticks` | how long a stolen flag stays submittable (default `10`) |
+| `flag_prefix` | flag wrapper `PREFIX{...}` (default `H7CTF`) |
+| `koth.round_interval` | KotH round length / hill reset cadence (default `15m`) |
+| `scoring.*` | attack / defense / SLA / KotH weights |
+
+Scoring is `attack + defense + sla + koth`, all additive — dropping the KotH layer degrades to plain Attack-Defense. Attack divides a flag's value by how many teams stole it; defense is a sublinear penalty for flags lost; SLA scales by `√teams`.
+
+Checkers are external executables the engine runs over a JSON protocol (task on stdin, verdict on stdout). See `services/example-notes` for a service + checker template.
+
 #### **Stack**
 
 | Component | Tech |
