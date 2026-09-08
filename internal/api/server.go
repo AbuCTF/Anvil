@@ -249,6 +249,26 @@ func (s *Server) setupRouter() {
 				users.DELETE("/:id", adminUserHandler.Delete)
 			}
 
+			// Game (Attack-Defense + KotH) setup
+			gameAdmin := admin.Group("/game")
+			{
+				gameAdminHandler := handlers.NewGameAdminHandler(s.config, s.db, s.logger)
+				gameAdmin.GET("/teams", gameAdminHandler.ListTeams)
+				gameAdmin.POST("/teams", gameAdminHandler.CreateTeam)
+				gameAdmin.DELETE("/teams/:id", gameAdminHandler.DeleteTeam)
+				gameAdmin.POST("/teams/:id/members", gameAdminHandler.AddMember)
+
+				gameAdmin.GET("/services", gameAdminHandler.ListServices)
+				gameAdmin.POST("/services", gameAdminHandler.CreateService)
+				gameAdmin.PATCH("/services/:id", gameAdminHandler.UpdateService)
+				gameAdmin.DELETE("/services/:id", gameAdminHandler.DeleteService)
+
+				gameAdmin.GET("/hills", gameAdminHandler.ListHills)
+				gameAdmin.POST("/hills", gameAdminHandler.CreateHill)
+				gameAdmin.PATCH("/hills/:id", gameAdminHandler.UpdateHill)
+				gameAdmin.DELETE("/hills/:id", gameAdminHandler.DeleteHill)
+			}
+
 			// Challenge management
 			challenges := admin.Group("/challenges")
 			{
