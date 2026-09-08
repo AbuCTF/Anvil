@@ -134,6 +134,7 @@ type GameConfig struct {
 	Enabled        bool          `mapstructure:"enabled"`
 	TickInterval   time.Duration `mapstructure:"tick_interval"`
 	FlagValidTicks int           `mapstructure:"flag_valid_ticks"`
+	FlagPrefix     string        `mapstructure:"flag_prefix"`
 
 	Koth    KothConfig    `mapstructure:"koth"`
 	Scoring ScoringConfig `mapstructure:"scoring"`
@@ -264,6 +265,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.enabled", false)
 	v.SetDefault("game.tick_interval", "2m")
 	v.SetDefault("game.flag_valid_ticks", 10)
+	v.SetDefault("game.flag_prefix", "H7CTF")
 	v.SetDefault("game.koth.round_interval", "15m")
 	v.SetDefault("game.koth.reset_enabled", true)
 	v.SetDefault("game.scoring.attack_base", 100)

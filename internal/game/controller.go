@@ -12,13 +12,24 @@ import (
 // Controller drives the game clock. It opens and closes ticks on a fixed
 // interval; checker dispatch, KotH control, and scoring hang off each tick.
 type Controller struct {
-	cfg    config.GameConfig
-	db     *database.DB
-	logger *zap.Logger
+	cfg        config.GameConfig
+	db         *database.DB
+	logger     *zap.Logger
+	dispatcher *Dispatcher
 }
 
 func NewController(cfg config.GameConfig, db *database.DB, logger *zap.Logger) *Controller {
-	return &Controller{cfg: cfg, db: db, logger: logger}
+	return &Controller{
+		cfg:    cfg,
+		db:     db,
+		logger: logger,
+		dispatcher: &Dispatcher{
+			db:             db,
+			logger:         logger,
+			flagPrefix:     cfg.FlagPrefix,
+			flagValidTicks: cfg.FlagValidTicks,
+		},
+	}
 }
 
 // Run ticks until ctx is cancelled. It returns immediately unless the engine is enabled.
@@ -61,7 +72,7 @@ func (c *Controller) runTick(parent context.Context, tick int) {
 		return
 	}
 
-	// Checker dispatch (flags + SLA), KotH control, and scoring run here.
+	c.dispatcher.dispatch(ctx, tick)
 
 	if err := c.closeTick(ctx, tick); err != nil {
 		c.logger.Error("close tick failed", zap.Int("tick", tick), zap.Error(err))
