@@ -154,6 +154,15 @@ func (s *Server) setupRouter() {
 				challenges.POST("/:slug/hints/:hint_id/unlock", challengeHandler.UnlockHint)
 			}
 
+			// Game (Attack-Defense + KotH) flag submission
+			gameRoutes := protected.Group("/game")
+			{
+				gameHandler := handlers.NewGameHandler(s.config, s.db, s.logger)
+				gameRoutes.POST("/submit", middleware.RateLimitEndpoint(
+					s.config.RateLimit.FlagSubmission,
+				), gameHandler.SubmitFlag)
+			}
+
 			// Instance management
 			instances := protected.Group("/instances")
 			{
