@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import { API_BASE } from '$lib/config';
 	import LineChart from '$lib/components/LineChart.svelte';
+	import { teamColor as seriesColor } from '$lib/rank';
 	import type { Series } from '$lib/chart/path';
 
 	interface Standing {
@@ -137,7 +138,7 @@
 			applyEvents(s.events ?? []);
 			raceSeries = (s.history ?? []).map((h) => ({
 				label: h.team,
-				color: `hsl(${teamHue(h.team_id)} 24% 58%)`,
+				color: seriesColor(h.team_id),
 				points: h.points
 			}));
 			initialized = true;
@@ -194,15 +195,10 @@
 		return () => clearInterval(timer);
 	});
 
-	function teamHue(key: string): number {
-		let h = 0;
-		for (let i = 0; i < key.length; i++) h = (Math.imul(h, 31) + key.charCodeAt(i)) >>> 0;
-		return h % 360;
-	}
 	function teamColor(key: string | null | undefined) {
-		if (!key) return { dot: 'hsl(30 6% 38%)', text: 'hsl(30 6% 58%)' };
-		const hue = teamHue(key);
-		return { dot: `hsl(${hue} 24% 55%)`, text: `hsl(${hue} 18% 72%)` };
+		if (!key) return { dot: '#57534c', text: '#837e75' };
+		const c = seriesColor(key);
+		return { dot: c, text: c };
 	}
 	const fmt = (n: number | null | undefined) => (typeof n === 'number' && Number.isFinite(n) ? n.toFixed(0) : '—');
 	function ago(at: number) {

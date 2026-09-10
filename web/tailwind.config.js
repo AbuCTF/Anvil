@@ -24,7 +24,14 @@ export default {
 					DEFAULT: '#a8935c',
 					light: '#c4b084',
 					dark: '#8c7847'
-				}
+				},
+				// Semantic status — muted, reserved for state only (see DESIGN.md).
+				up: '#6fae7f',
+				down: '#d3776f',
+				danger: '#f0524f',
+				warn: '#cba64a',
+				info: '#6f95bd',
+				blood: '#e0483c'
 			},
 			fontFamily: {
 				sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
