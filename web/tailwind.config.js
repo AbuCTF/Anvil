@@ -5,19 +5,21 @@ export default {
 	theme: {
 		extend: {
 			colors: {
-				// Stoic minimal palette
+				// Neutral scale driven by CSS variables so the whole UI flips between
+				// dark and light themes (see app.css). Meaning stays constant: 950 = page
+				// ground, 100 = primary text; the values invert per theme.
 				stone: {
-					50: '#fafaf9',
-					100: '#f5f5f4',
-					200: '#e7e5e4',
-					300: '#d6d3d1',
-					400: '#a8a29e',
-					500: '#78716c',
-					600: '#57534e',
-					700: '#44403c',
-					800: '#292524',
-					900: '#1c1917',
-					950: '#0c0a09'
+					50: 'rgb(var(--st-50) / <alpha-value>)',
+					100: 'rgb(var(--st-100) / <alpha-value>)',
+					200: 'rgb(var(--st-200) / <alpha-value>)',
+					300: 'rgb(var(--st-300) / <alpha-value>)',
+					400: 'rgb(var(--st-400) / <alpha-value>)',
+					500: 'rgb(var(--st-500) / <alpha-value>)',
+					600: 'rgb(var(--st-600) / <alpha-value>)',
+					700: 'rgb(var(--st-700) / <alpha-value>)',
+					800: 'rgb(var(--st-800) / <alpha-value>)',
+					900: 'rgb(var(--st-900) / <alpha-value>)',
+					950: 'rgb(var(--st-950) / <alpha-value>)'
 				},
 				// Minimal accent - muted gold
 				accent: {

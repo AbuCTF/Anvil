@@ -27,7 +27,7 @@
 <div class="fixed top-16 inset-x-0 bottom-0 overflow-hidden flex flex-col items-center justify-center text-center px-6">
 	<h1 class="text-4xl sm:text-6xl md:text-7xl font-semibold tracking-tight leading-[1.05] text-stone-100">
 		Forge Your<br />
-		Security <span class="text-cyan-400">Skills</span>
+		Security <span class="hero-accent">Skills</span>
 	</h1>
 
 	<p class="mt-6 text-sm md:text-base text-stone-400 max-w-xl leading-relaxed">
@@ -38,7 +38,7 @@
 	<div class="mt-8 flex flex-wrap gap-3 justify-center">
 		<a
 			href="/challenges"
-			class="inline-flex items-center gap-1.5 px-6 py-2.5 bg-stone-100 text-stone-950 text-sm font-medium hover:bg-white transition-colors rounded-full"
+			class="inline-flex items-center gap-1.5 px-6 py-2.5 bg-stone-100 text-stone-950 text-sm font-medium hover:bg-stone-50 transition-colors rounded-full"
 		>
 			Get Started
 			<Icon icon="mdi:arrow-right" class="w-4 h-4 -translate-y-[2px]" />

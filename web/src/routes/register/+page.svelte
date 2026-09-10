@@ -51,7 +51,7 @@
 			<h1 class="text-2xl font-bold text-stone-100 tracking-tight">Create Account</h1>
 			<p class="text-sm text-stone-500 mt-1.5">
 				Already have an account?
-				<a href="/login" class="text-stone-200 font-medium hover:text-white transition-colors">Sign in</a>
+				<a href="/login" class="text-stone-200 font-medium hover:text-stone-50 transition-colors">Sign in</a>
 			</p>
 		</div>
 
@@ -131,7 +131,7 @@
 				<button
 					type="submit"
 					disabled={!formValid || loading}
-					class="w-full rounded-md bg-stone-100 text-stone-950 font-medium py-2.5 text-sm hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+					class="w-full rounded-md bg-stone-100 text-stone-950 font-medium py-2.5 text-sm hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 				>
 					{#if loading}
 						<span class="flex items-center justify-center gap-2">

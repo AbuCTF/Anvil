@@ -43,7 +43,7 @@
 		: 'bg-stone-900/40 border-stone-800 hover:border-stone-700 hover:bg-stone-800/20'}"
 >
 	<div class="flex items-start justify-between gap-2">
-		<h3 class="text-base font-semibold leading-snug {challenge.is_solved ? 'text-stone-200' : 'text-stone-100 group-hover:text-white'} transition-colors">
+		<h3 class="text-base font-semibold leading-snug {challenge.is_solved ? 'text-stone-200' : 'text-stone-100 group-hover:text-stone-50'} transition-colors">
 			{challenge.name}
 		</h3>
 		{#if challenge.is_solved}

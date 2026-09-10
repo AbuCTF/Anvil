@@ -39,7 +39,7 @@
 >
 	<div class="p-4">
 		<div class="flex items-start justify-between mb-3">
-			<h3 class="text-[0.95rem] font-medium text-stone-100 group-hover:text-white transition-colors flex-1">
+			<h3 class="text-[0.95rem] font-medium text-stone-100 group-hover:text-stone-50 transition-colors flex-1">
 				{challenge.name}
 			</h3>
 			{#if challenge.is_solved}
@@ -94,7 +94,7 @@
 	</div>
 
 	{#if challenge.author_name}
-		<div class="px-4 py-2.5 bg-black/40 border-t border-stone-800">
+		<div class="px-4 py-2.5 bg-stone-950/40 border-t border-stone-800">
 			<p class="text-xs text-stone-500">
 				by <span class="text-stone-400">{challenge.author_name}</span>
 			</p>

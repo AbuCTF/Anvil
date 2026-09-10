@@ -109,7 +109,7 @@
 	<title>Challenges - Anvil</title>
 </svelte:head>
 
-<div class="min-h-screen bg-black">
+<div class="min-h-screen bg-stone-950">
 	<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 		<PageHeader
 			title="Challenges"
@@ -143,7 +143,7 @@
 						type="text"
 						bind:value={searchQuery}
 						placeholder="Search challenges…"
-						class="w-full pl-9 pr-9 py-2 bg-black border border-stone-800 rounded-md text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
+						class="w-full pl-9 pr-9 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
 					/>
 					{#if searchQuery}
 						<button
@@ -158,7 +158,7 @@
 
 				<select
 					bind:value={selectedDifficulty}
-					class="w-full px-3 py-2 bg-black border border-stone-800 rounded-md text-sm text-stone-100 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
+					class="w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-100 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
 				>
 					<option value="">All difficulties</option>
 					<option value="easy">Easy</option>
@@ -169,7 +169,7 @@
 
 				<select
 					bind:value={selectedCategory}
-					class="w-full px-3 py-2 bg-black border border-stone-800 rounded-md text-sm text-stone-100 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
+					class="w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-100 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
 				>
 					<option value="">All categories</option>
 					{#each categories as category}
@@ -185,7 +185,7 @@
 							<input
 								type="checkbox"
 								bind:checked={showSolved}
-								class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-black accent-amber-600 focus:ring-0 focus:ring-offset-0"
+								class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-stone-950 accent-amber-600 focus:ring-0 focus:ring-offset-0"
 							/>
 							<span class="text-stone-400 text-xs uppercase tracking-wide">Solved only</span>
 						</label>

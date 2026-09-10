@@ -5,6 +5,14 @@
 		<link rel="icon" href="%sveltekit.assets%/favicon.ico" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="description" content="Anvil - Forge Your Security Skills" />
+
+		<!-- Apply saved theme before paint to avoid a flash -->
+		<script>
+			try {
+				if (localStorage.getItem('theme') === 'light')
+					document.documentElement.setAttribute('data-theme', 'light');
+			} catch (e) {}
+		</script>
 		
 		<!-- Preconnect to API for faster requests -->
 		<link rel="preconnect" href="https://play.abu.rocks" crossorigin />

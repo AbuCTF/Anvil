@@ -706,7 +706,7 @@
 
 <svelte:window on:keydown={handleKeydown} />
 
-<div class="min-h-screen bg-black">
+<div class="min-h-screen bg-stone-950">
 	<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 		<PageHeader title="Admin" subtitle="Platform management">
 			<div slot="actions">
@@ -1664,7 +1664,7 @@
 <!-- Create Challenge Modal -->
 {#if showCreateModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-black/80 backdrop-blur-sm" on:click={() => showCreateModal = false}></button>
+		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showCreateModal = false}></button>
 		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-2xl max-h-[90vh] flex flex-col" role="dialog" aria-modal="true">
 			<!-- Header with Type Tabs -->
 			<div class="p-6 border-b border-stone-800 flex-shrink-0">
@@ -1679,7 +1679,7 @@
 				</div>
 
 				<!-- Type Tabs at Top -->
-				<div class="flex gap-1 p-1 bg-black border border-stone-800 rounded-md">
+				<div class="flex gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md">
 					<button
 						type="button"
 						on:click={() => newChallenge.type = 'container'}
@@ -1879,7 +1879,7 @@
 								</div>
 								<div class="space-y-3">
 									{#each newChallenge.flags as fl, i}
-										<div class="p-3 bg-black border border-stone-800 rounded-md space-y-2">
+										<div class="p-3 bg-stone-950 border border-stone-800 rounded-md space-y-2">
 											<div class="flex items-center gap-2">
 												<input type="text" bind:value={fl.name} class="flex-1 {fieldCls}" placeholder="Flag name" />
 												<input type="number" bind:value={fl.points} min="0" class="w-20 tabular-nums {fieldCls}" placeholder="pts" />
@@ -1932,7 +1932,7 @@
 							<!-- VM Source Selection -->
 							<div>
 								<span class={labelCls}>VM Source</span>
-								<div class="flex gap-1 p-1 bg-black border border-stone-800 rounded-md">
+								<div class="flex gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md">
 									<button
 										type="button"
 										on:click={() => newChallenge.vm_source = 'template'}
@@ -1968,7 +1968,7 @@
 												<button
 													type="button"
 													on:click={() => newChallenge.vm_template_id = template.id}
-													class="w-full p-3 rounded-md border text-left transition-colors {newChallenge.vm_template_id === template.id ? 'bg-stone-800/40 border-stone-600' : 'bg-black border-stone-800 hover:border-stone-700'}"
+													class="w-full p-3 rounded-md border text-left transition-colors {newChallenge.vm_template_id === template.id ? 'bg-stone-800/40 border-stone-600' : 'bg-stone-950 border-stone-800 hover:border-stone-700'}"
 												>
 													<div class="flex items-center justify-between">
 														<div>
@@ -2026,7 +2026,7 @@
 								</div>
 								<div class="space-y-3">
 									{#each newChallenge.flags as flag, i}
-										<div class="bg-black border border-stone-800 rounded-md p-4">
+										<div class="bg-stone-950 border border-stone-800 rounded-md p-4">
 											<div class="flex items-center gap-3 mb-3">
 												<input
 													type="text"
@@ -2075,7 +2075,7 @@
 						{#if pendingAttachments.length > 0}
 							<div class="space-y-2">
 								{#each pendingAttachments as attachment, i}
-									<div class="flex items-center gap-2 p-2 bg-black border border-stone-800 rounded-md">
+									<div class="flex items-center gap-2 p-2 bg-stone-950 border border-stone-800 rounded-md">
 										<Icon icon="mdi:file-outline" class="w-4 h-4 text-stone-400 shrink-0" />
 										<div class="min-w-0 flex-1">
 											<p class="text-xs text-stone-300 truncate">{attachment.file.name}</p>
@@ -2143,7 +2143,7 @@
 <!-- Edit Challenge Modal -->
 {#if showEditModal && editingChallenge}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-black/80 backdrop-blur-sm" on:click={() => { showEditModal = false; editingChallenge = null; }}></button>
+		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => { showEditModal = false; editingChallenge = null; }}></button>
 		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true">
 			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between sticky top-0 bg-stone-950 z-10">
 				<div>
@@ -2326,7 +2326,7 @@
 <!-- Add Node Modal -->
 {#if showNodeModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-black/80 backdrop-blur-sm" on:click={() => showNodeModal = false}></button>
+		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showNodeModal = false}></button>
 		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-lg" role="dialog" aria-modal="true">
 			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between">
 				<h2 class="text-lg font-semibold text-stone-100">Add VM Node</h2>
@@ -2402,7 +2402,7 @@
 <!-- Upload Template Modal -->
 {#if showTemplateUploadModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-black/80 backdrop-blur-sm" on:click={() => showTemplateUploadModal = false}></button>
+		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showTemplateUploadModal = false}></button>
 		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-lg" role="dialog" aria-modal="true">
 			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between">
 				<h2 class="text-lg font-semibold text-stone-100">Upload VM Template</h2>

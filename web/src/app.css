@@ -3,39 +3,73 @@
 @tailwind utilities;
 
 @layer base {
+	/* Dark theme (default). Meaning is fixed: 950 = page ground, 100 = primary text. */
+	:root {
+		--st-50: 250 250 249;
+		--st-100: 245 245 244;
+		--st-200: 231 229 228;
+		--st-300: 214 211 209;
+		--st-400: 168 162 158;
+		--st-500: 120 113 108;
+		--st-600: 87 83 78;
+		--st-700: 68 64 60;
+		--st-800: 41 37 36;
+		--st-900: 28 25 23;
+		--st-950: 12 10 9;
+		color-scheme: dark;
+	}
+	/* Light theme — the scale inverts, so every stone-* class flips automatically. */
+	:root[data-theme='light'] {
+		--st-50: 28 25 23;
+		--st-100: 28 25 23;
+		--st-200: 41 37 36;
+		--st-300: 62 58 54;
+		--st-400: 92 87 81;
+		--st-500: 122 115 108;
+		--st-600: 150 143 135;
+		--st-700: 185 179 170;
+		--st-800: 214 209 200;
+		--st-900: 228 223 215;
+		--st-950: 250 249 246;
+		color-scheme: light;
+	}
+
 	* {
 		@apply border-stone-800;
 	}
 	html, body {
-		@apply bg-black text-stone-100 antialiased;
+		@apply bg-stone-950 text-stone-100 antialiased;
 		font-family: 'JetBrains Mono', 'SF Mono', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier', monospace;
-		/* Prevent horizontal scroll on mobile */
 		overflow-x: hidden;
 		max-width: 100vw;
 	}
-	/* Use mono for all text */
 	h1, h2, h3, h4, h5, h6, p, a, button, input, textarea, select, label, span, div {
 		font-family: inherit;
 	}
-	/* Prevent layout shifts from long words on mobile */
 	p, span, div {
 		word-wrap: break-word;
 		overflow-wrap: break-word;
 	}
 }
 
+/* Theme-aware hero highlight — cyan reads darker on a light ground. */
+.hero-accent {
+	color: #22d3ee;
+}
+:root[data-theme='light'] .hero-accent {
+	color: #0e7490;
+}
+
 /* Hide scrollbar globally but keep functionality */
 html {
 	overflow-y: scroll;
-	scrollbar-width: none; /* Firefox */
-	-ms-overflow-style: none; /* IE and Edge */
+	scrollbar-width: none;
+	-ms-overflow-style: none;
 }
-
 html::-webkit-scrollbar {
-	display: none; /* Chrome, Safari, Opera */
+	display: none;
 }
 
-/* Mobile table scroll wrapper */
 @media (max-width: 768px) {
 	.mobile-table-wrapper {
 		overflow-x: auto;
@@ -43,7 +77,6 @@ html::-webkit-scrollbar {
 	}
 }
 
-/* Smooth scrolling */
 @media (prefers-reduced-motion: no-preference) {
 	html {
 		scroll-behavior: smooth;

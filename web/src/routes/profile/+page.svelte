@@ -103,7 +103,7 @@ function formatDate(dateString: string): string {
 	<title>Profile - Anvil</title>
 </svelte:head>
 
-<div class="min-h-screen bg-black">
+<div class="min-h-screen bg-stone-950">
 	{#if loading}
 		<div class="flex items-center justify-center min-h-[60vh]">
 			<div class="text-center">
@@ -132,7 +132,7 @@ function formatDate(dateString: string): string {
 										id="display_name"
 										type="text"
 										bind:value={editForm.display_name}
-										class="w-full px-4 py-3 bg-black border border-stone-700 rounded-lg text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
+										class="w-full px-4 py-3 bg-stone-950 border border-stone-700 rounded-lg text-stone-50 placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
 										placeholder="Your display name"
 									/>
 								</div>
@@ -143,7 +143,7 @@ function formatDate(dateString: string): string {
 										id="bio"
 										bind:value={editForm.bio}
 										rows="3"
-										class="w-full px-4 py-3 bg-black border border-stone-700 rounded-lg text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition resize-none"
+										class="w-full px-4 py-3 bg-stone-950 border border-stone-700 rounded-lg text-stone-50 placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition resize-none"
 										placeholder="Tell us about yourself..."
 									></textarea>
 								</div>
@@ -158,7 +158,7 @@ function formatDate(dateString: string): string {
 									<button
 										type="submit"
 										disabled={saving}
-										class="flex-1 px-4 py-3 bg-white text-black rounded-lg font-medium hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+										class="flex-1 px-4 py-3 bg-stone-50 text-stone-950 rounded-lg font-medium hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
 									>
 										{#if saving}
 											<Icon icon="mdi:loading" class="w-5 h-5 animate-spin inline-block mr-2" />
@@ -179,9 +179,9 @@ function formatDate(dateString: string): string {
 						{:else}
 							<div class="text-center mb-8">
 								<div class="w-28 h-28 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mx-auto flex items-center justify-center mb-5 shadow-2xl">
-									<Icon icon="mdi:account-circle" class="w-16 h-16 text-white" />
+									<Icon icon="mdi:account-circle" class="w-16 h-16 text-stone-50" />
 								</div>
-								<h1 class="text-2xl font-semibold text-white mb-2 tracking-tight">
+								<h1 class="text-2xl font-semibold text-stone-50 mb-2 tracking-tight">
 									{profile.display_name || profile.username}
 								</h1>
 								<p class="text-stone-400 text-sm font-mono">@{profile.username}</p>
@@ -193,7 +193,7 @@ function formatDate(dateString: string): string {
 
 							<button
 								on:click={() => editing = true}
-								class="w-full px-4 py-2.5 bg-stone-900/50 text-white rounded-lg hover:bg-stone-800/50 transition border border-stone-700/50 flex items-center justify-center space-x-2 text-sm font-medium"
+								class="w-full px-4 py-2.5 bg-stone-900/50 text-stone-50 rounded-lg hover:bg-stone-800/50 transition border border-stone-700/50 flex items-center justify-center space-x-2 text-sm font-medium"
 							>
 								<Icon icon="mdi:pencil" class="w-4 h-4" />
 								<span>Edit Profile</span>
@@ -201,17 +201,17 @@ function formatDate(dateString: string): string {
 
 							{#if stats}
 								<div class="mt-8 space-y-3">
-									<div class="text-center py-5 px-4 bg-black/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
-										<div class="text-4xl font-light text-white mb-1.5 tracking-tight">{stats.total_score || 0}</div>
+									<div class="text-center py-5 px-4 bg-stone-950/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
+										<div class="text-4xl font-light text-stone-50 mb-1.5 tracking-tight">{stats.total_score || 0}</div>
 										<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Total Points</div>
 									</div>
 									<div class="grid grid-cols-2 gap-3">
-										<div class="text-center py-4 px-3 bg-black/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
-											<div class="text-2xl font-light text-white mb-1 tracking-tight">#{stats.rank || 1}</div>
+										<div class="text-center py-4 px-3 bg-stone-950/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
+											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight">#{stats.rank || 1}</div>
 											<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Rank</div>
 										</div>
-										<div class="text-center py-4 px-3 bg-black/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
-											<div class="text-2xl font-light text-white mb-1 tracking-tight">{stats.total_solves || 0}</div>
+										<div class="text-center py-4 px-3 bg-stone-950/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
+											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight">{stats.total_solves || 0}</div>
 											<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Solved</div>
 										</div>
 									</div>
@@ -226,7 +226,7 @@ function formatDate(dateString: string): string {
 					<!-- Difficulty Progress -->
 					{#if stats?.by_difficulty}
 						<div class="bg-stone-950/50 border border-stone-800/50 rounded-xl p-8 backdrop-blur-sm">
-							<h2 class="text-lg font-semibold text-white mb-6 flex items-center space-x-2 tracking-tight">
+							<h2 class="text-lg font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
 								<Icon icon="mdi:chart-bar" class="w-5 h-5" />
 								<span>Progress by Difficulty</span>
 							</h2>
@@ -235,7 +235,7 @@ function formatDate(dateString: string): string {
 									{@const percentage = data.total > 0 ? (data.solved / data.total) * 100 : 0}
 									<div>
 										<div class="flex items-center justify-between mb-3">
-											<span class="font-medium capitalize text-white text-sm tracking-tight">
+											<span class="font-medium capitalize text-stone-50 text-sm tracking-tight">
 												{difficulty}
 											</span>
 											<span class="text-stone-400 text-xs font-mono">
@@ -257,16 +257,16 @@ function formatDate(dateString: string): string {
 					<!-- Category Progress -->
 					{#if stats?.by_category && Object.keys(stats.by_category).length > 0}
 						<div class="bg-stone-950/50 border border-stone-800/50 rounded-xl p-8 backdrop-blur-sm">
-							<h2 class="text-lg font-semibold text-white mb-6 flex items-center space-x-2 tracking-tight">
+							<h2 class="text-lg font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
 								<Icon icon="mdi:shape" class="w-5 h-5" />
 								<span>Progress by Category</span>
 							</h2>
 							<div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
 								{#each Object.entries(stats.by_category) as [category, data]}
 									{@const percentage = data.total > 0 ? (data.solved / data.total) * 100 : 0}
-									<div class="p-5 bg-black/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
+									<div class="p-5 bg-stone-950/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
 										<div class="text-xs text-stone-400 uppercase tracking-wider mb-3 font-medium truncate">{category}</div>
-										<div class="text-2xl font-light text-white mb-3 tracking-tight">{data.solved}<span class="text-stone-600 text-lg">/{data.total}</span></div>
+										<div class="text-2xl font-light text-stone-50 mb-3 tracking-tight">{data.solved}<span class="text-stone-600 text-lg">/{data.total}</span></div>
 										<div class="w-full bg-stone-900/50 rounded-full h-1.5 overflow-hidden">
 											<div class="h-full bg-green-500 transition-all duration-700 ease-out" style="width: {percentage}%"></div>
 										</div>
@@ -278,7 +278,7 @@ function formatDate(dateString: string): string {
 
 					<!-- Recent Solves -->
 					<div class="bg-stone-950/50 border border-stone-800/50 rounded-xl p-8 backdrop-blur-sm">
-						<h2 class="text-lg font-semibold text-white mb-6 flex items-center space-x-2 tracking-tight">
+						<h2 class="text-lg font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
 							<Icon icon="mdi:flag-checkered" class="w-5 h-5" />
 							<span>Recent Solves</span>
 						</h2>
@@ -289,7 +289,7 @@ function formatDate(dateString: string): string {
 								<p class="text-stone-500 mb-6 text-sm">No flags captured yet</p>
 								<a 
 									href="/challenges" 
-									class="inline-flex items-center space-x-2 px-6 py-2.5 bg-white text-black rounded-lg hover:bg-stone-200 transition text-sm font-medium"
+									class="inline-flex items-center space-x-2 px-6 py-2.5 bg-stone-50 text-stone-950 rounded-lg hover:bg-stone-200 transition text-sm font-medium"
 								>
 									<Icon icon="mdi:flag" class="w-4 h-4" />
 									<span>Browse Challenges</span>
@@ -300,14 +300,14 @@ function formatDate(dateString: string): string {
 								{#each solves.slice(0, 10) as solve}
 									<a 
 										href="/challenges/{solve.challenge_slug}"
-										class="flex items-center justify-between p-5 bg-black/50 border border-stone-800/50 rounded-xl hover:border-stone-700/50 transition-all group backdrop-blur-sm"
+										class="flex items-center justify-between p-5 bg-stone-950/50 border border-stone-800/50 rounded-xl hover:border-stone-700/50 transition-all group backdrop-blur-sm"
 									>
 										<div class="flex items-center space-x-4">
 											<div class="w-9 h-9 rounded-lg bg-green-950/30 border border-green-900/50 flex items-center justify-center flex-shrink-0">
 												<Icon icon="mdi:check" class="w-5 h-5 text-green-400" />
 											</div>
 											<div>
-												<div class="text-white font-medium group-hover:text-stone-200 transition text-sm tracking-tight">{solve.challenge_name}</div>
+												<div class="text-stone-50 font-medium group-hover:text-stone-200 transition text-sm tracking-tight">{solve.challenge_name}</div>
 												<div class="text-stone-500 text-xs mt-0.5">{solve.flag_name}</div>
 											</div>
 										</div>

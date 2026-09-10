@@ -61,13 +61,13 @@ export function categoryColor(name: string | null | undefined): string {
 export function difficultyClass(d: string | null | undefined): string {
 	switch ((d || '').toLowerCase()) {
 		case 'easy':
-			return 'text-green-400 border-green-900 bg-green-950/40';
+			return 'text-green-500 border-green-500/30 bg-green-500/10';
 		case 'medium':
-			return 'text-yellow-400 border-yellow-900 bg-yellow-950/40';
+			return 'text-yellow-500 border-yellow-500/30 bg-yellow-500/10';
 		case 'hard':
-			return 'text-red-400 border-red-900 bg-red-950/40';
+			return 'text-red-500 border-red-500/30 bg-red-500/10';
 		case 'insane':
-			return 'text-purple-400 border-purple-900 bg-purple-950/40';
+			return 'text-purple-500 border-purple-500/30 bg-purple-500/10';
 		default:
 			return 'text-stone-400 border-stone-700 bg-stone-800/40';
 	}
@@ -76,8 +76,8 @@ export function difficultyClass(d: string | null | undefined): string {
 // Resource-type pill: VM = purple, container = blue.
 export function resourceClass(t: string | null | undefined): string {
 	return (t || '').toLowerCase() === 'vm'
-		? 'text-purple-400 border-purple-900 bg-purple-950/40'
-		: 'text-sky-400 border-sky-900 bg-sky-950/40';
+		? 'text-purple-500 border-purple-500/30 bg-purple-500/10'
+		: 'text-sky-500 border-sky-500/30 bg-sky-500/10';
 }
 export function resourceIcon(t: string | null | undefined): string {
 	return (t || '').toLowerCase() === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker';

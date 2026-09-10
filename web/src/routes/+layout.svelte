@@ -21,10 +21,24 @@
 		{ name: 'VPN', href: '/vpn', icon: 'mdi:vpn' }
 	];
 
+	let theme: 'dark' | 'light' = 'dark';
+
 	onMount(() => {
 		// Check for existing auth token
 		auth.checkAuth();
+		theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
 	});
+
+	function toggleTheme() {
+		theme = theme === 'dark' ? 'light' : 'dark';
+		if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+		else document.documentElement.removeAttribute('data-theme');
+		try {
+			localStorage.setItem('theme', theme);
+		} catch (e) {
+			/* ignore */
+		}
+	}
 
 	function handleLogout() {
 		auth.logout();
@@ -32,9 +46,9 @@
 	}
 </script>
 
-<div class="min-h-screen bg-black text-stone-100 flex flex-col">
+<div class="min-h-screen bg-stone-950 text-stone-100 flex flex-col">
 	<!-- Navigation -->
-	<nav class="border-b border-stone-800 bg-black/95 backdrop-blur-sm sticky top-0 z-50">
+	<nav class="border-b border-stone-800 bg-stone-950/95 backdrop-blur-sm sticky top-0 z-50">
 		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
 			<div class="flex items-center justify-between h-16">
 				<!-- Logo / wordmark -->
@@ -50,8 +64,8 @@
 								href={item.href}
 								class="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200
 								{$page.url.pathname.startsWith(item.href)
-									? 'bg-stone-800 text-white'
-									: 'text-stone-400 hover:text-white'}"
+									? 'bg-stone-800 text-stone-50'
+									: 'text-stone-400 hover:text-stone-50'}"
 							>
 								<Icon icon={item.icon} class="w-4 h-4" />
 								<span>{item.name}</span>
@@ -62,6 +76,14 @@
 
 				<!-- User Menu -->
 				<div class="hidden md:flex items-center gap-3 shrink-0">
+					<button
+						on:click={toggleTheme}
+						aria-label="Toggle theme"
+						title="Toggle theme"
+						class="p-2 text-stone-400 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40"
+					>
+						<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
+					</button>
 					{#if $auth.isAuthenticated}
 						{#if $auth.user?.role === 'admin'}
 							<a
@@ -126,7 +148,10 @@
 				</div>
 
 				<!-- Mobile menu button -->
-				<div class="md:hidden">
+				<div class="md:hidden flex items-center gap-1">
+					<button on:click={toggleTheme} aria-label="Toggle theme" class="p-2 text-stone-400 hover:text-stone-100">
+						<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
+					</button>
 					<button
 						on:click={() => (mobileMenuOpen = !mobileMenuOpen)}
 						class="p-2 text-stone-400 hover:text-stone-100"

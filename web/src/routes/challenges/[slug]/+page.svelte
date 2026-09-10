@@ -409,7 +409,7 @@
 
 	function inlineMd(s: string): string {
 		return escapeHtml(s)
-			.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 rounded bg-black border border-stone-800 text-stone-200 text-[0.85em]">$1</code>')
+			.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 rounded bg-stone-950 border border-stone-800 text-stone-200 text-[0.85em]">$1</code>')
 			.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-stone-100">$1</strong>')
 			.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-amber-500 hover:text-amber-400 underline underline-offset-2">$1</a>');
 	}
@@ -514,7 +514,7 @@
 	<title>{challenge?.name || 'Challenge'} - Anvil</title>
 </svelte:head>
 
-<div class="min-h-screen bg-black">
+<div class="min-h-screen bg-stone-950">
 	{#if loading}
 		<div class="flex items-center justify-center min-h-[60vh]">
 			<Icon icon="mdi:loading" class="w-7 h-7 text-stone-600 animate-spin" />
@@ -620,7 +620,7 @@
 					{#if isAdmin}
 						<div class="flex items-center gap-2 pb-4 border-b border-stone-800/60">
 							{#if isEditing}
-								<button on:click={handleSaveEdit} disabled={saving} class="text-xs px-3 py-1.5 bg-stone-100 text-stone-950 rounded-md font-medium hover:bg-white disabled:opacity-50 transition-colors flex items-center gap-1.5">
+								<button on:click={handleSaveEdit} disabled={saving} class="text-xs px-3 py-1.5 bg-stone-100 text-stone-950 rounded-md font-medium hover:bg-stone-50 disabled:opacity-50 transition-colors flex items-center gap-1.5">
 									{#if saving}<Icon icon="mdi:loading" class="w-3 h-3 animate-spin" />{/if}
 									Save
 								</button>
@@ -656,7 +656,7 @@
 							<textarea
 								bind:value={editForm.description}
 								rows="6"
-								class="w-full px-3 py-2.5 bg-black border border-stone-800 rounded-md text-stone-300 text-sm leading-relaxed focus:outline-none focus:border-stone-600 resize-none"
+								class="w-full px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-md text-stone-300 text-sm leading-relaxed focus:outline-none focus:border-stone-600 resize-none"
 								placeholder="Challenge description…"
 							></textarea>
 						{:else if challenge.description}
@@ -689,7 +689,7 @@
 								{#if isEditing && isAdmin}
 									<!-- Admin flag editing mode -->
 									{#each editingFlags as flag, i}
-										<div class="py-3 px-4 bg-black border border-stone-800 rounded-lg">
+										<div class="py-3 px-4 bg-stone-950 border border-stone-800 rounded-lg">
 											{#if flag.editing}
 												<div class="space-y-3">
 													<div class="grid grid-cols-2 gap-3">
@@ -716,7 +716,7 @@
 														<button
 															on:click={() => { saveFlag(flag); flag.editing = false; }}
 															disabled={savingFlag}
-															class="px-3 py-1.5 bg-stone-100 hover:bg-white text-stone-950 text-xs font-medium rounded-md transition-colors disabled:opacity-50"
+															class="px-3 py-1.5 bg-stone-100 hover:bg-stone-50 text-stone-950 text-xs font-medium rounded-md transition-colors disabled:opacity-50"
 														>
 															{savingFlag ? 'Saving…' : 'Save'}
 														</button>
@@ -763,7 +763,7 @@
 								{:else}
 									<!-- Normal user view -->
 									{#each challenge.flags as flag, i}
-										<div class="flex items-center justify-between py-3 px-4 rounded-lg {flag.is_solved ? 'bg-up/[0.06] border border-up/20' : 'bg-black border border-stone-800'}">
+										<div class="flex items-center justify-between py-3 px-4 rounded-lg {flag.is_solved ? 'bg-up/[0.06] border border-up/20' : 'bg-stone-950 border border-stone-800'}">
 											<div class="flex items-center gap-3">
 												<div class="w-6 h-6 rounded flex items-center justify-center {flag.is_solved ? 'bg-up/20 text-up' : 'bg-stone-800 text-stone-500'} text-xs font-medium tabular-nums">
 													{#if flag.is_solved}
@@ -795,7 +795,7 @@
 						<Card title="Hints">
 							<div class="space-y-2">
 								{#each challenge.hints as hint, i}
-									<div class="py-3 px-4 bg-black border border-stone-800 rounded-lg">
+									<div class="py-3 px-4 bg-stone-950 border border-stone-800 rounded-lg">
 										{#if hint.is_unlocked}
 											<p class="text-stone-400 text-sm">{hint.content}</p>
 										{:else}
@@ -817,7 +817,7 @@
 						<Card title="Files">
 							<div class="space-y-2">
 								{#each challenge.attachments as attachment}
-									<div class="flex items-center justify-between py-2.5 px-4 bg-black border border-stone-800 rounded-lg group">
+									<div class="flex items-center justify-between py-2.5 px-4 bg-stone-950 border border-stone-800 rounded-lg group">
 										<div class="flex items-center gap-3 min-w-0">
 											<Icon icon="mdi:file-outline" class="w-4 h-4 text-stone-500 shrink-0" />
 											<div class="min-w-0">
@@ -849,7 +849,7 @@
 
 								<!-- Admin upload form -->
 								{#if isEditing && isAdmin}
-									<div class="py-3 px-4 bg-black border border-dashed border-stone-700 rounded-lg space-y-3">
+									<div class="py-3 px-4 bg-stone-950 border border-dashed border-stone-700 rounded-lg space-y-3">
 										<p class="text-xs text-stone-500 font-medium uppercase tracking-wide">Upload file</p>
 										<input
 											type="file"
@@ -861,7 +861,7 @@
 											type="text"
 											bind:value={attachmentDescription}
 											placeholder="Description (optional)"
-											class="block w-full px-3 py-1.5 bg-black border border-stone-800 rounded-md text-xs text-stone-100 placeholder-stone-600 focus:outline-none focus:border-stone-600"
+											class="block w-full px-3 py-1.5 bg-stone-950 border border-stone-800 rounded-md text-xs text-stone-100 placeholder-stone-600 focus:outline-none focus:border-stone-600"
 										/>
 										{#if attachmentUploading}
 											<div class="space-y-1">
@@ -874,7 +874,7 @@
 										<button
 											on:click={uploadAttachment}
 											disabled={attachmentUploading || !attachmentFileSelected}
-											class="text-xs px-3 py-1.5 bg-stone-100 text-stone-950 font-medium rounded-md hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+											class="text-xs px-3 py-1.5 bg-stone-100 text-stone-950 font-medium rounded-md hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 										>
 											{attachmentUploading ? 'Uploading…' : 'Upload'}
 										</button>
@@ -901,7 +901,7 @@
 											</div>
 											<span class="text-[0.65rem] uppercase tracking-wider text-stone-600">session</span>
 										</div>
-										<div class="h-1.5 bg-black border border-stone-800 rounded-full overflow-hidden">
+										<div class="h-1.5 bg-stone-950 border border-stone-800 rounded-full overflow-hidden">
 											<div
 												class="h-full {getTimeBarClass(instance.expires_at)} rounded-full transition-all duration-1000 ease-linear"
 												style="width: {instanceProgress(instance)}%"
@@ -918,7 +918,7 @@
 													{@const [port, svc] = portKey.split('/')}
 													{@const isHttp = svc === 'http' || svc === 'https'}
 													{@const connStr = isHttp ? `http://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`}
-													<div class="bg-black border border-stone-800 rounded-lg overflow-hidden">
+													<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
 														<div class="flex items-center gap-2 px-3 py-1.5 border-b border-stone-800/60 bg-stone-900/40">
 															<Icon
 																icon={isHttp ? 'mdi:web' : 'mdi:console'}
@@ -949,7 +949,7 @@
 												{/each}
 											</div>
 										{:else}
-											<div class="bg-black border border-stone-800 rounded-lg px-3 py-2 flex items-center justify-between">
+											<div class="bg-stone-950 border border-stone-800 rounded-lg px-3 py-2 flex items-center justify-between">
 												<code class="text-xs text-stone-300 font-mono">{instance.ip_address}</code>
 												<button on:click={() => copyToClipboard(instance.ip_address)} class="ml-2 transition-colors {copiedKey === instance.ip_address ? 'text-up' : 'text-stone-600 hover:text-stone-300'}" aria-label="Copy address">
 													<Icon icon={copiedKey === instance.ip_address ? 'mdi:check' : 'mdi:content-copy'} class="w-3.5 h-3.5" />
@@ -960,14 +960,14 @@
 
 									<!-- Time & Extensions -->
 									<div class="grid grid-cols-2 gap-3">
-										<div class="bg-black border border-stone-800 rounded-lg p-3">
+										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
 											<p class="text-[0.65rem] text-stone-500 mb-1 uppercase tracking-wide">Time left</p>
 											<p class="text-base font-mono font-medium tabular-nums {getTimeColorClass(instance.expires_at)}">{timeRemaining}</p>
 											{#if getSecondsRemaining(instance.expires_at) < 300}
 												<p class="text-xs text-down mt-1">Expiring soon</p>
 											{/if}
 										</div>
-										<div class="bg-black border border-stone-800 rounded-lg p-3">
+										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
 											<p class="text-[0.65rem] text-stone-500 mb-1 uppercase tracking-wide">Extensions</p>
 											<p class="text-base font-medium text-stone-200 tabular-nums">{instance.extensions_used || 0}<span class="text-stone-600 font-normal text-sm"> / {instance.max_extensions || 3}</span></p>
 										</div>
@@ -1009,7 +1009,7 @@
 									{#if error}
 										<div class="mb-4 py-2 px-3 rounded-md text-sm bg-down/10 border border-down/20 text-down">{error}</div>
 									{/if}
-									<button on:click={startInstance} disabled={creatingInstance} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-white transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+									<button on:click={startInstance} disabled={creatingInstance} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
 										{#if creatingInstance}
 											<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
 											Starting…
@@ -1031,9 +1031,9 @@
 									type="text"
 									bind:value={flagInput}
 									placeholder="flag&#123;...&#125;"
-									class="w-full px-3 py-2.5 bg-black border border-stone-800 rounded-md text-stone-100 text-sm font-mono placeholder-stone-600 focus:outline-none focus:border-stone-600"
+									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-md text-stone-100 text-sm font-mono placeholder-stone-600 focus:outline-none focus:border-stone-600"
 								/>
-								<button type="submit" disabled={submitting || !flagInput.trim()} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+								<button type="submit" disabled={submitting || !flagInput.trim()} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
 									{submitting ? 'Checking…' : 'Submit'}
 								</button>
 							</form>
@@ -1049,7 +1049,7 @@
 						<Card hasHeader={false} bodyClass="p-6">
 							<div class="text-center">
 								<p class="text-stone-500 text-sm mb-4">Login to start this challenge</p>
-								<a href="/login" class="inline-block w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-white transition-colors">
+								<a href="/login" class="inline-block w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors">
 									Login
 								</a>
 							</div>
@@ -1093,7 +1093,7 @@
 									<span>Unsolved — first blood available</span>
 								</div>
 							{:else}
-								<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-black border border-stone-800">
+								<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-stone-950 border border-stone-800">
 									<span class="text-stone-500 text-sm flex items-center gap-1.5">
 										<Icon icon="mdi:account-group" class="w-4 h-4" />
 										Solves
@@ -1158,7 +1158,7 @@
 
 <!-- Add Flag Modal -->
 {#if showFlagModal}
-	<div class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+	<div class="fixed inset-0 bg-stone-950/80 flex items-center justify-center z-50 p-4">
 		<div class="bg-stone-900 border border-stone-800 rounded-lg w-full max-w-md">
 			<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between">
 				<h3 class="text-sm font-semibold text-stone-200 uppercase tracking-wide">Add New Flag</h3>
@@ -1175,7 +1175,7 @@
 						bind:value={newFlag.name}
 						placeholder="e.g., User Flag"
 						required
-						class="w-full px-3 py-2 bg-black border border-stone-700 rounded-md text-sm text-stone-200 focus:outline-none focus:border-stone-600"
+						class="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded-md text-sm text-stone-200 focus:outline-none focus:border-stone-600"
 					/>
 				</div>
 				<div>
@@ -1186,7 +1186,7 @@
 						bind:value={newFlag.flag}
 						placeholder="flag&#123;...&#125;"
 						required
-						class="w-full px-3 py-2 bg-black border border-stone-700 rounded-md text-sm text-stone-200 font-mono focus:outline-none focus:border-stone-600"
+						class="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded-md text-sm text-stone-200 font-mono focus:outline-none focus:border-stone-600"
 					/>
 				</div>
 				<div>
@@ -1196,14 +1196,14 @@
 						type="number"
 						bind:value={newFlag.points}
 						required
-						class="w-full px-3 py-2 bg-black border border-stone-700 rounded-md text-sm text-stone-200 focus:outline-none focus:border-stone-600 tabular-nums"
+						class="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded-md text-sm text-stone-200 focus:outline-none focus:border-stone-600 tabular-nums"
 					/>
 				</div>
 				<div class="flex items-center gap-3 pt-2">
 					<button
 						type="submit"
 						disabled={savingFlag}
-						class="flex-1 py-2 bg-stone-100 hover:bg-white text-stone-950 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
+						class="flex-1 py-2 bg-stone-100 hover:bg-stone-50 text-stone-950 text-sm font-medium rounded-md transition-colors disabled:opacity-50"
 					>
 						{savingFlag ? 'Creating…' : 'Create Flag'}
 					</button>
