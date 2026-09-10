@@ -174,7 +174,7 @@
 						<div class="flex-1 min-w-0">
 							<div class="flex items-center gap-2">
 								<span class="w-2.5 h-2.5 rounded-full shrink-0" style="background: {c};"></span>
-								<p class="text-white font-medium truncate">{displayName(entry)}</p>
+								<a href="/profile/{entry.username}" class="block text-white font-medium truncate hover:text-amber-400 transition">{displayName(entry)}</a>
 							</div>
 							<p class="text-xs text-stone-500 tabular-nums">{entry.challenges_solved} challenges</p>
 						</div>
@@ -191,7 +191,7 @@
 						<div class="text-2xl font-bold text-white">{p.place}</div>
 						<div class="flex items-center justify-center gap-2 mt-2">
 							<span class="w-2.5 h-2.5 rounded-full shrink-0" style="background: {c};"></span>
-							<span class="text-lg font-medium text-white truncate">{displayName(p.e)}</span>
+							<a href="/profile/{p.e.username}" class="text-lg font-medium text-white truncate hover:text-amber-400 transition">{displayName(p.e)}</a>
 						</div>
 						<div class="text-amber-500 font-bold tabular-nums mt-1">{p.e.total_score} pts</div>
 						<div class="text-xs text-stone-500 tabular-nums mt-0.5">
@@ -237,9 +237,12 @@
 									<div class="flex items-center gap-2.5">
 										<span class="w-3 h-3 rounded-full shrink-0" style="background: {c};"></span>
 										<div class="min-w-0">
-											<div class="text-white font-medium truncate max-w-[160px] sm:max-w-[240px]">
+											<a
+												href="/profile/{entry.username}"
+												class="block text-white font-medium truncate max-w-[160px] sm:max-w-[240px] hover:text-amber-400 transition"
+											>
 												{displayName(entry)}
-											</div>
+											</a>
 											{#if hasAlias(entry)}
 												<div class="text-stone-500 text-xs hidden sm:block">@{entry.username}</div>
 											{/if}

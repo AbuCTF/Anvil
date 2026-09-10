@@ -125,6 +125,7 @@ func (s *Server) setupRouter() {
 			scoreboardHandler := handlers.NewScoreboardHandler(s.config, s.db, s.logger)
 			public.GET("/scoreboard", scoreboardHandler.Get)
 			public.GET("/scoreboard/history", scoreboardHandler.History)
+			public.GET("/profile/:username", scoreboardHandler.Profile)
 
 			// Public stats
 			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)

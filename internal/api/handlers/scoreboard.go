@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -171,4 +173,69 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 		series = append(series, byUser[k])
 	}
 	c.JSON(http.StatusOK, gin.H{"series": series})
+}
+
+type profileSolve struct {
+	Name          string  `json:"name"`
+	Slug          string  `json:"slug"`
+	Category      *string `json:"category,omitempty"`
+	CategoryColor *string `json:"category_color,omitempty"`
+	Points        int     `json:"points"`
+	SolvedAt      int64   `json:"solved_at"`
+}
+
+// Profile returns a player's solved challenges with times and categories.
+func (h *ScoreboardHandler) Profile(c *gin.Context) {
+	username := c.Param("username")
+
+	var userID uuid.UUID
+	var totalScore int
+	err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT id, total_score FROM users WHERE username = $1 AND status = 'active'`, username).
+		Scan(&userID, &totalScore)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "player not found"})
+		return
+	}
+	if err != nil {
+		h.logger.Error("profile user query", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	rows, err := h.db.Pool.Query(c.Request.Context(), `
+		SELECT c.name, c.slug, cat.name, cat.color, f.points, s.solved_at
+		FROM solves s
+		JOIN flags f ON f.id = s.flag_id
+		JOIN challenges c ON c.id = f.challenge_id
+		LEFT JOIN categories cat ON cat.id = c.category_id
+		WHERE s.user_id = $1
+		ORDER BY s.solved_at
+	`, userID)
+	if err != nil {
+		h.logger.Error("profile solves query", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	defer rows.Close()
+
+	solves := []profileSolve{}
+	for rows.Next() {
+		var ps profileSolve
+		var solvedAt time.Time
+		if err := rows.Scan(&ps.Name, &ps.Slug, &ps.Category, &ps.CategoryColor, &ps.Points, &solvedAt); err != nil {
+			continue
+		}
+		ps.SolvedAt = solvedAt.Unix()
+		solves = append(solves, ps)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user": gin.H{
+			"username":          username,
+			"total_score":       totalScore,
+			"challenges_solved": len(solves),
+		},
+		"solves": solves,
+	})
 }
