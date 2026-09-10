@@ -17,104 +17,84 @@
 		author_name?: string;
 	};
 
-	function getDifficultyColor(difficulty: string): string {
-		switch (difficulty.toLowerCase()) {
-			case 'easy':
-				return 'text-green-400 border-green-900 bg-green-950/30';
-			case 'medium':
-				return 'text-yellow-400 border-yellow-900 bg-yellow-950/30';
-			case 'hard':
-				return 'text-red-400 border-red-900 bg-red-950/30';
-			case 'insane':
-				return 'text-purple-400 border-purple-900 bg-purple-950/30';
-			default:
-				return 'text-stone-400 border-stone-800';
-		}
-	}
+	// Muted difficulty ramp — matches ChallengeTile. No neon; amber stays on points.
+	const diff: Record<string, string> = {
+		easy: 'text-stone-400 border-stone-700 bg-stone-800/40',
+		medium: 'text-info border-info/20 bg-info/10',
+		hard: 'text-warn border-warn/20 bg-warn/10',
+		insane: 'text-down border-down/20 bg-down/10'
+	};
+
+	$: diffClass = diff[challenge.difficulty?.toLowerCase()] ?? 'text-stone-400 border-stone-700 bg-stone-800/40';
+	$: progress = challenge.total_flags
+		? Math.min(100, ((challenge.user_solves || 0) / challenge.total_flags) * 100)
+		: 0;
 </script>
 
 <a
 	href="/challenges/{challenge.slug}"
-	class="group bg-stone-950 border border-stone-800 rounded-lg overflow-hidden hover:border-stone-700 transition-all duration-200 {challenge.is_solved
-		? 'ring-1 ring-green-900/30'
-		: ''}"
+	class="group block overflow-hidden rounded-lg border transition-colors duration-150 {challenge.is_solved
+		? 'bg-up/[0.04] border-up/25 hover:border-up/40'
+		: 'bg-stone-900/40 border-stone-800 hover:border-stone-700 hover:bg-stone-800/20'}"
 >
-	<div class="p-6">
-		<div class="flex items-start justify-between mb-4">
-			<h3 class="text-lg font-semibold text-white group-hover:text-stone-200 transition flex-1">
+	<div class="p-4">
+		<div class="flex items-start justify-between mb-3">
+			<h3 class="text-[0.95rem] font-medium text-stone-100 group-hover:text-white transition-colors flex-1">
 				{challenge.name}
 			</h3>
 			{#if challenge.is_solved}
-				<Icon icon="mdi:check-circle" class="w-5 h-5 text-green-500 flex-shrink-0 ml-2" />
+				<Icon icon="mdi:check-circle" class="w-4 h-4 text-up flex-shrink-0 ml-2" />
 			{/if}
 		</div>
 
 		{#if challenge.description}
-			<p class="text-sm text-stone-400 line-clamp-2 mb-4">
+			<p class="text-sm text-stone-400 line-clamp-2 mb-3">
 				{challenge.description}
 			</p>
 		{/if}
 
 		<div class="flex flex-wrap items-center gap-2 mb-4">
-			<span
-				class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium border {getDifficultyColor(
-					challenge.difficulty
-				)}"
-			>
+			<span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-medium capitalize {diffClass}">
 				{challenge.difficulty}
 			</span>
-
-			<!-- VM or Docker badge -->
-			<span
-				class="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium border {challenge.resource_type ===
-				'vm'
-					? 'bg-purple-950/50 text-purple-400 border-purple-800'
-					: 'bg-blue-950/50 text-blue-400 border-blue-800'}"
-			>
+			<span class="inline-flex items-center gap-1 rounded-full border border-stone-800 bg-stone-800/40 px-2 py-0.5 text-[0.68rem] font-medium text-stone-400">
 				<Icon
 					icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'}
-					class="w-3.5 h-3.5 mr-1"
+					class="w-3.5 h-3.5"
 				/>
 				{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}
 			</span>
 		</div>
 
-		<div class="flex items-center justify-between text-sm text-stone-400 mb-4">
-			<div class="flex items-center space-x-4">
-				<div class="flex items-center space-x-1.5">
-					<Icon icon="mdi:star-outline" class="w-4 h-4" />
-					<span>{challenge.base_points}</span>
-				</div>
-				<div class="flex items-center space-x-1.5">
-					<Icon icon="mdi:flag-outline" class="w-4 h-4" />
-					<span>{challenge.total_flags}</span>
-				</div>
-			</div>
-
-			<div class="flex items-center space-x-1.5 text-stone-500">
-				<Icon icon="mdi:account-group" class="w-4 h-4" />
-				<span>{challenge.total_solves}</span>
+		<div class="flex items-center justify-between text-sm">
+			<span class="font-semibold text-amber-500 tabular-nums">{challenge.base_points}<span class="text-stone-600 font-normal text-xs"> pts</span></span>
+			<div class="flex items-center gap-3 text-stone-500 text-xs">
+				<span class="inline-flex items-center gap-1 tabular-nums" title="Flags">
+					<Icon icon="mdi:flag-outline" class="w-3.5 h-3.5" />
+					{challenge.total_flags}
+				</span>
+				<span class="inline-flex items-center gap-1 tabular-nums" title="Solves">
+					<Icon icon="mdi:account-group" class="w-3.5 h-3.5" />
+					{challenge.total_solves}
+				</span>
 			</div>
 		</div>
 
 		{#if $auth.isAuthenticated && challenge.total_flags > 0}
-			<div class="pt-4 border-t border-stone-800">
-				<div class="flex items-center justify-between text-xs mb-2">
-					<span class="text-stone-500">Progress</span>
-					<span class="text-stone-400">{challenge.user_solves || 0}/{challenge.total_flags}</span>
+			<div class="mt-4 pt-3 border-t border-stone-800/60">
+				<div class="flex items-center justify-between text-xs mb-1.5">
+					<span class="text-stone-500 uppercase tracking-wide text-[0.65rem]">Progress</span>
+					<span class="text-stone-400 tabular-nums">{challenge.user_solves || 0}/{challenge.total_flags}</span>
 				</div>
-				<div class="w-full bg-stone-900 rounded-full h-2 overflow-hidden">
-					<div
-						class="h-full bg-gradient-to-r from-green-500 to-emerald-500 transition-all duration-500"
-						style="width: {((challenge.user_solves || 0) / challenge.total_flags) * 100}%"
-					></div>
+				<div class="w-full bg-stone-800 rounded-full h-1 overflow-hidden">
+					<div class="h-full bg-up rounded-full transition-all duration-500" style="width: {progress}%"></div>
 				</div>
 			</div>
 		{/if}
 	</div>
 
 	{#if challenge.author_name}
-		<div class="px-6 py-3 bg-black border-t border-stone-800">
+		<div class="px-4 py-2.5 bg-black/40 border-t border-stone-800">
 			<p class="text-xs text-stone-500">
 				by <span class="text-stone-400">{challenge.author_name}</span>
 			</p>

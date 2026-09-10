@@ -3,7 +3,10 @@
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
+	import { categoryColor } from '$lib/rank';
 	import ChallengeTile from '$lib/components/ChallengeTile.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	interface Challenge {
 		id: string;
@@ -31,24 +34,19 @@
 	let selectedCategory = '';
 	let showSolved = false;
 
-	const categoryMeta: Record<string, { icon: string; hue: number }> = {
-		'Web Exploitation': { icon: 'mdi:web', hue: 205 },
-		'Binary Exploitation': { icon: 'mdi:memory', hue: 0 },
-		'Reverse Engineering': { icon: 'mdi:cog-outline', hue: 265 },
-		Cryptography: { icon: 'mdi:key-variant', hue: 45 },
-		Forensics: { icon: 'mdi:fingerprint', hue: 160 },
-		OSINT: { icon: 'mdi:earth', hue: 190 },
-		Misc: { icon: 'mdi:shape-outline', hue: 315 }
+	// Icons only — the accent color always comes from the muted categoryColor palette.
+	const categoryIcons: Record<string, string> = {
+		'Web Exploitation': 'mdi:web',
+		'Binary Exploitation': 'mdi:memory',
+		'Reverse Engineering': 'mdi:cog-outline',
+		Cryptography: 'mdi:key-variant',
+		Forensics: 'mdi:fingerprint',
+		OSINT: 'mdi:earth',
+		Misc: 'mdi:shape-outline'
 	};
 
-	function catHue(name: string): number {
-		let h = 0;
-		for (let i = 0; i < name.length; i++) h = (Math.imul(h, 31) + name.charCodeAt(i)) >>> 0;
-		return h % 360;
-	}
-
-	function catInfo(name: string) {
-		return categoryMeta[name] ?? { icon: 'mdi:flag-outline', hue: catHue(name) };
+	function catIcon(name: string): string {
+		return categoryIcons[name] ?? 'mdi:flag-outline';
 	}
 
 	$: categories = [...new Set(challenges.map((c) => c.category).filter(Boolean))].sort() as string[];
@@ -113,44 +111,44 @@
 
 <div class="min-h-screen bg-black">
 	<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-		<div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
-			<div>
-				<h1 class="text-3xl font-bold text-white">Challenges</h1>
-				<p class="text-stone-500 text-sm mt-1">{categories.length} categories · pick a target</p>
-			</div>
-
-			{#if !loading}
-				<div class="flex items-center gap-6 text-sm">
-					<div class="flex items-center gap-2">
-						<Icon icon="mdi:flag-outline" class="w-5 h-5 text-stone-500" />
-						<span class="text-stone-300 tabular-nums">{challenges.length}</span>
-						<span class="text-stone-500">challenges</span>
-					</div>
-					{#if $auth.isAuthenticated}
+		<PageHeader
+			title="Challenges"
+			subtitle={loading ? 'Loading…' : `${categories.length} categories · pick a target`}
+		>
+			<svelte:fragment slot="actions">
+				{#if !loading}
+					<div class="flex items-center gap-5 text-sm">
 						<div class="flex items-center gap-2">
-							<Icon icon="mdi:check-circle" class="w-5 h-5 text-green-500" />
-							<span class="text-stone-300 tabular-nums">{solvedCount}</span>
-							<span class="text-stone-500">solved</span>
+							<Icon icon="mdi:flag-outline" class="w-4 h-4 text-stone-500" />
+							<span class="text-stone-200 tabular-nums">{challenges.length}</span>
+							<span class="text-stone-500 text-xs uppercase tracking-wide">challenges</span>
 						</div>
-					{/if}
-				</div>
-			{/if}
-		</div>
+						{#if $auth.isAuthenticated}
+							<div class="flex items-center gap-2">
+								<Icon icon="mdi:check-circle" class="w-4 h-4 text-up" />
+								<span class="text-stone-200 tabular-nums">{solvedCount}</span>
+								<span class="text-stone-500 text-xs uppercase tracking-wide">solved</span>
+							</div>
+						{/if}
+					</div>
+				{/if}
+			</svelte:fragment>
+		</PageHeader>
 
-		<div class="bg-stone-900/50 border border-stone-800 rounded-xl p-4 sm:p-5 mb-8">
+		<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4 mb-8">
 			<div class="grid grid-cols-1 md:grid-cols-4 gap-3">
 				<div class="relative md:col-span-2">
-					<Icon icon="mdi:magnify" class="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-stone-500" />
+					<Icon icon="mdi:magnify" class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-500" />
 					<input
 						type="text"
 						bind:value={searchQuery}
-						placeholder="Search challenges..."
-						class="w-full pl-10 pr-9 py-2.5 bg-black border border-stone-700 rounded-lg text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
+						placeholder="Search challenges…"
+						class="w-full pl-9 pr-9 py-2 bg-black border border-stone-800 rounded-md text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
 					/>
 					{#if searchQuery}
 						<button
 							on:click={() => (searchQuery = '')}
-							class="absolute right-2 top-1/2 -translate-y-1/2 text-stone-600 hover:text-stone-300 transition"
+							class="absolute right-2 top-1/2 -translate-y-1/2 text-stone-600 hover:text-stone-300 transition-colors"
 							aria-label="Clear search"
 						>
 							<Icon icon="mdi:close-circle" class="w-4 h-4" />
@@ -160,9 +158,9 @@
 
 				<select
 					bind:value={selectedDifficulty}
-					class="w-full px-4 py-2.5 bg-black border border-stone-700 rounded-lg text-white focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
+					class="w-full px-3 py-2 bg-black border border-stone-800 rounded-md text-sm text-stone-100 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
 				>
-					<option value="">All Difficulties</option>
+					<option value="">All difficulties</option>
 					<option value="easy">Easy</option>
 					<option value="medium">Medium</option>
 					<option value="hard">Hard</option>
@@ -171,9 +169,9 @@
 
 				<select
 					bind:value={selectedCategory}
-					class="w-full px-4 py-2.5 bg-black border border-stone-700 rounded-lg text-white focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
+					class="w-full px-3 py-2 bg-black border border-stone-800 rounded-md text-sm text-stone-100 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
 				>
-					<option value="">All Categories</option>
+					<option value="">All categories</option>
 					{#each categories as category}
 						<option value={category}>{category}</option>
 					{/each}
@@ -183,19 +181,19 @@
 			{#if $auth.isAuthenticated || hasFilters}
 				<div class="flex items-center justify-between gap-4 mt-3">
 					{#if $auth.isAuthenticated}
-						<label class="inline-flex items-center gap-2.5 cursor-pointer select-none">
+						<label class="inline-flex items-center gap-2 cursor-pointer select-none">
 							<input
 								type="checkbox"
 								bind:checked={showSolved}
-								class="w-4 h-4 rounded border-stone-600 bg-stone-900 text-green-500 focus:ring-0 focus:ring-offset-0"
+								class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-black accent-amber-600 focus:ring-0 focus:ring-offset-0"
 							/>
-							<span class="text-stone-400 text-sm">Solved only</span>
+							<span class="text-stone-400 text-xs uppercase tracking-wide">Solved only</span>
 						</label>
 					{:else}
 						<span></span>
 					{/if}
 					{#if hasFilters}
-						<button on:click={resetFilters} class="text-xs text-stone-500 hover:text-stone-300 transition inline-flex items-center gap-1">
+						<button on:click={resetFilters} class="text-xs text-stone-500 hover:text-stone-300 transition-colors inline-flex items-center gap-1">
 							<Icon icon="mdi:filter-remove-outline" class="w-4 h-4" />
 							Reset filters
 						</button>
@@ -205,52 +203,52 @@
 		</div>
 
 		{#if loading}
-			<div class="flex items-center justify-center py-32">
-				<div class="text-center">
-					<Icon icon="mdi:loading" class="w-8 h-8 text-amber-500 animate-spin mx-auto mb-4" />
-					<p class="text-stone-500">Loading challenges...</p>
-				</div>
+			<div class="space-y-10">
+				{#each [0, 1] as s (s)}
+					<section>
+						<div class="flex items-center gap-3 mb-4">
+							<span class="w-2 h-2 rounded-full bg-stone-800"></span>
+							<span class="h-3 w-40 rounded bg-stone-900/60 animate-pulse"></span>
+							<div class="flex-1 h-px bg-stone-800/60"></div>
+						</div>
+						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+							{#each [0, 1, 2] as k (k)}
+								<div class="h-32 rounded-lg border border-stone-800 bg-stone-900/40 animate-pulse"></div>
+							{/each}
+						</div>
+					</section>
+				{/each}
 			</div>
 		{:else if error}
-			<div class="bg-red-950/30 border border-red-900 rounded-lg p-6 text-center">
-				<Icon icon="mdi:alert-circle" class="w-8 h-8 text-red-400 mx-auto mb-3" />
-				<p class="text-red-400">{error}</p>
+			<div class="rounded-lg border border-down/30 bg-down/10 px-4 py-3 flex items-center gap-2.5">
+				<Icon icon="mdi:alert-circle-outline" class="w-4 h-4 text-down shrink-0" />
+				<p class="text-down text-sm">{error}</p>
 			</div>
 		{:else if filteredChallenges.length === 0}
-			<div class="text-center py-32">
-				<Icon icon="mdi:flag-off-outline" class="w-16 h-16 text-stone-700 mx-auto mb-4" />
-				<h3 class="text-xl font-semibold text-white mb-2">No Challenges Found</h3>
-				<p class="text-stone-500 mb-6">Try adjusting your filters</p>
-				{#if hasFilters}
-					<button on:click={resetFilters} class="text-sm text-amber-500 hover:text-amber-400 transition">Reset filters</button>
-				{/if}
+			<div class="rounded-lg border border-stone-800 bg-stone-900/40 py-4">
+				<EmptyState icon="mdi:flag-off-outline" text="No challenges match the current filters.">
+					{#if hasFilters}
+						<button on:click={resetFilters} class="mt-3 text-xs text-amber-500 hover:text-amber-400 transition-colors">Reset filters</button>
+					{/if}
+				</EmptyState>
 			</div>
 		{:else}
 			<div class="space-y-10">
 				{#each groups as group (group.category)}
-					{@const info = catInfo(group.category)}
+					{@const color = categoryColor(group.category)}
 					<section>
 						<div class="flex items-center gap-3 mb-4">
-							<span
-								class="inline-flex items-center justify-center w-9 h-9 rounded-lg shrink-0"
-								style="background: hsl({info.hue} 45% 15%); color: hsl({info.hue} 75% 66%);"
-							>
-								<Icon icon={info.icon} class="w-5 h-5" />
+							<span class="inline-flex items-center gap-2">
+								<span class="w-2 h-2 rounded-full shrink-0" style="background:{color}"></span>
+								<Icon icon={catIcon(group.category)} class="w-4 h-4 text-stone-500" />
 							</span>
-							<h2 class="text-lg font-semibold text-white">{group.category}</h2>
-							<span
-								class="text-xs tabular-nums rounded-full px-2.5 py-0.5 border"
-								class:text-green-400={group.solved === group.challenges.length}
-								style="color: hsl({info.hue} 60% 70%); background: hsl({info.hue} 45% 12% / 0.6); border-color: hsl({info.hue} 45% 24%);"
-							>
+							<h2 class="text-sm font-semibold uppercase tracking-wide text-stone-200">{group.category}</h2>
+							<span class="text-[0.68rem] tabular-nums rounded-full px-2 py-0.5 border border-stone-800 bg-stone-900/40 {group.solved === group.challenges.length && $auth.isAuthenticated ? 'text-up' : 'text-stone-400'}">
 								{#if $auth.isAuthenticated}{group.solved}/{group.challenges.length}{:else}{group.challenges.length}{/if}
 							</span>
-							<div
-								class="flex-1 h-px"
-								style="background: linear-gradient(to right, hsl({info.hue} 45% 28%), transparent);"
-							></div>
+							<div class="flex-1 h-px bg-stone-800/60"></div>
 						</div>
-						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
 							{#each group.challenges as challenge (challenge.id)}
 								<ChallengeTile {challenge} />
 							{/each}
