@@ -114,8 +114,8 @@ type sbPoint struct {
 }
 
 type sbSeries struct {
-	ID     string         `json:"id"`
-	Label  string         `json:"label"`
+	ID     string    `json:"id"`
+	Label  string    `json:"label"`
 	Points []sbPoint `json:"points"`
 }
 

@@ -100,7 +100,7 @@
 		easy: { color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/20' },
 		medium: { color: 'text-yellow-400', bg: 'bg-yellow-500/10', border: 'border-yellow-500/20' },
 		hard: { color: 'text-orange-400', bg: 'bg-orange-500/10', border: 'border-orange-500/20' },
-		insane: { color: 'text-red-400', bg: 'bg-red-500/10', border: 'border-red-500/20' }
+		insane: { color: 'text-purple-400', bg: 'bg-purple-500/10', border: 'border-purple-500/20' }
 	};
 
 	onMount(async () => {
@@ -337,8 +337,106 @@
 		return 'text-white';
 	}
 
-	function copyToClipboard(text: string) {
+	let copiedKey = '';
+	function copyToClipboard(text: string, key = text) {
 		navigator.clipboard.writeText(text);
+		copiedKey = key;
+		setTimeout(() => {
+			if (copiedKey === key) copiedKey = '';
+		}, 1500);
+	}
+
+	function instanceProgress(inst: any): number {
+		if (!inst?.expires_at || !inst?.created_at) return 100;
+		const total = inst.expires_at - inst.created_at;
+		if (total <= 0) return 0;
+		const remaining = inst.expires_at - Math.floor(Date.now() / 1000);
+		return Math.max(0, Math.min(100, (remaining / total) * 100));
+	}
+
+	function getTimeBarClass(expiresAt: number): string {
+		const s = getSecondsRemaining(expiresAt);
+		if (s < 300) return 'bg-red-500';
+		if (s < 600) return 'bg-yellow-500';
+		return 'bg-green-500';
+	}
+
+	const calloutStyles: Record<string, { label: string; cls: string; icon: string }> = {
+		NOTE: { label: 'Note', cls: 'border-blue-900 bg-blue-950/30 text-blue-400', icon: 'info' },
+		TIP: { label: 'Tip', cls: 'border-green-900 bg-green-950/30 text-green-400', icon: 'info' },
+		IMPORTANT: { label: 'Important', cls: 'border-purple-900 bg-purple-950/30 text-purple-400', icon: 'info' },
+		WARNING: { label: 'Warning', cls: 'border-yellow-900 bg-yellow-950/30 text-yellow-400', icon: 'warn' },
+		CAUTION: { label: 'Caution', cls: 'border-red-900 bg-red-950/30 text-red-400', icon: 'warn' }
+	};
+
+	const calloutIcons: Record<string, string> = {
+		info: '<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
+		warn: '<svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>'
+	};
+
+	function escapeHtml(s: string): string {
+		return s
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
+	}
+
+	function inlineMd(s: string): string {
+		return escapeHtml(s)
+			.replace(/`([^`]+)`/g, '<code class="px-1.5 py-0.5 rounded bg-black border border-stone-800 text-amber-300 text-[0.85em]">$1</code>')
+			.replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-white">$1</strong>')
+			.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-amber-400 hover:text-amber-300 underline underline-offset-2">$1</a>');
+	}
+
+	function renderMarkdown(src: string): string {
+		if (!src) return '';
+		const lines = src.replace(/\r\n/g, '\n').split('\n');
+		const blocks: string[] = [];
+		let para: string[] = [];
+		let i = 0;
+
+		const flushPara = () => {
+			if (para.length) {
+				blocks.push(`<p class="leading-relaxed">${para.map(inlineMd).join('<br>')}</p>`);
+				para = [];
+			}
+		};
+
+		while (i < lines.length) {
+			const line = lines[i];
+			if (/^\s*>/.test(line)) {
+				flushPara();
+				const quote: string[] = [];
+				while (i < lines.length && /^\s*>/.test(lines[i])) {
+					quote.push(lines[i].replace(/^\s*>\s?/, ''));
+					i++;
+				}
+				const m = quote[0]?.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i);
+				if (m) {
+					const st = calloutStyles[m[1].toUpperCase()];
+					const body = [m[2], ...quote.slice(1)].filter((l) => l.trim() !== '');
+					const inner = body.map(inlineMd).join('<br>');
+					blocks.push(
+						`<div class="rounded-lg border px-4 py-3 ${st.cls}"><div class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider mb-1">${calloutIcons[st.icon]}${st.label}</div><div class="text-sm text-stone-300 leading-relaxed">${inner}</div></div>`
+					);
+				} else {
+					const inner = quote.map(inlineMd).join('<br>');
+					blocks.push(`<blockquote class="border-l-2 border-stone-700 pl-3 text-stone-400 italic">${inner}</blockquote>`);
+				}
+				continue;
+			}
+			if (line.trim() === '') {
+				flushPara();
+				i++;
+				continue;
+			}
+			para.push(line);
+			i++;
+		}
+		flushPara();
+		return blocks.join('');
 	}
 
 	// Flag management functions
@@ -422,7 +520,7 @@
 				Challenges
 			</a>
 
-			<div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+			<div class="detail-in grid grid-cols-1 lg:grid-cols-3 gap-8">
 				<!-- Main Content -->
 				<div class="lg:col-span-2 space-y-6">
 					<!-- Header -->
@@ -535,7 +633,9 @@
 								placeholder="Challenge description..."
 							></textarea>
 						{:else if challenge.description}
-							<p class="text-stone-400 text-sm leading-relaxed whitespace-pre-wrap">{challenge.description}</p>
+							<div class="text-sm text-stone-300 leading-relaxed space-y-3">
+								{@html renderMarkdown(challenge.description)}
+							</div>
 						{:else}
 							<p class="text-stone-600 text-sm italic">No description provided.</p>
 						{/if}
@@ -647,7 +747,15 @@
 												</div>
 												<span class="text-sm {flag.is_solved ? 'text-green-400' : 'text-stone-300'}">{flag.name}</span>
 											</div>
-											<span class="text-xs {flag.is_solved ? 'text-green-400/60' : 'text-stone-500'}">{flag.points} pts</span>
+											<div class="flex items-center gap-3">
+												{#if typeof flag.total_solves === 'number'}
+													<span class="text-xs text-stone-600 inline-flex items-center gap-1">
+														<Icon icon="mdi:account-group" class="w-3.5 h-3.5" />
+														{flag.total_solves}
+													</span>
+												{/if}
+												<span class="text-xs {flag.is_solved ? 'text-green-400/60' : 'text-stone-500'}">{flag.points} pts</span>
+											</div>
 										</div>
 									{/each}
 								{/if}
@@ -797,9 +905,20 @@
 								{#if instance}
 									<div class="space-y-4">
 										<!-- Status -->
-										<div class="flex items-center gap-2">
-											<span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-											<span class="text-green-400 text-sm font-medium">Running</span>
+										<div>
+											<div class="flex items-center justify-between mb-2">
+												<div class="flex items-center gap-2">
+													<span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+													<span class="text-green-400 text-sm font-medium">Running</span>
+												</div>
+												<span class="text-[0.7rem] uppercase tracking-wider text-stone-600">session</span>
+											</div>
+											<div class="h-1.5 bg-black border border-stone-800 rounded-full overflow-hidden">
+												<div
+													class="h-full {getTimeBarClass(instance.expires_at)} rounded-full transition-all duration-1000 ease-linear"
+													style="width: {instanceProgress(instance)}%"
+												></div>
+											</div>
 										</div>
 
 										<!-- Connection Details -->
@@ -832,10 +951,10 @@
 																{/if}
 																<button
 																	on:click={() => copyToClipboard(connStr)}
-																	class="ml-2 flex-shrink-0 text-stone-600 hover:text-stone-300 transition"
+																	class="ml-2 flex-shrink-0 transition {copiedKey === connStr ? 'text-green-400' : 'text-stone-600 hover:text-stone-300'}"
 																	title="Copy"
 																>
-																	<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
+																	<Icon icon={copiedKey === connStr ? 'mdi:check' : 'mdi:content-copy'} class="w-3.5 h-3.5" />
 																</button>
 															</div>
 														</div>
@@ -844,8 +963,8 @@
 											{:else}
 												<div class="bg-black border border-stone-800 rounded-lg px-3 py-2 flex items-center justify-between">
 													<code class="text-xs text-stone-300 font-mono">{instance.ip_address}</code>
-													<button on:click={() => copyToClipboard(instance.ip_address)} class="ml-2 text-stone-600 hover:text-stone-300 transition">
-														<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
+													<button on:click={() => copyToClipboard(instance.ip_address)} class="ml-2 transition {copiedKey === instance.ip_address ? 'text-green-400' : 'text-stone-600 hover:text-stone-300'}">
+														<Icon icon={copiedKey === instance.ip_address ? 'mdi:check' : 'mdi:content-copy'} class="w-3.5 h-3.5" />
 													</button>
 												</div>
 											{/if}
@@ -937,8 +1056,9 @@
 								</form>
 								
 								{#if submitResult}
-									<div class="mt-3 py-2 px-3 rounded text-sm {submitResult.correct ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}">
-										{submitResult.message}
+									<div class="mt-3 flex items-start gap-2 py-2.5 px-3 rounded-lg text-sm border {submitResult.correct ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}">
+										<Icon icon={submitResult.correct ? 'mdi:check-circle' : 'mdi:alert-circle'} class="w-4 h-4 mt-0.5 shrink-0" />
+										<span>{submitResult.message}</span>
 									</div>
 								{/if}
 							</div>
@@ -958,10 +1078,20 @@
 							<h3 class="text-xs font-medium text-stone-500 uppercase tracking-wider">Statistics</h3>
 						</div>
 						<div class="p-4 space-y-3">
-							<div class="flex justify-between text-sm">
-								<span class="text-stone-500">Solves</span>
-								<span class="text-stone-300">{challenge.total_solves}</span>
-							</div>
+							{#if challenge.total_solves === 0}
+								<div class="flex items-center gap-2 py-2 px-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+									<Icon icon="mdi:water" class="w-4 h-4 shrink-0" />
+									<span>Unsolved — first blood available</span>
+								</div>
+							{:else}
+								<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-black border border-stone-800">
+									<span class="text-stone-500 text-sm flex items-center gap-1.5">
+										<Icon icon="mdi:account-group" class="w-4 h-4" />
+										Solves
+									</span>
+									<span class="text-lg font-semibold text-white tabular-nums">{challenge.total_solves}</span>
+								</div>
+							{/if}
 							<div class="flex justify-between text-sm">
 								<span class="text-stone-500">Flags</span>
 								<span class="text-stone-300">{challenge.total_flags}</span>
@@ -982,6 +1112,24 @@
 			</div>
 		</div>
 	{/if}
+
+<style>
+	@media (prefers-reduced-motion: no-preference) {
+		.detail-in {
+			animation: detailIn 0.3s ease both;
+		}
+	}
+	@keyframes detailIn {
+		from {
+			opacity: 0;
+			transform: translateY(8px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+</style>
 </div>
 
 <!-- Add Flag Modal -->
