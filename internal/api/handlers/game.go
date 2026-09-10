@@ -182,3 +182,60 @@ func (h *GameHandler) Status(c *gin.Context) {
 		"tick_interval_seconds": int(h.config.Game.TickInterval.Seconds()),
 	})
 }
+
+type historyPoint struct {
+	Tick  int     `json:"x"`
+	Total float64 `json:"y"`
+}
+
+type historySeries struct {
+	TeamID string         `json:"team_id"`
+	Team   string         `json:"team"`
+	Points []historyPoint `json:"points"`
+}
+
+// History returns each team's score over time for the race chart.
+func (h *GameHandler) History(c *gin.Context) {
+	if !h.config.Game.Enabled {
+		c.JSON(http.StatusNotFound, gin.H{"error": "game not active"})
+		return
+	}
+
+	rows, err := h.db.Pool.Query(c.Request.Context(),
+		`SELECT t.id, t.name, s.tick_number, s.total
+		 FROM game_score_snapshots s JOIN game_teams t ON t.id = s.team_id
+		 WHERE t.is_nop = false
+		 ORDER BY t.name, s.tick_number`)
+	if err != nil {
+		h.logger.Error("history query", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	defer rows.Close()
+
+	order := []string{}
+	byTeam := map[string]*historySeries{}
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		var tick int
+		var total float64
+		if err := rows.Scan(&id, &name, &tick, &total); err != nil {
+			continue
+		}
+		key := id.String()
+		s := byTeam[key]
+		if s == nil {
+			s = &historySeries{TeamID: key, Team: name}
+			byTeam[key] = s
+			order = append(order, key)
+		}
+		s.Points = append(s.Points, historyPoint{Tick: tick, Total: total})
+	}
+
+	series := make([]*historySeries, 0, len(order))
+	for _, k := range order {
+		series = append(series, byTeam[k])
+	}
+	c.JSON(http.StatusOK, gin.H{"series": series})
+}

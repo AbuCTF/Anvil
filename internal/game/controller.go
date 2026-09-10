@@ -78,6 +78,7 @@ func (c *Controller) runTick(parent context.Context, tick int) {
 	c.dispatcher.dispatch(ctx, tick)
 	c.runKoth(ctx, tick)
 	c.recomputeStandings(ctx)
+	c.snapshotStandings(ctx, tick)
 	c.emitStandings(ctx, tick)
 
 	if err := c.closeTick(ctx, tick); err != nil {

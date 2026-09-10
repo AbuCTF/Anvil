@@ -132,6 +132,7 @@ func (s *Server) setupRouter() {
 			public.GET("/arena/scoreboard", arenaRead.Scoreboard)
 			public.GET("/arena/hills", arenaRead.Hills)
 			public.GET("/arena/status", arenaRead.Status)
+			public.GET("/arena/history", arenaRead.History)
 		}
 
 		// Protected routes (require authentication)

@@ -42,6 +42,19 @@ func (c *Controller) recomputeStandings(ctx context.Context) {
 	c.writeStandings(ctx, acc)
 }
 
+// snapshotStandings records the current board as a point in time, for the
+// score-over-time chart, sparklines, and rank deltas.
+func (c *Controller) snapshotStandings(ctx context.Context, tick int) {
+	_, err := c.db.Pool.Exec(ctx,
+		`INSERT INTO game_score_snapshots (tick_number, team_id, total, rank)
+		 SELECT $1, team_id, total, rank FROM game_standings
+		 ON CONFLICT (tick_number, team_id) DO UPDATE SET total = EXCLUDED.total, rank = EXCLUDED.rank`,
+		tick)
+	if err != nil {
+		c.logger.Warn("standings: snapshot", zap.Error(err))
+	}
+}
+
 // accumulateDefense subtracts a sublinear penalty for each captured flag and
 // returns the captor count per flag (reused for attack).
 func (c *Controller) accumulateDefense(ctx context.Context, acc map[uuid.UUID]*standing) map[uuid.UUID]int {

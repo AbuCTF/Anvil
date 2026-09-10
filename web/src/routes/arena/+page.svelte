@@ -2,6 +2,8 @@
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
 	import { API_BASE } from '$lib/config';
+	import LineChart from '$lib/components/LineChart.svelte';
+	import type { Series } from '$lib/chart/path';
 
 	interface Standing {
 		rank: number | null;
@@ -26,11 +28,18 @@
 		tick_interval_seconds: number;
 	}
 
+	interface HistorySeries {
+		team_id: string;
+		team: string;
+		points: { x: number; y: number }[];
+	}
+
 	const POLL_MS = 5000;
 
 	let standings: Standing[] = [];
 	let hills: Hill[] = [];
 	let status: GameStatus | null = null;
+	let raceSeries: Series[] = [];
 
 	let loading = true;
 	let error = '';
@@ -59,10 +68,11 @@
 		if (inFlight) return;
 		inFlight = true;
 		try {
-			const [sb, hl, st] = await Promise.all([
+			const [sb, hl, st, hist] = await Promise.all([
 				fetchGame<{ standings: Standing[] }>('/scoreboard'),
 				fetchGame<{ hills: Hill[] }>('/hills'),
-				fetchGame<GameStatus>('/status')
+				fetchGame<GameStatus>('/status'),
+				fetchGame<{ series: HistorySeries[] }>('/history')
 			]);
 
 			gameActive = !(sb === null && hl === null && st === null);
@@ -74,6 +84,11 @@
 			standings = sb?.standings ?? [];
 			applyHills(hl?.hills ?? []);
 			status = st ?? status;
+			raceSeries = (hist?.series ?? []).map((s) => ({
+				label: s.team,
+				color: `hsl(${teamHue(s.team_id)} 70% 55%)`,
+				points: s.points
+			}));
 			initialized = true;
 			error = '';
 		} catch (e) {
@@ -234,6 +249,26 @@
 				</div>
 			{/if}
 		</div>
+
+		<!-- Score over time -->
+		{#if raceSeries.length}
+			<div class="bg-stone-900/50 rounded-xl border border-stone-800 overflow-hidden mb-8">
+				<div class="px-5 py-4 border-b border-stone-800 flex items-center gap-2">
+					<Icon icon="mdi:chart-line" class="w-5 h-5 text-amber-500" />
+					<h2 class="text-lg font-semibold text-white">Score over time</h2>
+				</div>
+				<div class="p-4">
+					<LineChart series={raceSeries} height={300} />
+					<div class="flex flex-wrap gap-x-4 gap-y-1 mt-3">
+						{#each raceSeries as s}
+							<span class="inline-flex items-center gap-1.5 text-xs text-stone-400">
+								<span class="w-2.5 h-2.5 rounded-full" style="background: {s.color};"></span>{s.label}
+							</span>
+						{/each}
+					</div>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Scoreboard -->
 		<div class="bg-stone-900/50 rounded-xl border border-stone-800 overflow-hidden">
