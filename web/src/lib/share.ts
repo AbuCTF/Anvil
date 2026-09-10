@@ -78,7 +78,7 @@ export async function downloadRankCard(d: RankCardData) {
 	// header
 	ctx.fillStyle = '#78716c';
 	ctx.font = mono(500, 14);
-	ctx.fillText('ANVIL  ·  SCOREBOARD', 40, 50);
+	ctx.fillText('Anvil  ·  Scoreboard', 40, 50);
 
 	// rank + delta
 	ctx.fillStyle = '#f59e0b';
@@ -100,8 +100,8 @@ export async function downloadRankCard(d: RankCardData) {
 	// stats
 	const stat = (x: number, label: string, value: string, accent = false) => {
 		ctx.fillStyle = '#78716c';
-		ctx.font = mono(500, 12);
-		ctx.fillText(label.toUpperCase(), x, 258);
+		ctx.font = mono(500, 13);
+		ctx.fillText(label, x, 258);
 		ctx.fillStyle = accent ? '#f59e0b' : '#e7e5e4';
 		ctx.font = mono(600, 28);
 		ctx.fillText(value, x, 292);

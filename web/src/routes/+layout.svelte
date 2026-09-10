@@ -195,12 +195,4 @@
 	<main class="flex-1">
 		<slot />
 	</main>
-
-	<!-- Footer -->
-	<footer class="border-t border-stone-800">
-		<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex items-center justify-between">
-			<span class="text-xs font-mono uppercase tracking-widest text-stone-600">Anvil</span>
-			<span class="text-xs font-mono text-stone-600 tabular-nums">© 2026</span>
-		</div>
-	</footer>
 </div>

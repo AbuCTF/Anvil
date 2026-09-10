@@ -24,7 +24,7 @@
 	<title>Anvil</title>
 </svelte:head>
 
-<div class="min-h-[calc(100vh-4rem)] flex flex-col items-center justify-center text-center px-6 py-16">
+<div class="fixed top-16 inset-x-0 bottom-0 overflow-hidden flex flex-col items-center justify-center text-center px-6">
 	<h1 class="text-4xl sm:text-6xl md:text-7xl font-semibold tracking-tight leading-[1.05] text-stone-100">
 		Forge Your<br />
 		Security <span class="text-cyan-400">Skills</span>
@@ -41,7 +41,7 @@
 			class="inline-flex items-center gap-1.5 px-6 py-2.5 bg-stone-100 text-stone-950 text-sm font-medium hover:bg-white transition-colors rounded-full"
 		>
 			Get Started
-			<Icon icon="mdi:arrow-right" class="w-4 h-4" />
+			<Icon icon="mdi:arrow-right" class="w-4 h-4 -translate-y-[2px]" />
 		</a>
 		<a
 			href="/register"
