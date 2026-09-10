@@ -91,6 +91,15 @@
 			.map((s) => ({ name: s.name, slug: s.slug, points: s.points, rel: s.solved_at - t0 }))
 	}));
 
+	let solvedView: 'category' | 'timeline' = 'category';
+	$: solveLog = sorted.map((s) => ({
+		name: s.name,
+		slug: s.slug,
+		category: catOf(s),
+		color: catColor(s),
+		points: s.points,
+		rel: s.solved_at - t0
+	}));
 
 	async function load(name: string) {
 		loading = true;
@@ -206,35 +215,66 @@
 
 			<!-- Solved challenges -->
 			<Card title="Solved">
-				<span slot="meta" class="text-stone-500 text-xs tabular-nums">{solves.length}</span>
-				<div class="grid sm:grid-cols-2 gap-x-6 gap-y-5">
-					{#each listGroups as g}
-						<div>
-							<div class="flex items-center gap-2 pb-2 mb-1 border-b border-stone-800">
-								<span class="w-2 h-2 rounded-full shrink-0" style="background: {g.color};"></span>
-								<span class="text-xs font-medium uppercase tracking-wide text-stone-300 truncate"
-									>{g.name}</span
-								>
-								<span class="ml-auto text-xs text-stone-500 tabular-nums">{g.total} pts</span>
-							</div>
-							<ul class="divide-y divide-stone-800/60">
-								{#each g.items as it}
-									<li class="flex items-center gap-2 py-1.5 text-sm">
-										<Icon icon="mdi:check" class="w-3.5 h-3.5 text-stone-600 shrink-0" />
-										<a
-											href="/challenges/{it.slug}"
-											class="text-stone-300 hover:text-stone-100 transition truncate">{it.name}</a
-										>
-										<span class="ml-auto flex items-center gap-3 shrink-0 tabular-nums">
-											<span class="text-stone-600 text-xs">+{formatDur(it.rel)}</span>
-											<span class="text-stone-300 text-xs font-medium w-12 text-right">{it.points}</span>
-										</span>
-									</li>
-								{/each}
-							</ul>
-						</div>
-					{/each}
+				<div slot="meta" class="flex items-center gap-2.5">
+					<span class="text-stone-500 text-xs tabular-nums">{solves.length}</span>
+					<div class="flex rounded-md border border-stone-800 overflow-hidden text-xs">
+						<button
+							class="px-2.5 py-1 transition-colors {solvedView === 'category' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
+							on:click={() => (solvedView = 'category')}>Category</button
+						>
+						<button
+							class="px-2.5 py-1 border-l border-stone-800 transition-colors {solvedView === 'timeline' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
+							on:click={() => (solvedView = 'timeline')}>Timeline</button
+						>
+					</div>
 				</div>
+
+				{#if solvedView === 'category'}
+					<div class="grid sm:grid-cols-2 gap-x-6 gap-y-5">
+						{#each listGroups as g}
+							<div>
+								<div class="flex items-center gap-2 pb-2 mb-1 border-b border-stone-800">
+									<span class="w-2 h-2 rounded-full shrink-0" style="background: {g.color};"></span>
+									<span class="text-sm font-medium text-stone-200 truncate">{g.name}</span>
+									<span class="text-stone-600 text-xs tabular-nums">· {g.items.length}</span>
+									<span class="ml-auto text-xs text-stone-500 tabular-nums">{g.total} pts</span>
+								</div>
+								<ul class="divide-y divide-stone-800/60">
+									{#each g.items as it}
+										<li class="flex items-center gap-2 py-1.5 text-sm">
+											<Icon icon="mdi:check" class="w-3.5 h-3.5 text-stone-600 shrink-0" />
+											<a
+												href="/challenges/{it.slug}"
+												class="text-stone-300 hover:text-stone-100 transition truncate">{it.name}</a
+											>
+											<span class="ml-auto flex items-center gap-3 shrink-0 tabular-nums">
+												<span class="text-stone-600 text-xs">+{formatDur(it.rel)}</span>
+												<span class="text-stone-300 text-xs font-medium w-12 text-right">{it.points}</span>
+											</span>
+										</li>
+									{/each}
+								</ul>
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<ol class="relative ml-1.5 border-l border-stone-800">
+						{#each solveLog as s}
+							<li class="relative pl-5 py-1.5">
+								<span
+									class="absolute -left-[5px] top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ring-2 ring-stone-950"
+									style="background: {s.color};"
+								></span>
+								<div class="flex items-center gap-3 text-sm">
+									<span class="text-stone-600 text-xs tabular-nums w-14 shrink-0">+{formatDur(s.rel)}</span>
+									<a href="/challenges/{s.slug}" class="text-stone-200 hover:text-stone-100 transition truncate">{s.name}</a>
+									<span class="text-xs shrink-0 truncate hidden sm:inline" style="color: {s.color};">{s.category}</span>
+									<span class="ml-auto text-stone-400 text-xs font-medium tabular-nums shrink-0">{s.points}</span>
+								</div>
+							</li>
+						{/each}
+					</ol>
+				{/if}
 			</Card>
 		{/if}
 	{/if}
