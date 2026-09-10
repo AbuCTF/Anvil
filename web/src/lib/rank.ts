@@ -8,8 +8,9 @@ export function teamHue(key: string): number {
 	return h % 360;
 }
 
+// Muted, low-chroma per-team color — distinguishable but stoic on near-black.
 export function teamColor(key: string): string {
-	return `hsl(${teamHue(key)} 70% 55%)`;
+	return `hsl(${teamHue(key)} 26% 62%)`;
 }
 
 export function rankAccent(rank: number | null | undefined): string {

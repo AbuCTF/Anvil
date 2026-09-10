@@ -13,6 +13,18 @@ export interface Series {
 
 const r = (n: number) => Math.round(n * 100) / 100;
 
+// Step-after: the value holds until the next x, then jumps. Accurate for a
+// cumulative score, which is flat between solves and steps up at each solve.
+export function stepPath(points: Pt[]): string {
+	const n = points.length;
+	if (n === 0) return '';
+	let d = `M ${r(points[0].x)} ${r(points[0].y)}`;
+	for (let i = 1; i < n; i++) {
+		d += ` L ${r(points[i].x)} ${r(points[i - 1].y)} L ${r(points[i].x)} ${r(points[i].y)}`;
+	}
+	return d;
+}
+
 // A smooth, overshoot-free cubic through the points (Fritsch-Carlson tangents).
 export function monotonePath(points: Pt[]): string {
 	const n = points.length;
