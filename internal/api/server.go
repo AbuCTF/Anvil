@@ -122,7 +122,9 @@ func (s *Server) setupRouter() {
 			}
 
 			// Public scoreboard (if enabled)
-			public.GET("/scoreboard", handlers.NewScoreboardHandler(s.config, s.db, s.logger).Get)
+			scoreboardHandler := handlers.NewScoreboardHandler(s.config, s.db, s.logger)
+			public.GET("/scoreboard", scoreboardHandler.Get)
+			public.GET("/scoreboard/history", scoreboardHandler.History)
 
 			// Public stats
 			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)

@@ -7,6 +7,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -105,4 +106,69 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		"leaderboard": entries,
 		"total_users": totalUsers,
 	})
+}
+
+type sbPoint struct {
+	X int64   `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type sbSeries struct {
+	ID     string         `json:"id"`
+	Label  string         `json:"label"`
+	Points []sbPoint `json:"points"`
+}
+
+// History returns the top players' cumulative score over time for the race chart.
+func (h *ScoreboardHandler) History(c *gin.Context) {
+	if !h.config.Platform.ScoreboardEnabled {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Scoreboard is disabled"})
+		return
+	}
+
+	rows, err := h.db.Pool.Query(c.Request.Context(), `
+		SELECT u.id, u.username, s.solved_at, s.points_awarded
+		FROM users u
+		JOIN solves s ON s.user_id = u.id
+		WHERE u.id IN (
+			SELECT id FROM users
+			WHERE role != 'admin' AND status = 'active' AND total_score > 0
+			ORDER BY total_score DESC LIMIT 10
+		)
+		ORDER BY u.id, s.solved_at
+	`)
+	if err != nil {
+		h.logger.Error("scoreboard history query", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+		return
+	}
+	defer rows.Close()
+
+	order := []string{}
+	byUser := map[string]*sbSeries{}
+	cum := map[string]float64{}
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		var solvedAt time.Time
+		var pts int
+		if err := rows.Scan(&id, &name, &solvedAt, &pts); err != nil {
+			continue
+		}
+		key := id.String()
+		s := byUser[key]
+		if s == nil {
+			s = &sbSeries{ID: key, Label: name}
+			byUser[key] = s
+			order = append(order, key)
+		}
+		cum[key] += float64(pts)
+		s.Points = append(s.Points, sbPoint{X: solvedAt.Unix(), Y: cum[key]})
+	}
+
+	series := make([]*sbSeries, 0, len(order))
+	for _, k := range order {
+		series = append(series, byUser[k])
+	}
+	c.JSON(http.StatusOK, gin.H{"series": series})
 }
