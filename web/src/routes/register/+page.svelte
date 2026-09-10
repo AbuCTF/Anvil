@@ -1,7 +1,9 @@
 <script lang="ts">
+	import Icon from '@iconify/svelte';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api';
 	import { auth } from '$lib/stores/auth';
+	import Card from '$lib/components/Card.svelte';
 
 	let username = '';
 	let email = '';
@@ -25,14 +27,14 @@
 
 		try {
 			const response = await api.register(username, email, password);
-			
+
 			// Store tokens
 			localStorage.setItem('accessToken', response.access_token);
 			localStorage.setItem('refreshToken', response.refresh_token);
-			
+
 			// Update auth store
 			auth.login(response.access_token, response.user);
-			
+
 			// Redirect to challenges
 			await goto('/challenges', { replaceState: true });
 		} catch (e) {
@@ -47,101 +49,101 @@
 	<title>Register - Anvil</title>
 </svelte:head>
 
-<div class="min-h-screen flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
-	<div class="max-w-md w-full">
-		<div class="text-center mb-8">
-			<a href="/" class="inline-block mb-6">
-				<img src="/logo.png" alt="Anvil" class="h-12 w-auto mx-auto" />
-			</a>
-			<h2 class="text-2xl font-bold text-white">Create Account</h2>
-			<p class="mt-2 text-stone-400 text-sm">
-				Already have an account? <a href="/login" class="text-white hover:underline">Sign in</a>
-			</p>
-		</div>
+<div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12">
+	<div class="w-full max-w-sm">
+		<Card title="Create account" bodyClass="p-5 sm:p-6">
+			<form on:submit|preventDefault={handleSubmit} class="space-y-4">
+				{#if error}
+					<p class="flex items-start gap-1.5 text-danger text-sm">
+						<Icon icon="mdi:alert-circle-outline" class="w-4 h-4 shrink-0 mt-0.5" />
+						<span>{error}</span>
+					</p>
+				{/if}
 
-		<form on:submit|preventDefault={handleSubmit} class="bg-stone-950 border border-stone-800 rounded-lg p-8 space-y-5">
-			{#if error}
-				<div class="bg-red-950/30 border border-red-900 rounded px-4 py-3 text-red-400 text-sm">
-					{error}
+				<div>
+					<label for="username" class="block text-sm font-medium text-stone-400 mb-1.5">Username</label>
+					<input
+						id="username"
+						type="text"
+						autocomplete="username"
+						bind:value={username}
+						required
+						placeholder="username"
+						class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
+					/>
+					{#if username && !usernameValid}
+						<p class="mt-1.5 text-xs text-stone-500 tabular-nums">3–32 characters, letters, numbers, _ or -</p>
+					{/if}
 				</div>
-			{/if}
 
-			<div>
-				<label for="username" class="block text-sm font-medium text-stone-300 mb-2">
-					Username
-				</label>
-				<input
-					id="username"
-					type="text"
-					bind:value={username}
-					required
-					class="block w-full px-4 py-3 bg-black border border-stone-700 rounded-lg text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
-					placeholder="Enter username"
-				/>
-				{#if username && !usernameValid}
-					<p class="mt-1.5 text-xs text-stone-500">3-32 characters, alphanumeric only</p>
-				{/if}
-			</div>
+				<div>
+					<label for="email" class="block text-sm font-medium text-stone-400 mb-1.5">Email</label>
+					<input
+						id="email"
+						type="email"
+						autocomplete="email"
+						bind:value={email}
+						required
+						placeholder="you@example.com"
+						class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
+					/>
+					{#if email && !emailValid}
+						<p class="mt-1.5 text-xs text-stone-500">Enter a valid email address</p>
+					{/if}
+				</div>
 
-			<div>
-				<label for="email" class="block text-sm font-medium text-stone-300 mb-2">
-					Email
-				</label>
-				<input
-					id="email"
-					type="email"
-					bind:value={email}
-					required
-					class="block w-full px-4 py-3 bg-black border border-stone-700 rounded-lg text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
-					placeholder="you@example.com"
-				/>
-			</div>
+				<div>
+					<label for="password" class="block text-sm font-medium text-stone-400 mb-1.5">Password</label>
+					<input
+						id="password"
+						type="password"
+						autocomplete="new-password"
+						bind:value={password}
+						required
+						placeholder="password"
+						class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
+					/>
+					{#if password && !passwordValid}
+						<p class="mt-1.5 text-xs text-stone-500 tabular-nums">Minimum 8 characters required</p>
+					{/if}
+				</div>
 
-			<div>
-				<label for="password" class="block text-sm font-medium text-stone-300 mb-2">
-					Password
-				</label>
-				<input
-					id="password"
-					type="password"
-					bind:value={password}
-					required
-					class="block w-full px-4 py-3 bg-black border border-stone-700 rounded-lg text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
-					placeholder="Minimum 8 characters"
-				/>
-				{#if password && !passwordValid}
-					<p class="mt-1.5 text-xs text-stone-500">Minimum 8 characters required</p>
-				{/if}
-			</div>
+				<div>
+					<label for="confirmPassword" class="block text-sm font-medium text-stone-400 mb-1.5">Confirm password</label>
+					<input
+						id="confirmPassword"
+						type="password"
+						autocomplete="new-password"
+						bind:value={confirmPassword}
+						required
+						placeholder="repeat password"
+						class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
+					/>
+					{#if confirmPassword && !passwordsMatch}
+						<p class="mt-1.5 text-xs text-danger">Passwords do not match</p>
+					{/if}
+				</div>
 
-			<div>
-				<label for="confirmPassword" class="block text-sm font-medium text-stone-300 mb-2">
-					Confirm Password
-				</label>
-				<input
-					id="confirmPassword"
-					type="password"
-					bind:value={confirmPassword}
-					required
-					class="block w-full px-4 py-3 bg-black border border-stone-700 rounded-lg text-white placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
-					placeholder="Confirm your password"
-				/>
-				{#if confirmPassword && password !== confirmPassword}
-					<p class="mt-1.5 text-xs text-red-400">Passwords do not match</p>
-				{/if}
-			</div>
+				<button
+					type="submit"
+					disabled={!formValid || loading}
+					class="w-full rounded-md bg-amber-500 text-black font-medium py-2.5 text-sm hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+				>
+					{#if loading}
+						<span class="flex items-center justify-center gap-2">
+							<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+							Creating account…
+						</span>
+					{:else}
+						Create account
+					{/if}
+				</button>
+			</form>
+		</Card>
 
-			<button
-				type="submit"
-				disabled={!formValid || loading}
-				class="w-full px-6 py-3 bg-white text-black font-semibold rounded-lg hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-			>
-				{#if loading}
-					Creating account...
-				{:else}
-					Create Account
-				{/if}
-			</button>
-		</form>
+		<p class="text-center text-stone-500 text-sm mt-4">
+			Already have an account?
+			<a href="/login" class="text-amber-500 hover:text-amber-400 transition-colors">Sign in</a>
+		</p>
 	</div>
 </div>

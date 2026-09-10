@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import { goto } from '$app/navigation';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
-	import { auth } from '$stores/auth';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Card from '$lib/components/Card.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 
 	interface Instance {
 		id: string;
@@ -108,230 +109,216 @@
 	function formatTimeRemaining(expiresAt: number): string {
 		const now = Math.floor(Date.now() / 1000);
 		const remaining = expiresAt - now;
-		
+
 		if (remaining <= 0) return 'Expired';
-		
+
 		const hours = Math.floor(remaining / 3600);
 		const minutes = Math.floor((remaining % 3600) / 60);
-		
+
 		if (hours > 0) {
 			return `${hours}h ${minutes}m`;
 		}
 		return `${minutes}m`;
 	}
 
-	function getStatusColor(status: string): string {
+	// Muted status dot — the semantic color lives on the dot, the label stays gray.
+	function statusDot(status: string): string {
 		switch (status) {
 			case 'running':
-				return 'bg-green-500';
+				return 'bg-up';
 			case 'starting':
 			case 'stopping':
-				return 'bg-yellow-500 animate-pulse';
+				return 'bg-warn animate-pulse';
 			case 'stopped':
 			case 'error':
-				return 'bg-red-500';
+				return 'bg-down';
 			default:
-				return 'bg-stone-500';
+				return 'bg-stone-600';
 		}
 	}
 
-	function getStatusIcon(status: string): string {
-		switch (status) {
-			case 'running':
-				return 'mdi:check-circle';
-			case 'starting':
-				return 'mdi:loading';
-			case 'stopping':
-				return 'mdi:stop-circle';
-			case 'stopped':
-			case 'error':
-				return 'mdi:alert-circle';
-			default:
-				return 'mdi:help-circle';
-		}
-	}
+	const btnBase =
+		'flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+	const btnNeutral = 'text-stone-300 border border-stone-800 hover:bg-stone-800/40 hover:text-stone-100';
+	const btnDanger = 'text-down border border-down/30 hover:bg-down/10';
 </script>
 
 <svelte:head>
 	<title>My Instances - Anvil</title>
 </svelte:head>
 
-<div class="min-h-screen bg-black">
-	<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-		<div class="mb-8 flex items-center justify-between">
-			<div>
-				<h1 class="text-3xl font-bold text-white">My Instances</h1>
-			</div>
-			<a 
-				href="/challenges"
-				class="flex items-center space-x-2 px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-stone-200 transition"
-			>
-				<Icon icon="mdi:plus" class="w-5 h-5" />
-				<span>New Instance</span>
-			</a>
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+	<PageHeader title="My Instances" subtitle={instances.length ? `${instances.length} active` : ''}>
+		<a
+			slot="actions"
+			href="/challenges"
+			class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm font-medium transition-colors"
+		>
+			<Icon icon="mdi:plus" class="w-4 h-4" />
+			<span>New Instance</span>
+		</a>
+	</PageHeader>
+
+	{#if loading}
+		<div class="flex items-center justify-center py-16">
+			<Icon icon="mdi:loading" class="w-6 h-6 text-stone-500 animate-spin" />
 		</div>
+	{:else if error}
+		<div class="border border-down/30 bg-down/5 rounded-lg p-6 text-center">
+			<Icon icon="mdi:alert-circle-outline" class="w-8 h-8 text-down mx-auto mb-3" />
+			<p class="text-down text-sm mb-4">{error}</p>
+			<button
+				on:click={() => { error = ''; loading = true; loadInstances(); }}
+				class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm font-medium transition-colors"
+			>
+				<Icon icon="mdi:refresh" class="w-4 h-4" />
+				<span>Try again</span>
+			</button>
+		</div>
+	{:else if instances.length === 0}
+		<EmptyState icon="mdi:server-off" text="No active instances.">
+			<a
+				href="/challenges"
+				class="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm font-medium transition-colors"
+			>
+				<Icon icon="mdi:magnify" class="w-4 h-4" />
+				<span>Browse challenges</span>
+			</a>
+		</EmptyState>
+	{:else}
+		<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+			{#each instances as instance (instance.id)}
+				{@const expired = instance.expires_at <= Math.floor(Date.now() / 1000)}
+				{@const busy = !!actionLoading[instance.id]}
+				<Card bodyClass="p-0">
+					<div slot="header" class="flex items-center gap-2.5 min-w-0">
+						<span class="w-2 h-2 rounded-full shrink-0 {statusDot(instance.status)}"></span>
+						<a
+							href="/challenges/{instance.challenge_slug}"
+							class="text-stone-200 font-medium truncate hover:text-amber-400 transition-colors"
+						>
+							{instance.challenge_name}
+						</a>
+					</div>
+					<span slot="meta" class="text-xs text-stone-400 capitalize tracking-wide">{instance.status}</span>
 
-		{#if loading}
-			<div class="flex items-center justify-center min-h-[40vh]">
-				<div class="text-center">
-					<Icon icon="mdi:loading" class="w-8 h-8 text-stone-500 animate-spin mx-auto mb-4" />
-					<p class="text-stone-500">Loading instances...</p>
-				</div>
-			</div>
-		{:else if error}
-			<div class="bg-red-950/30 border border-red-900 rounded-lg p-6 text-center">
-				<Icon icon="mdi:alert-circle" class="w-8 h-8 text-red-400 mx-auto mb-3" />
-				<p class="text-red-400 mb-4">{error}</p>
-				<button
-					on:click={loadInstances}
-					class="px-6 py-3 bg-stone-950 text-white rounded-lg hover:bg-stone-900 transition border border-stone-800"
-				>
-					Try Again
-				</button>
-			</div>
-		{:else if instances.length === 0}
-			<div class="bg-stone-950 border border-stone-800 rounded-lg p-12 text-center">
-				<Icon icon="mdi:server-off" class="w-16 h-16 text-stone-700 mx-auto mb-4" />
-				<h2 class="text-xl font-semibold text-white mb-6">No Active Instances</h2>
-				<a
-					href="/challenges"
-					class="inline-flex items-center space-x-2 px-6 py-3 bg-white text-black rounded-lg font-medium hover:bg-stone-200 transition"
-				>
-					<span>Browse Challenges</span>
-				</a>
-			</div>
-		{:else}
-			<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-				{#each instances as instance (instance.id)}
-					<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
-						<div class="p-5 border-b border-stone-800 flex items-center justify-between">
-							<div class="flex items-center space-x-3">
-								<div class="w-2.5 h-2.5 rounded-full {getStatusColor(instance.status)}"></div>
-								<a 
-									href="/challenges/{instance.challenge_slug}"
-									class="text-white font-semibold hover:text-stone-200 transition"
+					<div class="p-4 sm:p-5 space-y-4">
+						<!-- Target -->
+						<div class="flex items-center justify-between gap-3">
+							<span class="text-stone-500 text-xs uppercase tracking-wide shrink-0">Target</span>
+							<div class="flex items-center gap-1.5 min-w-0">
+								<code class="min-w-0 break-all px-2.5 py-1.5 bg-stone-950/60 text-stone-300 border border-stone-800 rounded-md font-mono text-sm tabular-nums">
+									{instance.ip_address}
+								</code>
+								<button
+									on:click={() => navigator.clipboard.writeText(instance.ip_address)}
+									class="p-1.5 text-stone-600 hover:text-stone-300 transition-colors shrink-0"
+									title="Copy"
 								>
-									{instance.challenge_name}
-								</a>
-							</div>
-							<div class="flex items-center space-x-2 text-xs text-stone-400">
-								<Icon icon={getStatusIcon(instance.status)} class="w-4 h-4" />
-								<span class="capitalize">{instance.status}</span>
+									<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
+								</button>
 							</div>
 						</div>
 
-						<div class="p-5 space-y-4">
-							<div class="flex items-center justify-between">
-								<span class="text-stone-500 text-xs uppercase tracking-wider">Target</span>
-								<div class="flex items-center gap-2">
-									<code class="px-3 py-1.5 bg-black text-green-400 border border-stone-800 rounded font-mono text-sm">
-										{instance.ip_address}
-									</code>
-									<button 
-										on:click={() => navigator.clipboard.writeText(instance.ip_address)}
-										class="p-1.5 text-stone-500 hover:text-white transition"
-										title="Copy"
-									>
-										<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
-									</button>
-								</div>
-							</div>
-
-							{#if instance.ports && Object.keys(instance.ports).length > 0}
-								<div>
-									<span class="text-stone-500 text-xs uppercase tracking-wider block mb-2">Connect</span>
-									<div class="space-y-1.5">
-										{#each Object.entries(instance.ports) as [portKey]}
-											<div class="flex items-center gap-2">
-												{#if isHttpPort(portKey)}
-													<a href={getConnectionCmd(instance.ip_address, portKey)} target="_blank" rel="noopener" class="flex-1 px-3 py-1.5 bg-black text-blue-400 border border-stone-800 rounded font-mono text-sm hover:text-blue-300 transition">
-														{getConnectionCmd(instance.ip_address, portKey)}
-													</a>
-												{:else}
-													<code class="flex-1 px-3 py-1.5 bg-black text-stone-300 border border-stone-800 rounded font-mono text-sm">
-														{getConnectionCmd(instance.ip_address, portKey)}
-													</code>
-												{/if}
-												<button 
-													on:click={() => navigator.clipboard.writeText(getConnectionCmd(instance.ip_address, portKey))}
-													class="p-1.5 text-stone-500 hover:text-white transition"
-													title="Copy"
+						<!-- Connect -->
+						{#if instance.ports && Object.keys(instance.ports).length > 0}
+							<div>
+								<span class="text-stone-500 text-xs uppercase tracking-wide block mb-2">Connect</span>
+								<div class="space-y-1.5">
+									{#each Object.entries(instance.ports) as [portKey]}
+										<div class="flex items-center gap-1.5">
+											{#if isHttpPort(portKey)}
+												<a
+													href={getConnectionCmd(instance.ip_address, portKey)}
+													target="_blank"
+													rel="noopener"
+													class="flex-1 min-w-0 break-all px-2.5 py-1.5 bg-stone-950/60 text-stone-300 border border-stone-800 rounded-md font-mono text-sm hover:text-amber-400 transition-colors"
 												>
-													<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
-												</button>
-											</div>
-										{/each}
-									</div>
-								</div>
-							{/if}
-
-							<div class="grid grid-cols-2 gap-4 pt-2">
-								<div class="p-3 bg-black border border-stone-800 rounded-lg">
-									<div class="flex items-center space-x-2 text-stone-500 text-xs mb-1">
-										<Icon icon="mdi:clock-outline" class="w-4 h-4" />
-										<span>Time Remaining</span>
-									</div>
-									<div class="text-white font-semibold text-lg">
-										{formatTimeRemaining(instance.expires_at)}
-									</div>
-								</div>
-
-								<div class="p-3 bg-black border border-stone-800 rounded-lg">
-									<div class="flex items-center space-x-2 text-stone-500 text-xs mb-1">
-										<Icon icon="mdi:refresh" class="w-4 h-4" />
-										<span>Extensions</span>
-									</div>
-									<div class="text-white font-semibold text-lg">
-										{instance.extensions_used} / {instance.max_extensions}
-									</div>
+													{getConnectionCmd(instance.ip_address, portKey)}
+												</a>
+											{:else}
+												<code class="flex-1 min-w-0 break-all px-2.5 py-1.5 bg-stone-950/60 text-stone-300 border border-stone-800 rounded-md font-mono text-sm">
+													{getConnectionCmd(instance.ip_address, portKey)}
+												</code>
+											{/if}
+											<button
+												on:click={() => navigator.clipboard.writeText(getConnectionCmd(instance.ip_address, portKey))}
+												class="p-1.5 text-stone-600 hover:text-stone-300 transition-colors shrink-0"
+												title="Copy"
+											>
+												<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
+											</button>
+										</div>
+									{/each}
 								</div>
 							</div>
-						</div>
+						{/if}
 
-						<div class="p-4 border-t border-stone-800 flex space-x-3">
-							<button
-								on:click={() => extendInstance(instance.id)}
-								disabled={!!actionLoading[instance.id] || instance.extensions_used >= instance.max_extensions}
-								class="flex-1 flex items-center justify-center space-x-2 px-4 py-3 bg-stone-900 text-white rounded-lg hover:bg-stone-800 disabled:opacity-50 disabled:cursor-not-allowed transition border border-stone-800"
-							>
-								{#if actionLoading[instance.id] === 'extending'}
-									<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />
-									<span>Extending...</span>
-								{:else}
-									<Icon icon="mdi:clock-plus" class="w-5 h-5" />
-									<span>Extend</span>
-								{/if}
-							</button>
-							<button
-								on:click={() => revertInstance(instance.id, instance.challenge_slug)}
-								disabled={!!actionLoading[instance.id]}
-								class="flex-1 flex items-center justify-center space-x-2 px-4 py-3 bg-stone-900 text-white rounded-lg hover:bg-stone-800 disabled:opacity-50 transition border border-stone-800"
-							>
-								{#if actionLoading[instance.id] === 'reverting'}
-									<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />
-									<span>Reverting...</span>
-								{:else}
-									<Icon icon="mdi:restart" class="w-5 h-5" />
-									<span>Revert</span>
-								{/if}
-							</button>
-							<button
-								on:click={() => stopInstance(instance.id)}
-								disabled={!!actionLoading[instance.id]}
-								class="flex-1 flex items-center justify-center space-x-2 px-4 py-3 bg-red-950/30 text-red-400 rounded-lg hover:bg-red-950/50 disabled:opacity-50 transition border border-red-900"
-							>
-								{#if actionLoading[instance.id] === 'stopping'}
-									<Icon icon="mdi:loading" class="w-5 h-5 animate-spin" />
-									<span>Stopping...</span>
-								{:else}
-									<Icon icon="mdi:stop" class="w-5 h-5" />
-									<span>Stop</span>
-								{/if}
-							</button>
+						<!-- Stats -->
+						<div class="grid grid-cols-2 gap-3 pt-1">
+							<div class="p-3 bg-stone-950/50 border border-stone-800 rounded-md">
+								<div class="flex items-center gap-1.5 text-stone-500 text-xs uppercase tracking-wide mb-1.5">
+									<Icon icon="mdi:clock-outline" class="w-3.5 h-3.5" />
+									<span>Remaining</span>
+								</div>
+								<div class="font-mono tabular-nums text-lg {expired ? 'text-down' : 'text-amber-500/90'}">
+									{formatTimeRemaining(instance.expires_at)}
+								</div>
+							</div>
+
+							<div class="p-3 bg-stone-950/50 border border-stone-800 rounded-md">
+								<div class="flex items-center gap-1.5 text-stone-500 text-xs uppercase tracking-wide mb-1.5">
+									<Icon icon="mdi:refresh" class="w-3.5 h-3.5" />
+									<span>Extensions</span>
+								</div>
+								<div class="font-mono tabular-nums text-lg text-stone-100">
+									{instance.extensions_used} / {instance.max_extensions}
+								</div>
+							</div>
 						</div>
 					</div>
-				{/each}
-			</div>
-		{/if}
-	</div>
+
+					<!-- Actions -->
+					<div class="px-4 py-3 sm:px-5 border-t border-stone-800 grid grid-cols-3 gap-2">
+						<button
+							on:click={() => extendInstance(instance.id)}
+							disabled={busy || instance.extensions_used >= instance.max_extensions}
+							class="{btnBase} {btnNeutral}"
+						>
+							{#if actionLoading[instance.id] === 'extending'}
+								<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+							{:else}
+								<Icon icon="mdi:clock-plus" class="w-4 h-4" />
+							{/if}
+							<span>Extend</span>
+						</button>
+						<button
+							on:click={() => revertInstance(instance.id, instance.challenge_slug)}
+							disabled={busy}
+							class="{btnBase} {btnNeutral}"
+						>
+							{#if actionLoading[instance.id] === 'reverting'}
+								<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+							{:else}
+								<Icon icon="mdi:restart" class="w-4 h-4" />
+							{/if}
+							<span>Revert</span>
+						</button>
+						<button
+							on:click={() => stopInstance(instance.id)}
+							disabled={busy}
+							class="{btnBase} {btnDanger}"
+						>
+							{#if actionLoading[instance.id] === 'stopping'}
+								<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+							{:else}
+								<Icon icon="mdi:stop" class="w-4 h-4" />
+							{/if}
+							<span>Stop</span>
+						</button>
+					</div>
+				</Card>
+			{/each}
+		</div>
+	{/if}
 </div>
