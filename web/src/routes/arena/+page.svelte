@@ -297,7 +297,7 @@
 		<div class="grid lg:grid-cols-3 gap-4 mb-6">
 			<div class="lg:col-span-2 bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
-					<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide">Service status</h2>
+					<h2 class="text-[0.95rem] font-semibold text-stone-200">Service status</h2>
 					<span class="text-stone-600 text-xs ml-auto">latest tick</span>
 				</div>
 				<div class="overflow-x-auto">
@@ -363,7 +363,7 @@
 			<!-- Captures -->
 			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden flex flex-col">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
-					<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide">Captures</h2>
+					<h2 class="text-[0.95rem] font-semibold text-stone-200">Captures</h2>
 					<span class="text-stone-600 text-xs ml-auto tabular-nums">{events.length}</span>
 				</div>
 				<div class="p-1.5 overflow-y-auto max-h-[21rem]">
@@ -398,7 +398,7 @@
 		{#if raceSeries.length}
 			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden mb-6">
 				<div class="px-4 py-3 border-b border-stone-800">
-					<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide">Score over time</h2>
+					<h2 class="text-[0.95rem] font-semibold text-stone-200">Score over time</h2>
 				</div>
 				<div class="p-4">
 					<LineChart series={raceSeries} height={280} curve="step" emphasize={leaderIdx} xFormat={(x) => 't' + Math.round(x)} />
@@ -409,7 +409,7 @@
 		<!-- Standings -->
 		<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 			<div class="px-4 py-3 border-b border-stone-800">
-				<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide">Standings</h2>
+				<h2 class="text-[0.95rem] font-semibold text-stone-200">Standings</h2>
 			</div>
 			<div class="overflow-x-auto">
 				<table class="w-full min-w-[720px] text-sm">

@@ -161,8 +161,8 @@
 		<!-- Identity -->
 		<div class="flex items-center gap-4 mb-6">
 			<div
-				class="w-14 h-14 rounded-lg flex items-center justify-center text-lg font-semibold text-stone-950 shrink-0"
-				style="background: {teamColor(username)};"
+				class="w-14 h-14 rounded-lg flex items-center justify-center text-lg font-semibold shrink-0 bg-stone-900 border border-stone-800"
+				style="color: {teamColor(username)};"
 			>
 				{initials}
 			</div>

@@ -67,7 +67,8 @@ is used only when distinguishing many series, capped at ~10 lines.
   on live update and columns align. Non-negotiable on the scoreboard.
 - Weight band **400 / 510 (medium) / 590 (semibold)**. Never 700+ — heavy reads as gamer.
   Body 400, UI labels/medium 510, headings 590.
-- Section headers: small, `uppercase tracking-wide text-stone-200`, ~13–14px.
+- Section headers: Title Case (never UPPERCASE), `font-semibold text-stone-200`, ~15px. Tiny
+  table column headers may stay uppercase, but panel/section titles read in normal case.
 - Tight negative tracking on large display numbers.
 
 ## Spacing, radius, borders

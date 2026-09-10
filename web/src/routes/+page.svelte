@@ -1,4 +1,5 @@
 <script lang="ts">
+	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
 	import { api } from '$api';
 
@@ -37,9 +38,10 @@
 	<div class="mt-8 flex flex-wrap gap-3 justify-center">
 		<a
 			href="/challenges"
-			class="px-6 py-2.5 bg-stone-100 text-stone-950 text-sm font-medium hover:bg-white transition-colors rounded-full"
+			class="inline-flex items-center gap-1.5 px-6 py-2.5 bg-stone-100 text-stone-950 text-sm font-medium hover:bg-white transition-colors rounded-full"
 		>
-			Get Started →
+			Get Started
+			<Icon icon="mdi:arrow-right" class="w-4 h-4" />
 		</a>
 		<a
 			href="/register"

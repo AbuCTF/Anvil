@@ -9,7 +9,7 @@
 	{#if hasHeader && (title || $$slots.header || $$slots.meta)}
 		<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
 			<slot name="header">
-				<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide">{title}</h2>
+				<h2 class="text-[0.95rem] font-semibold text-stone-200">{title}</h2>
 			</slot>
 			<div class="ml-auto flex items-center gap-2"><slot name="meta" /></div>
 		</div>
