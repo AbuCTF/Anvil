@@ -45,7 +45,7 @@
 
 	// Returns null when the endpoint reports the game is off (404 / {"error": ...}).
 	async function fetchGame<T>(path: string): Promise<T | null> {
-		const res = await fetch(`${API_BASE}/api/v1/game${path}`, {
+		const res = await fetch(`${API_BASE}/api/v1/arena${path}`, {
 			headers: { 'Content-Type': 'application/json' }
 		});
 		if (res.status === 404) return null;
@@ -144,7 +144,7 @@
 </script>
 
 <svelte:head>
-	<title>Game Control Map - Anvil</title>
+	<title>Arena - Anvil</title>
 </svelte:head>
 
 <div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-6">

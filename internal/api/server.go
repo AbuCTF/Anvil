@@ -127,11 +127,11 @@ func (s *Server) setupRouter() {
 			// Public stats
 			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
 
-			// Game (Attack-Defense + KotH) read endpoints
-			gameRead := handlers.NewGameHandler(s.config, s.db, s.logger)
-			public.GET("/game/scoreboard", gameRead.Scoreboard)
-			public.GET("/game/hills", gameRead.Hills)
-			public.GET("/game/status", gameRead.Status)
+			// Arena (Attack-Defense + KotH) read endpoints
+			arenaRead := handlers.NewGameHandler(s.config, s.db, s.logger)
+			public.GET("/arena/scoreboard", arenaRead.Scoreboard)
+			public.GET("/arena/hills", arenaRead.Hills)
+			public.GET("/arena/status", arenaRead.Status)
 		}
 
 		// Protected routes (require authentication)
@@ -160,13 +160,13 @@ func (s *Server) setupRouter() {
 				challenges.POST("/:slug/hints/:hint_id/unlock", challengeHandler.UnlockHint)
 			}
 
-			// Game (Attack-Defense + KotH) flag submission
-			gameRoutes := protected.Group("/game")
+			// Arena (Attack-Defense + KotH) flag submission
+			arenaRoutes := protected.Group("/arena")
 			{
-				gameHandler := handlers.NewGameHandler(s.config, s.db, s.logger)
-				gameRoutes.POST("/submit", middleware.RateLimitEndpoint(
+				arenaHandler := handlers.NewGameHandler(s.config, s.db, s.logger)
+				arenaRoutes.POST("/submit", middleware.RateLimitEndpoint(
 					s.config.RateLimit.FlagSubmission,
-				), gameHandler.SubmitFlag)
+				), arenaHandler.SubmitFlag)
 			}
 
 			// Instance management
@@ -249,8 +249,8 @@ func (s *Server) setupRouter() {
 				users.DELETE("/:id", adminUserHandler.Delete)
 			}
 
-			// Game (Attack-Defense + KotH) setup
-			gameAdmin := admin.Group("/game")
+			// Arena (Attack-Defense + KotH) setup
+			gameAdmin := admin.Group("/arena")
 			{
 				gameAdminHandler := handlers.NewGameAdminHandler(s.config, s.db, s.logger)
 				gameAdmin.GET("/teams", gameAdminHandler.ListTeams)
