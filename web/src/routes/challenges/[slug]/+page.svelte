@@ -540,7 +540,7 @@
 		<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 			<!-- Back Link -->
 			<a href="/challenges" class="inline-flex items-center gap-1.5 text-stone-500 hover:text-stone-300 text-sm mb-8 transition-colors">
-				<Icon icon="mdi:chevron-left" class="w-4 h-4" />
+				<Icon icon="mdi:arrow-left" class="w-4 h-4 -translate-y-[1px]" />
 				Challenges
 			</a>
 

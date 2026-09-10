@@ -237,12 +237,9 @@
 				{#each groups as group (group.category)}
 					{@const color = categoryColor(group.category)}
 					<section>
-						<div class="flex items-center gap-3 mb-4">
-							<span class="inline-flex items-center gap-2">
-								<span class="w-2 h-2 rounded-full shrink-0" style="background:{color}"></span>
-								<Icon icon={catIcon(group.category)} class="w-4 h-4 text-stone-500" />
-							</span>
-							<h2 class="text-sm font-semibold uppercase tracking-wide text-stone-200">{group.category}</h2>
+						<div class="flex items-center gap-2.5 mb-4">
+							<Icon icon={catIcon(group.category)} class="w-4 h-4 shrink-0" style="color:{color}" />
+							<h2 class="text-[0.95rem] font-semibold text-stone-200 leading-none">{group.category}</h2>
 							<span class="text-[0.68rem] tabular-nums rounded-full px-2 py-0.5 border border-stone-800 bg-stone-900/40 {group.solved === group.challenges.length && $auth.isAuthenticated ? 'text-up' : 'text-stone-400'}">
 								{#if $auth.isAuthenticated}{group.solved}/{group.challenges.length}{:else}{group.challenges.length}{/if}
 							</span>

@@ -75,13 +75,8 @@
 						<div class="relative">
 							<button
 								on:click={() => userMenuOpen = !userMenuOpen}
-								class="flex items-center gap-2 px-2 py-1.5 text-sm text-stone-300 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40"
+								class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-stone-300 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40"
 							>
-								<div class="w-8 h-8 bg-stone-800 border border-stone-700 rounded-md flex items-center justify-center">
-									<span class="text-xs font-semibold text-stone-300">
-										{($auth.user?.username || 'U').charAt(0).toUpperCase()}
-									</span>
-								</div>
 								<span class="font-medium">{$auth.user?.username}</span>
 								<Icon icon="mdi:chevron-down" class="w-4 h-4 text-stone-500" />
 							</button>

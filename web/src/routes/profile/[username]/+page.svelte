@@ -91,7 +91,6 @@
 			.map((s) => ({ name: s.name, slug: s.slug, points: s.points, rel: s.solved_at - t0 }))
 	}));
 
-	$: initials = username ? username.slice(0, 2).toUpperCase() : '?';
 
 	async function load(name: string) {
 		loading = true;
@@ -159,25 +158,20 @@
 		</EmptyState>
 	{:else}
 		<!-- Identity -->
-		<div class="flex items-center gap-4 mb-6">
-			<div
-				class="w-14 h-14 rounded-lg flex items-center justify-center text-lg font-semibold shrink-0 bg-stone-900 border border-stone-800"
-				style="color: {teamColor(username)};"
-			>
-				{initials}
-			</div>
-			<div class="min-w-0">
+		<div class="mb-6">
+			<div class="flex items-center gap-2.5">
+				<span class="w-2.5 h-2.5 rounded-full shrink-0" style="background: {teamColor(username)};"></span>
 				<h1 class="text-2xl font-bold text-stone-100 tracking-tight truncate">{username}</h1>
-				{#if rank != null}
-					<div class="mt-0.5 inline-flex items-center gap-1.5 text-sm {rankAccent(rank)}">
-						<Icon
-							icon={rank === 1 ? 'mdi:trophy' : rank <= 3 ? 'mdi:medal' : 'mdi:pound'}
-							class="w-3.5 h-3.5"
-						/>
-						<span class="font-medium tabular-nums">{rank}</span>
-					</div>
-				{/if}
 			</div>
+			{#if rank != null}
+				<div class="mt-1 inline-flex items-center gap-1.5 text-sm {rankAccent(rank)}">
+					<Icon
+						icon={rank === 1 ? 'mdi:trophy' : rank <= 3 ? 'mdi:medal' : 'mdi:pound'}
+						class="w-3.5 h-3.5"
+					/>
+					<span class="font-medium tabular-nums">{rank}</span>
+				</div>
+			{/if}
 		</div>
 
 		{#if solves.length === 0}
