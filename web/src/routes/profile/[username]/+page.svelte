@@ -3,7 +3,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { API_BASE } from '$lib/config';
-	import { teamColor, categoryColor, rankAccent } from '$lib/rank';
+	import { categoryColor } from '$lib/rank';
 	import { formatDur } from '$lib/chart/time';
 	import Card from '$lib/components/Card.svelte';
 	import StatTile from '$lib/components/StatTile.svelte';
@@ -152,7 +152,7 @@
 		href="/scoreboard"
 		class="inline-flex items-center gap-1.5 text-sm text-stone-500 hover:text-stone-300 transition mb-6"
 	>
-		<Icon icon="mdi:arrow-left" class="w-4 h-4 shrink-0" />
+		<Icon icon="mdi:arrow-left" class="w-3.5 h-3.5 shrink-0" />
 		<span class="leading-none">Scoreboard</span>
 	</a>
 
@@ -168,21 +168,7 @@
 		</EmptyState>
 	{:else}
 		<!-- Identity -->
-		<div class="mb-6">
-			<div class="flex items-center gap-2.5">
-				<span class="w-2.5 h-2.5 rounded-full shrink-0" style="background: {teamColor(username)};"></span>
-				<h1 class="text-2xl font-bold text-stone-100 tracking-tight truncate leading-none">{username}</h1>
-			</div>
-			{#if rank != null}
-				<div class="mt-1.5 inline-flex items-center gap-1.5 text-sm {rankAccent(rank)}">
-					<Icon
-						icon={rank === 1 ? 'mdi:trophy' : rank <= 3 ? 'mdi:medal' : 'mdi:pound'}
-						class="w-3.5 h-3.5 shrink-0"
-					/>
-					<span class="font-medium tabular-nums leading-none">{rank}</span>
-				</div>
-			{/if}
-		</div>
+		<h1 class="text-2xl font-bold text-stone-100 tracking-tight truncate mb-6">{username}</h1>
 
 		{#if solves.length === 0}
 			<EmptyState icon="mdi:flag-outline" text="No solves yet." />

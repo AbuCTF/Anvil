@@ -278,9 +278,9 @@
 								<div class="fade-in flex items-center gap-2">
 									{#if held}
 										<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.dot};"></span>
-										<span class="text-lg font-semibold text-stone-100 truncate">{hill.controller}</span>
+										<span class="text-lg font-semibold text-stone-100 truncate leading-none">{hill.controller}</span>
 									{:else}
-										<span class="text-lg font-semibold text-stone-600">Open</span>
+										<span class="text-lg font-semibold text-stone-600 leading-none">Open</span>
 									{/if}
 								</div>
 							{/key}
