@@ -46,6 +46,14 @@ Semantic (muted; reserved for state only):
 | flag-missing | `#9c5a30` |
 | first blood | `#e0483c` (the one sanctioned saturated pop) |
 
+**Sanctioned categorical color** — a few signals *earn* real color because color IS the
+meaning; use the shared helpers, never ad-hoc hues:
+- **Difficulty** (`difficultyClass` in `rank.ts`): easy=green, medium=yellow, hard=red,
+  insane=purple — outlined pills (colored text + border + dark tint).
+- **Resource type** (`resourceClass`): VM=purple, container=blue.
+- The landing hero highlight word is cyan.
+These are the only places saturated color appears in chrome; everywhere else stays muted.
+
 Team / series palette — **muted, low-chroma** (see `$lib/rank.ts`). Never fully
 saturated. Per-team identity is a small dot or a thin accent bar, never a saturated
 card fill. Charts default to amber-on-stone for a single series; the muted team palette
@@ -93,6 +101,13 @@ is used only when distinguishing many series, capped at ~10 lines.
   step interpolation, never smoothing that invents motion. Accuracy over prettiness.
 - Always label axes (time on x, value on y). Cap multi-series charts at ~10 lines.
 - Muted palette; emphasize one series (leader) and dim the rest.
+
+## Responsive
+
+Every page must work from ~360px (mobile) to wide desktop. Wide tables/grids scroll
+inside `overflow-x-auto`; the page body never scrolls sideways. Stack columns on small
+screens (`grid-cols-1` → `sm:`/`lg:` up), hide non-essential table columns on narrow
+widths (`hidden md:table-cell`), and keep tap targets comfortable. Test at 375px and 1440px.
 
 ## Interaction
 

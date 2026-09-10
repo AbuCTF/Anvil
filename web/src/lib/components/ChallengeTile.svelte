@@ -1,6 +1,7 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { auth } from '$stores/auth';
+	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
 
 	export let challenge: {
 		slug: string;
@@ -15,18 +16,9 @@
 		user_solves: number;
 		is_solved: boolean;
 		author_name?: string;
+		description?: string;
 	};
 
-	// Muted difficulty ramp — restrained escalation, never neon. Amber is reserved
-	// for the points value, so difficulty leans on stone + muted semantic tokens.
-	const diff: Record<string, string> = {
-		easy: 'text-stone-400 border-stone-700 bg-stone-800/40',
-		medium: 'text-info border-info/20 bg-info/10',
-		hard: 'text-warn border-warn/20 bg-warn/10',
-		insane: 'text-down border-down/20 bg-down/10'
-	};
-
-	$: diffClass = diff[challenge.difficulty?.toLowerCase()] ?? 'text-stone-400 border-stone-700 bg-stone-800/40';
 	$: points = challenge.base_points ?? challenge.points ?? 0;
 	$: multiFlag = challenge.total_flags > 1;
 	$: progress = challenge.total_flags
@@ -36,45 +28,54 @@
 
 <a
 	href="/challenges/{challenge.slug}"
-	class="tile group relative flex h-full flex-col rounded-lg border p-4 transition-colors duration-150 {challenge.is_solved
+	class="tile group flex h-full flex-col rounded-lg border p-4 transition-colors duration-150 {challenge.is_solved
 		? 'bg-up/[0.04] border-up/25 hover:border-up/40'
 		: 'bg-stone-900/40 border-stone-800 hover:border-stone-700 hover:bg-stone-800/20'}"
 >
-	<div class="flex items-center justify-between gap-2 mb-3">
-		<span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-medium capitalize {diffClass}">
-			{challenge.difficulty}
-		</span>
-		<div class="flex items-center gap-2 text-stone-600">
-			<Icon
-				icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'}
-				class="w-4 h-4"
-			/>
-			{#if challenge.is_solved}
-				<Icon icon="mdi:check-circle" class="w-4 h-4 text-up" />
-			{/if}
-		</div>
+	<div class="flex items-start justify-between gap-2">
+		<h3 class="text-base font-semibold leading-snug {challenge.is_solved ? 'text-stone-200' : 'text-stone-100 group-hover:text-white'} transition-colors">
+			{challenge.name}
+		</h3>
+		{#if challenge.is_solved}
+			<Icon icon="mdi:check-circle" class="w-4 h-4 text-up shrink-0 mt-0.5" />
+		{/if}
 	</div>
 
-	<h3 class="text-[0.95rem] font-medium leading-snug flex-1 {challenge.is_solved ? 'text-stone-200' : 'text-stone-100 group-hover:text-white'} transition-colors">
-		{challenge.name}
-	</h3>
+	{#if challenge.description}
+		<p class="mt-1.5 text-sm text-stone-500 leading-relaxed line-clamp-2">{challenge.description}</p>
+	{/if}
 
-	<div class="mt-4 flex items-center justify-between">
-		<span class="font-semibold text-amber-500 tabular-nums text-sm">{points}<span class="text-stone-600 font-normal text-xs"> pts</span></span>
-		<div class="flex items-center gap-3 text-stone-500 text-xs">
-			<span class="inline-flex items-center gap-1 tabular-nums" title="Solves">
-				<Icon icon="mdi:account-group" class="w-3.5 h-3.5" />
-				{challenge.total_solves}
+	<div class="mt-3 flex flex-wrap items-center gap-2">
+		<span class="inline-flex items-center rounded border px-2 py-0.5 text-[0.68rem] font-medium capitalize {difficultyClass(challenge.difficulty)}">
+			{challenge.difficulty}
+		</span>
+		{#if challenge.resource_type}
+			<span class="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[0.68rem] font-medium {resourceClass(challenge.resource_type)}">
+				<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3" />
+				{resourceLabel(challenge.resource_type)}
 			</span>
-			<span class="inline-flex items-center gap-1 tabular-nums" title="Flags">
+		{/if}
+	</div>
+
+	<div class="mt-4 pt-3 border-t border-stone-800/60 flex items-center justify-between text-xs">
+		<div class="flex items-center gap-3">
+			<span class="inline-flex items-center gap-1 text-amber-500 font-semibold tabular-nums" title="Points">
+				<Icon icon="mdi:star-outline" class="w-3.5 h-3.5" />
+				{points}
+			</span>
+			<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Flags">
 				<Icon icon="mdi:flag-outline" class="w-3.5 h-3.5" />
 				{challenge.total_flags}
 			</span>
 		</div>
+		<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Solves">
+			<Icon icon="mdi:account-group" class="w-3.5 h-3.5" />
+			{challenge.total_solves}
+		</span>
 	</div>
 
 	{#if $auth.isAuthenticated && multiFlag}
-		<div class="mt-4 pt-3 border-t border-stone-800/60">
+		<div class="mt-3 pt-3 border-t border-stone-800/60">
 			<div class="flex items-center justify-between text-xs mb-1.5">
 				<span class="text-stone-500 uppercase tracking-wide text-[0.65rem]">Progress</span>
 				<span class="text-stone-400 tabular-nums">{challenge.user_solves || 0}/{challenge.total_flags}</span>

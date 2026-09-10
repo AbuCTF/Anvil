@@ -56,6 +56,36 @@ export function categoryColor(name: string | null | undefined): string {
 	return teamColor(name);
 }
 
+// Difficulty is a meaningful signal, so it earns color (a sanctioned exception to
+// "muted"): easy=green, medium=yellow, hard=red, insane=purple. See DESIGN.md.
+export function difficultyClass(d: string | null | undefined): string {
+	switch ((d || '').toLowerCase()) {
+		case 'easy':
+			return 'text-green-400 border-green-900 bg-green-950/40';
+		case 'medium':
+			return 'text-yellow-400 border-yellow-900 bg-yellow-950/40';
+		case 'hard':
+			return 'text-red-400 border-red-900 bg-red-950/40';
+		case 'insane':
+			return 'text-purple-400 border-purple-900 bg-purple-950/40';
+		default:
+			return 'text-stone-400 border-stone-700 bg-stone-800/40';
+	}
+}
+
+// Resource-type pill: VM = purple, container = blue.
+export function resourceClass(t: string | null | undefined): string {
+	return (t || '').toLowerCase() === 'vm'
+		? 'text-purple-400 border-purple-900 bg-purple-950/40'
+		: 'text-sky-400 border-sky-900 bg-sky-950/40';
+}
+export function resourceIcon(t: string | null | undefined): string {
+	return (t || '').toLowerCase() === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker';
+}
+export function resourceLabel(t: string | null | undefined): string {
+	return (t || '').toLowerCase() === 'vm' ? 'VM' : 'Docker';
+}
+
 export function rankAccent(rank: number | null | undefined): string {
 	switch (rank) {
 		case 1:

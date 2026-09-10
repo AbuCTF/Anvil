@@ -4,7 +4,7 @@
 	import { page } from '$app/stores';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
-	import { categoryColor } from '$lib/rank';
+	import { categoryColor, difficultyClass } from '$lib/rank';
 	import Card from '$lib/components/Card.svelte';
 
 	let challenge: any = null;
@@ -98,14 +98,8 @@
 
 	$: isAdmin = $auth.isAuthenticated && $auth.user?.role === 'admin';
 
-	// Muted difficulty ramp — matches the challenge tiles; amber stays on points.
-	const diffPill: Record<string, string> = {
-		easy: 'text-stone-400 border-stone-700 bg-stone-800/40',
-		medium: 'text-info border-info/20 bg-info/10',
-		hard: 'text-warn border-warn/20 bg-warn/10',
-		insane: 'text-down border-down/20 bg-down/10'
-	};
-	$: diffClass = diffPill[String(challenge?.difficulty ?? '').toLowerCase()] ?? 'text-stone-400 border-stone-700 bg-stone-800/40';
+	// Colored difficulty pill — shared with the challenge tiles. See DESIGN.md.
+	$: diffClass = difficultyClass(challenge?.difficulty);
 
 	// Solver podium — rendered only if the API supplies ordered solve data. First
 	// blood is the one sanctioned saturated pop (blood token).
