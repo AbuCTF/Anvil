@@ -29,6 +29,33 @@ export function teamColor(key: string): string {
 	return SERIES[teamHue(key) % SERIES.length];
 }
 
+// Muted category color — consistent across scoreboard/profile/challenges. Prefer this
+// over any vibrant category color stored in the database.
+const CATEGORY: Record<string, string> = {
+	pwn: '#cf7f83',
+	binary: '#cf7f83',
+	web: '#6f9dc9',
+	crypto: '#a394c9',
+	rev: '#cf9268',
+	reverse: '#cf9268',
+	forensics: '#7bb587',
+	misc: '#b39a86',
+	osint: '#c9b46e',
+	blockchain: '#4faaa6',
+	ppc: '#8f93d6',
+	network: '#79c7cf',
+	hardware: '#9aa657',
+	steg: '#bd85b0',
+	sanity: '#837e75'
+};
+
+export function categoryColor(name: string | null | undefined): string {
+	if (!name) return '#837e75';
+	const k = name.toLowerCase();
+	for (const key in CATEGORY) if (k.includes(key)) return CATEGORY[key];
+	return teamColor(name);
+}
+
 export function rankAccent(rank: number | null | undefined): string {
 	switch (rank) {
 		case 1:

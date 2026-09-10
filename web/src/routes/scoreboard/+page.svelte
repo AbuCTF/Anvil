@@ -1,25 +1,28 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
-	import { api } from '$api';
 	import { API_BASE } from '$lib/config';
 	import LineChart from '$lib/components/LineChart.svelte';
 	import Sparkline from '$lib/components/Sparkline.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
+	import Card from '$lib/components/Card.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { teamColor, rankAccent } from '$lib/rank';
+	import { downloadRankCard } from '$lib/share';
 	import type { Series } from '$lib/chart/path';
 
-	interface ScoreboardEntry {
+	interface Entry {
 		rank: number;
 		user_id: string;
 		username: string;
 		display_name?: string;
-		team_name?: string;
 		total_score: number;
 		challenges_solved: number;
 		flags_solved: number;
 		last_solve_at?: string;
+		delta: number;
+		spark?: number[];
 	}
-
 	interface HistorySeries {
 		id: string;
 		label: string;
@@ -28,44 +31,36 @@
 
 	const POLL_MS = 5000;
 
-	let entries: ScoreboardEntry[] = [];
+	let entries: Entry[] = [];
 	let totalUsers = 0;
 	let raceSeries: Series[] = [];
-	let sparks: Record<string, number[]> = {};
-
 	let loading = true;
 	let error = '';
 	let inFlight = false;
 	let timer: ReturnType<typeof setInterval>;
 
+	let search = '';
+	let sortKey: 'rank' | 'name' = 'rank';
+
 	async function load() {
 		if (inFlight) return;
 		inFlight = true;
 		try {
-			const [sbRaw, histRaw] = await Promise.all([
-				api.getScoreboard(),
+			const [sbRes, histRes] = await Promise.all([
+				fetch(`${API_BASE}/api/v1/scoreboard?limit=500`).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
 				fetch(`${API_BASE}/api/v1/scoreboard/history`)
 					.then((r) => (r.ok ? r.json() : { series: [] }))
 					.catch(() => ({ series: [] }))
 			]);
 
-			const sb = sbRaw as { leaderboard: ScoreboardEntry[]; total_users: number };
-			const hist = histRaw as { series: HistorySeries[] };
+			entries = sbRes.leaderboard ?? [];
+			totalUsers = sbRes.total_users ?? entries.length;
 
-			entries = sb.leaderboard ?? [];
-			totalUsers = sb.total_users ?? 0;
-
-			const series = hist.series ?? [];
-			raceSeries = series.map((s) => ({
-				label: s.label,
-				color: teamColor(s.id),
-				points: s.points
-			}));
-			sparks = Object.fromEntries(series.map((s) => [s.id, s.points.map((p) => p.y)]));
+			const series: HistorySeries[] = histRes.series ?? [];
+			raceSeries = series.map((s) => ({ label: s.label, color: teamColor(s.id), points: s.points }));
 			error = '';
 		} catch (e) {
-			// Keep the last good board on a transient error (rate-limit / blip); retry next poll.
-			if (entries.length === 0) error = e instanceof Error ? e.message : 'Failed to load scoreboard';
+			if (entries.length === 0) error = typeof e === 'number' ? `HTTP ${e}` : 'Failed to load scoreboard';
 		} finally {
 			loading = false;
 			inFlight = false;
@@ -78,36 +73,38 @@
 		return () => clearInterval(timer);
 	});
 
-	$: podium =
-		entries.length >= 3
-			? [
-					{ e: entries[1], place: '2nd', cls: 'border-stone-600/40 bg-stone-900/50 mt-8' },
-					{
-						e: entries[0],
-						place: '1st',
-						cls: 'border-yellow-500/40 bg-gradient-to-b from-yellow-500/10 to-stone-900/50'
-					},
-					{ e: entries[2], place: '3rd', cls: 'border-amber-600/40 bg-stone-900/50 mt-12' }
-				]
-			: [];
+	const displayName = (e: Entry) => e.display_name || e.username;
 
-	function displayName(e: ScoreboardEntry) {
-		return e.display_name || e.team_name || e.username;
+	$: leaderIdx = entries.length ? raceSeries.findIndex((s) => s.label === entries[0].username) : -1;
+
+	$: filtered = (() => {
+		const q = search.trim().toLowerCase();
+		let rows = q ? entries.filter((e) => displayName(e).toLowerCase().includes(q) || e.username.toLowerCase().includes(q)) : entries;
+		if (sortKey === 'name') rows = [...rows].sort((a, b) => displayName(a).localeCompare(displayName(b)));
+		return rows;
+	})();
+
+	function formatDate(s?: string) {
+		if (!s) return '—';
+		return new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 	}
-
-	function hasAlias(e: ScoreboardEntry) {
-		return !!(e.display_name || e.team_name);
-	}
-
-	function formatDate(dateString?: string) {
-		if (!dateString) return '—';
-		return new Date(dateString).toLocaleString();
-	}
-
 	function tierIcon(rank: number): string | null {
 		if (rank === 1) return 'mdi:trophy';
 		if (rank <= 3) return 'mdi:medal';
 		return null;
+	}
+	const clock = (x: number) => new Date(x * 1000).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+	function share(e: Entry) {
+		downloadRankCard({
+			rank: e.rank,
+			username: displayName(e),
+			score: e.total_score,
+			solves: e.challenges_solved,
+			delta: e.delta,
+			spark: e.spark ?? [],
+			color: teamColor(e.user_id)
+		});
 	}
 </script>
 
@@ -116,160 +113,107 @@
 </svelte:head>
 
 <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-	<div class="flex flex-wrap items-end justify-between gap-4 mb-8">
-		<div>
-			<h1 class="text-2xl sm:text-3xl font-bold text-white">Scoreboard</h1>
-			<p class="mt-1 text-stone-400 tabular-nums">{totalUsers} participants</p>
-		</div>
-		{#if !loading && !error}
-			<div class="flex items-center gap-2 text-stone-600 text-xs">
-				<span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-				live · {POLL_MS / 1000}s
+	<PageHeader title="Scoreboard" subtitle="{totalUsers} participants">
+		<div slot="actions" class="flex items-center gap-2">
+			<div class="relative">
+				<Icon icon="mdi:magnify" class="w-4 h-4 text-stone-600 absolute left-2.5 top-1/2 -translate-y-1/2" />
+				<input
+					bind:value={search}
+					placeholder="Search"
+					class="w-40 sm:w-52 bg-stone-900/60 border border-stone-800 rounded-md pl-8 pr-3 py-1.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-700"
+				/>
 			</div>
-		{/if}
-	</div>
+			<div class="flex rounded-md border border-stone-800 overflow-hidden text-xs">
+				<button
+					class="px-2.5 py-1.5 transition-colors {sortKey === 'rank' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
+					on:click={() => (sortKey = 'rank')}>Rank</button
+				>
+				<button
+					class="px-2.5 py-1.5 transition-colors border-l border-stone-800 {sortKey === 'name' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
+					on:click={() => (sortKey = 'name')}>Name</button
+				>
+			</div>
+		</div>
+	</PageHeader>
 
 	{#if loading}
-		<div class="flex items-center justify-center py-12">
-			<Icon icon="mdi:loading" class="w-8 h-8 text-amber-500 animate-spin" />
+		<div class="flex items-center justify-center py-16">
+			<Icon icon="mdi:loading" class="w-6 h-6 text-stone-500 animate-spin" />
 		</div>
 	{:else if error}
-		<div class="bg-red-500/10 border border-red-500/20 rounded-lg p-6 text-center">
-			<Icon icon="mdi:alert-circle" class="w-12 h-12 text-red-500 mx-auto mb-4" />
-			<p class="text-red-400">{error}</p>
-			<p class="text-stone-500 text-sm mt-2">Retrying every {POLL_MS / 1000}s…</p>
-		</div>
+		<EmptyState icon="mdi:alert-circle-outline" text={error} />
 	{:else if entries.length === 0}
-		<div class="bg-stone-900/50 rounded-xl border border-stone-800 p-12 text-center">
-			<Icon icon="mdi:trophy-outline" class="w-16 h-16 text-stone-600 mx-auto mb-4" />
-			<h3 class="text-xl font-medium text-white mb-2">No scores yet</h3>
-			<p class="text-stone-400">Be the first to solve a challenge!</p>
-		</div>
+		<EmptyState icon="mdi:trophy-outline" text="No scores yet." />
 	{:else}
 		{#if raceSeries.length}
-			<div class="bg-stone-900/50 rounded-xl border border-stone-800 overflow-hidden mb-8">
-				<div class="px-5 py-4 border-b border-stone-800 flex items-center gap-2">
-					<Icon icon="mdi:chart-line" class="w-5 h-5 text-amber-500" />
-					<h2 class="text-lg font-semibold text-white">Score over time</h2>
-					<span class="text-stone-500 text-sm ml-auto">top {raceSeries.length}</span>
-				</div>
-				<div class="p-4">
-					<LineChart series={raceSeries} height={300} />
-					<div class="flex flex-wrap gap-x-4 gap-y-1 mt-3">
-						{#each raceSeries as s}
-							<span class="inline-flex items-center gap-1.5 text-xs text-stone-400">
-								<span class="w-2.5 h-2.5 rounded-full" style="background: {s.color};"></span>{s.label}
-							</span>
-						{/each}
-					</div>
-				</div>
+			<div class="mb-6">
+				<Card title="Score over time">
+					<span slot="meta" class="text-stone-500 text-xs">top {raceSeries.length}</span>
+					<LineChart series={raceSeries} height={280} curve="step" emphasize={leaderIdx} xFormat={clock} />
+				</Card>
 			</div>
 		{/if}
 
-		{#if entries.length >= 3}
-			<div class="md:hidden space-y-3 mb-8">
-				{#each entries.slice(0, 3) as entry}
-					{@const c = teamColor(entry.user_id)}
-					<div class="bg-stone-900/50 rounded-xl p-4 border border-stone-800 flex items-center gap-4">
-						<Icon icon={tierIcon(entry.rank) ?? 'mdi:medal'} class="w-7 h-7 {rankAccent(entry.rank)}" />
-						<div class="flex-1 min-w-0">
-							<div class="flex items-center gap-2">
-								<span class="w-2.5 h-2.5 rounded-full shrink-0" style="background: {c};"></span>
-								<a href="/profile/{entry.username}" class="block text-white font-medium truncate hover:text-amber-400 transition">{displayName(entry)}</a>
-							</div>
-							<p class="text-xs text-stone-500 tabular-nums">{entry.challenges_solved} challenges</p>
-						</div>
-						<span class="text-amber-500 font-bold tabular-nums">{entry.total_score}</span>
-					</div>
-				{/each}
-			</div>
-
-			<div class="hidden md:grid grid-cols-3 gap-4 mb-8 items-end">
-				{#each podium as p}
-					{@const c = teamColor(p.e.user_id)}
-					<div class="rounded-xl border p-6 text-center {p.cls}">
-						<Icon icon={tierIcon(p.e.rank) ?? 'mdi:medal'} class="w-10 h-10 mx-auto mb-2 {rankAccent(p.e.rank)}" />
-						<div class="text-2xl font-bold text-white">{p.place}</div>
-						<div class="flex items-center justify-center gap-2 mt-2">
-							<span class="w-2.5 h-2.5 rounded-full shrink-0" style="background: {c};"></span>
-							<a href="/profile/{p.e.username}" class="text-lg font-medium text-white truncate hover:text-amber-400 transition">{displayName(p.e)}</a>
-						</div>
-						<div class="text-amber-500 font-bold tabular-nums mt-1">{p.e.total_score} pts</div>
-						<div class="text-xs text-stone-500 tabular-nums mt-0.5">
-							{p.e.challenges_solved} challenges · {p.e.flags_solved} flags
-						</div>
-					</div>
-				{/each}
-			</div>
-		{/if}
-
-		<div class="bg-stone-900/50 rounded-xl border border-stone-800 overflow-hidden">
-			<div class="px-5 py-4 border-b border-stone-800 flex items-center gap-2">
-				<Icon icon="mdi:trophy" class="w-5 h-5 text-amber-500" />
-				<h2 class="text-lg font-semibold text-white">Standings</h2>
-			</div>
+		<Card title="Standings" bodyClass="">
+			<span slot="meta" class="text-stone-500 text-xs tabular-nums">{filtered.length}</span>
 			<div class="overflow-x-auto">
-				<table class="w-full min-w-[640px]">
+				<table class="w-full min-w-[680px] text-sm">
 					<thead>
-						<tr class="border-b border-stone-800 text-stone-400 text-sm">
-							<th class="px-4 sm:px-6 py-3 text-left font-medium w-16">Rank</th>
-							<th class="px-4 sm:px-6 py-3 text-left font-medium">Player</th>
-							<th class="px-4 sm:px-6 py-3 text-left font-medium hidden sm:table-cell">Trend</th>
-							<th class="px-4 sm:px-6 py-3 text-right font-medium">Score</th>
-							<th class="px-4 sm:px-6 py-3 text-right font-medium hidden md:table-cell">Challenges</th>
-							<th class="px-4 sm:px-6 py-3 text-right font-medium hidden lg:table-cell">Flags</th>
-							<th class="px-4 sm:px-6 py-3 text-right font-medium hidden xl:table-cell">Last Solve</th>
+						<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider border-b border-stone-800">
+							<th class="px-4 py-2.5 text-left font-medium w-16">Rank</th>
+							<th class="px-4 py-2.5 text-left font-medium">Player</th>
+							<th class="px-4 py-2.5 text-left font-medium hidden sm:table-cell w-28">Trend</th>
+							<th class="px-4 py-2.5 text-right font-medium hidden md:table-cell">Solves</th>
+							<th class="px-4 py-2.5 text-right font-medium">Score</th>
+							<th class="px-4 py-2.5 text-right font-medium hidden xl:table-cell">Last solve</th>
+							<th class="px-3 py-2.5 w-10"></th>
 						</tr>
 					</thead>
-					<tbody class="divide-y divide-stone-800">
-						{#each entries as entry (entry.user_id)}
-							{@const c = teamColor(entry.user_id)}
-							{@const ti = tierIcon(entry.rank)}
-							<tr class="hover:bg-stone-800/40 transition-colors {entry.rank === 1 ? 'bg-amber-500/5' : ''}">
-								<td class="px-4 sm:px-6 py-3 whitespace-nowrap">
+					<tbody>
+						{#each filtered as e (e.user_id)}
+							{@const c = teamColor(e.user_id)}
+							{@const ti = tierIcon(e.rank)}
+							<tr class="group border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors {e.rank === 1 ? 'bg-amber-500/[0.04]' : ''}">
+								<td class="px-4 py-2.5 whitespace-nowrap">
 									<div class="flex items-center gap-1.5">
-										{#if ti}
-											<Icon icon={ti} class="w-5 h-5 {rankAccent(entry.rank)}" />
+										{#if ti}<Icon icon={ti} class="w-4 h-4 {rankAccent(e.rank)}" />{/if}
+										<span class="text-stone-200 font-semibold tabular-nums">{e.rank}</span>
+										{#if e.delta > 0}
+											<span class="text-up text-[0.65rem] tabular-nums inline-flex items-center"><Icon icon="mdi:menu-up" class="w-3 h-3" />{e.delta}</span>
+										{:else if e.delta < 0}
+											<span class="text-down text-[0.65rem] tabular-nums inline-flex items-center"><Icon icon="mdi:menu-down" class="w-3 h-3" />{-e.delta}</span>
 										{/if}
-										<span class="text-white font-bold tabular-nums">{entry.rank}</span>
 									</div>
 								</td>
-								<td class="px-4 sm:px-6 py-3 whitespace-nowrap">
+								<td class="px-4 py-2.5 whitespace-nowrap">
 									<div class="flex items-center gap-2.5">
-										<span class="w-3 h-3 rounded-full shrink-0" style="background: {c};"></span>
-										<div class="min-w-0">
-											<a
-												href="/profile/{entry.username}"
-												class="block text-white font-medium truncate max-w-[160px] sm:max-w-[240px] hover:text-amber-400 transition"
-											>
-												{displayName(entry)}
-											</a>
-											{#if hasAlias(entry)}
-												<div class="text-stone-500 text-xs hidden sm:block">@{entry.username}</div>
-											{/if}
-										</div>
+										<span class="w-2 h-2 rounded-full shrink-0" style="background: {c};"></span>
+										<a href="/profile/{e.username}" class="text-stone-200 truncate max-w-[200px] hover:text-amber-400 transition">{displayName(e)}</a>
 									</div>
 								</td>
-								<td class="px-4 sm:px-6 py-3 whitespace-nowrap hidden sm:table-cell">
-									<Sparkline data={sparks[entry.user_id] ?? []} color={c} />
+								<td class="px-4 py-2.5 hidden sm:table-cell">
+									<Sparkline data={e.spark ?? []} color={c} />
 								</td>
-								<td class="px-4 sm:px-6 py-3 whitespace-nowrap text-right text-amber-500 font-bold tabular-nums">
-									{entry.total_score}
-								</td>
-								<td class="px-4 sm:px-6 py-3 whitespace-nowrap text-right text-stone-300 tabular-nums hidden md:table-cell">
-									{entry.challenges_solved}
-								</td>
-								<td class="px-4 sm:px-6 py-3 whitespace-nowrap text-right text-stone-300 tabular-nums hidden lg:table-cell">
-									{entry.flags_solved}
-								</td>
-								<td class="px-4 sm:px-6 py-3 whitespace-nowrap text-right text-stone-400 text-sm hidden xl:table-cell">
-									{formatDate(entry.last_solve_at)}
+								<td class="px-4 py-2.5 whitespace-nowrap text-right text-stone-400 tabular-nums hidden md:table-cell">{e.challenges_solved}</td>
+								<td class="px-4 py-2.5 whitespace-nowrap text-right text-amber-500/90 font-semibold tabular-nums">{e.total_score.toLocaleString()}</td>
+								<td class="px-4 py-2.5 whitespace-nowrap text-right text-stone-500 text-xs tabular-nums hidden xl:table-cell">{formatDate(e.last_solve_at)}</td>
+								<td class="px-3 py-2.5 text-right">
+									<button
+										on:click={() => share(e)}
+										title="Share rank card"
+										class="text-stone-700 hover:text-amber-400 opacity-0 group-hover:opacity-100 focus:opacity-100 transition"
+									>
+										<Icon icon="mdi:share-variant-outline" class="w-4 h-4" />
+									</button>
 								</td>
 							</tr>
 						{/each}
+						{#if filtered.length === 0}
+							<tr><td colspan="7" class="px-4 py-8 text-center text-stone-500">No players match “{search}”.</td></tr>
+						{/if}
 					</tbody>
 				</table>
 			</div>
-		</div>
+		</Card>
 	{/if}
 </div>

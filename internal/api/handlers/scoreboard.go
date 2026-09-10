@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -38,6 +39,8 @@ type ScoreboardEntry struct {
 	FlagsSolved      int     `json:"flags_solved"`
 	LastSolveAt      *string `json:"last_solve_at,omitempty"`
 	Country          *string `json:"country,omitempty"`
+	Delta            int     `json:"delta"`
+	Spark            []int   `json:"spark,omitempty"`
 }
 
 // Get returns the scoreboard, paginated so the full field is served page by page.
@@ -108,12 +111,87 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT COUNT(*) FROM users WHERE role != 'admin' AND status = 'active'`).Scan(&totalUsers)
 
+	h.attachTrends(c.Request.Context(), entries)
+
 	c.JSON(http.StatusOK, gin.H{
 		"leaderboard": entries,
 		"total_users": totalUsers,
 		"page":        page,
 		"limit":       limit,
 	})
+}
+
+// attachTrends fills each entry's per-team sparkline (cumulative score over its
+// solves) and rank delta (movement since the 20th-most-recent solve).
+func (h *ScoreboardHandler) attachTrends(ctx context.Context, entries []ScoreboardEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		ids[i] = e.UserID
+	}
+
+	// Sparkline: cumulative points per user, in solve order.
+	sparks := map[string][]int{}
+	if rows, err := h.db.Pool.Query(ctx,
+		`SELECT user_id, points_awarded FROM solves WHERE user_id::text = ANY($1) ORDER BY user_id, solved_at`, ids); err == nil {
+		cum := map[string]int{}
+		for rows.Next() {
+			var uid uuid.UUID
+			var p int
+			if rows.Scan(&uid, &p) == nil {
+				k := uid.String()
+				cum[k] += p
+				sparks[k] = append(sparks[k], cum[k])
+			}
+		}
+		rows.Close()
+	}
+
+	// Rank delta: rank now (entry.Rank) vs rank as of the 20th-newest solve.
+	rankThen := map[string]int{}
+	var cutoff time.Time
+	if h.db.Pool.QueryRow(ctx, `SELECT solved_at FROM solves ORDER BY solved_at DESC OFFSET 20 LIMIT 1`).Scan(&cutoff) == nil {
+		scoreThen := map[string]int{}
+		if rows, err := h.db.Pool.Query(ctx,
+			`SELECT user_id, COALESCE(SUM(points_awarded), 0) FROM solves WHERE solved_at <= $1 GROUP BY user_id`, cutoff); err == nil {
+			for rows.Next() {
+				var uid uuid.UUID
+				var s int
+				if rows.Scan(&uid, &s) == nil {
+					scoreThen[uid.String()] = s
+				}
+			}
+			rows.Close()
+		}
+		type us struct {
+			id   string
+			then int
+		}
+		all := []us{}
+		if rows, err := h.db.Pool.Query(ctx,
+			`SELECT id FROM users WHERE role != 'admin' AND status = 'active'`); err == nil {
+			for rows.Next() {
+				var id uuid.UUID
+				if rows.Scan(&id) == nil {
+					all = append(all, us{id.String(), scoreThen[id.String()]})
+				}
+			}
+			rows.Close()
+		}
+		sort.SliceStable(all, func(a, b int) bool { return all[a].then > all[b].then })
+		for i, u := range all {
+			rankThen[u.id] = i + 1
+		}
+	}
+
+	for i := range entries {
+		entries[i].Spark = sparks[entries[i].UserID]
+		if rt, ok := rankThen[entries[i].UserID]; ok {
+			entries[i].Delta = rt - entries[i].Rank
+		}
+	}
 }
 
 type sbPoint struct {
