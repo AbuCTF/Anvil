@@ -64,7 +64,8 @@
 			sparks = Object.fromEntries(series.map((s) => [s.id, s.points.map((p) => p.y)]));
 			error = '';
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load scoreboard';
+			// Keep the last good board on a transient error (rate-limit / blip); retry next poll.
+			if (entries.length === 0) error = e instanceof Error ? e.message : 'Failed to load scoreboard';
 		} finally {
 			loading = false;
 			inFlight = false;

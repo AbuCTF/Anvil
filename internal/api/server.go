@@ -132,10 +132,13 @@ func (s *Server) setupRouter() {
 
 			// Arena (Attack-Defense + KotH) read endpoints
 			arenaRead := handlers.NewGameHandler(s.config, s.db, s.logger)
+			public.GET("/arena/state", arenaRead.State)
 			public.GET("/arena/scoreboard", arenaRead.Scoreboard)
 			public.GET("/arena/hills", arenaRead.Hills)
 			public.GET("/arena/status", arenaRead.Status)
 			public.GET("/arena/history", arenaRead.History)
+			public.GET("/arena/services", arenaRead.Services)
+			public.GET("/arena/events", arenaRead.Events)
 		}
 
 		// Protected routes (require authentication)
