@@ -259,31 +259,28 @@
 					<h2 class="text-[0.95rem] font-semibold text-stone-200">King of the Hill</h2>
 					<span class="text-stone-600 text-xs ml-auto tabular-nums">{hills.length} hills</span>
 				</div>
-				<div class="p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+				<div class="grid grid-cols-2 sm:grid-cols-4">
 					{#each hills as hill (hill.hill_id)}
 						{@const c = teamColor(hill.controller)}
 						{@const held = !!hill.controller}
 						<div
-							class="relative overflow-hidden rounded-lg border bg-stone-950/50 p-4 min-h-[5.5rem] flex flex-col justify-between transition {flash.has(
+							class="px-5 py-4 border-stone-800/60 border-t sm:border-t-0 sm:border-l sm:first:border-l-0 transition-colors {flash.has(
 								hill.hill_id
 							)
-								? 'border-amber-500/40'
-								: 'border-stone-800'}"
+								? 'bg-amber-500/5'
+								: ''}"
 						>
-							{#if held}<div class="absolute left-0 top-0 bottom-0 w-[3px]" style="background: {c.dot};"></div>{/if}
-							<div class="flex items-center justify-between">
-								<span class="text-xs text-stone-400">{hill.name}</span>
-								<Icon icon="mdi:crown-outline" class="w-4 h-4 {held ? 'text-amber-500/60' : 'text-stone-700'}" />
+							<div class="flex items-center gap-1.5 text-xs text-stone-500 mb-2">
+								<Icon icon={held ? 'mdi:crown' : 'mdi:crown-outline'} class="w-3.5 h-3.5 {held ? 'text-amber-500/70' : 'text-stone-700'}" />
+								{hill.name}
 							</div>
 							{#key hill.controller ?? '__none__'}
-								<div class="fade-in mt-2">
+								<div class="fade-in flex items-center gap-2">
 									{#if held}
-										<div class="flex items-center gap-2">
-											<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.dot};"></span>
-											<span class="text-base font-semibold text-stone-100 truncate">{hill.controller}</span>
-										</div>
+										<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.dot};"></span>
+										<span class="text-lg font-semibold text-stone-100 truncate">{hill.controller}</span>
 									{:else}
-										<div class="text-base font-semibold text-stone-600">Uncontested</div>
+										<span class="text-lg font-semibold text-stone-600">Open</span>
 									{/if}
 								</div>
 							{/key}
