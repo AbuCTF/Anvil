@@ -2,7 +2,6 @@
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
-	import Card from '$lib/components/Card.svelte';
 
 	let username = '';
 	let password = '';
@@ -47,7 +46,15 @@
 
 <div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12">
 	<div class="w-full max-w-sm">
-		<Card title="Sign in" bodyClass="p-5 sm:p-6">
+		<div class="text-center mb-6">
+			<h1 class="text-2xl font-bold text-stone-100 tracking-tight">Welcome Back</h1>
+			<p class="text-sm text-stone-500 mt-1.5">
+				Don't have an account?
+				<a href="/register" class="text-stone-200 font-medium hover:text-white transition-colors">Create one</a>
+			</p>
+		</div>
+
+		<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-5 sm:p-6">
 			<form on:submit|preventDefault={handleSubmit} class="space-y-4">
 				{#if error}
 					<p class="flex items-start gap-1.5 text-danger text-sm">
@@ -57,25 +64,25 @@
 				{/if}
 
 				<div>
-					<label for="username" class="block text-sm font-medium text-stone-400 mb-1.5">Username</label>
+					<label for="username" class="block text-sm font-medium text-stone-300 mb-1.5">Username</label>
 					<input
 						id="username"
 						type="text"
 						autocomplete="username"
 						bind:value={username}
-						placeholder="username"
+						placeholder="Enter your username"
 						class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
 					/>
 				</div>
 
 				<div>
-					<label for="password" class="block text-sm font-medium text-stone-400 mb-1.5">Password</label>
+					<label for="password" class="block text-sm font-medium text-stone-300 mb-1.5">Password</label>
 					<input
 						id="password"
 						type="password"
 						autocomplete="current-password"
 						bind:value={password}
-						placeholder="password"
+						placeholder="Enter your password"
 						class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
 					/>
 				</div>
@@ -83,7 +90,7 @@
 				<button
 					type="submit"
 					disabled={loading}
-					class="w-full rounded-md bg-amber-500 text-black font-medium py-2.5 text-sm hover:bg-amber-400 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+					class="w-full rounded-md bg-stone-100 text-stone-950 font-medium py-2.5 text-sm hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 				>
 					{#if loading}
 						<span class="flex items-center justify-center gap-2">
@@ -91,15 +98,10 @@
 							Signing in…
 						</span>
 					{:else}
-						Sign in
+						Sign In
 					{/if}
 				</button>
 			</form>
-		</Card>
-
-		<p class="text-center text-stone-500 text-sm mt-4">
-			No account?
-			<a href="/register" class="text-amber-500 hover:text-amber-400 transition-colors">Create one</a>
-		</p>
+		</div>
 	</div>
 </div>

@@ -11,6 +11,7 @@
 	const navigation = [
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' },
+		{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' },
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
 
@@ -43,14 +44,14 @@
 
 				<!-- Desktop Navigation - Centered -->
 				<div class="hidden md:flex items-center justify-center flex-1 px-8">
-					<div class="flex items-center gap-1">
+					<div class="flex items-center bg-stone-900/50 rounded-full p-1 border border-stone-800/50">
 						{#each navigation as item}
 							<a
 								href={item.href}
-								class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors
+								class="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200
 								{$page.url.pathname.startsWith(item.href)
-									? 'text-amber-500'
-									: 'text-stone-400 hover:text-stone-100 hover:bg-stone-800/40'}"
+									? 'bg-stone-800 text-white'
+									: 'text-stone-400 hover:text-white'}"
 							>
 								<Icon icon={item.icon} class="w-4 h-4" />
 								<span>{item.name}</span>
@@ -122,7 +123,7 @@
 						</a>
 						<a
 							href="/register"
-							class="px-5 py-2 bg-stone-100 text-sm font-medium text-stone-950 hover:bg-white transition-colors rounded-md"
+							class="px-5 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-sm font-semibold text-black hover:from-amber-400 hover:to-orange-500 transition-all rounded-full"
 						>
 							Register
 						</a>
@@ -182,7 +183,7 @@
 					{:else}
 						<div class="border-t border-stone-800 pt-3 mt-3 flex gap-3">
 							<a href="/login" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-medium text-stone-300 border border-stone-800 rounded-md hover:bg-stone-800/40 hover:text-stone-100 transition-colors">Login</a>
-							<a href="/register" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-medium text-stone-950 bg-stone-100 rounded-md hover:bg-white transition-colors">Register</a>
+							<a href="/register" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-semibold text-black bg-gradient-to-r from-amber-500 to-orange-600 rounded-full hover:from-amber-400 hover:to-orange-500 transition-all">Register</a>
 						</div>
 					{/if}
 				</div>
