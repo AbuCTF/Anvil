@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import { API_BASE } from '$lib/config';
 	import LineChart from '$lib/components/LineChart.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { teamColor as seriesColor } from '$lib/rank';
 	import type { Series } from '$lib/chart/path';
 
@@ -235,66 +236,65 @@
 			<p class="text-stone-500">The finals board comes online when the game starts.</p>
 		</div>
 	{:else}
-		<!-- Header -->
-		<div class="flex flex-wrap items-end justify-between gap-4 mb-6">
-			<div>
-				<h1 class="text-2xl font-bold text-stone-100 tracking-tight">Arena</h1>
-				<p class="text-stone-500 text-sm mt-0.5">Attack · Defense · King of the Hill</p>
-			</div>
-			<div class="flex items-center gap-2 text-sm">
+		<PageHeader title="Arena" subtitle="Attack · Defense · King of the Hill">
+			<div slot="actions" class="flex items-center gap-2 text-sm">
 				<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
-					<span class="text-stone-500 text-xs uppercase tracking-wider">Tick</span>
+					<span class="text-stone-500 text-xs">Tick</span>
 					<span class="text-stone-100 font-semibold tabular-nums">{status?.tick ?? '—'}</span>
 				</div>
 				<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
-					<span class="text-stone-500 text-xs uppercase tracking-wider">Round</span>
+					<span class="text-stone-500 text-xs">Round</span>
 					<span class="text-stone-100 font-semibold tabular-nums">{status?.round ?? '—'}</span>
 				</div>
-				<div class="hidden sm:flex items-center gap-1.5 text-stone-600 text-xs pl-1">
-					<span class="w-1.5 h-1.5 rounded-full bg-amber-500/70"></span>live
-				</div>
+				<span class="hidden sm:inline-flex items-center gap-1.5 text-stone-600 text-xs pl-1">
+					<span class="w-1.5 h-1.5 rounded-full bg-amber-500/70 animate-pulse"></span>live
+				</span>
 			</div>
-		</div>
+		</PageHeader>
 
-		<!-- Control map -->
+		<!-- King of the Hill -->
 		{#if hills.length}
-			<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-6">
-				{#each hills as hill (hill.hill_id)}
-					{@const c = teamColor(hill.controller)}
-					{@const held = !!hill.controller}
-					<div
-						class="relative overflow-hidden rounded-lg border bg-stone-950/50 p-4 min-h-[6rem] flex flex-col justify-between transition {flash.has(
-							hill.hill_id
-						)
-							? 'border-amber-500/40'
-							: 'border-stone-800'}"
-					>
-						{#if held}<div class="absolute left-0 top-0 bottom-0 w-[3px]" style="background: {c.dot};"></div>{/if}
-						<div class="flex items-center justify-between">
-							<span class="text-[0.7rem] uppercase tracking-wider text-stone-500">{hill.name}</span>
-							<Icon icon="mdi:crown-outline" class="w-4 h-4 {held ? 'text-amber-500/60' : 'text-stone-700'}" />
-						</div>
-						{#key hill.controller ?? '__none__'}
-							<div class="fade-in">
-								{#if held}
-									<div class="flex items-center gap-2">
-										<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.dot};"></span>
-										<span class="text-lg font-semibold text-stone-100 truncate">{hill.controller}</span>
-									</div>
-									<div class="text-[0.6rem] uppercase tracking-wider text-stone-600 mt-0.5 pl-4">holds</div>
-								{:else}
-									<div class="text-lg font-semibold text-stone-600">Uncontested</div>
-									<div class="text-[0.6rem] uppercase tracking-wider text-stone-700 mt-0.5">open</div>
-								{/if}
+			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden mb-6">
+				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
+					<h2 class="text-[0.95rem] font-semibold text-stone-200">King of the Hill</h2>
+					<span class="text-stone-600 text-xs ml-auto tabular-nums">{hills.length} hills</span>
+				</div>
+				<div class="p-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+					{#each hills as hill (hill.hill_id)}
+						{@const c = teamColor(hill.controller)}
+						{@const held = !!hill.controller}
+						<div
+							class="relative overflow-hidden rounded-lg border bg-stone-950/50 p-4 min-h-[5.5rem] flex flex-col justify-between transition {flash.has(
+								hill.hill_id
+							)
+								? 'border-amber-500/40'
+								: 'border-stone-800'}"
+						>
+							{#if held}<div class="absolute left-0 top-0 bottom-0 w-[3px]" style="background: {c.dot};"></div>{/if}
+							<div class="flex items-center justify-between">
+								<span class="text-xs text-stone-400">{hill.name}</span>
+								<Icon icon="mdi:crown-outline" class="w-4 h-4 {held ? 'text-amber-500/60' : 'text-stone-700'}" />
 							</div>
-						{/key}
-					</div>
-				{/each}
+							{#key hill.controller ?? '__none__'}
+								<div class="fade-in mt-2">
+									{#if held}
+										<div class="flex items-center gap-2">
+											<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.dot};"></span>
+											<span class="text-base font-semibold text-stone-100 truncate">{hill.controller}</span>
+										</div>
+									{:else}
+										<div class="text-base font-semibold text-stone-600">Uncontested</div>
+									{/if}
+								</div>
+							{/key}
+						</div>
+					{/each}
+				</div>
 			</div>
 		{/if}
 
 		<!-- Service status + captures -->
-		<div class="grid lg:grid-cols-3 gap-4 mb-6">
+		<div class="grid lg:grid-cols-3 gap-6 mb-6">
 			<div class="lg:col-span-2 bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
 					<h2 class="text-[0.95rem] font-semibold text-stone-200">Service status</h2>
