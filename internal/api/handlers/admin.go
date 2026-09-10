@@ -53,7 +53,8 @@ func (h *AdminUserHandler) List(c *gin.Context) {
 
 	var users []gin.H
 	for rows.Next() {
-		var id, username, email, role string
+		var id, username, role string
+		var email *string
 		var totalScore int
 		var createdAt time.Time
 
