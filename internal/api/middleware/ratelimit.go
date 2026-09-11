@@ -139,7 +139,11 @@ func RateLimitEndpoint(cfg config.RateLimit) gin.HandlerFunc {
 				key = uidStr
 			}
 		} else if sessionID, exists := c.Get("session_id"); exists {
-			key = sessionID.(string)
+			if sid, ok := sessionID.(uuid.UUID); ok {
+				key = sid.String()
+			} else if sidStr, ok := sessionID.(string); ok {
+				key = sidStr
+			}
 		}
 
 		if !limiter.allow(key) {

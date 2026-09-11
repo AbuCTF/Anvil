@@ -22,6 +22,20 @@ type Config struct {
 	Game        GameConfig      `mapstructure:"game"`
 }
 
+const defaultJWTSecret = "change-me-in-production-please"
+
+// Validate checks configuration that would make a production deployment
+// unsafe to start. Development keeps permissive defaults for local work.
+func (c Config) Validate() error {
+	if strings.EqualFold(strings.TrimSpace(c.Environment), "production") {
+		secret := strings.TrimSpace(c.JWT.Secret)
+		if secret == defaultJWTSecret || len([]byte(secret)) < 32 {
+			return fmt.Errorf("jwt.secret must be at least 32 bytes and non-default in production")
+		}
+	}
+	return nil
+}
+
 type ServerConfig struct {
 	Port            int           `mapstructure:"port"`
 	Host            string        `mapstructure:"host"`
@@ -214,7 +228,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.db", 0)
 
-	v.SetDefault("jwt.secret", "change-me-in-production-please")
+	v.SetDefault("jwt.secret", defaultJWTSecret)
 	v.SetDefault("jwt.access_expiry", "15m")
 	v.SetDefault("jwt.refresh_expiry", "7d")
 	v.SetDefault("jwt.issuer", "anvil")

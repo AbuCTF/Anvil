@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -91,6 +92,50 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+func parseAccessToken(tokenString string, cfg *config.Config) (*Claims, error) {
+	parserOptions := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+	}
+	if cfg.JWT.Issuer != "" {
+		parserOptions = append(parserOptions, jwt.WithIssuer(cfg.JWT.Issuer))
+	}
+
+	token, err := jwt.ParseWithClaims(
+		tokenString,
+		&Claims{},
+		func(token *jwt.Token) (interface{}, error) {
+			if token.Method != jwt.SigningMethodHS256 {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return []byte(cfg.JWT.Secret), nil
+		},
+		parserOptions...,
+	)
+	if err != nil || !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+
+	claims, ok := token.Claims.(*Claims)
+	if !ok {
+		return nil, errors.New("invalid token claims")
+	}
+
+	switch claims.TokenType {
+	case "user":
+		if claims.UserID == uuid.Nil {
+			return nil, errors.New("user token missing user ID")
+		}
+	case "team":
+		if claims.SessionID == uuid.Nil {
+			return nil, errors.New("team token missing session ID")
+		}
+	default:
+		return nil, errors.New("invalid token type")
+	}
+
+	return claims, nil
+}
+
 // Auth middleware validates JWT tokens
 func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -112,14 +157,7 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 
 		tokenString := parts[1]
 
-		// Parse and validate token
-		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrSignatureInvalid
-			}
-			return []byte(cfg.JWT.Secret), nil
-		})
-
+		claims, err := parseAccessToken(tokenString, cfg)
 		if err != nil {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "Invalid or expired token",
@@ -127,22 +165,15 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			return
 		}
 
-		claims, ok := token.Claims.(*Claims)
-		if !ok || !token.Valid {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Invalid token claims",
-			})
-			return
-		}
-
 		// Check if it's a user token or team token
 		if claims.TokenType == "user" {
-			// Verify user still exists and is active
-			var status string
+			// Verify user still exists and is active. Role and username come from the
+			// database so account changes take effect without waiting for token expiry.
+			var username, role, status string
 			err := db.Pool.QueryRow(c.Request.Context(),
-				"SELECT status FROM users WHERE id = $1",
+				"SELECT username, role, status FROM users WHERE id = $1",
 				claims.UserID,
-			).Scan(&status)
+			).Scan(&username, &role, &status)
 
 			if err != nil {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -159,16 +190,20 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			}
 
 			c.Set("user_id", claims.UserID)
-			c.Set("username", claims.Username)
-			c.Set("role", claims.Role)
+			c.Set("username", username)
+			c.Set("role", role)
 			c.Set("token_type", "user")
 		} else if claims.TokenType == "team" {
 			// For team tokens, verify session is still valid
 			var expiresAt time.Time
+			var teamName string
 			err := db.Pool.QueryRow(c.Request.Context(),
-				"SELECT expires_at FROM sessions WHERE id = $1",
+				`SELECT s.expires_at, t.team_name
+				 FROM sessions s
+				 JOIN team_tokens t ON t.id = s.token_id
+				 WHERE s.id = $1`,
 				claims.SessionID,
-			).Scan(&expiresAt)
+			).Scan(&expiresAt, &teamName)
 
 			if err != nil {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
@@ -185,7 +220,7 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			}
 
 			c.Set("session_id", claims.SessionID)
-			c.Set("username", claims.Username)
+			c.Set("username", teamName)
 			c.Set("role", "user") // Team tokens are always user role
 			c.Set("token_type", "team")
 		}
@@ -213,30 +248,18 @@ func OptionalAuth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 
 		tokenString := parts[1]
 
-		token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrSignatureInvalid
-			}
-			return []byte(cfg.JWT.Secret), nil
-		})
-
-		if err != nil || !token.Valid {
-			c.Next()
-			return
-		}
-
-		claims, ok := token.Claims.(*Claims)
-		if !ok {
+		claims, err := parseAccessToken(tokenString, cfg)
+		if err != nil {
 			c.Next()
 			return
 		}
 
 		if claims.TokenType == "user" {
-			var status string
+			var username, role, status string
 			err := db.Pool.QueryRow(c.Request.Context(),
-				"SELECT status FROM users WHERE id = $1",
+				"SELECT username, role, status FROM users WHERE id = $1",
 				claims.UserID,
-			).Scan(&status)
+			).Scan(&username, &role, &status)
 
 			if err != nil || status != "active" {
 				c.Next()
@@ -244,15 +267,19 @@ func OptionalAuth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			}
 
 			c.Set("user_id", claims.UserID)
-			c.Set("username", claims.Username)
-			c.Set("role", claims.Role)
+			c.Set("username", username)
+			c.Set("role", role)
 			c.Set("token_type", "user")
 		} else if claims.TokenType == "team" {
 			var expiresAt time.Time
+			var teamName string
 			err := db.Pool.QueryRow(c.Request.Context(),
-				"SELECT expires_at FROM sessions WHERE id = $1",
+				`SELECT s.expires_at, t.team_name
+				 FROM sessions s
+				 JOIN team_tokens t ON t.id = s.token_id
+				 WHERE s.id = $1`,
 				claims.SessionID,
-			).Scan(&expiresAt)
+			).Scan(&expiresAt, &teamName)
 
 			if err != nil || time.Now().After(expiresAt) {
 				c.Next()
@@ -260,7 +287,7 @@ func OptionalAuth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			}
 
 			c.Set("session_id", claims.SessionID)
-			c.Set("username", claims.Username)
+			c.Set("username", teamName)
 			c.Set("role", "user")
 			c.Set("token_type", "team")
 		}
@@ -297,8 +324,9 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 // GetUserID extracts user ID from context (handles both user and session)
 func GetUserID(c *gin.Context) *uuid.UUID {
 	if userID, exists := c.Get("user_id"); exists {
-		id := userID.(uuid.UUID)
-		return &id
+		if id, ok := userID.(uuid.UUID); ok {
+			return &id
+		}
 	}
 	return nil
 }
@@ -306,8 +334,9 @@ func GetUserID(c *gin.Context) *uuid.UUID {
 // GetSessionID extracts session ID from context
 func GetSessionID(c *gin.Context) *uuid.UUID {
 	if sessionID, exists := c.Get("session_id"); exists {
-		id := sessionID.(uuid.UUID)
-		return &id
+		if id, ok := sessionID.(uuid.UUID); ok {
+			return &id
+		}
 	}
 	return nil
 }

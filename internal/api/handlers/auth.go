@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -49,10 +51,10 @@ type TokenAuthRequest struct {
 }
 
 type AuthResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	TokenType    string `json:"token_type"`
+	AccessToken  string        `json:"access_token"`
+	RefreshToken string        `json:"refresh_token"`
+	ExpiresIn    int           `json:"expires_in"`
+	TokenType    string        `json:"token_type"`
 	User         *UserResponse `json:"user,omitempty"`
 	Team         *TeamResponse `json:"team,omitempty"`
 }
@@ -93,7 +95,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid request body",
+			"error":   "Invalid request body",
 			"details": err.Error(),
 		})
 		return
@@ -419,17 +421,30 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Hash the refresh token to compare with stored hash
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("Failed to start refresh transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to refresh tokens",
+		})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Hash the refresh token to compare with stored hash. Token rotation is kept
+	// in this transaction so a failed revoke cannot leave the old token usable.
 	tokenHash := hashToken(req.RefreshToken)
 
 	var userID uuid.UUID
 	var expiresAt time.Time
 	var revoked bool
 
-	err := h.db.Pool.QueryRow(c.Request.Context(),
+	err = tx.QueryRow(ctx,
 		`SELECT user_id, expires_at, revoked
 		 FROM refresh_tokens
-		 WHERE token_hash = $1`,
+		 WHERE token_hash = $1
+		 FOR UPDATE`,
 		tokenHash,
 	).Scan(&userID, &expiresAt, &revoked)
 
@@ -455,11 +470,11 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	}
 
 	// Get user info
-	var username, role string
-	err = h.db.Pool.QueryRow(c.Request.Context(),
-		"SELECT username, role FROM users WHERE id = $1",
+	var username, role, status string
+	err = tx.QueryRow(ctx,
+		"SELECT username, role, status FROM users WHERE id = $1",
 		userID,
-	).Scan(&username, &role)
+	).Scan(&username, &role, &status)
 
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
@@ -467,20 +482,46 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		})
 		return
 	}
+	if status != "active" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Account is " + status,
+		})
+		return
+	}
 
-	// Revoke old refresh token
-	_, err = h.db.Pool.Exec(c.Request.Context(),
-		"UPDATE refresh_tokens SET revoked = true WHERE token_hash = $1",
+	// Revoke old refresh token. The row lock from the lookup plus the conditional
+	// update prevents two concurrent refreshes from both rotating one token.
+	result, err := tx.Exec(ctx,
+		"UPDATE refresh_tokens SET revoked = true WHERE token_hash = $1 AND revoked = false",
 		tokenHash,
 	)
 	if err != nil {
-		h.logger.Warn("Failed to revoke old refresh token", zap.Error(err))
+		h.logger.Error("Failed to revoke old refresh token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to refresh tokens",
+		})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logger.Error("Refresh token revoke affected an unexpected number of rows",
+			zap.Int64("rows_affected", result.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to refresh tokens",
+		})
+		return
 	}
 
 	// Generate new tokens
-	tokens, err := h.generateTokens(userID, username, role, "user")
+	tokens, err := h.generateTokensWithStore(ctx, tx, userID, username, role, "user")
 	if err != nil {
 		h.logger.Error("Failed to generate new tokens", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to refresh tokens",
+		})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("Failed to commit refreshed tokens", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to refresh tokens",
 		})
@@ -519,6 +560,14 @@ type tokenPair struct {
 }
 
 func (h *AuthHandler) generateTokens(userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
+	return h.generateTokensWithStore(context.Background(), h.db.Pool, userID, username, role, tokenType)
+}
+
+type tokenStore interface {
+	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
+}
+
+func (h *AuthHandler) generateTokensWithStore(ctx context.Context, store tokenStore, userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
 	// Generate access token
 	claims := middleware.Claims{
 		UserID:    userID,
@@ -543,7 +592,7 @@ func (h *AuthHandler) generateTokens(userID uuid.UUID, username, role, tokenType
 	refreshHash := hashToken(refreshToken)
 
 	// Store refresh token
-	_, err = h.db.Pool.Exec(context.Background(),
+	_, err = store.Exec(ctx,
 		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
 		 VALUES ($1, $2, $3)`,
 		userID, refreshHash, time.Now().Add(h.config.JWT.RefreshExpiry),
@@ -576,8 +625,6 @@ func generateSecureToken(length int) string {
 }
 
 func hashToken(token string) string {
-	// Simple hash - in production use a proper hash function
-	hash := make([]byte, 32)
-	copy(hash, token)
-	return hex.EncodeToString(hash)
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
 }

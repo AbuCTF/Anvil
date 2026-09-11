@@ -68,6 +68,12 @@ func (s *Server) Router() http.Handler {
 
 func (s *Server) setupRouter() {
 	r := gin.New()
+	if err := r.SetTrustedProxies(s.config.Server.TrustedProxies); err != nil {
+		s.logger.Error("invalid trusted proxy configuration", zap.Error(err))
+		// Invalid proxy configuration must not leave Gin trusting forwarded
+		// addresses from arbitrary clients.
+		_ = r.SetTrustedProxies(nil)
+	}
 
 	// Set max multipart memory for large file uploads (20GB)
 	r.MaxMultipartMemory = 20 << 30 // 20GB
@@ -102,7 +108,13 @@ func (s *Server) setupRouter() {
 			{
 				authHandler := handlers.NewAuthHandler(s.config, s.db, s.logger)
 				auth.POST("/register", authHandler.Register)
-				auth.POST("/login", authHandler.Login)
+				if s.config.RateLimit.Enabled {
+					auth.POST("/login", middleware.RateLimitEndpoint(
+						s.config.RateLimit.Login,
+					), authHandler.Login)
+				} else {
+					auth.POST("/login", authHandler.Login)
+				}
 				auth.POST("/token", authHandler.TokenAuth) // For team token auth
 				auth.POST("/refresh", authHandler.RefreshToken)
 				auth.POST("/logout", authHandler.Logout)

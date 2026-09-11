@@ -1002,7 +1002,7 @@ func (h *ChallengeHandler) UnlockHint(c *gin.Context) {
 	// Record unlock
 	unlockID := uuid.New()
 	_, err = tx.Exec(c.Request.Context(),
-		`INSERT INTO hint_unlocks (id, user_id, hint_id, points_spent, unlocked_at)
+		`INSERT INTO hint_unlocks (id, user_id, hint_id, points_deducted, unlocked_at)
 		 VALUES ($1, $2, $3, $4, NOW())`,
 		unlockID, uid, hid, hintCost)
 	if err != nil {

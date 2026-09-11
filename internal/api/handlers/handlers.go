@@ -658,11 +658,17 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 	}
 
 	// Log the action
-	userID, _ := c.Get("userID")
-	uid := userID.(uuid.UUID)
-	logAdminAction(h.db, c, uid.String(), "settings_updated", "platform_settings", "", map[string]interface{}{
+	userID, exists := c.Get("user_id")
+	uid, ok := userID.(uuid.UUID)
+	if !exists || !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	if err := logAdminAction(h.db, c, uid.String(), "settings_updated", "platform_settings", "", map[string]interface{}{
 		"settings_count": len(req.Settings),
-	})
+	}); err != nil {
+		h.logger.Warn("Failed to log settings audit action", zap.Error(err))
+	}
 
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
@@ -703,10 +709,30 @@ func NewAttachmentHandler(db *database.DB, storageSvc storage.StorageBackend, lo
 }
 
 // logAdminAction logs an admin action to the audit log
-func logAdminAction(db *database.DB, c *gin.Context, userID, action, resourceType, resourceID string, metadata map[string]interface{}) {
-	metadataJSON, _ := json.Marshal(metadata)
-	_, _ = db.Pool.Exec(c.Request.Context(), `
-		INSERT INTO audit_log (user_id, action, resource_type, resource_id, metadata, ip_address, user_agent)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, userID, action, resourceType, resourceID, string(metadataJSON), c.ClientIP(), c.Request.UserAgent())
+func logAdminAction(db *database.DB, c *gin.Context, userID, action, resourceType, resourceID string, metadata map[string]interface{}) error {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("marshal audit metadata: %w", err)
+	}
+	parsedUserID, err := uuid.Parse(userID)
+	if err != nil {
+		return fmt.Errorf("parse audit user id: %w", err)
+	}
+
+	// audit_log uses entity_type/entity_id/new_values (the initial schema), not
+	// the resource_* / metadata names used by an older handler.
+	var entityID interface{}
+	if resourceID != "" {
+		parsedID, err := uuid.Parse(resourceID)
+		if err != nil {
+			return fmt.Errorf("parse audit entity id: %w", err)
+		}
+		entityID = parsedID
+	}
+
+	_, err = db.Pool.Exec(c.Request.Context(), `
+		INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
+	`, parsedUserID, action, resourceType, entityID, string(metadataJSON), c.ClientIP(), c.Request.UserAgent())
+	return err
 }

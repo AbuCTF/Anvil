@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/anvil-lab/anvil/internal/api/middleware"
 	"github.com/anvil-lab/anvil/internal/services/upload"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -27,13 +28,13 @@ func NewUploadHandler(uploadService *upload.Service, logger *zap.Logger) *Upload
 
 // InitUploadRequest represents the request to initialize an upload
 type InitUploadRequest struct {
-	Filename    string           `json:"filename" binding:"required"`
-	FileType    upload.FileType  `json:"file_type" binding:"required"`
-	TotalSize   int64            `json:"total_size" binding:"required,gt=0"`
-	ContentType string           `json:"content_type"`
-	ChunkSize   int64            `json:"chunk_size"`
-	Checksum    string           `json:"checksum"`
-	ChallengeID *string          `json:"challenge_id"`
+	Filename    string          `json:"filename" binding:"required"`
+	FileType    upload.FileType `json:"file_type" binding:"required"`
+	TotalSize   int64           `json:"total_size" binding:"required,gt=0"`
+	ContentType string          `json:"content_type"`
+	ChunkSize   int64           `json:"chunk_size"`
+	Checksum    string          `json:"checksum"`
+	ChallengeID *string         `json:"challenge_id"`
 }
 
 // InitUploadResponse is returned when an upload is initialized
@@ -54,8 +55,8 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 	}
 
 	// Get user ID from context
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -87,7 +88,7 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 		ChallengeID: req.ChallengeID,
 	}
 
-	uploadSession, err := h.uploadService.InitUpload(c.Request.Context(), userID.(string), uploadReq)
+	uploadSession, err := h.uploadService.InitUpload(c.Request.Context(), userID.String(), uploadReq)
 	if err != nil {
 		h.logger.Error("failed to initialize upload", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -115,8 +116,8 @@ func (h *UploadHandler) UploadChunk(c *gin.Context) {
 	}
 
 	// Get user ID and verify ownership
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -128,7 +129,7 @@ func (h *UploadHandler) UploadChunk(c *gin.Context) {
 		return
 	}
 
-	if uploadSession.UserID != userID.(string) {
+	if uploadSession.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -169,8 +170,8 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 	uploadID := c.Param("id")
 
 	// Get user ID and verify ownership
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -182,7 +183,7 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	if uploadSession.UserID != userID.(string) {
+	if uploadSession.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -213,8 +214,8 @@ func (h *UploadHandler) GetUploadStatus(c *gin.Context) {
 	uploadID := c.Param("id")
 
 	// Get user ID and verify ownership
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -225,7 +226,7 @@ func (h *UploadHandler) GetUploadStatus(c *gin.Context) {
 		return
 	}
 
-	if uploadSession.UserID != userID.(string) {
+	if uploadSession.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -239,8 +240,8 @@ func (h *UploadHandler) GetUploadProgress(c *gin.Context) {
 	uploadID := c.Param("id")
 
 	// Get user ID and verify ownership
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -251,7 +252,7 @@ func (h *UploadHandler) GetUploadProgress(c *gin.Context) {
 		return
 	}
 
-	if uploadSession.UserID != userID.(string) {
+	if uploadSession.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -271,8 +272,8 @@ func (h *UploadHandler) GetMissingChunks(c *gin.Context) {
 	uploadID := c.Param("id")
 
 	// Get user ID and verify ownership
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -283,7 +284,7 @@ func (h *UploadHandler) GetMissingChunks(c *gin.Context) {
 		return
 	}
 
-	if uploadSession.UserID != userID.(string) {
+	if uploadSession.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -306,8 +307,8 @@ func (h *UploadHandler) CancelUpload(c *gin.Context) {
 	uploadID := c.Param("id")
 
 	// Get user ID and verify ownership
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -318,7 +319,7 @@ func (h *UploadHandler) CancelUpload(c *gin.Context) {
 		return
 	}
 
-	if uploadSession.UserID != userID.(string) {
+	if uploadSession.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -338,13 +339,13 @@ func (h *UploadHandler) CancelUpload(c *gin.Context) {
 // ListUserUploads lists all uploads for the current user
 // GET /api/v1/uploads
 func (h *UploadHandler) ListUserUploads(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
-	uploads, err := h.uploadService.GetUserUploads(c.Request.Context(), userID.(string))
+	uploads, err := h.uploadService.GetUserUploads(c.Request.Context(), userID.String())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -359,8 +360,8 @@ func (h *UploadHandler) ListUserUploads(c *gin.Context) {
 // SimpleUpload handles small file uploads without chunking
 // POST /api/v1/uploads/simple
 func (h *UploadHandler) SimpleUpload(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -420,7 +421,7 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 		ChallengeID: challengeIDPtr,
 	}
 
-	uploadSession, err := h.uploadService.InitUpload(c.Request.Context(), userID.(string), uploadReq)
+	uploadSession, err := h.uploadService.InitUpload(c.Request.Context(), userID.String(), uploadReq)
 	if err != nil {
 		h.logger.Error("failed to initialize simple upload", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -457,53 +458,53 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 func (h *UploadHandler) GetSupportedTypes(c *gin.Context) {
 	types := []gin.H{
 		{
-			"type":       "dockerfile",
-			"extensions": []string{"Dockerfile", "dockerfile"},
-			"max_size":   1 * 1024 * 1024,
+			"type":        "dockerfile",
+			"extensions":  []string{"Dockerfile", "dockerfile"},
+			"max_size":    1 * 1024 * 1024,
 			"description": "Dockerfile for building container images",
 		},
 		{
-			"type":       "docker_context",
-			"extensions": []string{".tar.gz", ".tgz", ".tar"},
-			"max_size":   500 * 1024 * 1024,
+			"type":        "docker_context",
+			"extensions":  []string{".tar.gz", ".tgz", ".tar"},
+			"max_size":    500 * 1024 * 1024,
 			"description": "Docker build context archive",
 		},
 		{
-			"type":       "docker_image",
-			"extensions": []string{".tar"},
-			"max_size":   10 * 1024 * 1024 * 1024,
+			"type":        "docker_image",
+			"extensions":  []string{".tar"},
+			"max_size":    10 * 1024 * 1024 * 1024,
 			"description": "Exported Docker image",
 		},
 		{
-			"type":       "ova",
-			"extensions": []string{".ova"},
-			"max_size":   50 * 1024 * 1024 * 1024,
+			"type":        "ova",
+			"extensions":  []string{".ova"},
+			"max_size":    50 * 1024 * 1024 * 1024,
 			"description": "Open Virtual Appliance (VirtualBox/VMware)",
 		},
 		{
-			"type":       "vmdk",
-			"extensions": []string{".vmdk"},
-			"max_size":   50 * 1024 * 1024 * 1024,
+			"type":        "vmdk",
+			"extensions":  []string{".vmdk"},
+			"max_size":    50 * 1024 * 1024 * 1024,
 			"description": "VMware Virtual Disk",
 		},
 		{
-			"type":       "qcow2",
-			"extensions": []string{".qcow2", ".qcow"},
-			"max_size":   50 * 1024 * 1024 * 1024,
+			"type":        "qcow2",
+			"extensions":  []string{".qcow2", ".qcow"},
+			"max_size":    50 * 1024 * 1024 * 1024,
 			"description": "QEMU Copy-On-Write disk image",
 		},
 		{
-			"type":       "iso",
-			"extensions": []string{".iso"},
-			"max_size":   10 * 1024 * 1024 * 1024,
+			"type":        "iso",
+			"extensions":  []string{".iso"},
+			"max_size":    10 * 1024 * 1024 * 1024,
 			"description": "ISO disk image",
 		},
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"types":           types,
-		"chunk_size":      10 * 1024 * 1024,
-		"max_chunk_size":  100 * 1024 * 1024,
+		"types":             types,
+		"chunk_size":        10 * 1024 * 1024,
+		"max_chunk_size":    100 * 1024 * 1024,
 		"simple_upload_max": 100 * 1024 * 1024,
 	})
 }

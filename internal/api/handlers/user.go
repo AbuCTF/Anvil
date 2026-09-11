@@ -197,7 +197,7 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 
 	// Hints unlocked
 	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*), COALESCE(SUM(points_spent), 0) FROM hint_unlocks WHERE user_id = $1`,
+		`SELECT COUNT(*), COALESCE(SUM(points_deducted), 0) FROM hint_unlocks WHERE user_id = $1`,
 		uid).Scan(&stats.HintsUnlocked, &stats.PointsSpentOnHints)
 
 	// Solves by difficulty

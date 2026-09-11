@@ -1052,7 +1052,7 @@ func (h *AdminChallengeHandler) ListFlags(c *gin.Context) {
 	challengeID := c.Param("id")
 
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, name, flag_hash, points, sort_order, is_case_sensitive
+		`SELECT id, name, flag_hash, points, sort_order, case_sensitive
 		 FROM flags WHERE challenge_id = $1 ORDER BY sort_order`, challengeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})

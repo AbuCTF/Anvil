@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/api/middleware"
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -60,8 +61,8 @@ func (h *VMHandler) CreateVM(c *gin.Context) {
 		return
 	}
 
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -81,7 +82,7 @@ func (h *VMHandler) CreateVM(c *gin.Context) {
 		Name:        "", // Auto-generated
 		TemplateID:  req.TemplateID,
 		ChallengeID: req.ChallengeID,
-		UserID:      userID.(string),
+		UserID:      userID.String(),
 		VCPU:        req.VCPU,
 		MemoryMB:    req.MemoryMB,
 		Duration:    duration,
@@ -90,7 +91,7 @@ func (h *VMHandler) CreateVM(c *gin.Context) {
 	instance, err := h.vmService.CreateInstance(c.Request.Context(), vmReq)
 	if err != nil {
 		h.logger.Error("failed to create VM",
-			zap.String("user_id", userID.(string)),
+			zap.String("user_id", userID.String()),
 			zap.String("template_id", req.TemplateID),
 			zap.Error(err),
 		)
@@ -106,8 +107,8 @@ func (h *VMHandler) CreateVM(c *gin.Context) {
 func (h *VMHandler) GetVM(c *gin.Context) {
 	instanceID := c.Param("id")
 
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -120,7 +121,7 @@ func (h *VMHandler) GetVM(c *gin.Context) {
 
 	// Check ownership (unless admin)
 	role, _ := c.Get("role")
-	if instance.UserID != userID.(string) && role != "admin" {
+	if instance.UserID != userID.String() && role != "admin" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -131,13 +132,13 @@ func (h *VMHandler) GetVM(c *gin.Context) {
 // ListUserVMs returns all VMs for the current user
 // GET /api/v1/vms
 func (h *VMHandler) ListUserVMs(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
-	instances, err := h.vmService.ListUserInstances(c.Request.Context(), userID.(string))
+	instances, err := h.vmService.ListUserInstances(c.Request.Context(), userID.String())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -159,8 +160,8 @@ func (h *VMHandler) ListUserVMs(c *gin.Context) {
 func (h *VMHandler) StartVM(c *gin.Context) {
 	instanceID := c.Param("id")
 
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -171,7 +172,7 @@ func (h *VMHandler) StartVM(c *gin.Context) {
 		return
 	}
 
-	if instance.UserID != userID.(string) {
+	if instance.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -191,8 +192,8 @@ func (h *VMHandler) StartVM(c *gin.Context) {
 func (h *VMHandler) StopVM(c *gin.Context) {
 	instanceID := c.Param("id")
 
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -203,7 +204,7 @@ func (h *VMHandler) StopVM(c *gin.Context) {
 		return
 	}
 
-	if instance.UserID != userID.(string) {
+	if instance.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -223,8 +224,8 @@ func (h *VMHandler) StopVM(c *gin.Context) {
 func (h *VMHandler) ResetVM(c *gin.Context) {
 	instanceID := c.Param("id")
 
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -235,7 +236,7 @@ func (h *VMHandler) ResetVM(c *gin.Context) {
 		return
 	}
 
-	if instance.UserID != userID.(string) {
+	if instance.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -277,8 +278,8 @@ func (h *VMHandler) ResetVM(c *gin.Context) {
 func (h *VMHandler) ExtendVM(c *gin.Context) {
 	instanceID := c.Param("id")
 
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -289,7 +290,7 @@ func (h *VMHandler) ExtendVM(c *gin.Context) {
 		return
 	}
 
-	if instance.UserID != userID.(string) {
+	if instance.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}
@@ -321,8 +322,8 @@ func (h *VMHandler) ExtendVM(c *gin.Context) {
 func (h *VMHandler) DestroyVM(c *gin.Context) {
 	instanceID := c.Param("id")
 
-	userID, exists := c.Get("user_id")
-	if !exists {
+	userID := middleware.GetUserID(c)
+	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
@@ -333,7 +334,7 @@ func (h *VMHandler) DestroyVM(c *gin.Context) {
 		return
 	}
 
-	if instance.UserID != userID.(string) {
+	if instance.UserID != userID.String() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
 		return
 	}

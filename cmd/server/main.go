@@ -37,6 +37,9 @@ func main() {
 	if err != nil {
 		sugar.Fatalf("Failed to load configuration: %v", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		sugar.Fatalf("Invalid configuration: %v", err)
+	}
 
 	sugar.Infof("Loaded configuration for environment: %s", cfg.Environment)
 
