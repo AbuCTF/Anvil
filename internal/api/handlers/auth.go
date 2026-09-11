@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
@@ -101,7 +103,8 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Check invite code if required
+	// An invite is checked authoritatively after the password is hashed, inside
+	// the same transaction that creates the account and its refresh token.
 	if regMode == "invite" {
 		if req.InviteCode == nil || *req.InviteCode == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -109,21 +112,51 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			})
 			return
 		}
+	}
 
-		// Validate invite code
-		var codeID uuid.UUID
+	// Hash password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		h.logger.Error("Failed to hash password", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to process registration",
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("Failed to start registration transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create account",
+		})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var inviteCodeID uuid.UUID
+	if regMode == "invite" {
 		var currentUses, maxUses int
 		var expiresAt *time.Time
-		err := h.db.Pool.QueryRow(c.Request.Context(),
-			`SELECT id, current_uses, max_uses, expires_at 
-			 FROM invite_codes 
-			 WHERE code = $1`,
+		err = tx.QueryRow(ctx,
+			`SELECT id, COALESCE(current_uses, 0), COALESCE(max_uses, 1), expires_at
+			 FROM invite_codes
+			 WHERE code = $1
+			 FOR UPDATE`,
 			*req.InviteCode,
-		).Scan(&codeID, &currentUses, &maxUses, &expiresAt)
+		).Scan(&inviteCodeID, &currentUses, &maxUses, &expiresAt)
 
-		if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "Invalid invite code",
+			})
+			return
+		}
+		if err != nil {
+			h.logger.Error("Failed to validate invite code", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to process registration",
 			})
 			return
 		}
@@ -141,30 +174,11 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			})
 			return
 		}
-
-		// Increment usage
-		_, err = h.db.Pool.Exec(c.Request.Context(),
-			"UPDATE invite_codes SET current_uses = current_uses + 1 WHERE id = $1",
-			codeID,
-		)
-		if err != nil {
-			h.logger.Error("Failed to update invite code usage", zap.Error(err))
-		}
-	}
-
-	// Hash password
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		h.logger.Error("Failed to hash password", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to process registration",
-		})
-		return
 	}
 
 	// Create user
 	var userID uuid.UUID
-	err = h.db.Pool.QueryRow(c.Request.Context(),
+	err = tx.QueryRow(ctx,
 		`INSERT INTO users (username, email, password_hash, role, status)
 		 VALUES ($1, $2, $3, 'user', 'active')
 		 RETURNING id`,
@@ -191,10 +205,42 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
+	if regMode == "invite" {
+		result, err := tx.Exec(ctx,
+			`UPDATE invite_codes
+			 SET current_uses = COALESCE(current_uses, 0) + 1
+			 WHERE id = $1
+			   AND COALESCE(current_uses, 0) < COALESCE(max_uses, 1)`,
+			inviteCodeID,
+		)
+		if err != nil {
+			h.logger.Error("Failed to update invite code usage", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to create account",
+			})
+			return
+		}
+		if result.RowsAffected() != 1 {
+			h.logger.Error("Invite code update affected an unexpected number of rows",
+				zap.Int64("rows_affected", result.RowsAffected()))
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "Failed to create account",
+			})
+			return
+		}
+	}
+
 	// Generate tokens
-	tokens, err := h.generateTokens(userID, req.Username, "user", "user")
+	tokens, err := h.generateTokensWithStore(ctx, tx, userID, req.Username, "user", "user")
 	if err != nil {
 		h.logger.Error("Failed to generate tokens", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to complete registration",
+		})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("Failed to commit registration", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to complete registration",
 		})
@@ -312,22 +358,41 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 		return
 	}
 
-	// Find team token
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("Failed to start team authentication transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create session",
+		})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock the team token until its session and usage count are committed.
 	var tokenID uuid.UUID
 	var teamName string
 	var currentUses, maxUses int
 	var expiresAt *time.Time
 
-	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, team_name, current_uses, max_uses, expires_at
+	err = tx.QueryRow(ctx,
+		`SELECT id, team_name, COALESCE(current_uses, 0), COALESCE(max_uses, 1), expires_at
 		 FROM team_tokens
-		 WHERE token = $1`,
+		 WHERE token = $1
+		 FOR UPDATE`,
 		req.Token,
 	).Scan(&tokenID, &teamName, &currentUses, &maxUses, &expiresAt)
 
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid team token",
+		})
+		return
+	}
+	if err != nil {
+		h.logger.Error("Failed to validate team token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create session",
 		})
 		return
 	}
@@ -351,7 +416,7 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 	sessionExpiry := time.Now().Add(24 * time.Hour)
 
 	var sessionID uuid.UUID
-	err = h.db.Pool.QueryRow(c.Request.Context(),
+	err = tx.QueryRow(ctx,
 		`INSERT INTO sessions (token_id, session_token, ip_address, user_agent, expires_at)
 		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
@@ -366,13 +431,29 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 		return
 	}
 
-	// Increment token usage
-	_, err = h.db.Pool.Exec(c.Request.Context(),
-		"UPDATE team_tokens SET current_uses = current_uses + 1 WHERE id = $1",
+	// Increment defensively as well as holding the row lock, so the database
+	// cannot commit a use beyond the configured limit.
+	result, err := tx.Exec(ctx,
+		`UPDATE team_tokens
+		 SET current_uses = COALESCE(current_uses, 0) + 1
+		 WHERE id = $1
+		   AND COALESCE(current_uses, 0) < COALESCE(max_uses, 1)`,
 		tokenID,
 	)
 	if err != nil {
-		h.logger.Warn("Failed to update token usage", zap.Error(err))
+		h.logger.Error("Failed to update token usage", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create session",
+		})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logger.Error("Team token update affected an unexpected number of rows",
+			zap.Int64("rows_affected", result.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create session",
+		})
+		return
 	}
 
 	// Generate JWT for session
@@ -394,6 +475,13 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 		h.logger.Error("Failed to sign token", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to create access token",
+		})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("Failed to commit team authentication", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create session",
 		})
 		return
 	}

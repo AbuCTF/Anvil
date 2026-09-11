@@ -8,7 +8,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -578,7 +580,11 @@ func generateStorageKey(userID string, fileType FileType, uploadID string, filen
 	} else {
 		prefix = "docker"
 	}
-	return fmt.Sprintf("%s/%s/%s/%s", prefix, userID, uploadID, filename)
+	safeName := filepath.Base(strings.ReplaceAll(filename, "\\", "/"))
+	if safeName == "." || safeName == "" {
+		safeName = "upload"
+	}
+	return fmt.Sprintf("%s/%s/%s/%s", prefix, userID, uploadID, safeName)
 }
 
 // GetFileTypeInfo returns information about a file type

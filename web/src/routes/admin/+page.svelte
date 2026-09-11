@@ -376,7 +376,7 @@
 
 	function handleSelectChange(e: Event, key: string) {
 		const target = e.target as HTMLSelectElement;
-		updateSetting(key, target.value);
+		updateSetting(key, target.value === 'true');
 	}
 
 	async function createNode() {

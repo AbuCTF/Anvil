@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/services/vpn"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -75,12 +77,17 @@ func (h *VPNHandler) GetConfig(c *gin.Context) {
 		&vpnConfig.IPAddress, &vpnConfig.PublicKey, &vpnConfig.PrivateKey, &vpnConfig.CreatedAt,
 	)
 
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		// No config exists
 		c.JSON(http.StatusOK, VPNConfigResponse{
 			HasConfig: false,
 			Endpoint:  h.config.VPN.PublicEndpoint,
 		})
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to load VPN config", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load VPN config"})
 		return
 	}
 
@@ -124,6 +131,11 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 			"ip_address": existingIP,
 			"hint":       "Use DELETE /api/v1/vpn/config to regenerate",
 		})
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		h.logger.Error("failed to check existing VPN config", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check existing VPN config"})
 		return
 	}
 
@@ -200,8 +212,13 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 	err := h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT assigned_ip, last_handshake, COALESCE(bytes_sent, 0), COALESCE(bytes_received, 0) 
 		 FROM vpn_configs WHERE user_id = $1`, uid).Scan(&ipAddress, &lastHandshake, &bytesSent, &bytesReceived)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusOK, VPNStatusResponse{Connected: false})
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to load VPN status", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load VPN status"})
 		return
 	}
 

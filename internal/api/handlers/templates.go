@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,8 +60,9 @@ type TemplateResponse struct {
 func (h *VMTemplateHandler) List(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
 		SELECT id, name, slug, description, image_path, original_format::text, image_size,
-		       disk_gb, vcpu, memory_mb, os_type, os_variant, os_name, network_mode,
-		       is_active, is_public, created_at
+		       disk_gb, vcpu, memory_mb, COALESCE(os_type, ''), os_variant, os_name,
+		       COALESCE(network_mode, 'nat'), COALESCE(is_active, false),
+		       COALESCE(is_public, false), COALESCE(created_at, to_timestamp(0))
 		FROM vm_templates
 		ORDER BY created_at DESC
 	`)
@@ -98,6 +100,11 @@ func (h *VMTemplateHandler) List(c *gin.Context) {
 		t.CreatedAt = createdAt.Unix()
 		templates = append(templates, t)
 	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing templates", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch templates"})
+		return
+	}
 
 	if templates == nil {
 		templates = []TemplateResponse{}
@@ -120,8 +127,9 @@ func (h *VMTemplateHandler) Get(c *gin.Context) {
 
 	err := h.db.Pool.QueryRow(c.Request.Context(), `
 		SELECT id, name, slug, description, image_path, original_format::text, image_size,
-		       disk_gb, vcpu, memory_mb, os_type, os_variant, os_name, network_mode,
-		       is_active, is_public, created_at
+		       disk_gb, vcpu, memory_mb, COALESCE(os_type, ''), os_variant, os_name,
+		       COALESCE(network_mode, 'nat'), COALESCE(is_active, false),
+		       COALESCE(is_public, false), COALESCE(created_at, to_timestamp(0))
 		FROM vm_templates WHERE id = $1
 	`, templateID).Scan(
 		&t.ID, &t.Name, &t.Slug, &description, &t.ImagePath, &t.OriginalFormat,
@@ -271,13 +279,54 @@ func (h *VMTemplateHandler) updateUploadStatus(c *gin.Context, uploadID, status,
 	`, status, uploadID)
 }
 
+func copyFileDurably(sourcePath, destinationPath string) error {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return fmt.Errorf("open source: %w", err)
+	}
+
+	destination, err := os.Create(destinationPath)
+	if err != nil {
+		return errors.Join(fmt.Errorf("create destination: %w", err), source.Close())
+	}
+
+	_, copyErr := io.Copy(destination, source)
+	var syncErr error
+	if copyErr == nil {
+		syncErr = destination.Sync()
+	}
+	destinationCloseErr := destination.Close()
+	sourceCloseErr := source.Close()
+
+	if err := errors.Join(copyErr, syncErr, destinationCloseErr, sourceCloseErr); err != nil {
+		if removeErr := os.Remove(destinationPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return errors.Join(err, fmt.Errorf("remove incomplete destination: %w", removeErr))
+		}
+		return err
+	}
+
+	return nil
+}
+
+func (h *VMTemplateHandler) markUploadFailed(ctx context.Context, uploadID string, processingErr error) {
+	_, err := h.db.Pool.Exec(ctx, `
+		UPDATE uploads
+		SET status = 'failed', error_message = $2, updated_at = NOW()
+		WHERE id = $1
+	`, uploadID, processingErr.Error())
+	if err != nil {
+		h.logger.Error("failed to mark upload as failed",
+			zap.String("upload_id", uploadID),
+			zap.Error(err))
+	}
+}
+
 func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, description, originalName, uploadPath, templatesDir, checksum, minVCPU, minMemoryMB, osType string) {
 	ctx := context.Background()
 
-	// Determine output path
-	safeName := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
-	safeName = strings.ReplaceAll(safeName, "_", "-")
-	qcow2Path := filepath.Join(templatesDir, fmt.Sprintf("%s.qcow2", safeName))
+	// The template ID keeps untrusted names out of the filesystem and prevents a
+	// duplicate template name from overwriting an existing image.
+	qcow2Path := filepath.Join(templatesDir, templateID+".qcow2")
 
 	ext := strings.ToLower(filepath.Ext(uploadPath))
 	var diskSizeGB float64
@@ -286,17 +335,17 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, descriptio
 		// Already QCOW2, just move it
 		if err := os.Rename(uploadPath, qcow2Path); err != nil {
 			// Copy if rename fails (cross-device)
-			src, _ := os.Open(uploadPath)
-			dst, err := os.Create(qcow2Path)
-			if err != nil {
-				h.logger.Error("failed to create qcow2 file", zap.Error(err))
-				h.db.Pool.Exec(ctx, `UPDATE uploads SET status = 'failed' WHERE id = $1`, uploadID)
+			if copyErr := copyFileDurably(uploadPath, qcow2Path); copyErr != nil {
+				h.logger.Error("failed to copy qcow2 file", zap.Error(copyErr))
+				h.markUploadFailed(ctx, uploadID, copyErr)
 				return
 			}
-			io.Copy(dst, src)
-			src.Close()
-			dst.Close()
-			os.Remove(uploadPath)
+			if removeErr := os.Remove(uploadPath); removeErr != nil {
+				h.logger.Warn("failed to remove copied upload",
+					zap.String("upload_id", uploadID),
+					zap.String("path", uploadPath),
+					zap.Error(removeErr))
+			}
 		}
 	} else if ext == ".ova" || ext == ".vmdk" {
 		// Convert using qemu-img
@@ -346,11 +395,17 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, descriptio
 
 	// Get disk size
 	info, err := os.Stat(qcow2Path)
-	var imageSizeBytes int64
-	if err == nil {
-		imageSizeBytes = info.Size()
-		diskSizeGB = float64(imageSizeBytes) / (1024 * 1024 * 1024)
+	if err != nil {
+		statErr := fmt.Errorf("stat processed qcow2: %w", err)
+		h.logger.Error("failed to inspect processed qcow2",
+			zap.String("upload_id", uploadID),
+			zap.String("path", qcow2Path),
+			zap.Error(err))
+		h.markUploadFailed(ctx, uploadID, statErr)
+		return
 	}
+	imageSizeBytes := info.Size()
+	diskSizeGB = float64(imageSizeBytes) / (1024 * 1024 * 1024)
 
 	// Generate slug from name
 	slug := strings.ToLower(strings.ReplaceAll(name, " ", "-"))
@@ -370,8 +425,17 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, descriptio
 	fmt.Sscanf(minVCPU, "%d", &vcpuInt)
 	fmt.Sscanf(minMemoryMB, "%d", &memoryInt)
 
-	// Create template record with correct column names
-	_, err = h.db.Pool.Exec(ctx, `
+	// Create the template and complete the upload atomically. If the status
+	// update fails, the active template must not remain visible.
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin template transaction", zap.Error(err))
+		h.markUploadFailed(ctx, uploadID, err)
+		_ = os.Remove(qcow2Path)
+		return
+	}
+
+	_, err = tx.Exec(ctx, `
 		INSERT INTO vm_templates (
 			id, upload_id, name, slug, description, image_path, original_format, original_path,
 			image_size, vcpu, memory_mb, disk_gb, os_type, is_active, created_at, updated_at
@@ -380,13 +444,37 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, descriptio
 		imageSizeBytes, vcpuInt, memoryInt, int(diskSizeGB)+1, osType)
 
 	if err != nil {
+		_ = tx.Rollback(ctx)
 		h.logger.Error("failed to create template record", zap.Error(err))
-		h.db.Pool.Exec(ctx, `UPDATE uploads SET status = 'failed' WHERE id = $1`, uploadID)
+		h.markUploadFailed(ctx, uploadID, err)
+		_ = os.Remove(qcow2Path)
 		return
 	}
 
-	// Update upload status
-	h.db.Pool.Exec(ctx, `UPDATE uploads SET status = 'completed' WHERE id = $1`, uploadID)
+	result, err := tx.Exec(ctx, `
+		UPDATE uploads
+		SET status = 'completed', error_message = NULL, completed_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`, uploadID)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		h.logger.Error("failed to mark upload as completed", zap.String("upload_id", uploadID), zap.Error(err))
+		h.markUploadFailed(ctx, uploadID, err)
+		_ = os.Remove(qcow2Path)
+		return
+	}
+	if result.RowsAffected() != 1 {
+		_ = tx.Rollback(ctx)
+		err := fmt.Errorf("upload completion updated %d rows", result.RowsAffected())
+		h.logger.Error("failed to mark upload as completed", zap.String("upload_id", uploadID), zap.Error(err))
+		h.markUploadFailed(ctx, uploadID, err)
+		_ = os.Remove(qcow2Path)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit completed template", zap.String("upload_id", uploadID), zap.Error(err))
+		return
+	}
 
 	h.logger.Info("template created",
 		zap.String("template_id", templateID),
@@ -402,7 +490,7 @@ func (h *VMTemplateHandler) GetUploadStatus(c *gin.Context) {
 	var status, filename string
 	var sizeBytes int64
 	err := h.db.Pool.QueryRow(c.Request.Context(), `
-		SELECT status, filename, size_bytes FROM uploads WHERE id = $1
+		SELECT status, filename, total_size FROM uploads WHERE id = $1
 	`, uploadID).Scan(&status, &filename, &sizeBytes)
 
 	if err != nil {
@@ -411,11 +499,11 @@ func (h *VMTemplateHandler) GetUploadStatus(c *gin.Context) {
 	}
 
 	// Check if template was created
-	var templateID *string
-	h.db.Pool.QueryRow(c.Request.Context(), `
-		SELECT id FROM vm_templates WHERE original_name = $1
+	var templateID string
+	templateErr := h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT id FROM vm_templates WHERE upload_id = $1
 		ORDER BY created_at DESC LIMIT 1
-	`, filename).Scan(&templateID)
+	`, uploadID).Scan(&templateID)
 
 	response := gin.H{
 		"upload_id": uploadID,
@@ -424,8 +512,8 @@ func (h *VMTemplateHandler) GetUploadStatus(c *gin.Context) {
 		"size":      sizeBytes,
 	}
 
-	if templateID != nil {
-		response["template_id"] = *templateID
+	if templateErr == nil {
+		response["template_id"] = templateID
 	}
 
 	c.JSON(http.StatusOK, response)

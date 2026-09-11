@@ -51,11 +51,11 @@ var allowedAttachmentExtensions = map[string]bool{
 // the returned name is safe to embed in a Content-Disposition header.
 func sanitiseFilename(name string) string {
 	// Strip directory components
-	name = filepath.Base(name)
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
 	// Remove any characters that are not printable ASCII
 	var b strings.Builder
 	for _, r := range name {
-		if r > 0x1F && r < 0x7F && unicode.IsPrint(r) {
+		if r > 0x1F && r < 0x7F && r != '"' && r != '\\' && unicode.IsPrint(r) {
 			b.WriteRune(r)
 		}
 	}

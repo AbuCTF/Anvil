@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gosimple/slug"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -30,6 +33,8 @@ type AdminService struct {
 	logger       *zap.Logger
 }
 
+const activeAdminMutationLockID int64 = 0x416e76696c41646d
+
 // NewAdminService creates a new admin service
 func NewAdminService(cfg *config.Config, db *database.DB, containerSvc *container.Service, logger *zap.Logger) *AdminService {
 	return &AdminService{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
@@ -38,7 +43,7 @@ func NewAdminService(cfg *config.Config, db *database.DB, containerSvc *containe
 // ListUsers returns all users (admin)
 func (h *AdminUserHandler) List(c *gin.Context) {
 	query := `
-		SELECT id, username, email, role, total_score, created_at
+		SELECT id, username, email, role, status, total_score, created_at
 		FROM users
 		ORDER BY created_at DESC
 	`
@@ -53,12 +58,12 @@ func (h *AdminUserHandler) List(c *gin.Context) {
 
 	var users []gin.H
 	for rows.Next() {
-		var id, username, role string
+		var id, username, role, status string
 		var email *string
 		var totalScore int
 		var createdAt time.Time
 
-		if err := rows.Scan(&id, &username, &email, &role, &totalScore, &createdAt); err != nil {
+		if err := rows.Scan(&id, &username, &email, &role, &status, &totalScore, &createdAt); err != nil {
 			h.logger.Error("failed to scan user", zap.Error(err))
 			continue
 		}
@@ -68,6 +73,8 @@ func (h *AdminUserHandler) List(c *gin.Context) {
 			"username":    username,
 			"email":       email,
 			"role":        role,
+			"status":      status,
+			"is_banned":   status == "banned",
 			"total_score": totalScore,
 			"created_at":  createdAt.Unix(),
 		})
@@ -87,20 +94,21 @@ func (h *AdminUserHandler) Get(c *gin.Context) {
 	var user struct {
 		ID         string
 		Username   string
-		Email      string
+		Email      *string
 		Role       string
+		Status     string
 		TotalScore int
-		IsBanned   bool
 		CreatedAt  time.Time
 	}
 
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, username, email, role, total_score, is_banned, created_at
+		`SELECT id, username, email, role, status, total_score, created_at
 		 FROM users WHERE id = $1`, userID).Scan(
-		&user.ID, &user.Username, &user.Email, &user.Role,
-		&user.TotalScore, &user.IsBanned, &user.CreatedAt,
+		&user.ID, &user.Username, &user.Email, &user.Role, &user.Status,
+		&user.TotalScore, &user.CreatedAt,
 	)
 	if err != nil {
+		h.logger.Warn("failed to fetch user", zap.String("user_id", userID), zap.Error(err))
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
@@ -110,8 +118,9 @@ func (h *AdminUserHandler) Get(c *gin.Context) {
 		"username":    user.Username,
 		"email":       user.Email,
 		"role":        user.Role,
+		"status":      user.Status,
 		"total_score": user.TotalScore,
-		"is_banned":   user.IsBanned,
+		"is_banned":   user.Status == "banned",
 		"created_at":  user.CreatedAt.Unix(),
 	})
 }
@@ -128,26 +137,47 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.Role == nil && req.TotalScore == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no changes provided"})
+		return
+	}
 
+	var newRole string
 	if req.Role != nil {
-		newRole := strings.ToLower(strings.TrimSpace(*req.Role))
+		newRole = strings.ToLower(strings.TrimSpace(*req.Role))
 		if newRole != "admin" && newRole != "user" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid role: must be 'admin' or 'user'"})
 			return
 		}
+	}
 
-		var currentRole string
-		err := h.db.Pool.QueryRow(c.Request.Context(),
-			`SELECT role FROM users WHERE id = $1`,
-			userID,
-		).Scan(&currentRole)
-		if err != nil {
+	ctx := c.Request.Context()
+	tx, err := h.beginAdminUserMutation(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin user update", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var currentRole, currentStatus string
+	err = tx.QueryRow(ctx,
+		`SELECT role, status FROM users WHERE id = $1`,
+		userID,
+	).Scan(&currentRole, &currentStatus)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
-			return
+		} else {
+			h.logger.Error("failed to fetch user for update", zap.String("user_id", userID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user"})
 		}
+		return
+	}
 
-		if currentRole == "admin" && newRole != "admin" {
-			adminCount, err := h.countAdminUsers(c.Request.Context())
+	if req.Role != nil {
+		if currentRole == "admin" && currentStatus == "active" && newRole != "admin" {
+			adminCount, err := countActiveAdminUsers(ctx, tx)
 			if err != nil {
 				h.logger.Error("failed to count admins", zap.Error(err))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user"})
@@ -159,7 +189,7 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 			}
 		}
 
-		_, err = h.db.Pool.Exec(c.Request.Context(),
+		_, err = tx.Exec(ctx,
 			`UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2`,
 			newRole, userID)
 		if err != nil {
@@ -169,13 +199,18 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 	}
 
 	if req.TotalScore != nil {
-		_, err := h.db.Pool.Exec(c.Request.Context(),
+		_, err := tx.Exec(ctx,
 			`UPDATE users SET total_score = $1, updated_at = NOW() WHERE id = $2`,
 			*req.TotalScore, userID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user"})
 			return
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit user update", zap.String("user_id", userID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update user"})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "user updated"})
@@ -184,10 +219,47 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 // BanUser bans a user
 func (h *AdminUserHandler) Ban(c *gin.Context) {
 	userID := c.Param("id")
+	ctx := c.Request.Context()
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE users SET is_banned = true, updated_at = NOW() WHERE id = $1`, userID)
+	tx, err := h.beginAdminUserMutation(ctx)
 	if err != nil {
+		h.logger.Error("failed to begin user ban", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ban user"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var role, status string
+	err = tx.QueryRow(ctx, `SELECT role, status FROM users WHERE id = $1`, userID).Scan(&role, &status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		} else {
+			h.logger.Error("failed to fetch user for ban", zap.String("user_id", userID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ban user"})
+		}
+		return
+	}
+	if role == "admin" && status == "active" {
+		adminCount, err := countActiveAdminUsers(ctx, tx)
+		if err != nil {
+			h.logger.Error("failed to count admins", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ban user"})
+			return
+		}
+		if adminCount <= 1 {
+			c.JSON(http.StatusConflict, gin.H{"error": "cannot ban the last active admin"})
+			return
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE users SET status = 'banned', updated_at = NOW() WHERE id = $1`, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ban user"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit user ban", zap.String("user_id", userID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ban user"})
 		return
 	}
@@ -199,10 +271,14 @@ func (h *AdminUserHandler) Ban(c *gin.Context) {
 func (h *AdminUserHandler) Unban(c *gin.Context) {
 	userID := c.Param("id")
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE users SET is_banned = false, updated_at = NOW() WHERE id = $1`, userID)
+	result, err := h.db.Pool.Exec(c.Request.Context(),
+		`UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1`, userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unban user"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
 
@@ -212,19 +288,33 @@ func (h *AdminUserHandler) Unban(c *gin.Context) {
 // DeleteUser deletes a user
 func (h *AdminUserHandler) Delete(c *gin.Context) {
 	userID := c.Param("id")
+	ctx := c.Request.Context()
 
-	var currentRole string
-	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT role FROM users WHERE id = $1`,
-		userID,
-	).Scan(&currentRole)
+	tx, err := h.beginAdminUserMutation(ctx)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		h.logger.Error("failed to begin user deletion", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var currentRole, currentStatus string
+	err = tx.QueryRow(ctx,
+		`SELECT role, status FROM users WHERE id = $1`,
+		userID,
+	).Scan(&currentRole, &currentStatus)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		} else {
+			h.logger.Error("failed to fetch user for deletion", zap.String("user_id", userID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
+		}
 		return
 	}
 
-	if currentRole == "admin" {
-		adminCount, err := h.countAdminUsers(c.Request.Context())
+	if currentRole == "admin" && currentStatus == "active" {
+		adminCount, err := countActiveAdminUsers(ctx, tx)
 		if err != nil {
 			h.logger.Error("failed to count admins", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
@@ -236,9 +326,14 @@ func (h *AdminUserHandler) Delete(c *gin.Context) {
 		}
 	}
 
-	_, err = h.db.Pool.Exec(c.Request.Context(),
+	_, err = tx.Exec(ctx,
 		`DELETE FROM users WHERE id = $1`, userID)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit user deletion", zap.String("user_id", userID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete user"})
 		return
 	}
@@ -246,9 +341,23 @@ func (h *AdminUserHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "user deleted"})
 }
 
-func (h *AdminUserHandler) countAdminUsers(ctx context.Context) (int, error) {
+func (h *AdminUserHandler) beginAdminUserMutation(ctx context.Context) (pgx.Tx, error) {
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, activeAdminMutationLockID); err != nil {
+		_ = tx.Rollback(ctx)
+		return nil, err
+	}
+	return tx, nil
+}
+
+func countActiveAdminUsers(ctx context.Context, tx pgx.Tx) (int, error) {
 	var count int
-	err := h.db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&count)
+	err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM users WHERE role = 'admin' AND status = 'active'`,
+	).Scan(&count)
 	if err != nil {
 		return 0, err
 	}
@@ -722,7 +831,8 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	}
 
 	// Save file to disk
-	tempPath := tempDir + "/" + challengeID.String() + "_" + header.Filename
+	safeFilename := sanitiseFilename(header.Filename)
+	tempPath := filepath.Join(tempDir, challengeID.String()+"_"+safeFilename)
 	dst, err := os.Create(tempPath)
 	if err != nil {
 		h.logger.Error("failed to create temp file", zap.Error(err))
@@ -1219,25 +1329,24 @@ func (h *AdminChallengeHandler) ListHints(c *gin.Context) {
 	challengeID := c.Param("id")
 
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, challenge_id, cost, content, created_at, updated_at 
-		 FROM hints WHERE challenge_id = $1 ORDER BY cost ASC`, challengeID)
+		`SELECT id, challenge_id, cost, content, created_at
+		 FROM hints WHERE challenge_id = $1 ORDER BY sort_order, created_at`, challengeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
 		return
 	}
 	defer rows.Close()
 
-	var hints []map[string]interface{}
+	hints := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var hint struct {
 			ID          string
 			ChallengeID string
 			Cost        int
 			Content     string
-			CreatedAt   string
-			UpdatedAt   string
+			CreatedAt   time.Time
 		}
-		if err := rows.Scan(&hint.ID, &hint.ChallengeID, &hint.Cost, &hint.Content, &hint.CreatedAt, &hint.UpdatedAt); err != nil {
+		if err := rows.Scan(&hint.ID, &hint.ChallengeID, &hint.Cost, &hint.Content, &hint.CreatedAt); err != nil {
 			continue
 		}
 		hints = append(hints, map[string]interface{}{
@@ -1246,7 +1355,6 @@ func (h *AdminChallengeHandler) ListHints(c *gin.Context) {
 			"cost":         hint.Cost,
 			"content":      hint.Content,
 			"created_at":   hint.CreatedAt,
-			"updated_at":   hint.UpdatedAt,
 		})
 	}
 
@@ -1280,6 +1388,7 @@ func (h *AdminChallengeHandler) CreateHint(c *gin.Context) {
 
 // UpdateHint updates a hint
 func (h *AdminChallengeHandler) UpdateHint(c *gin.Context) {
+	challengeID := c.Param("id")
 	hintID := c.Param("hint_id")
 
 	var req struct {
@@ -1291,11 +1400,15 @@ func (h *AdminChallengeHandler) UpdateHint(c *gin.Context) {
 		return
 	}
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE hints SET cost = $1, content = $2, updated_at = NOW() WHERE id = $3`,
-		req.Cost, req.Content, hintID)
+	result, err := h.db.Pool.Exec(c.Request.Context(),
+		`UPDATE hints SET cost = $1, content = $2 WHERE id = $3 AND challenge_id = $4`,
+		req.Cost, req.Content, hintID, challengeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update hint"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "hint not found"})
 		return
 	}
 
@@ -1304,12 +1417,17 @@ func (h *AdminChallengeHandler) UpdateHint(c *gin.Context) {
 
 // DeleteHint deletes a hint
 func (h *AdminChallengeHandler) DeleteHint(c *gin.Context) {
+	challengeID := c.Param("id")
 	hintID := c.Param("hint_id")
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`DELETE FROM hints WHERE id = $1`, hintID)
+	result, err := h.db.Pool.Exec(c.Request.Context(),
+		`DELETE FROM hints WHERE id = $1 AND challenge_id = $2`, hintID, challengeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete hint"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "hint not found"})
 		return
 	}
 
@@ -1364,19 +1482,19 @@ func (h *AdminChallengeHandler) ListFlagShareEvents(c *gin.Context) {
 	defer rows.Close()
 
 	type shareRow struct {
-		ID                string `json:"id"`
-		CreatedAt         int64  `json:"created_at"`
-		ChallengeID       string `json:"challenge_id"`
-		ChallengeName     string `json:"challenge_name"`
-		FlagID            string `json:"flag_id"`
-		FlagName          string `json:"flag_name"`
-		FlagValue         string `json:"flag_value"`
-		OwnerUserID       string `json:"owner_user_id"`
-		OwnerUsername     string `json:"owner_username"`
-		SubmitterUserID   string `json:"submitter_user_id"`
-		SubmitterUsername string `json:"submitter_username"`
-		SubmitterIP       string `json:"submitter_ip"`
-		OwnerInstanceID   string `json:"owner_instance_id"`
+		ID                string  `json:"id"`
+		CreatedAt         int64   `json:"created_at"`
+		ChallengeID       string  `json:"challenge_id"`
+		ChallengeName     string  `json:"challenge_name"`
+		FlagID            string  `json:"flag_id"`
+		FlagName          string  `json:"flag_name"`
+		FlagValue         string  `json:"flag_value"`
+		OwnerUserID       string  `json:"owner_user_id"`
+		OwnerUsername     string  `json:"owner_username"`
+		SubmitterUserID   string  `json:"submitter_user_id"`
+		SubmitterUsername string  `json:"submitter_username"`
+		SubmitterIP       *string `json:"submitter_ip"`
+		OwnerInstanceID   *string `json:"owner_instance_id"`
 	}
 
 	var results []shareRow

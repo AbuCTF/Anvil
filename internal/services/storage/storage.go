@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,13 +121,20 @@ func NewLocalStorage(basePath string, logger *zap.Logger) (*LocalStorage, error)
 	}, nil
 }
 
-func (l *LocalStorage) fullPath(key string) string {
-	return filepath.Join(l.basePath, key)
+func (l *LocalStorage) fullPath(key string) (string, error) {
+	cleanKey := filepath.Clean(filepath.FromSlash(strings.ReplaceAll(key, "\\", "/")))
+	if cleanKey == "." || filepath.IsAbs(cleanKey) || cleanKey == ".." || strings.HasPrefix(cleanKey, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("storage key escapes base directory")
+	}
+	return filepath.Join(l.basePath, cleanKey), nil
 }
 
 // Upload implements StorageBackend.Upload
 func (l *LocalStorage) Upload(ctx context.Context, key string, reader io.Reader, size int64) error {
-	fullPath := l.fullPath(key)
+	fullPath, err := l.fullPath(key)
+	if err != nil {
+		return fmt.Errorf("invalid storage key: %w", err)
+	}
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
@@ -162,7 +170,10 @@ func (l *LocalStorage) Upload(ctx context.Context, key string, reader io.Reader,
 
 // Download implements StorageBackend.Download
 func (l *LocalStorage) Download(ctx context.Context, key string) (io.ReadCloser, error) {
-	fullPath := l.fullPath(key)
+	fullPath, err := l.fullPath(key)
+	if err != nil {
+		return nil, fmt.Errorf("invalid storage key: %w", err)
+	}
 
 	file, err := os.Open(fullPath)
 	if err != nil {
@@ -177,7 +188,10 @@ func (l *LocalStorage) Download(ctx context.Context, key string) (io.ReadCloser,
 
 // Delete implements StorageBackend.Delete
 func (l *LocalStorage) Delete(ctx context.Context, key string) error {
-	fullPath := l.fullPath(key)
+	fullPath, err := l.fullPath(key)
+	if err != nil {
+		return fmt.Errorf("invalid storage key: %w", err)
+	}
 
 	if err := os.Remove(fullPath); err != nil {
 		if os.IsNotExist(err) {
@@ -192,8 +206,11 @@ func (l *LocalStorage) Delete(ctx context.Context, key string) error {
 
 // Exists implements StorageBackend.Exists
 func (l *LocalStorage) Exists(ctx context.Context, key string) (bool, error) {
-	fullPath := l.fullPath(key)
-	_, err := os.Stat(fullPath)
+	fullPath, err := l.fullPath(key)
+	if err != nil {
+		return false, fmt.Errorf("invalid storage key: %w", err)
+	}
+	_, err = os.Stat(fullPath)
 	if err == nil {
 		return true, nil
 	}
@@ -206,7 +223,10 @@ func (l *LocalStorage) Exists(ctx context.Context, key string) (bool, error) {
 // GetURL implements StorageBackend.GetURL
 // For local storage, returns a file:// URL (for dev) or path to be served via HTTP
 func (l *LocalStorage) GetURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
-	fullPath := l.fullPath(key)
+	fullPath, err := l.fullPath(key)
+	if err != nil {
+		return "", fmt.Errorf("invalid storage key: %w", err)
+	}
 	exists, err := l.Exists(ctx, key)
 	if err != nil {
 		return "", err
@@ -220,7 +240,10 @@ func (l *LocalStorage) GetURL(ctx context.Context, key string, expiry time.Durat
 
 // GetSize implements StorageBackend.GetSize
 func (l *LocalStorage) GetSize(ctx context.Context, key string) (int64, error) {
-	fullPath := l.fullPath(key)
+	fullPath, err := l.fullPath(key)
+	if err != nil {
+		return 0, fmt.Errorf("invalid storage key: %w", err)
+	}
 	info, err := os.Stat(fullPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to stat file: %w", err)
@@ -318,7 +341,10 @@ func (l *LocalStorage) CompleteMultipartUpload(ctx context.Context, key, uploadI
 		return fmt.Errorf("upload not found: %s", uploadID)
 	}
 
-	fullPath := l.fullPath(key)
+	fullPath, err := l.fullPath(key)
+	if err != nil {
+		return fmt.Errorf("invalid storage key: %w", err)
+	}
 
 	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {

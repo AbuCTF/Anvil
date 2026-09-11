@@ -685,32 +685,40 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		h.logger.Warn("failed to clear lockout on correct submission", zap.Error(delErr))
 	}
 
-	// Check if already solved
-	var alreadySolved bool
-	err = h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT EXISTS(SELECT 1 FROM solves WHERE user_id = $1 AND flag_id = $2)`,
-		uid, matchedFlag.ID).Scan(&alreadySolved)
-
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
-		h.logger.Warn("failed to check solve status", zap.Error(err))
-		// Continue anyway, ON CONFLICT will handle it
-		alreadySolved = false
+		h.logger.Error("failed to begin solve transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
 	}
+	defer tx.Rollback(ctx)
 
-	if alreadySolved {
-		c.JSON(http.StatusOK, gin.H{
-			"correct":        true,
-			"already_solved": true,
-			"message":        "Correct! But you've already solved this flag.",
-			"flag_name":      matchedFlag.Name,
-			"points":         0,
-		})
+	// Serialize solves for this challenge so its denormalized counts cannot lose
+	// concurrent updates.
+	var challengeLock int
+	if err := tx.QueryRow(ctx,
+		`SELECT 1 FROM challenges WHERE id = $1 FOR UPDATE`, challengeID,
+	).Scan(&challengeLock); err != nil {
+		h.logger.Error("failed to lock challenge for solve", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 		return
 	}
 
-	// Record solve (with ON CONFLICT to handle race conditions)
+	// Count the source rows rather than trusting total_flags, which admin flag
+	// edits update separately and may briefly leave stale.
+	var totalFlags int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM flags WHERE challenge_id = $1`, challengeID,
+	).Scan(&totalFlags); err != nil {
+		h.logger.Error("failed to count challenge flags", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
+
+	// Record solve (with ON CONFLICT to handle duplicate submissions).
 	solveID := uuid.New()
-	result, err := h.db.Pool.Exec(c.Request.Context(),
+	result, err := tx.Exec(ctx,
 		`INSERT INTO solves (id, user_id, challenge_id, flag_id, points_awarded, solved_at)
 		 VALUES ($1, $2, $3, $4, $5, NOW())
 		 ON CONFLICT (user_id, flag_id) DO NOTHING`,
@@ -725,6 +733,11 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// Check if row was actually inserted (RowsAffected=0 means conflict/already existed)
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
+		if err := tx.Commit(ctx); err != nil {
+			h.logger.Error("failed to commit duplicate solve transaction", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"correct":        true,
 			"already_solved": true,
@@ -735,26 +748,69 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Update user's total score (only if actually inserted)
-	h.db.Pool.Exec(c.Request.Context(),
+	// Update user and denormalized solve counts only for a newly inserted solve.
+	userResult, err := tx.Exec(ctx,
 		`UPDATE users SET total_score = total_score + $1, updated_at = NOW() WHERE id = $2`,
 		matchedFlag.Points, uid)
+	if err != nil {
+		h.logger.Error("failed to update user score", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
+	if userResult.RowsAffected() != 1 {
+		h.logger.Error("failed to update user score", zap.Int64("rows_affected", userResult.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
 
-	// Update challenge solve count
-	h.db.Pool.Exec(c.Request.Context(),
+	flagResult, err := tx.Exec(ctx,
+		`UPDATE flags SET total_solves = (
+			SELECT COUNT(*) FROM solves WHERE flag_id = $1
+		), updated_at = NOW() WHERE id = $1`, matchedFlag.ID)
+	if err != nil {
+		h.logger.Error("failed to update flag solve count", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
+	if flagResult.RowsAffected() != 1 {
+		h.logger.Error("failed to update flag solve count", zap.Int64("rows_affected", flagResult.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
+
+	challengeResult, err := tx.Exec(ctx,
 		`UPDATE challenges SET total_solves = (
 			SELECT COUNT(DISTINCT user_id) FROM solves s
 			JOIN flags f ON s.flag_id = f.id
 			WHERE f.challenge_id = $1
 		) WHERE id = $1`, challengeID)
+	if err != nil {
+		h.logger.Error("failed to update challenge solve count", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
+	if challengeResult.RowsAffected() != 1 {
+		h.logger.Error("failed to update challenge solve count", zap.Int64("rows_affected", challengeResult.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
 
 	// Check if all flags solved (first blood check)
-	var totalFlags, solvedFlags int
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT total_flags FROM challenges WHERE id = $1`, challengeID).Scan(&totalFlags)
-	h.db.Pool.QueryRow(c.Request.Context(),
+	var solvedFlags int
+	if err := tx.QueryRow(ctx,
 		`SELECT COUNT(*) FROM solves s JOIN flags f ON s.flag_id = f.id
-		 WHERE s.user_id = $1 AND f.challenge_id = $2`, uid, challengeID).Scan(&solvedFlags)
+		 WHERE s.user_id = $1 AND f.challenge_id = $2`, uid, challengeID,
+	).Scan(&solvedFlags); err != nil {
+		h.logger.Error("failed to count solved flags", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit solve transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
 
 	response := gin.H{
 		"correct":      true,

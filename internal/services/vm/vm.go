@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	rand2 "math/rand"
 	"os"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -814,6 +816,11 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateVMRequest) (*VMI
 	// Generate MAC address
 	macAddress := generateMAC(instanceID)
 
+	metadata := req.Metadata
+	if metadata == nil {
+		metadata = make(map[string]string)
+	}
+
 	instance := &VMInstance{
 		ID:           instanceID,
 		Name:         fmt.Sprintf("anvil-%s", instanceID[:8]),
@@ -828,7 +835,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateVMRequest) (*VMI
 		MACAddress:   macAddress,
 		VNCPort:      vncPort,
 		ExposedPorts: make(map[int]int),
-		Metadata:     req.Metadata,
+		Metadata:     metadata,
 		CreatedAt:    time.Now(),
 		ExpiresAt:    time.Now().Add(duration),
 	}
@@ -1175,14 +1182,14 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 		// Check if this VM exists in the database (any status)
 		var instanceID string
 		var status string
-		var expiresAt time.Time
+		var expiresAt *time.Time
 
 		// Query database for instance with this container_id
 		err := s.db.Pool.QueryRow(ctx,
 			`SELECT id, status, expires_at FROM instances WHERE container_id = $1`,
 			vmName).Scan(&instanceID, &status, &expiresAt)
 
-		if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			// Not in database - truly orphaned, destroy it
 			s.logger.Info("cleaning up orphaned VM (not in database)", zap.String("vm_name", vmName))
 			destroyCmd := fmt.Sprintf("%s destroy %s 2>/dev/null || true", virshCmd, vmName)
@@ -1190,12 +1197,16 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 
 			undefineCmd := fmt.Sprintf("%s undefine %s 2>/dev/null || true", virshCmd, vmName)
 			s.runSSHCommand(ctx, node, undefineCmd)
-		} else if status == "failed" || status == "terminated" || time.Now().After(expiresAt) {
+		} else if err != nil {
+			s.logger.Warn("failed to verify VM during reconciliation; leaving it untouched",
+				zap.String("vm_name", vmName),
+				zap.Error(err))
+		} else if status == "failed" || status == "expired" || (expiresAt != nil && time.Now().After(*expiresAt)) {
 			// Expired or failed - clean it up
 			s.logger.Info("cleaning up expired/failed VM",
 				zap.String("vm_name", vmName),
 				zap.String("status", status),
-				zap.Time("expires_at", expiresAt))
+				zap.Any("expires_at", expiresAt))
 			destroyCmd := fmt.Sprintf("%s destroy %s 2>/dev/null || true", virshCmd, vmName)
 			s.runSSHCommand(ctx, node, destroyCmd)
 

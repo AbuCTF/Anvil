@@ -172,6 +172,10 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	if req.SSHUser == "" {
 		req.SSHUser = "anvil"
 	}
+	if req.TotalVCPU < 1 || req.TotalMemoryMB < 1 || req.TotalDiskGB < 1 || req.MaxVMs < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node capacities and max_vms must be positive"})
+		return
+	}
 
 	nodeID := uuid.New()
 
@@ -212,46 +216,43 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// Build dynamic update query
-	updates := []string{}
-	args := []interface{}{}
-	argIndex := 1
-
-	if req.Status != nil {
-		updates = append(updates, "status = $"+string(rune('0'+argIndex)))
-		args = append(args, *req.Status)
-		argIndex++
-	}
-	if req.MaxVMs != nil {
-		updates = append(updates, "max_vms = $"+string(rune('0'+argIndex)))
-		args = append(args, *req.MaxVMs)
-		argIndex++
-	}
-	if req.TotalVCPU != nil {
-		updates = append(updates, "total_vcpu = $"+string(rune('0'+argIndex)))
-		args = append(args, *req.TotalVCPU)
-		argIndex++
-	}
-	if req.TotalMemoryMB != nil {
-		updates = append(updates, "total_memory_mb = $"+string(rune('0'+argIndex)))
-		args = append(args, *req.TotalMemoryMB)
-		argIndex++
-	}
-
-	if len(updates) == 0 {
+	if req.Status == nil && req.MaxVMs == nil && req.TotalVCPU == nil && req.TotalMemoryMB == nil && req.TotalDiskGB == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no fields to update"})
 		return
 	}
+	if req.Status != nil {
+		switch *req.Status {
+		case "online", "offline", "maintenance", "draining":
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid node status"})
+			return
+		}
+	}
+	if (req.MaxVMs != nil && *req.MaxVMs < 1) ||
+		(req.TotalVCPU != nil && *req.TotalVCPU < 1) ||
+		(req.TotalMemoryMB != nil && *req.TotalMemoryMB < 1) ||
+		(req.TotalDiskGB != nil && *req.TotalDiskGB < 1) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node capacities and max_vms must be positive"})
+		return
+	}
 
-	args = append(args, nodeID)
-
-	// Note: This is a simplified approach - in production use proper query building
-	_, err := h.db.Pool.Exec(c.Request.Context(), `
-		UPDATE vm_nodes SET status = COALESCE($1, status), updated_at = NOW() WHERE id = $2
-	`, req.Status, nodeID)
+	result, err := h.db.Pool.Exec(c.Request.Context(), `
+		UPDATE vm_nodes SET
+			status = COALESCE($1, status),
+			max_vms = COALESCE($2, max_vms),
+			total_vcpu = COALESCE($3, total_vcpu),
+			total_memory_mb = COALESCE($4, total_memory_mb),
+			total_disk_gb = COALESCE($5, total_disk_gb),
+			updated_at = NOW()
+		WHERE id = $6
+	`, req.Status, req.MaxVMs, req.TotalVCPU, req.TotalMemoryMB, req.TotalDiskGB, nodeID)
 	if err != nil {
 		h.logger.Error("failed to update node", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update node"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
 		return
 	}
 

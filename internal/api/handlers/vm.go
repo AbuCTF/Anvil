@@ -183,7 +183,12 @@ func (h *VMHandler) StartVM(c *gin.Context) {
 		return
 	}
 
-	instance, _ = h.vmService.GetInstance(c.Request.Context(), instanceID)
+	instance, err = h.vmService.GetInstance(c.Request.Context(), instanceID)
+	if err != nil {
+		h.logger.Error("failed to refresh VM state", zap.String("id", instanceID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh VM state"})
+		return
+	}
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 
@@ -215,7 +220,12 @@ func (h *VMHandler) StopVM(c *gin.Context) {
 		return
 	}
 
-	instance, _ = h.vmService.GetInstance(c.Request.Context(), instanceID)
+	instance, err = h.vmService.GetInstance(c.Request.Context(), instanceID)
+	if err != nil {
+		h.logger.Error("failed to refresh VM state", zap.String("id", instanceID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh VM state"})
+		return
+	}
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 
@@ -267,9 +277,17 @@ func (h *VMHandler) ResetVM(c *gin.Context) {
 	}
 
 	// Increment reset counter
+	if instance.Metadata == nil {
+		instance.Metadata = make(map[string]string)
+	}
 	instance.Metadata["reset_count"] = fmt.Sprintf("%d", resetCount+1)
 
-	instance, _ = h.vmService.GetInstance(c.Request.Context(), instanceID)
+	instance, err = h.vmService.GetInstance(c.Request.Context(), instanceID)
+	if err != nil {
+		h.logger.Error("failed to refresh VM state", zap.String("id", instanceID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh VM state"})
+		return
+	}
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 
@@ -313,7 +331,12 @@ func (h *VMHandler) ExtendVM(c *gin.Context) {
 		return
 	}
 
-	instance, _ = h.vmService.GetInstance(c.Request.Context(), instanceID)
+	instance, err = h.vmService.GetInstance(c.Request.Context(), instanceID)
+	if err != nil {
+		h.logger.Error("failed to refresh VM state", zap.String("id", instanceID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh VM state"})
+		return
+	}
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 

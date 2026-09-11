@@ -488,8 +488,8 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 	query := `
 		SELECT 
 			i.id, i.challenge_id, i.container_id, i.status,
-			i.ip_address, i.ports, i.created_at, i.expires_at,
-			i.extensions_used, i.max_extensions,
+			i.ip_address, i.assigned_ports, i.created_at, i.expires_at,
+			i.extensions_used, COALESCE(c.max_extensions, 3) as max_extensions,
 			c.name as challenge_name, c.slug as challenge_slug
 		FROM instances i
 		JOIN challenges c ON i.challenge_id = c.id
@@ -520,6 +520,15 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 	}
 	inst.CreatedAt = createdAt.Unix()
 	inst.ExpiresAt = expiresAt.Unix()
+	if len(portsJSON) > 0 {
+		if err := json.Unmarshal(portsJSON, &inst.Ports); err != nil {
+			h.logger.Warn("failed to parse assigned_ports", zap.Error(err))
+			inst.Ports = make(map[string]int)
+		}
+	}
+	if inst.Ports == nil {
+		inst.Ports = make(map[string]int)
+	}
 
 	c.JSON(http.StatusOK, inst)
 }
@@ -712,11 +721,9 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 
 // logAction logs user actions for audit trail
 func (h *InstanceHandler) logAction(c *gin.Context, userID, action string, details map[string]interface{}) {
-	// Insert into audit log (create table if needed)
-	h.db.Pool.Exec(c.Request.Context(),
-		`INSERT INTO audit_log (id, user_id, action, details, ip_address, user_agent, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, NOW())`,
-		uuid.New(), userID, action, details, c.ClientIP(), c.GetHeader("User-Agent"))
+	if err := logAdminAction(h.db, c, userID, action, "instance", "", details); err != nil {
+		h.logger.Warn("failed to log instance action", zap.Error(err))
+	}
 }
 
 // Delete terminates and removes an instance

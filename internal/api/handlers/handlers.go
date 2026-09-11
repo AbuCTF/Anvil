@@ -597,8 +597,15 @@ func (h *SettingsHandler) List(c *gin.Context) {
 	defer rows.Close()
 
 	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
+		var key string
+		var rawValue json.RawMessage
+		if err := rows.Scan(&key, &rawValue); err != nil {
+			h.logger.Warn("Failed to scan setting", zap.Error(err))
+			continue
+		}
+		var value interface{}
+		if err := json.Unmarshal(rawValue, &value); err != nil {
+			h.logger.Warn("Failed to decode setting", zap.String("key", key), zap.Error(err))
 			continue
 		}
 		settings[key] = value
@@ -627,24 +634,17 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 
 	// Upsert each setting
 	for key, value := range req.Settings {
-		valueStr, ok := value.(string)
-		if !ok {
-			// Convert numbers to string
-			switch v := value.(type) {
-			case float64:
-				valueStr = fmt.Sprintf("%.0f", v)
-			case int:
-				valueStr = fmt.Sprintf("%d", v)
-			default:
-				valueStr = fmt.Sprintf("%v", v)
-			}
+		valueJSON, err := json.Marshal(value)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid setting value: " + key})
+			return
 		}
 
-		_, err := tx.Exec(c.Request.Context(), `
+		_, err = tx.Exec(c.Request.Context(), `
 			INSERT INTO platform_settings (key, value, updated_at)
-			VALUES ($1, $2, NOW())
+			VALUES ($1, $2::jsonb, NOW())
 			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
-		`, key, valueStr)
+		`, key, string(valueJSON))
 		if err != nil {
 			h.logger.Error("Failed to update setting", zap.String("key", key), zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update setting: " + key})

@@ -190,6 +190,11 @@ func Load() (*Config, error) {
 	v.AutomaticEnv()
 
 	setDefaults(v)
+	for _, key := range v.AllKeys() {
+		if err := v.BindEnv(key); err != nil {
+			return nil, fmt.Errorf("error binding environment variable for %s: %w", key, err)
+		}
+	}
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -213,6 +218,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.read_timeout", "15s")
 	v.SetDefault("server.write_timeout", "15s")
 	v.SetDefault("server.shutdown_timeout", "30s")
+	v.SetDefault("server.trusted_proxies", []string{})
 
 	v.SetDefault("database.host", "localhost")
 	v.SetDefault("database.port", 5432)
@@ -230,7 +236,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("jwt.secret", defaultJWTSecret)
 	v.SetDefault("jwt.access_expiry", "15m")
-	v.SetDefault("jwt.refresh_expiry", "7d")
+	v.SetDefault("jwt.refresh_expiry", "168h")
 	v.SetDefault("jwt.issuer", "anvil")
 
 	v.SetDefault("container.runtime", "docker")
@@ -240,10 +246,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("container.max_per_user", 2)
 	v.SetDefault("container.cleanup_interval", "5m")
 	v.SetDefault("container.health_check_interval", "30s")
+	v.SetDefault("container.labels", map[string]string{})
 
 	v.SetDefault("vpn.enabled", true)
 	v.SetDefault("vpn.interface", "wg0")
 	v.SetDefault("vpn.listen_port", 51820)
+	v.SetDefault("vpn.public_endpoint", "")
+	v.SetDefault("vpn.private_key", "")
+	v.SetDefault("vpn.public_key", "")
 	v.SetDefault("vpn.address_range", "10.10.0.0/16")
 	v.SetDefault("vpn.dns", "1.1.1.1")
 	v.SetDefault("vpn.mtu", 1420)
@@ -289,4 +299,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.scoring.koth_hold", 5)
 	v.SetDefault("game.scoring.koth_rank", []int{12, 7, 4, 2, 1})
 	v.SetDefault("game.webhook.enabled", false)
+	v.SetDefault("game.webhook.url", "")
+	v.SetDefault("game.webhook.secret", "")
+	v.SetDefault("game.webhook.id", "")
 }
