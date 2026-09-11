@@ -6,7 +6,7 @@
 
 <div class="flex flex-wrap items-end justify-between gap-4 mb-6">
 	<div>
-		<h1 class="text-2xl font-bold text-stone-100 tracking-tight">{title}</h1>
+		<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">{title}</h1>
 		{#if subtitle}<p class="text-stone-500 text-sm mt-0.5">{subtitle}</p>{/if}
 	</div>
 	<slot name="actions" />

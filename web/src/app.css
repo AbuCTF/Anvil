@@ -50,6 +50,10 @@
 		word-wrap: break-word;
 		overflow-wrap: break-word;
 	}
+	:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+		outline: 2px solid rgb(245 158 11 / 0.8) !important;
+		outline-offset: 2px !important;
+	}
 }
 
 /* Theme-aware hero highlight — cyan reads darker on a light ground. */

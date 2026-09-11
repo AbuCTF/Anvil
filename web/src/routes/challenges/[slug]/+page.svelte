@@ -371,7 +371,11 @@
 
 	function instanceProgress(inst: any): number {
 		if (!inst?.expires_at || !inst?.created_at) return 100;
-		const total = inst.expires_at - inst.created_at;
+		const createdAt = typeof inst.created_at === 'number'
+			? (inst.created_at > 1_000_000_000_000 ? inst.created_at / 1000 : inst.created_at)
+			: Date.parse(inst.created_at) / 1000;
+		if (!Number.isFinite(createdAt)) return 100;
+		const total = inst.expires_at - createdAt;
 		if (total <= 0) return 0;
 		const remaining = inst.expires_at - Math.floor(Date.now() / 1000);
 		return Math.max(0, Math.min(100, (remaining / total) * 100));
@@ -531,16 +535,16 @@
 	{:else if challenge}
 		<!-- Success Toast -->
 		{#if showEditSuccess}
-			<div class="fixed top-4 right-4 z-50 bg-up/10 border border-up/20 text-up px-4 py-2 rounded-lg text-sm flex items-center gap-2">
-				<Icon icon="mdi:check" class="w-4 h-4" />
+			<div class="fixed top-4 right-4 z-50 bg-up/10 border border-up/20 text-up px-4 py-2 rounded-lg text-sm leading-none flex items-center gap-2">
+				<Icon icon="mdi:check" class="w-3.5 h-3.5 shrink-0" />
 				Saved
 			</div>
 		{/if}
 
 		<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 			<!-- Back Link -->
-			<a href="/challenges" class="inline-flex items-center gap-1.5 text-stone-500 hover:text-stone-300 text-sm mb-8 transition-colors">
-				<Icon icon="mdi:arrow-left" class="w-4 h-4 -translate-y-[1px]" />
+		<a href="/challenges" class="inline-flex items-center gap-1.5 text-stone-500 hover:text-stone-300 text-sm leading-none mb-8 transition-colors">
+			<Icon icon="mdi:arrow-left" class="w-3.5 h-3.5 shrink-0" />
 				Challenges
 			</a>
 
@@ -560,7 +564,7 @@
 								<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">{challenge.name}</h1>
 							{/if}
 
-							<div class="flex flex-wrap items-center gap-2.5 mt-3">
+						<div class="flex flex-wrap items-center gap-2.5 mt-3 leading-none">
 								{#if isEditing && editForm}
 									<select bind:value={editForm.difficulty} class="text-xs px-2 py-1 rounded bg-stone-900 border border-stone-700 text-stone-300 focus:outline-none">
 										<option value="easy">Easy</option>
@@ -574,13 +578,13 @@
 									</span>
 								{/if}
 
-								<span class="inline-flex items-center gap-1.5 text-xs text-stone-500">
-									<Icon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} class="w-3.5 h-3.5" />
+								<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
+									<Icon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} class="w-3 h-3 shrink-0" />
 									{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}
 								</span>
 
 								{#if challenge.category}
-									<span class="inline-flex items-center gap-1.5 text-xs text-stone-500">
+									<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
 										<span class="w-2 h-2 rounded-full shrink-0" style="background:{categoryColor(challenge.category)}"></span>
 										{challenge.category}
 									</span>
@@ -593,8 +597,8 @@
 								{/if}
 
 								{#if challenge.is_solved}
-									<span class="text-[0.68rem] font-medium px-2 py-0.5 rounded-full bg-up/10 border border-up/20 text-up flex items-center gap-1">
-										<Icon icon="mdi:check" class="w-3 h-3" />
+									<span class="text-[0.68rem] leading-none font-medium px-2 py-0.5 rounded-full bg-up/10 border border-up/20 text-up flex items-center gap-1">
+										<Icon icon="mdi:check" class="w-3 h-3 shrink-0" />
 										Solved
 									</span>
 								{/if}
@@ -618,7 +622,7 @@
 
 					<!-- Admin Controls -->
 					{#if isAdmin}
-						<div class="flex items-center gap-2 pb-4 border-b border-stone-800/60">
+						<div class="flex items-center gap-2 pb-4 border-b border-stone-800/60 leading-none">
 							{#if isEditing}
 								<button on:click={handleSaveEdit} disabled={saving} class="text-xs px-3 py-1.5 bg-stone-100 text-stone-950 rounded-md font-medium hover:bg-stone-50 disabled:opacity-50 transition-colors flex items-center gap-1.5">
 									{#if saving}<Icon icon="mdi:loading" class="w-3 h-3 animate-spin" />{/if}
@@ -675,9 +679,9 @@
 								{#if isEditing && isAdmin}
 									<button
 										on:click={() => showFlagModal = true}
-										class="text-xs text-up hover:text-up/80 transition-colors flex items-center gap-1"
+									class="text-xs leading-none text-up hover:text-up/80 transition-colors flex items-center gap-1"
 									>
-										<Icon icon="mdi:plus" class="w-3.5 h-3.5" />
+									<Icon icon="mdi:plus" class="w-3 h-3 shrink-0" />
 										Add Flag
 									</button>
 								{:else}
@@ -737,7 +741,7 @@
 												</div>
 											{:else}
 												<div class="flex items-center justify-between">
-													<div class="flex items-center gap-3">
+										<div class="flex items-center gap-3 leading-none">
 														<div class="w-6 h-6 rounded flex items-center justify-center bg-stone-800 text-stone-500 text-xs font-medium tabular-nums">
 															{i + 1}
 														</div>
@@ -776,8 +780,8 @@
 											</div>
 											<div class="flex items-center gap-3">
 												{#if typeof flag.total_solves === 'number'}
-													<span class="text-xs text-stone-500 inline-flex items-center gap-1 tabular-nums">
-														<Icon icon="mdi:account-group" class="w-3.5 h-3.5" />
+												<span class="text-xs leading-none text-stone-500 inline-flex items-center gap-1 tabular-nums">
+													<Icon icon="mdi:account-group" class="w-3 h-3 shrink-0" />
 														{flag.total_solves}
 													</span>
 												{/if}
@@ -801,8 +805,8 @@
 										{:else}
 											<div class="flex items-center justify-between">
 												<span class="text-stone-500 text-sm tabular-nums">Hint #{i + 1}</span>
-												<button class="text-xs text-stone-300 hover:text-stone-100 transition-colors tabular-nums">
-													Unlock ({hint.cost} pts)
+										<button disabled title="Hint unlocking is temporarily unavailable" class="text-xs text-stone-600 cursor-not-allowed tabular-nums">
+											Unlock unavailable
 												</button>
 											</div>
 										{/if}
@@ -829,9 +833,9 @@
 											<a
 												href="/api/v1/challenges/{challenge.slug}/attachments/{attachment.id}/download"
 												download={attachment.filename}
-												class="text-xs px-2.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 rounded-md transition-colors flex items-center gap-1"
+											class="text-xs leading-none px-2.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 rounded-md transition-colors flex items-center gap-1"
 											>
-												<Icon icon="mdi:download" class="w-3.5 h-3.5" />
+											<Icon icon="mdi:download" class="w-3 h-3 shrink-0" />
 												Download
 											</a>
 											{#if isEditing && isAdmin}
@@ -895,7 +899,7 @@
 									<!-- Status -->
 									<div>
 										<div class="flex items-center justify-between mb-2">
-											<div class="flex items-center gap-2">
+										<div class="flex items-center gap-2 leading-none">
 												<span class="w-2 h-2 bg-up rounded-full animate-pulse"></span>
 												<span class="text-up text-sm font-medium">Running</span>
 											</div>
@@ -917,7 +921,7 @@
 												{#each Object.entries(instance.ports) as [portKey, _]}
 													{@const [port, svc] = portKey.split('/')}
 													{@const isHttp = svc === 'http' || svc === 'https'}
-													{@const connStr = isHttp ? `http://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`}
+											{@const connStr = isHttp ? `${svc}://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`}
 													<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
 														<div class="flex items-center gap-2 px-3 py-1.5 border-b border-stone-800/60 bg-stone-900/40">
 															<Icon
@@ -925,14 +929,14 @@
 																class="w-3.5 h-3.5 {isHttp ? 'text-info' : 'text-stone-400'}"
 															/>
 															<span class="text-[0.65rem] font-medium {isHttp ? 'text-info' : 'text-stone-400'} uppercase tracking-wider">
-																{isHttp ? 'HTTP' : 'TCP'}
+														{isHttp ? svc.toUpperCase() : 'TCP'}
 															</span>
 															<span class="text-xs text-stone-600 ml-auto tabular-nums">:{port}</span>
 														</div>
 														<div class="flex items-center justify-between px-3 py-2">
 															{#if isHttp}
-																<a href="http://{instance.ip_address}:{port}" target="_blank" rel="noopener" class="text-xs text-info hover:text-info/80 font-mono truncate flex-1 min-w-0">
-																	http://{instance.ip_address}:{port}
+													<a href={connStr} target="_blank" rel="noopener" class="text-xs text-info hover:text-info/80 font-mono truncate flex-1 min-w-0">
+														{connStr}
 																</a>
 															{:else}
 																<code class="text-xs text-stone-300 font-mono">{connStr}</code>
@@ -975,19 +979,19 @@
 
 									<!-- Actions -->
 									<div class="flex gap-2">
-										<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs py-2 bg-stone-900 text-stone-300 rounded-md border border-stone-800 hover:bg-stone-800/60 hover:border-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
+								<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs leading-none py-2 bg-stone-900 text-stone-300 rounded-md border border-stone-800 hover:bg-stone-800/60 hover:border-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
 											{#if instanceAction === 'extending'}
-												<Icon icon="mdi:loading" class="w-3.5 h-3.5 animate-spin" />
+										<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
 											{:else}
-												<Icon icon="mdi:clock-plus-outline" class="w-3.5 h-3.5" />
+										<Icon icon="mdi:clock-plus-outline" class="w-3 h-3 shrink-0" />
 											{/if}
 											{instanceAction === 'extending' ? 'Extending…' : 'Extend'}
 										</button>
-										<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs py-2 bg-down/10 text-down rounded-md border border-down/30 hover:bg-down/20 transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5">
+								<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs leading-none py-2 bg-down/10 text-down rounded-md border border-down/30 hover:bg-down/20 transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5">
 											{#if instanceAction === 'stopping'}
-												<Icon icon="mdi:loading" class="w-3.5 h-3.5 animate-spin" />
+										<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
 											{:else}
-												<Icon icon="mdi:stop-circle-outline" class="w-3.5 h-3.5" />
+										<Icon icon="mdi:stop-circle-outline" class="w-3 h-3 shrink-0" />
 											{/if}
 											{instanceAction === 'stopping' ? 'Stopping…' : 'Stop'}
 										</button>
@@ -1009,12 +1013,12 @@
 									{#if error}
 										<div class="mb-4 py-2 px-3 rounded-md text-sm bg-down/10 border border-down/20 text-down">{error}</div>
 									{/if}
-									<button on:click={startInstance} disabled={creatingInstance} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+								<button on:click={startInstance} disabled={creatingInstance} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm leading-none font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
 										{#if creatingInstance}
-											<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+										<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 											Starting…
 										{:else}
-											<Icon icon="mdi:play" class="w-4 h-4" />
+										<Icon icon="mdi:play" class="w-3.5 h-3.5 shrink-0" />
 											Start Instance
 										{/if}
 									</button>
@@ -1068,13 +1072,15 @@
 								<ol class="space-y-2">
 									{#each solvers as s (s.rank)}
 										{@const rk = podiumRank[s.rank] ?? { cls: 'text-stone-300 bg-stone-800/30 border-stone-800', label: `${s.rank}` }}
-										<li class="flex items-center justify-between py-2 px-3 rounded-lg border {rk.cls}">
-											<div class="flex items-center gap-2.5 min-w-0">
+									<li class="flex items-center justify-between py-2 px-3 rounded-lg border {rk.cls}">
+										<div class="flex items-center gap-2.5 min-w-0 leading-none">
+											<span class="w-6 shrink-0 inline-flex items-center justify-center">
 												{#if s.rank === 1}
-													<Icon icon="mdi:water" class="w-4 h-4 shrink-0" />
+													<Icon icon="mdi:water" class="w-3.5 h-3.5 shrink-0" />
 												{:else}
-													<span class="text-[0.65rem] font-medium uppercase tracking-wide shrink-0 w-6 tabular-nums">{rk.label}</span>
+													<span class="text-[0.65rem] font-medium uppercase tracking-wide tabular-nums">{rk.label}</span>
 												{/if}
+											</span>
 												<span class="text-sm truncate {s.rank === 1 ? 'font-medium' : 'text-stone-200'}">{s.name}</span>
 											</div>
 											{#if formatSolvedAt(s.at)}
@@ -1088,14 +1094,14 @@
 									<span class="text-stone-200 tabular-nums font-medium">{challenge.total_solves}</span>
 								</div>
 							{:else if challenge.total_solves === 0}
-								<div class="flex items-center gap-2 py-2 px-3 rounded-lg bg-blood/10 border border-blood/20 text-blood text-xs">
-									<Icon icon="mdi:water" class="w-4 h-4 shrink-0" />
+								<div class="flex items-center gap-2 py-2 px-3 rounded-lg bg-blood/10 border border-blood/20 text-blood text-xs leading-none">
+									<Icon icon="mdi:water" class="w-3 h-3 shrink-0" />
 									<span>Unsolved — first blood available</span>
 								</div>
 							{:else}
 								<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-stone-950 border border-stone-800">
-									<span class="text-stone-500 text-sm flex items-center gap-1.5">
-										<Icon icon="mdi:account-group" class="w-4 h-4" />
+									<span class="text-stone-500 text-sm leading-none flex items-center gap-1.5">
+										<Icon icon="mdi:account-group" class="w-3.5 h-3.5 shrink-0" />
 										Solves
 									</span>
 									<span class="text-lg font-semibold text-stone-100 tabular-nums">{challenge.total_solves}</span>
@@ -1118,7 +1124,7 @@
 							{#if challenge.category}
 								<div class="flex justify-between">
 									<span class="text-stone-500">Category</span>
-									<span class="text-stone-300 inline-flex items-center gap-1.5">
+								<span class="text-stone-300 inline-flex items-center gap-1.5 leading-none">
 										<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{categoryColor(challenge.category)}"></span>
 										{challenge.category}
 									</span>
@@ -1161,7 +1167,7 @@
 	<div class="fixed inset-0 bg-stone-950/80 flex items-center justify-center z-50 p-4">
 		<div class="bg-stone-900 border border-stone-800 rounded-lg w-full max-w-md">
 			<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between">
-				<h3 class="text-sm font-semibold text-stone-200 uppercase tracking-wide">Add New Flag</h3>
+				<h3 class="text-sm font-semibold text-stone-200">Add New Flag</h3>
 				<button on:click={() => showFlagModal = false} class="text-stone-500 hover:text-stone-300 transition-colors" aria-label="Close">
 					<Icon icon="mdi:close" class="w-5 h-5" />
 				</button>

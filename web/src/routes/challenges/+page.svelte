@@ -117,15 +117,15 @@
 		>
 			<svelte:fragment slot="actions">
 				{#if !loading}
-					<div class="flex items-center gap-5 text-sm">
+					<div class="flex items-center gap-5 text-sm leading-none">
 						<div class="flex items-center gap-2">
-							<Icon icon="mdi:flag-outline" class="w-4 h-4 text-stone-500" />
+							<Icon icon="mdi:flag-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
 							<span class="text-stone-200 tabular-nums">{challenges.length}</span>
 							<span class="text-stone-500 text-xs uppercase tracking-wide">challenges</span>
 						</div>
 						{#if $auth.isAuthenticated}
 							<div class="flex items-center gap-2">
-								<Icon icon="mdi:check-circle" class="w-4 h-4 text-up" />
+								<Icon icon="mdi:check-circle" class="w-3.5 h-3.5 shrink-0 text-up" />
 								<span class="text-stone-200 tabular-nums">{solvedCount}</span>
 								<span class="text-stone-500 text-xs uppercase tracking-wide">solved</span>
 							</div>
@@ -193,8 +193,8 @@
 						<span></span>
 					{/if}
 					{#if hasFilters}
-						<button on:click={resetFilters} class="text-xs text-stone-500 hover:text-stone-300 transition-colors inline-flex items-center gap-1">
-							<Icon icon="mdi:filter-remove-outline" class="w-4 h-4" />
+					<button on:click={resetFilters} class="text-xs leading-none text-stone-500 hover:text-stone-300 transition-colors inline-flex items-center gap-1">
+						<Icon icon="mdi:filter-remove-outline" class="w-3 h-3 shrink-0" />
 							Reset filters
 						</button>
 					{/if}
@@ -220,8 +220,8 @@
 				{/each}
 			</div>
 		{:else if error}
-			<div class="rounded-lg border border-down/30 bg-down/10 px-4 py-3 flex items-center gap-2.5">
-				<Icon icon="mdi:alert-circle-outline" class="w-4 h-4 text-down shrink-0" />
+			<div class="rounded-lg border border-down/30 bg-down/10 px-4 py-3 flex items-start gap-2.5">
+				<Icon icon="mdi:alert-circle-outline" class="w-3.5 h-3.5 text-down shrink-0 mt-0.5" />
 				<p class="text-down text-sm">{error}</p>
 			</div>
 		{:else if filteredChallenges.length === 0}
@@ -237,10 +237,10 @@
 				{#each groups as group (group.category)}
 					{@const color = categoryColor(group.category)}
 					<section>
-						<div class="flex items-center gap-2.5 mb-4">
-							<Icon icon={catIcon(group.category)} class="w-4 h-4 shrink-0" style="color:{color}" />
+						<div class="flex items-center gap-2.5 mb-4 leading-none">
+							<Icon icon={catIcon(group.category)} class="w-3.5 h-3.5 shrink-0" style="color:{color}" />
 							<h2 class="text-[0.95rem] font-semibold text-stone-200 leading-none">{group.category}</h2>
-							<span class="text-[0.68rem] tabular-nums rounded-full px-2 py-0.5 border border-stone-800 bg-stone-900/40 {group.solved === group.challenges.length && $auth.isAuthenticated ? 'text-up' : 'text-stone-400'}">
+							<span class="text-[0.68rem] leading-none tabular-nums rounded-full px-2 py-0.5 border border-stone-800 bg-stone-900/40 {group.solved === group.challenges.length && $auth.isAuthenticated ? 'text-up' : 'text-stone-400'}">
 								{#if $auth.isAuthenticated}{group.solved}/{group.challenges.length}{:else}{group.challenges.length}{/if}
 							</span>
 							<div class="flex-1 h-px bg-stone-800/60"></div>

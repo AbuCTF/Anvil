@@ -143,7 +143,7 @@
 	}
 
 	const btnBase =
-		'flex items-center justify-center gap-2 px-4 py-2.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+		'flex items-center justify-center gap-2 px-4 py-2.5 rounded-md text-sm leading-none font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
 	const btnPrimary = 'text-amber-500 border border-amber-500/40 hover:bg-amber-500/10';
 	const btnNeutral = 'text-stone-300 border border-stone-800 hover:bg-stone-800/40 hover:text-stone-100';
 	const btnDanger = 'text-down border border-down/30 hover:bg-down/10';
@@ -165,47 +165,47 @@
 			<!-- Status -->
 			<Card title="Connection Status">
 				{#if vpnStatus?.connected}
-					<div class="flex items-center gap-2.5 mb-4">
+					<div class="flex items-center gap-2.5 mb-4 leading-none">
 						<span class="w-2 h-2 rounded-full bg-up animate-pulse"></span>
 						<span class="text-up font-medium">Connected</span>
 					</div>
 
 					<div class="space-y-3 bg-stone-950/50 border border-stone-800 rounded-md p-4">
 						<div class="flex items-center justify-between gap-3">
-							<span class="text-stone-500 text-sm flex items-center gap-2">
-								<Icon icon="mdi:ip-network" class="w-4 h-4" />
+							<span class="text-stone-500 text-sm leading-none flex items-center gap-2">
+								<Icon icon="mdi:ip-network" class="w-3.5 h-3.5 shrink-0" />
 								<span>Internal IP</span>
 							</span>
 							<code class="font-mono text-sm text-stone-200 tabular-nums break-all text-right">{vpnStatus.ip_address}</code>
 						</div>
 						<div class="flex items-center justify-between gap-3">
-							<span class="text-stone-500 text-sm flex items-center gap-2">
-								<Icon icon="mdi:clock-outline" class="w-4 h-4" />
+							<span class="text-stone-500 text-sm leading-none flex items-center gap-2">
+								<Icon icon="mdi:clock-outline" class="w-3.5 h-3.5 shrink-0" />
 								<span>Last handshake</span>
 							</span>
 							<span class="text-stone-300 text-sm font-mono tabular-nums">{formatLastHandshake(vpnStatus.last_handshake ?? 0)}</span>
 						</div>
 						<div class="flex items-center justify-between gap-3">
-							<span class="text-stone-500 text-sm flex items-center gap-2">
-								<Icon icon="mdi:swap-vertical" class="w-4 h-4" />
+							<span class="text-stone-500 text-sm leading-none flex items-center gap-2">
+								<Icon icon="mdi:swap-vertical" class="w-3.5 h-3.5 shrink-0" />
 								<span>Data transfer</span>
 							</span>
-							<span class="text-stone-300 text-sm font-mono tabular-nums">
-								<Icon icon="mdi:arrow-up" class="w-3 h-3 inline text-up" />
+							<span class="text-stone-300 text-sm leading-none font-mono tabular-nums inline-flex items-center gap-1">
+								<Icon icon="mdi:arrow-up" class="w-3.5 h-3.5 shrink-0 text-up" />
 								{formatBytes(vpnStatus.bytes_sent || 0)}
 								<span class="text-stone-600">/</span>
-								<Icon icon="mdi:arrow-down" class="w-3 h-3 inline text-info" />
+								<Icon icon="mdi:arrow-down" class="w-3.5 h-3.5 shrink-0 text-info" />
 								{formatBytes(vpnStatus.bytes_received || 0)}
 							</span>
 						</div>
 					</div>
 
-					<p class="text-xs text-stone-600 mt-3 flex items-center gap-1.5">
-						<Icon icon="mdi:information-outline" class="w-3.5 h-3.5" />
-						<span>Status updates every 10 seconds</span>
+					<p class="text-xs leading-none text-stone-600 mt-3 flex items-center gap-1.5">
+						<Icon icon="mdi:information-outline" class="w-3 h-3 shrink-0" />
+						<span>Status updates every 3 seconds</span>
 					</p>
 				{:else}
-					<div class="flex items-center gap-2.5 mb-4">
+					<div class="flex items-center gap-2.5 mb-4 leading-none">
 						<span class="w-2 h-2 rounded-full bg-stone-600"></span>
 						<span class="text-stone-400 font-medium">Not connected</span>
 					</div>
@@ -234,7 +234,7 @@
 					<div class="space-y-4">
 						<div class="flex gap-2">
 							<button on:click={downloadConfig} class="flex-1 {btnBase} {btnPrimary}">
-								<Icon icon="mdi:download" class="w-4 h-4" />
+								<Icon icon="mdi:download" class="w-3.5 h-3.5 shrink-0" />
 								<span>Download</span>
 							</button>
 							<button
@@ -260,10 +260,10 @@
 								<div class="flex gap-2">
 									<button on:click={regenerateConfig} disabled={regenerating} class="flex-1 {btnBase} {btnDanger} py-2">
 										{#if regenerating}
-											<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+										<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 											<span>Regenerating...</span>
 										{:else}
-											<Icon icon="mdi:refresh" class="w-4 h-4" />
+										<Icon icon="mdi:refresh" class="w-3.5 h-3.5 shrink-0" />
 											<span>Confirm regenerate</span>
 										{/if}
 									</button>
@@ -274,7 +274,7 @@
 							</div>
 						{:else}
 							<button on:click={() => showRegenerateConfirm = true} class="w-full {btnBase} {btnNeutral} py-2">
-								<Icon icon="mdi:refresh" class="w-4 h-4" />
+								<Icon icon="mdi:refresh" class="w-3.5 h-3.5 shrink-0" />
 								<span>Regenerate config</span>
 							</button>
 						{/if}
@@ -293,10 +293,10 @@
 						</div>
 						<button on:click={generateConfig} disabled={generating} class="w-full {btnBase} {btnPrimary}">
 							{#if generating}
-								<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+								<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 								<span>Generating...</span>
 							{:else}
-								<Icon icon="mdi:key-plus" class="w-4 h-4" />
+								<Icon icon="mdi:key-plus" class="w-3.5 h-3.5 shrink-0" />
 								<span>Generate config</span>
 							{/if}
 						</button>
@@ -309,7 +309,7 @@
 		<Card title="Setup Instructions">
 			<div class="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
 				<div class="space-y-3">
-					<h3 class="text-stone-200 text-sm font-medium uppercase tracking-wide">GNU/Linux</h3>
+					<h3 class="text-stone-200 text-sm font-medium">GNU/Linux</h3>
 					<div class="bg-stone-950/50 border border-stone-800 rounded-md p-4 space-y-3 text-sm">
 						<div>
 							<p class="text-stone-500 text-xs mb-1">Install WireGuard</p>
@@ -327,7 +327,7 @@
 				</div>
 
 				<div class="space-y-3">
-					<h3 class="text-stone-200 text-sm font-medium uppercase tracking-wide">macOS</h3>
+					<h3 class="text-stone-200 text-sm font-medium">macOS</h3>
 					<div class="bg-stone-950/50 border border-stone-800 rounded-md p-4 space-y-3 text-sm">
 						<div class="flex items-start gap-2">
 							<span class="text-stone-600 font-mono tabular-nums shrink-0">1.</span>
@@ -345,7 +345,7 @@
 				</div>
 
 				<div class="space-y-3">
-					<h3 class="text-stone-200 text-sm font-medium uppercase tracking-wide">Windows</h3>
+					<h3 class="text-stone-200 text-sm font-medium">Windows</h3>
 					<div class="bg-stone-950/50 border border-stone-800 rounded-md p-4 space-y-3 text-sm">
 						<div class="flex items-start gap-2">
 							<span class="text-stone-600 font-mono tabular-nums shrink-0">1.</span>
@@ -365,8 +365,8 @@
 		</Card>
 
 		{#if error}
-			<div class="mt-4 sm:mt-6 border border-down/30 bg-down/5 rounded-lg p-4 flex items-center gap-3">
-				<Icon icon="mdi:alert-circle-outline" class="w-5 h-5 text-down shrink-0" />
+			<div class="mt-4 sm:mt-6 border border-down/30 bg-down/5 rounded-lg p-4 flex items-start gap-3">
+				<Icon icon="mdi:alert-circle-outline" class="w-4 h-4 text-down shrink-0 mt-0.5" />
 				<span class="text-down text-sm">{error}</span>
 			</div>
 		{/if}

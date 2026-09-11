@@ -47,7 +47,7 @@
 <div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12">
 	<div class="w-full max-w-sm">
 		<div class="text-center mb-6">
-			<h1 class="text-2xl font-bold text-stone-100 tracking-tight">Welcome Back</h1>
+			<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">Welcome Back</h1>
 			<p class="text-sm text-stone-500 mt-1.5">
 				Don't have an account?
 				<a href="/register" class="text-stone-200 font-medium hover:text-stone-50 transition-colors">Create one</a>
@@ -93,8 +93,8 @@
 					class="w-full rounded-md bg-stone-100 text-stone-950 font-medium py-2.5 text-sm hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 				>
 					{#if loading}
-						<span class="flex items-center justify-center gap-2">
-							<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+						<span class="flex items-center justify-center gap-2 leading-none">
+							<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 							Signing in…
 						</span>
 					{:else}

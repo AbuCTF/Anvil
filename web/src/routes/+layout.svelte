@@ -62,12 +62,12 @@
 						{#each navigation as item}
 							<a
 								href={item.href}
-								class="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200
+								class="flex items-center gap-1.5 px-4 py-1.5 text-sm leading-none font-medium rounded-full transition-all duration-200
 								{$page.url.pathname.startsWith(item.href)
 									? 'bg-stone-800 text-stone-50'
 									: 'text-stone-400 hover:text-stone-50'}"
 							>
-								<Icon icon={item.icon} class="w-4 h-4" />
+								<Icon icon={item.icon} class="w-3.5 h-3.5 shrink-0" />
 								<span>{item.name}</span>
 							</a>
 						{/each}
@@ -88,19 +88,21 @@
 						{#if $auth.user?.role === 'admin'}
 							<a
 								href="/admin"
-								class="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-amber-500 hover:text-amber-400 transition-colors"
+								class="flex items-center gap-1.5 px-3 py-1.5 text-sm leading-none font-medium text-amber-500 hover:text-amber-400 transition-colors"
 							>
-								<Icon icon="mdi:shield-crown" class="w-4 h-4" />
+								<Icon icon="mdi:shield-crown" class="w-3.5 h-3.5 shrink-0" />
 								<span>Admin</span>
 							</a>
 						{/if}
 						<div class="relative">
 							<button
 								on:click={() => userMenuOpen = !userMenuOpen}
-								class="flex items-center gap-1.5 px-3 py-1.5 text-sm text-stone-300 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40"
+								aria-haspopup="menu"
+								aria-expanded={userMenuOpen}
+								class="flex items-center gap-1.5 px-3 py-1.5 text-sm leading-none text-stone-300 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40"
 							>
 								<span class="font-medium">{$auth.user?.username}</span>
-								<Icon icon="mdi:chevron-down" class="w-4 h-4 text-stone-500" />
+								<Icon icon="mdi:chevron-down" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
 							</button>
 
 							{#if userMenuOpen}
@@ -113,18 +115,18 @@
 										<a
 											href={item.href}
 											on:click={() => userMenuOpen = false}
-											class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-400 hover:bg-stone-800/40 hover:text-stone-100 transition-colors"
+											class="flex items-center gap-3 px-4 py-2.5 text-sm leading-none text-stone-400 hover:bg-stone-800/40 hover:text-stone-100 transition-colors"
 										>
-											<Icon icon={item.icon} class="w-4 h-4" />
+											<Icon icon={item.icon} class="w-3.5 h-3.5 shrink-0" />
 											<span>{item.name}</span>
 										</a>
 									{/each}
 									<div class="border-t border-stone-800">
 										<button
 											on:click={handleLogout}
-											class="flex items-center gap-3 px-4 py-2.5 text-sm text-stone-400 hover:bg-stone-800/40 hover:text-danger transition-colors w-full text-left"
+											class="flex items-center gap-3 px-4 py-2.5 text-sm leading-none text-stone-400 hover:bg-stone-800/40 hover:text-danger transition-colors w-full text-left"
 										>
-											<Icon icon="mdi:logout" class="w-4 h-4" />
+											<Icon icon="mdi:logout" class="w-3.5 h-3.5 shrink-0" />
 											<span>Logout</span>
 										</button>
 									</div>
@@ -140,7 +142,7 @@
 						</a>
 						<a
 							href="/register"
-							class="px-5 py-2 bg-gradient-to-r from-amber-500 to-orange-600 text-sm font-semibold text-black hover:from-amber-400 hover:to-orange-500 transition-all rounded-full"
+							class="px-5 py-2 bg-amber-500 text-sm font-semibold text-amber-950 hover:bg-amber-400 transition-colors rounded-full"
 						>
 							Register
 						</a>
@@ -154,6 +156,8 @@
 					</button>
 					<button
 						on:click={() => (mobileMenuOpen = !mobileMenuOpen)}
+						aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}
+						aria-expanded={mobileMenuOpen}
 						class="p-2 text-stone-400 hover:text-stone-100"
 					>
 						<Icon icon={mobileMenuOpen ? 'mdi:close' : 'mdi:menu'} class="w-5 h-5" />
@@ -170,12 +174,12 @@
 						<a
 							href={item.href}
 							on:click={() => mobileMenuOpen = false}
-							class="flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-md transition-colors
+							class="flex items-center gap-3 px-3 py-2.5 text-sm leading-none font-medium rounded-md transition-colors
 							{$page.url.pathname.startsWith(item.href)
 								? 'text-amber-500'
 								: 'text-stone-400 hover:bg-stone-800/40 hover:text-stone-100'}"
 						>
-							<Icon icon={item.icon} class="w-5 h-5" />
+							<Icon icon={item.icon} class="w-3.5 h-3.5 shrink-0" />
 							<span>{item.name}</span>
 						</a>
 					{/each}
@@ -186,24 +190,24 @@
 								<a
 									href={item.href}
 									on:click={() => mobileMenuOpen = false}
-									class="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-stone-400 hover:bg-stone-800/40 hover:text-stone-100 rounded-md transition-colors"
+									class="flex items-center gap-3 px-3 py-2.5 text-sm leading-none font-medium text-stone-400 hover:bg-stone-800/40 hover:text-stone-100 rounded-md transition-colors"
 								>
-									<Icon icon={item.icon} class="w-5 h-5" />
+									<Icon icon={item.icon} class="w-3.5 h-3.5 shrink-0" />
 									<span>{item.name}</span>
 								</a>
 							{/each}
 							<button
 								on:click={() => { handleLogout(); mobileMenuOpen = false; }}
-								class="flex items-center gap-3 px-3 py-2.5 text-sm font-medium text-stone-400 hover:bg-stone-800/40 hover:text-danger rounded-md transition-colors w-full text-left"
+								class="flex items-center gap-3 px-3 py-2.5 text-sm leading-none font-medium text-stone-400 hover:bg-stone-800/40 hover:text-danger rounded-md transition-colors w-full text-left"
 							>
-								<Icon icon="mdi:logout" class="w-5 h-5" />
+								<Icon icon="mdi:logout" class="w-3.5 h-3.5 shrink-0" />
 								<span>Logout</span>
 							</button>
 						</div>
 					{:else}
 						<div class="border-t border-stone-800 pt-3 mt-3 flex gap-3">
 							<a href="/login" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-medium text-stone-300 border border-stone-800 rounded-md hover:bg-stone-800/40 hover:text-stone-100 transition-colors">Login</a>
-							<a href="/register" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-semibold text-black bg-gradient-to-r from-amber-500 to-orange-600 rounded-full hover:from-amber-400 hover:to-orange-500 transition-all">Register</a>
+							<a href="/register" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-semibold text-amber-950 bg-amber-500 rounded-full hover:bg-amber-400 transition-colors">Register</a>
 						</div>
 					{/if}
 				</div>

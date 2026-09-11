@@ -48,7 +48,7 @@
 	<div class="w-full max-w-sm">
 		<div class="text-center mb-6">
 			<img src="/logo.png" alt="Anvil" class="h-9 w-auto mx-auto mb-4" />
-			<h1 class="text-2xl font-bold text-stone-100 tracking-tight">Create Account</h1>
+			<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">Create Account</h1>
 			<p class="text-sm text-stone-500 mt-1.5">
 				Already have an account?
 				<a href="/login" class="text-stone-200 font-medium hover:text-stone-50 transition-colors">Sign in</a>
@@ -134,8 +134,8 @@
 					class="w-full rounded-md bg-stone-100 text-stone-950 font-medium py-2.5 text-sm hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 				>
 					{#if loading}
-						<span class="flex items-center justify-center gap-2">
-							<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+						<span class="flex items-center justify-center gap-2 leading-none">
+							<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 							Creating account…
 						</span>
 					{:else}

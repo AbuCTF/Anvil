@@ -13,7 +13,7 @@
 		status: string;
 		ip_address: string;
 		ports: Record<string, number>;
-		created_at: string;
+		created_at: number | string;
 		expires_at: number;
 		extensions_used: number;
 		max_extensions: number;
@@ -41,6 +41,7 @@
 		try {
 			const response = await api.getInstances();
 			instances = response.instances || [];
+			error = '';
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load instances';
 		} finally {
@@ -95,15 +96,15 @@
 
 	function getConnectionCmd(ip: string, portKey: string): string {
 		const [port, svc] = portKey.split('/');
-		if (svc === 'http') {
-			return `http://${ip}:${port}`;
+		if (svc === 'http' || svc === 'https') {
+			return `${svc}://${ip}:${port}`;
 		}
 		return `nc ${ip} ${port}`;
 	}
 
 	function isHttpPort(portKey: string): boolean {
 		const [, svc] = portKey.split('/');
-		return svc === 'http';
+		return svc === 'http' || svc === 'https';
 	}
 
 	function formatTimeRemaining(expiresAt: number): string {
@@ -138,7 +139,7 @@
 	}
 
 	const btnBase =
-		'flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+		'flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-md text-sm leading-none font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
 	const btnNeutral = 'text-stone-300 border border-stone-800 hover:bg-stone-800/40 hover:text-stone-100';
 	const btnDanger = 'text-down border border-down/30 hover:bg-down/10';
 </script>
@@ -152,9 +153,9 @@
 		<a
 			slot="actions"
 			href="/challenges"
-			class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm font-medium transition-colors"
+			class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm leading-none font-medium transition-colors"
 		>
-			<Icon icon="mdi:plus" class="w-4 h-4" />
+			<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
 			<span>New Instance</span>
 		</a>
 	</PageHeader>
@@ -169,9 +170,9 @@
 			<p class="text-down text-sm mb-4">{error}</p>
 			<button
 				on:click={() => { error = ''; loading = true; loadInstances(); }}
-				class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm font-medium transition-colors"
+				class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm leading-none font-medium transition-colors"
 			>
-				<Icon icon="mdi:refresh" class="w-4 h-4" />
+				<Icon icon="mdi:refresh" class="w-3.5 h-3.5 shrink-0" />
 				<span>Try again</span>
 			</button>
 		</div>
@@ -179,9 +180,9 @@
 		<EmptyState icon="mdi:server-off" text="No active instances.">
 			<a
 				href="/challenges"
-				class="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm font-medium transition-colors"
+				class="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm leading-none font-medium transition-colors"
 			>
-				<Icon icon="mdi:magnify" class="w-4 h-4" />
+				<Icon icon="mdi:magnify" class="w-3.5 h-3.5 shrink-0" />
 				<span>Browse challenges</span>
 			</a>
 		</EmptyState>
@@ -191,7 +192,7 @@
 				{@const expired = instance.expires_at <= Math.floor(Date.now() / 1000)}
 				{@const busy = !!actionLoading[instance.id]}
 				<Card bodyClass="p-0">
-					<div slot="header" class="flex items-center gap-2.5 min-w-0">
+					<div slot="header" class="flex items-center gap-2.5 min-w-0 leading-none">
 						<span class="w-2 h-2 rounded-full shrink-0 {statusDot(instance.status)}"></span>
 						<a
 							href="/challenges/{instance.challenge_slug}"
@@ -257,8 +258,8 @@
 						<!-- Stats -->
 						<div class="grid grid-cols-2 gap-3 pt-1">
 							<div class="p-3 bg-stone-950/50 border border-stone-800 rounded-md">
-								<div class="flex items-center gap-1.5 text-stone-500 text-xs uppercase tracking-wide mb-1.5">
-									<Icon icon="mdi:clock-outline" class="w-3.5 h-3.5" />
+								<div class="flex items-center gap-1.5 text-stone-500 text-xs leading-none uppercase tracking-wide mb-1.5">
+									<Icon icon="mdi:clock-outline" class="w-3 h-3 shrink-0" />
 									<span>Remaining</span>
 								</div>
 								<div class="font-mono tabular-nums text-lg {expired ? 'text-down' : 'text-amber-500/90'}">
@@ -267,8 +268,8 @@
 							</div>
 
 							<div class="p-3 bg-stone-950/50 border border-stone-800 rounded-md">
-								<div class="flex items-center gap-1.5 text-stone-500 text-xs uppercase tracking-wide mb-1.5">
-									<Icon icon="mdi:refresh" class="w-3.5 h-3.5" />
+								<div class="flex items-center gap-1.5 text-stone-500 text-xs leading-none uppercase tracking-wide mb-1.5">
+									<Icon icon="mdi:refresh" class="w-3 h-3 shrink-0" />
 									<span>Extensions</span>
 								</div>
 								<div class="font-mono tabular-nums text-lg text-stone-100">
@@ -286,9 +287,9 @@
 							class="{btnBase} {btnNeutral}"
 						>
 							{#if actionLoading[instance.id] === 'extending'}
-								<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+								<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 							{:else}
-								<Icon icon="mdi:clock-plus" class="w-4 h-4" />
+								<Icon icon="mdi:clock-plus" class="w-3.5 h-3.5 shrink-0" />
 							{/if}
 							<span>Extend</span>
 						</button>
@@ -298,9 +299,9 @@
 							class="{btnBase} {btnNeutral}"
 						>
 							{#if actionLoading[instance.id] === 'reverting'}
-								<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+								<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 							{:else}
-								<Icon icon="mdi:restart" class="w-4 h-4" />
+								<Icon icon="mdi:restart" class="w-3.5 h-3.5 shrink-0" />
 							{/if}
 							<span>Revert</span>
 						</button>
@@ -310,9 +311,9 @@
 							class="{btnBase} {btnDanger}"
 						>
 							{#if actionLoading[instance.id] === 'stopping'}
-								<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+								<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 							{:else}
-								<Icon icon="mdi:stop" class="w-4 h-4" />
+								<Icon icon="mdi:stop" class="w-3.5 h-3.5 shrink-0" />
 							{/if}
 							<span>Stop</span>
 						</button>

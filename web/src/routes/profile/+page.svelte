@@ -1,9 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
-import { goto } from '$app/navigation';
 import Icon from '@iconify/svelte';
 import { api } from '$api';
-import { auth } from '$stores/auth';
 
 interface UserStats {
 	total_score: number;
@@ -34,16 +32,6 @@ let editForm = {
 };
 let saving = false;
 let saveError = '';
-
-function getDifficultyColor(difficulty: string): string {
-	switch(difficulty.toLowerCase()) {
-		case 'easy': return 'bg-green-500';
-		case 'medium': return 'bg-yellow-500';
-		case 'hard': return 'bg-red-500';
-		case 'insane': return 'bg-purple-500';
-		default: return 'bg-stone-400';
-	}
-}
 
 onMount(async () => {
 	await loadProfile();
@@ -113,9 +101,9 @@ function formatDate(dateString: string): string {
 		</div>
 	{:else if error}
 		<div class="max-w-4xl mx-auto px-4 py-8">
-			<div class="bg-red-950/30 border border-red-900 rounded-xl p-6 text-center">
-				<Icon icon="mdi:alert-circle" class="w-8 h-8 text-red-400 mx-auto mb-3" />
-				<p class="text-red-400">{error}</p>
+			<div class="bg-down/10 border border-down/30 rounded-lg p-6 text-center">
+				<Icon icon="mdi:alert-circle" class="w-8 h-8 text-down mx-auto mb-3" />
+				<p class="text-down">{error}</p>
 			</div>
 		</div>
 	{:else if profile}
@@ -123,16 +111,16 @@ function formatDate(dateString: string): string {
 			<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
 				<!-- Profile Card -->
 				<div class="lg:col-span-1">
-					<div class="bg-stone-950/50 border border-stone-800/50 rounded-xl p-8 backdrop-blur-sm">
+					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-6">
 						{#if editing}
 							<form on:submit|preventDefault={saveProfile} class="space-y-5">
 								<div>
 									<label for="display_name" class="block text-sm font-medium text-stone-300 mb-2">Display Name</label>
 									<input
-										id="display_name"
-										type="text"
-										bind:value={editForm.display_name}
-										class="w-full px-4 py-3 bg-stone-950 border border-stone-700 rounded-lg text-stone-50 placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition"
+									id="display_name"
+									type="text"
+									bind:value={editForm.display_name}
+									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-700 rounded-md text-stone-50 placeholder-stone-500 focus:outline-none focus:border-stone-500 transition"
 										placeholder="Your display name"
 									/>
 								</div>
@@ -140,16 +128,16 @@ function formatDate(dateString: string): string {
 								<div>
 									<label for="bio" class="block text-sm font-medium text-stone-300 mb-2">Bio</label>
 									<textarea
-										id="bio"
-										bind:value={editForm.bio}
-										rows="3"
-										class="w-full px-4 py-3 bg-stone-950 border border-stone-700 rounded-lg text-stone-50 placeholder-stone-500 focus:outline-none focus:border-stone-500 focus:ring-1 focus:ring-stone-500 transition resize-none"
+									id="bio"
+									bind:value={editForm.bio}
+									rows="3"
+									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-700 rounded-md text-stone-50 placeholder-stone-500 focus:outline-none focus:border-stone-500 transition resize-none"
 										placeholder="Tell us about yourself..."
 									></textarea>
 								</div>
 
 								{#if saveError}
-									<div class="bg-red-950/30 border border-red-900 rounded px-4 py-3 text-red-400 text-sm">
+									<div class="bg-down/10 border border-down/30 rounded-md px-4 py-3 text-down text-sm">
 										{saveError}
 									</div>
 								{/if}
@@ -158,10 +146,10 @@ function formatDate(dateString: string): string {
 									<button
 										type="submit"
 										disabled={saving}
-										class="flex-1 px-4 py-3 bg-stone-50 text-stone-950 rounded-lg font-medium hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
+										class="flex-1 inline-flex items-center justify-center px-4 py-2.5 bg-stone-50 text-stone-950 rounded-md leading-none font-medium hover:bg-stone-200 disabled:opacity-50 disabled:cursor-not-allowed transition"
 									>
 										{#if saving}
-											<Icon icon="mdi:loading" class="w-5 h-5 animate-spin inline-block mr-2" />
+											<Icon icon="mdi:loading" class="w-4 h-4 shrink-0 animate-spin mr-2" />
 											Saving...
 										{:else}
 											Save Changes
@@ -170,16 +158,16 @@ function formatDate(dateString: string): string {
 									<button
 										type="button"
 										on:click={() => editing = false}
-										class="px-4 py-3 bg-stone-900 text-stone-300 rounded-lg hover:bg-stone-800 transition border border-stone-800"
+										class="px-4 py-2.5 bg-stone-900 text-stone-300 rounded-md hover:bg-stone-800 transition border border-stone-800"
 									>
 										Cancel
 									</button>
 								</div>
 							</form>
 						{:else}
-							<div class="text-center mb-8">
-								<div class="w-28 h-28 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mx-auto flex items-center justify-center mb-5 shadow-2xl">
-									<Icon icon="mdi:account-circle" class="w-16 h-16 text-stone-50" />
+							<div class="text-center mb-6">
+								<div class="w-20 h-20 bg-stone-900/60 border border-stone-800 rounded-lg mx-auto flex items-center justify-center mb-4">
+									<Icon icon="mdi:account-circle" class="w-11 h-11 text-stone-500" />
 								</div>
 								<h1 class="text-2xl font-semibold text-stone-50 mb-2 tracking-tight">
 									{profile.display_name || profile.username}
@@ -193,25 +181,25 @@ function formatDate(dateString: string): string {
 
 							<button
 								on:click={() => editing = true}
-								class="w-full px-4 py-2.5 bg-stone-900/50 text-stone-50 rounded-lg hover:bg-stone-800/50 transition border border-stone-700/50 flex items-center justify-center space-x-2 text-sm font-medium"
+								class="w-full px-4 py-2.5 bg-stone-900/50 text-stone-50 rounded-md hover:bg-stone-800/50 transition border border-stone-700/50 flex items-center justify-center space-x-2 text-sm leading-none font-medium"
 							>
-								<Icon icon="mdi:pencil" class="w-4 h-4" />
+								<Icon icon="mdi:pencil" class="w-3.5 h-3.5 shrink-0" />
 								<span>Edit Profile</span>
 							</button>
 
 							{#if stats}
 								<div class="mt-8 space-y-3">
-									<div class="text-center py-5 px-4 bg-stone-950/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
-										<div class="text-4xl font-light text-stone-50 mb-1.5 tracking-tight">{stats.total_score || 0}</div>
+									<div class="text-center py-5 px-4 bg-stone-950/50 border border-stone-800 rounded-lg">
+										<div class="text-4xl font-light text-stone-50 mb-1.5 tracking-tight tabular-nums">{stats.total_score || 0}</div>
 										<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Total Points</div>
 									</div>
 									<div class="grid grid-cols-2 gap-3">
-										<div class="text-center py-4 px-3 bg-stone-950/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
-											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight">#{stats.rank || 1}</div>
+										<div class="text-center py-4 px-3 bg-stone-950/50 border border-stone-800 rounded-lg">
+											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight tabular-nums">{stats.rank ? `#${stats.rank}` : '—'}</div>
 											<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Rank</div>
 										</div>
-										<div class="text-center py-4 px-3 bg-stone-950/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
-											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight">{stats.total_solves || 0}</div>
+										<div class="text-center py-4 px-3 bg-stone-950/50 border border-stone-800 rounded-lg">
+											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight tabular-nums">{stats.total_solves || 0}</div>
 											<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Solved</div>
 										</div>
 									</div>
@@ -225,9 +213,9 @@ function formatDate(dateString: string): string {
 				<div class="lg:col-span-2 space-y-6">
 					<!-- Difficulty Progress -->
 					{#if stats?.by_difficulty}
-						<div class="bg-stone-950/50 border border-stone-800/50 rounded-xl p-8 backdrop-blur-sm">
-							<h2 class="text-lg font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
-								<Icon icon="mdi:chart-bar" class="w-5 h-5" />
+						<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-6">
+							<h2 class="text-lg leading-none font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
+								<Icon icon="mdi:chart-bar" class="w-[18px] h-[18px] shrink-0" />
 								<span>Progress by Difficulty</span>
 							</h2>
 							<div class="space-y-6">
@@ -244,7 +232,7 @@ function formatDate(dateString: string): string {
 										</div>
 										<div class="w-full bg-stone-900/50 rounded-full h-2 overflow-hidden">
 											<div 
-												class="h-full transition-all duration-700 ease-out {getDifficultyColor(difficulty)}"
+												class="h-full bg-stone-500 transition-all duration-700 ease-out"
 												style="width: {percentage}%"
 											></div>
 										</div>
@@ -256,19 +244,19 @@ function formatDate(dateString: string): string {
 
 					<!-- Category Progress -->
 					{#if stats?.by_category && Object.keys(stats.by_category).length > 0}
-						<div class="bg-stone-950/50 border border-stone-800/50 rounded-xl p-8 backdrop-blur-sm">
-							<h2 class="text-lg font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
-								<Icon icon="mdi:shape" class="w-5 h-5" />
+						<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-6">
+							<h2 class="text-lg leading-none font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
+								<Icon icon="mdi:shape" class="w-[18px] h-[18px] shrink-0" />
 								<span>Progress by Category</span>
 							</h2>
 							<div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
 								{#each Object.entries(stats.by_category) as [category, data]}
 									{@const percentage = data.total > 0 ? (data.solved / data.total) * 100 : 0}
-									<div class="p-5 bg-stone-950/50 border border-stone-800/50 rounded-xl backdrop-blur-sm">
+									<div class="p-5 bg-stone-950/50 border border-stone-800 rounded-lg">
 										<div class="text-xs text-stone-400 uppercase tracking-wider mb-3 font-medium truncate">{category}</div>
 										<div class="text-2xl font-light text-stone-50 mb-3 tracking-tight">{data.solved}<span class="text-stone-600 text-lg">/{data.total}</span></div>
 										<div class="w-full bg-stone-900/50 rounded-full h-1.5 overflow-hidden">
-											<div class="h-full bg-green-500 transition-all duration-700 ease-out" style="width: {percentage}%"></div>
+											<div class="h-full bg-stone-500 transition-all duration-700 ease-out" style="width: {percentage}%"></div>
 										</div>
 									</div>
 								{/each}
@@ -277,9 +265,9 @@ function formatDate(dateString: string): string {
 					{/if}
 
 					<!-- Recent Solves -->
-					<div class="bg-stone-950/50 border border-stone-800/50 rounded-xl p-8 backdrop-blur-sm">
-						<h2 class="text-lg font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
-							<Icon icon="mdi:flag-checkered" class="w-5 h-5" />
+					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-6">
+						<h2 class="text-lg leading-none font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
+							<Icon icon="mdi:flag-checkered" class="w-[18px] h-[18px] shrink-0" />
 							<span>Recent Solves</span>
 						</h2>
 
@@ -289,9 +277,9 @@ function formatDate(dateString: string): string {
 								<p class="text-stone-500 mb-6 text-sm">No flags captured yet</p>
 								<a 
 									href="/challenges" 
-									class="inline-flex items-center space-x-2 px-6 py-2.5 bg-stone-50 text-stone-950 rounded-lg hover:bg-stone-200 transition text-sm font-medium"
+									class="inline-flex items-center space-x-2 px-6 py-2.5 bg-stone-50 text-stone-950 rounded-md hover:bg-stone-200 transition text-sm leading-none font-medium"
 								>
-									<Icon icon="mdi:flag" class="w-4 h-4" />
+									<Icon icon="mdi:flag" class="w-3.5 h-3.5 shrink-0" />
 									<span>Browse Challenges</span>
 								</a>
 							</div>
@@ -300,11 +288,11 @@ function formatDate(dateString: string): string {
 								{#each solves.slice(0, 10) as solve}
 									<a 
 										href="/challenges/{solve.challenge_slug}"
-										class="flex items-center justify-between p-5 bg-stone-950/50 border border-stone-800/50 rounded-xl hover:border-stone-700/50 transition-all group backdrop-blur-sm"
+										class="flex items-center justify-between p-5 bg-stone-950/50 border border-stone-800 rounded-md hover:border-stone-700 transition-colors group"
 									>
 										<div class="flex items-center space-x-4">
-											<div class="w-9 h-9 rounded-lg bg-green-950/30 border border-green-900/50 flex items-center justify-center flex-shrink-0">
-												<Icon icon="mdi:check" class="w-5 h-5 text-green-400" />
+											<div class="w-9 h-9 rounded-md bg-up/10 border border-up/30 flex items-center justify-center flex-shrink-0">
+												<Icon icon="mdi:check" class="w-5 h-5 text-up" />
 											</div>
 											<div>
 												<div class="text-stone-50 font-medium group-hover:text-stone-200 transition text-sm tracking-tight">{solve.challenge_name}</div>
@@ -312,7 +300,7 @@ function formatDate(dateString: string): string {
 											</div>
 										</div>
 										<div class="text-right">
-											<div class="text-green-400 font-medium text-sm">+{solve.points}</div>
+											<div class="text-up font-medium text-sm tabular-nums">+{solve.points}</div>
 											<div class="text-stone-600 text-xs font-mono mt-0.5">{formatDate(solve.solved_at)}</div>
 										</div>
 									</a>

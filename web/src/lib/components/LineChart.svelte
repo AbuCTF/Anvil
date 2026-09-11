@@ -106,7 +106,7 @@
 		>
 			{#if xFormat && dataX != null}<div class="text-stone-500 mb-1 tabular-nums">{xFormat(dataX)}</div>{/if}
 			{#each hoverRows.slice(0, 8) as r}
-				<div class="flex items-center gap-1.5">
+				<div class="flex items-center gap-1.5 leading-none">
 					<span class="w-2 h-2 rounded-full shrink-0" style="background: {r.color};"></span>
 					<span class="text-stone-300 truncate">{r.label}</span>
 					<span class="ml-auto text-stone-400 tabular-nums">{Math.round(r.value ?? 0)}</span>

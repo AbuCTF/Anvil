@@ -237,7 +237,7 @@
 		</div>
 	{:else}
 		<PageHeader title="Arena" subtitle="Attack · Defense · King of the Hill">
-			<div slot="actions" class="flex items-center gap-2 text-sm">
+			<div slot="actions" class="flex items-center gap-2 text-sm leading-none">
 				<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
 					<span class="text-stone-500 text-xs">Tick</span>
 					<span class="text-stone-100 font-semibold tabular-nums">{status?.tick ?? '—'}</span>
@@ -246,7 +246,7 @@
 					<span class="text-stone-500 text-xs">Round</span>
 					<span class="text-stone-100 font-semibold tabular-nums">{status?.round ?? '—'}</span>
 				</div>
-				<span class="hidden sm:inline-flex items-center gap-1.5 text-stone-600 text-xs pl-1">
+				<span class="hidden sm:inline-flex items-center gap-1.5 text-stone-600 text-xs leading-none pl-1">
 					<span class="w-1.5 h-1.5 rounded-full bg-amber-500/70 animate-pulse"></span>live
 				</span>
 			</div>
@@ -270,8 +270,8 @@
 								? 'bg-amber-500/5'
 								: ''}"
 						>
-							<div class="flex items-center gap-1.5 text-xs text-stone-500 mb-2">
-								<Icon icon={held ? 'mdi:crown' : 'mdi:crown-outline'} class="w-3.5 h-3.5 {held ? 'text-amber-500/70' : 'text-stone-700'}" />
+							<div class="flex items-center gap-1.5 text-xs leading-none text-stone-500 mb-2">
+								<Icon icon={held ? 'mdi:crown' : 'mdi:crown-outline'} class="w-3 h-3 shrink-0 {held ? 'text-amber-500/70' : 'text-stone-700'}" />
 								{hill.name}
 							</div>
 							{#key hill.controller ?? '__none__'}
@@ -309,7 +309,7 @@
 									</th>
 									{#each matrixServices as s}
 										<th class="px-2 py-2 text-center text-xs font-medium text-stone-400">
-											<span class="inline-flex items-center gap-1.5">
+										<span class="inline-flex items-center gap-1.5 leading-none">
 												<span class="w-1.5 h-1.5 rounded-full" style="background: {CAT[s.category] ?? '#6b6560'};"></span>
 												{s.name}
 											</span>
@@ -323,7 +323,7 @@
 									{@const tc = teamColor(r.team_id)}
 									<tr>
 										<td class="sticky left-0 z-10 bg-stone-950/70 px-4 py-1.5 whitespace-nowrap border-t border-stone-800/60">
-											<div class="flex items-center gap-2">
+											<div class="flex items-center gap-2 leading-none">
 												<span class="text-stone-600 text-xs tabular-nums w-5 text-right">{r.rank ?? '—'}</span>
 												<span class="w-2 h-2 rounded-full shrink-0" style="background: {tc.dot};"></span>
 												<a href="/scoreboard" class="text-stone-300 text-sm truncate max-w-[140px] hover:text-amber-400 transition">{r.team}</a>
@@ -350,7 +350,7 @@
 				</div>
 				<div class="px-4 py-2.5 border-t border-stone-800 flex flex-wrap gap-x-4 gap-y-1.5">
 					{#each ['OK', 'DOWN', 'FAULTY', 'RECOVERING', 'FLAG_NOT_FOUND'] as s}
-						<span class="inline-flex items-center gap-1.5 text-[0.7rem] text-stone-500">
+					<span class="inline-flex items-center gap-1.5 text-[0.7rem] leading-none text-stone-500">
 							<span class="w-2.5 h-2.5 rounded-sm" style="background: {slaStyle(s).color};"></span>{slaStyle(s).label}
 						</span>
 					{/each}
@@ -371,7 +371,7 @@
 							{#each events as e (eventKey(e))}
 								{@const ac = teamColor(e.attacker)}
 								<li
-									class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm transition-colors {flashEvents.has(eventKey(e))
+									class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm leading-none transition-colors {flashEvents.has(eventKey(e))
 										? 'bg-amber-500/5'
 										: ''}"
 								>
@@ -429,7 +429,7 @@
 							<tr class="border-t border-stone-800/60 hover:bg-stone-800/20 transition-colors">
 								<td class="px-4 py-2.5 whitespace-nowrap text-stone-300 font-semibold tabular-nums">{team.rank ?? '—'}</td>
 								<td class="px-4 py-2.5 whitespace-nowrap">
-									<div class="flex items-center gap-2.5">
+									<div class="flex items-center gap-2.5 leading-none">
 										<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.dot};"></span>
 										<span class="text-stone-200 truncate max-w-[220px]">{team.team}</span>
 									</div>

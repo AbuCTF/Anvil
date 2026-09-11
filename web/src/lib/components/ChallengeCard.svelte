@@ -53,14 +53,14 @@
 			</p>
 		{/if}
 
-		<div class="flex flex-wrap items-center gap-2 mb-4">
-			<span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-medium capitalize {diffClass}">
+		<div class="flex flex-wrap items-center gap-2 mb-4 leading-none">
+			<span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[0.68rem] leading-none font-medium capitalize {diffClass}">
 				{challenge.difficulty}
 			</span>
-			<span class="inline-flex items-center gap-1 rounded-full border border-stone-800 bg-stone-800/40 px-2 py-0.5 text-[0.68rem] font-medium text-stone-400">
+			<span class="inline-flex items-center gap-1 rounded-full border border-stone-800 bg-stone-800/40 px-2 py-0.5 text-[0.68rem] leading-none font-medium text-stone-400">
 				<Icon
 					icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'}
-					class="w-3.5 h-3.5"
+					class="w-3 h-3 shrink-0"
 				/>
 				{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}
 			</span>
@@ -68,13 +68,13 @@
 
 		<div class="flex items-center justify-between text-sm">
 			<span class="font-semibold text-amber-500 tabular-nums">{challenge.base_points}<span class="text-stone-600 font-normal text-xs"> pts</span></span>
-			<div class="flex items-center gap-3 text-stone-500 text-xs">
+			<div class="flex items-center gap-3 text-stone-500 text-xs leading-none">
 				<span class="inline-flex items-center gap-1 tabular-nums" title="Flags">
-					<Icon icon="mdi:flag-outline" class="w-3.5 h-3.5" />
+					<Icon icon="mdi:flag-outline" class="w-3 h-3 shrink-0" />
 					{challenge.total_flags}
 				</span>
 				<span class="inline-flex items-center gap-1 tabular-nums" title="Solves">
-					<Icon icon="mdi:account-group" class="w-3.5 h-3.5" />
+					<Icon icon="mdi:account-group" class="w-3 h-3 shrink-0" />
 					{challenge.total_solves}
 				</span>
 			</div>

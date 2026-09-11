@@ -168,7 +168,7 @@
 		</EmptyState>
 	{:else}
 		<!-- Identity -->
-		<h1 class="text-2xl font-bold text-stone-100 tracking-tight truncate mb-6">{username}</h1>
+		<h1 class="text-2xl font-semibold text-stone-100 tracking-tight truncate mb-6">{username}</h1>
 
 		{#if solves.length === 0}
 			<EmptyState icon="mdi:flag-outline" text="No solves yet." />
@@ -220,7 +220,7 @@
 					<div class="grid sm:grid-cols-2 gap-x-6 gap-y-5">
 						{#each listGroups as g}
 							<div>
-								<div class="flex items-center gap-2 pb-2 mb-1 border-b border-stone-800">
+								<div class="flex items-center gap-2 pb-2 mb-1 border-b border-stone-800 leading-none">
 									<span class="w-2 h-2 rounded-full shrink-0" style="background: {g.color};"></span>
 									<span class="text-sm font-medium text-stone-200 truncate">{g.name}</span>
 									<span class="text-stone-600 text-xs tabular-nums">· {g.items.length}</span>
@@ -228,7 +228,7 @@
 								</div>
 								<ul class="divide-y divide-stone-800/60">
 									{#each g.items as it}
-										<li class="flex items-center gap-2 py-1.5 text-sm">
+									<li class="flex items-center gap-2 py-1.5 text-sm leading-none">
 											<Icon icon="mdi:check" class="w-3.5 h-3.5 text-stone-600 shrink-0" />
 											<a
 												href="/challenges/{it.slug}"
@@ -252,7 +252,7 @@
 									class="absolute -left-[5px] top-1/2 -translate-y-1/2 w-2 h-2 rounded-full ring-2 ring-stone-950"
 									style="background: {s.color};"
 								></span>
-								<div class="flex items-center gap-3 text-sm">
+								<div class="flex items-center gap-3 text-sm leading-none">
 									<span class="text-stone-600 text-xs tabular-nums w-14 shrink-0">+{formatDur(s.rel)}</span>
 									<a href="/challenges/{s.slug}" class="text-stone-200 hover:text-stone-100 transition truncate">{s.name}</a>
 									<span class="text-xs shrink-0 truncate hidden sm:inline" style="color: {s.color};">{s.category}</span>

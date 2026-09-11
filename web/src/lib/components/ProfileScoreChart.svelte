@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { monotonePath } from '$lib/chart/path';
+	import { stepPath } from '$lib/chart/path';
 	import { linear, niceMax } from '$lib/chart/scale';
 	import { formatDur, timeTicks } from '$lib/chart/time';
 
@@ -18,9 +18,9 @@
 	$: sx = linear(0, xMax === 0 ? 1 : xMax, padL, width - padR);
 	$: sy = linear(0, yMax, height - padB, padT);
 	$: screen = points.map((p) => ({ ...p, cx: sx(p.x), cy: sy(p.y) }));
-	$: line = monotonePath(screen.map((p) => ({ x: p.cx, y: p.cy })));
+	$: line = stepPath(screen.map((p) => ({ x: p.cx, y: p.cy })));
 	$: area = screen.length
-		? `${monotonePath(screen.map((p) => ({ x: p.cx, y: p.cy })))} L ${sx(xMax)} ${sy(0)} L ${padL} ${sy(0)} Z`
+		? `${stepPath(screen.map((p) => ({ x: p.cx, y: p.cy })))} L ${sx(xMax)} ${sy(0)} L ${padL} ${sy(0)} Z`
 		: '';
 	$: yTicks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(f * yMax));
 	$: xTicks = timeTicks(xMax);

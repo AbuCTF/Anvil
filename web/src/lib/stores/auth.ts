@@ -32,6 +32,8 @@ function createAuthStore() {
 	};
 
 	const { subscribe, set, update } = writable<AuthState>(initialState);
+	let refreshPromise: Promise<string | null> | null = null;
+	let authGeneration = 0;
 
 	// Helper to delay execution
 	const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -49,40 +51,53 @@ function createAuthStore() {
 		}
 	};
 
-	// Try to refresh the access token using refresh token
-	const tryRefreshToken = async (): Promise<boolean> => {
-		if (!browser) return false;
-		
-		const refreshToken = localStorage.getItem('refreshToken');
-		if (!refreshToken) return false;
+	const refreshAccessToken = async (): Promise<string | null> => {
+		if (!browser) return null;
+		if (refreshPromise) return refreshPromise;
+
+		const generation = authGeneration;
+		const currentPromise = (async () => {
+			const refreshToken = localStorage.getItem('refreshToken');
+			if (!refreshToken) return null;
+
+			try {
+				const response = await fetchWithRetry(`${API_BASE}/api/v1/auth/refresh`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ refresh_token: refreshToken })
+				});
+				if (!response.ok) return null;
+
+				const data = await response.json();
+				if (!data.access_token) return null;
+				if (generation !== authGeneration || localStorage.getItem('refreshToken') !== refreshToken) {
+					return null;
+				}
+
+				localStorage.setItem('accessToken', data.access_token);
+				if (data.refresh_token) localStorage.setItem('refreshToken', data.refresh_token);
+				update((state) => ({ ...state, accessToken: data.access_token, lastChecked: null }));
+				return data.access_token as string;
+			} catch (error) {
+				console.error('Token refresh failed:', error);
+				return null;
+			}
+		})();
+		refreshPromise = currentPromise;
 
 		try {
-			const response = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ refresh_token: refreshToken })
-			});
-
-			if (response.ok) {
-				const data = await response.json();
-				if (data.access_token) {
-					localStorage.setItem('accessToken', data.access_token);
-					if (data.refresh_token) {
-						localStorage.setItem('refreshToken', data.refresh_token);
-					}
-					return true;
-				}
-			}
-		} catch (error) {
-			console.error('Token refresh failed:', error);
+			return await currentPromise;
+		} finally {
+			if (refreshPromise === currentPromise) refreshPromise = null;
 		}
-		return false;
 	};
 
 	return {
 		subscribe,
 
 		login: (accessToken: string, user: User, refreshToken?: string) => {
+			authGeneration++;
+			refreshPromise = null;
 			if (browser) {
 				localStorage.setItem('accessToken', accessToken);
 				localStorage.setItem('user', JSON.stringify(user));
@@ -99,7 +114,11 @@ function createAuthStore() {
 			});
 		},
 
+		refreshAccessToken,
+
 		logout: (redirect = true) => {
+			authGeneration++;
+			refreshPromise = null;
 			if (browser) {
 				localStorage.removeItem('accessToken');
 				localStorage.removeItem('refreshToken');
@@ -118,6 +137,7 @@ function createAuthStore() {
 			
 			const currentState = get({ subscribe });
 			if (currentState.isLoading) return; // Prevent concurrent checks
+			const generation = authGeneration;
 
 			const token = localStorage.getItem('accessToken');
 			if (!token) {
@@ -131,9 +151,11 @@ function createAuthStore() {
 				const response = await fetchWithRetry(`${API_BASE}/api/v1/user/me`, {
 					headers: { 'Authorization': `Bearer ${token}` }
 				});
+				if (generation !== authGeneration) return;
 
 				if (response.ok) {
 					const user = await response.json();
+					if (generation !== authGeneration) return;
 					localStorage.setItem('user', JSON.stringify(user));
 					set({
 						isAuthenticated: true,
@@ -144,31 +166,31 @@ function createAuthStore() {
 					});
 				} else if (response.status === 401) {
 					// Token expired - try refresh
-					const refreshed = await tryRefreshToken();
-					if (refreshed) {
-						// Retry with new token
-						const newToken = localStorage.getItem('accessToken');
-						if (newToken) {
-							const retryResponse = await fetch(`${API_BASE}/api/v1/user/me`, {
-								headers: { 'Authorization': `Bearer ${newToken}` }
+					const newToken = await refreshAccessToken();
+					if (generation !== authGeneration) return;
+					if (newToken) {
+						const retryResponse = await fetchWithRetry(`${API_BASE}/api/v1/user/me`, {
+							headers: { 'Authorization': `Bearer ${newToken}` }
+						});
+						if (generation !== authGeneration) return;
+						if (retryResponse.ok) {
+							const user = await retryResponse.json();
+							if (generation !== authGeneration) return;
+							localStorage.setItem('user', JSON.stringify(user));
+							set({
+								isAuthenticated: true,
+								user,
+								accessToken: newToken,
+								isLoading: false,
+								lastChecked: Date.now()
 							});
-							if (retryResponse.ok) {
-								const user = await retryResponse.json();
-								localStorage.setItem('user', JSON.stringify(user));
-								set({
-									isAuthenticated: true,
-									user,
-									accessToken: newToken,
-									isLoading: false,
-									lastChecked: Date.now()
-								});
-								return;
-							}
+							return;
 						}
 					}
 					// Refresh failed - clear auth
 					localStorage.removeItem('accessToken');
 					localStorage.removeItem('refreshToken');
+					localStorage.removeItem('user');
 					set(initialState);
 				} else {
 					// Server error (5xx) - don't clear auth, keep trying
@@ -176,6 +198,7 @@ function createAuthStore() {
 					update(s => ({ ...s, isLoading: false }));
 				}
 			} catch (error) {
+				if (generation !== authGeneration) return;
 				// Network error - don't clear auth, user might be offline
 				console.error('Auth check network error:', error);
 				// Keep existing token but mark as unchecked
@@ -195,6 +218,7 @@ function createAuthStore() {
 
 			const currentState = get({ subscribe });
 			const now = Date.now();
+			const generation = authGeneration;
 
 			// Skip if already loading
 			if (currentState.isLoading) return;
@@ -225,9 +249,11 @@ function createAuthStore() {
 				const response = await fetchWithRetry(`${API_BASE}/api/v1/user/me`, {
 					headers: { 'Authorization': `Bearer ${token}` }
 				});
+				if (generation !== authGeneration) return;
 
 				if (response.ok) {
 					const user = await response.json();
+					if (generation !== authGeneration) return;
 					set({
 						isAuthenticated: true,
 						user,
@@ -237,14 +263,26 @@ function createAuthStore() {
 					});
 				} else if (response.status === 401) {
 					// Token invalid - try refresh
-					const refreshed = await tryRefreshToken();
-					if (refreshed) {
-						// Recursively check with new token
-						update(s => ({ ...s, isLoading: false, lastChecked: null }));
-						const store = { subscribe };
-						const newStore = createAuthStore();
-						await newStore.checkAuth();
-						return;
+					const newToken = await refreshAccessToken();
+					if (generation !== authGeneration) return;
+					if (newToken) {
+						const retryResponse = await fetchWithRetry(`${API_BASE}/api/v1/user/me`, {
+							headers: { 'Authorization': `Bearer ${newToken}` }
+						});
+						if (generation !== authGeneration) return;
+						if (retryResponse.ok) {
+							const user = await retryResponse.json();
+							if (generation !== authGeneration) return;
+							localStorage.setItem('user', JSON.stringify(user));
+							set({
+								isAuthenticated: true,
+								user,
+								accessToken: newToken,
+								isLoading: false,
+								lastChecked: Date.now()
+							});
+							return;
+						}
 					}
 					// Refresh failed - clear everything
 					localStorage.removeItem('accessToken');
@@ -257,6 +295,7 @@ function createAuthStore() {
 					update(s => ({ ...s, isLoading: false, lastChecked: now }));
 				}
 			} catch (error) {
+				if (generation !== authGeneration) return;
 				// Network error - keep existing auth state
 				console.error('Auth check error:', error);
 				update(s => ({ ...s, isLoading: false }));
@@ -272,6 +311,8 @@ function createAuthStore() {
 
 		// Force clear auth (for explicit logout or security reasons)
 		clearAuth: () => {
+			authGeneration++;
+			refreshPromise = null;
 			if (browser) {
 				localStorage.removeItem('accessToken');
 				localStorage.removeItem('refreshToken');

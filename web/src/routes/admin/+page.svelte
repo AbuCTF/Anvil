@@ -2,7 +2,6 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { api } from '$api';
-	import { auth } from '$stores/auth';
 	import Icon from '@iconify/svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -106,8 +105,8 @@
 	// Shared design-system class tokens (see DESIGN.md).
 	const fieldCls = 'px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-500 transition-colors';
 	const labelCls = 'block text-xs font-medium text-stone-400 mb-1.5';
-	const btnPrimary = 'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md bg-amber-500/90 text-stone-950 text-sm font-medium hover:bg-amber-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
-	const btnGhost = 'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md border border-stone-700 text-stone-300 text-sm font-medium hover:bg-stone-800/40 hover:text-stone-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+	const btnPrimary = 'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md bg-amber-500/90 text-stone-950 text-sm leading-none font-medium hover:bg-amber-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
+	const btnGhost = 'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md border border-stone-700 text-stone-300 text-sm leading-none font-medium hover:bg-stone-800/40 hover:text-stone-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key !== 'Escape') return;
@@ -286,6 +285,7 @@
 			users = usersRes.users || [];
 			challenges = challengesRes.challenges || [];
 			categories = categoriesRes.categories || [];
+			error = '';
 
 			// Load infrastructure data in parallel
 			try {
@@ -452,24 +452,12 @@
 		if (!confirm('Force stop and remove this VM instance? The user will lose their session.')) return;
 		actionLoading = instanceId;
 		try {
-			const response = await fetch(`/api/v1/admin/instances/${instanceId}/stop`, {
-				method: 'POST',
-				headers: {
-					'Authorization': `Bearer ${$auth.accessToken}`,
-					'Content-Type': 'application/json'
-				}
-			});
-			if (!response.ok) {
-				const error = await response.json().catch(() => ({ error: 'Failed to stop instance' }));
-				throw new Error(error.error || 'Failed to stop instance');
-			}
-			// Clear loading immediately when successful
-			actionLoading = '';
-			// Then refresh dashboard
+			await api.forceStopAdminInstance(instanceId);
 			await loadDashboard();
 		} catch (e) {
-			actionLoading = '';
 			alert(e instanceof Error ? e.message : 'Failed to stop instance');
+		} finally {
+			actionLoading = '';
 		}
 	}
 
@@ -477,24 +465,12 @@
 		if (!confirm('Force stop and remove this Docker instance? The user will lose their session.')) return;
 		actionLoading = instanceId;
 		try {
-			const response = await fetch(`/api/v1/admin/instances/${instanceId}/stop`, {
-				method: 'POST',
-				headers: {
-					'Authorization': `Bearer ${$auth.accessToken}`,
-					'Content-Type': 'application/json'
-				}
-			});
-			if (!response.ok) {
-				const error = await response.json().catch(() => ({ error: 'Failed to stop Docker instance' }));
-				throw new Error(error.error || 'Failed to stop Docker instance');
-			}
-			// Clear loading immediately when successful
-			actionLoading = '';
-			// Then refresh dashboard
+			await api.forceStopAdminInstance(instanceId);
 			await loadDashboard();
 		} catch (e) {
-			actionLoading = '';
 			alert(e instanceof Error ? e.message : 'Failed to stop Docker instance');
+		} finally {
+			actionLoading = '';
 		}
 	}
 
@@ -712,17 +688,17 @@
 			<div slot="actions">
 				{#if activeTab === 'challenges'}
 					<button on:click={() => showCreateModal = true} class={btnPrimary}>
-						<Icon icon="mdi:plus" class="w-4 h-4" />
+						<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
 						New Challenge
 					</button>
 				{:else if activeTab === 'infrastructure'}
 					<div class="flex flex-wrap gap-2">
 						<button on:click={() => showTemplateUploadModal = true} class={btnGhost}>
-							<Icon icon="mdi:upload" class="w-4 h-4" />
+							<Icon icon="mdi:upload" class="w-3.5 h-3.5 shrink-0" />
 							Upload Template
 						</button>
 						<button on:click={() => showNodeModal = true} class={btnPrimary}>
-							<Icon icon="mdi:plus" class="w-4 h-4" />
+							<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
 							Add Node
 						</button>
 					</div>
@@ -744,9 +720,9 @@
 						<button
 							type="button"
 							on:click={() => setTab(tab.id)}
-							class="relative px-3.5 py-2.5 text-sm font-medium whitespace-nowrap flex items-center gap-2 transition-colors {activeTab === tab.id ? 'text-stone-100' : 'text-stone-500 hover:text-stone-300'}"
+							class="relative px-3.5 py-2.5 text-sm leading-none font-medium whitespace-nowrap flex items-center gap-2 transition-colors {activeTab === tab.id ? 'text-stone-100' : 'text-stone-500 hover:text-stone-300'}"
 						>
-							<Icon icon={tab.icon} class="w-4 h-4" />
+							<Icon icon={tab.icon} class="w-3.5 h-3.5 shrink-0" />
 							{tab.label}
 							{#if activeTab === tab.id}
 								<span class="absolute inset-x-2 -bottom-px h-0.5 bg-stone-400"></span>
@@ -838,14 +814,14 @@
 								<div class="flex items-start justify-between gap-3 mb-3">
 									<div class="min-w-0">
 										<a href="/challenges/{challenge.slug}" class="text-sm font-medium text-stone-200 hover:text-amber-400 transition-colors">{challenge.name}</a>
-										<div class="flex items-center flex-wrap gap-1.5 mt-1.5">
-											<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] capitalize {difficultyClass(challenge.difficulty)}">{challenge.difficulty}</span>
-											<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] {resourceClass(challenge.resource_type)}">
-												<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3" />{resourceLabel(challenge.resource_type)}
+									<div class="flex items-center flex-wrap gap-1.5 mt-1.5 leading-none">
+										<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}">{challenge.difficulty}</span>
+										<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
+											<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3 shrink-0" />{resourceLabel(challenge.resource_type)}
 											</span>
 										</div>
 									</div>
-									<span class="inline-flex items-center gap-1.5 text-xs shrink-0 {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
+								<span class="inline-flex items-center gap-1.5 text-xs leading-none shrink-0 {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
 										<span class="w-1.5 h-1.5 rounded-full {challenge.status === 'published' ? 'bg-up' : 'bg-warn'}"></span>
 										{challenge.status === 'published' ? 'Published' : 'Draft'}
 									</span>
@@ -857,41 +833,41 @@
 								<div class="flex items-center gap-2 pt-3 border-t border-stone-800">
 									<button
 										on:click={() => openEditModal(challenge)}
-										class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-300 border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
+									class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-stone-300 border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 										disabled={actionLoading === challenge.id}
 										title="Edit challenge"
 									>
-										<Icon icon="mdi:pencil" class="w-3.5 h-3.5" />
+									<Icon icon="mdi:pencil" class="w-3 h-3 shrink-0" />
 										Edit
 									</button>
 									{#if challenge.status === 'draft'}
 										<button
 											on:click={() => publishChallenge(challenge)}
-											class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-up border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
+										class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-up border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 											disabled={actionLoading === challenge.id}
 											title="Publish challenge"
 										>
-											<Icon icon="mdi:rocket-launch-outline" class="w-3.5 h-3.5" />
+										<Icon icon="mdi:rocket-launch-outline" class="w-3 h-3 shrink-0" />
 											Publish
 										</button>
 									{:else}
 										<button
 											on:click={() => unpublishChallenge(challenge)}
-											class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-warn border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
+										class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-warn border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 											disabled={actionLoading === challenge.id}
 											title="Unpublish challenge"
 										>
-											<Icon icon="mdi:eye-off-outline" class="w-3.5 h-3.5" />
+										<Icon icon="mdi:eye-off-outline" class="w-3 h-3 shrink-0" />
 											Unpublish
 										</button>
 									{/if}
 									<button
 										on:click={() => deleteChallenge(challenge)}
-										class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-down border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50 ml-auto"
+									class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs leading-none font-medium text-down border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50 ml-auto"
 										disabled={actionLoading === challenge.id}
 										title="Delete challenge"
 									>
-										<Icon icon="mdi:trash-can-outline" class="w-3.5 h-3.5" />
+									<Icon icon="mdi:trash-can-outline" class="w-3 h-3 shrink-0" />
 									</button>
 								</div>
 							</div>
@@ -922,17 +898,17 @@
 													<a href="/challenges/{challenge.slug}" class="text-stone-200 hover:text-amber-400 transition-colors">{challenge.name}</a>
 												</td>
 												<td class="px-4 py-2.5">
-													<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] capitalize {difficultyClass(challenge.difficulty)}">{challenge.difficulty}</span>
+												<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}">{challenge.difficulty}</span>
 												</td>
 												<td class="px-4 py-2.5">
-													<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] {resourceClass(challenge.resource_type)}">
-														<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3" />{resourceLabel(challenge.resource_type)}
+												<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
+													<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3 shrink-0" />{resourceLabel(challenge.resource_type)}
 													</span>
 												</td>
 												<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">{challenge.base_points}</td>
 												<td class="px-4 py-2.5 text-right text-stone-400 tabular-nums">{challenge.total_solves || 0}</td>
 												<td class="px-4 py-2.5">
-													<span class="inline-flex items-center gap-1.5 text-xs {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
+												<span class="inline-flex items-center gap-1.5 text-xs leading-none {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
 														<span class="w-1.5 h-1.5 rounded-full {challenge.status === 'published' ? 'bg-up' : 'bg-warn'}"></span>
 														{challenge.status === 'published' ? 'Published' : 'Draft'}
 													</span>
@@ -1145,7 +1121,7 @@
 								{#each nodes as node}
 									<div class="px-4 py-3">
 										<div class="flex items-center justify-between gap-2 mb-2">
-											<div class="flex items-center gap-2 min-w-0">
+											<div class="flex items-center gap-2 min-w-0 leading-none">
 												<div class="w-2 h-2 rounded-full shrink-0 {node.status === 'online' ? 'bg-up' : 'bg-down'}"></div>
 												<span class="text-sm text-stone-200 font-medium truncate">{node.name}</span>
 												{#if node.is_primary}
@@ -1348,9 +1324,9 @@
 						<div class="flex justify-end">
 							<button on:click={savePlatformSettings} disabled={savingSettings} class={btnPrimary}>
 								{#if savingSettings}
-									<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+									<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 								{:else}
-									<Icon icon="mdi:content-save-outline" class="w-4 h-4" />
+									<Icon icon="mdi:content-save-outline" class="w-3.5 h-3.5 shrink-0" />
 								{/if}
 								Save Settings
 							</button>
@@ -1360,8 +1336,8 @@
 					<!-- Instance Timeouts -->
 					<Card bodyClass="p-4">
 						<div slot="header">
-							<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide flex items-center gap-2">
-								<Icon icon="mdi:timer-outline" class="w-4 h-4 text-stone-500" />
+							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
+								<Icon icon="mdi:timer-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
 								Instance Timeouts
 							</h2>
 							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Default session durations for VM instances by difficulty</p>
@@ -1378,7 +1354,7 @@
 									<div class="flex items-center gap-2">
 										<input
 											type="number"
-											value={platformSettings[setting.key] || setting.default}
+											value={platformSettings[setting.key] ?? setting.default}
 											on:input={(e) => handleNumberInput(e, setting.key)}
 											min="30"
 											max="480"
@@ -1394,8 +1370,8 @@
 					<!-- Cooldown Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
-							<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide flex items-center gap-2">
-								<Icon icon="mdi:timer-sand" class="w-4 h-4 text-stone-500" />
+							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
+								<Icon icon="mdi:timer-sand" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
 								Cooldown Periods
 							</h2>
 							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Wait time before users can restart an instance after stopping</p>
@@ -1412,7 +1388,7 @@
 									<div class="flex items-center gap-2">
 										<input
 											type="number"
-											value={platformSettings[setting.key] || setting.default}
+											value={platformSettings[setting.key] ?? setting.default}
 											on:input={(e) => handleNumberInput(e, setting.key)}
 											min="0"
 											max="120"
@@ -1428,8 +1404,8 @@
 					<!-- Extension Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
-							<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide flex items-center gap-2">
-								<Icon icon="mdi:clock-plus-outline" class="w-4 h-4 text-stone-500" />
+							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
+								<Icon icon="mdi:clock-plus-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
 								Extension Settings
 							</h2>
 							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">How many times and by how much users can extend their session</p>
@@ -1439,7 +1415,7 @@
 								<span class={labelCls}>Max Extensions</span>
 								<input
 									type="number"
-									value={platformSettings.max_extensions || 3}
+									value={platformSettings.max_extensions ?? 3}
 									on:input={(e) => handleNumberInput(e, 'max_extensions')}
 									min="0"
 									max="10"
@@ -1451,7 +1427,7 @@
 								<div class="flex items-center gap-2">
 									<input
 										type="number"
-										value={platformSettings.extension_minutes || 30}
+										value={platformSettings.extension_minutes ?? 30}
 										on:input={(e) => handleNumberInput(e, 'extension_minutes')}
 										min="15"
 										max="120"
@@ -1466,8 +1442,8 @@
 					<!-- User Limits -->
 					<Card bodyClass="p-4">
 						<div slot="header">
-							<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide flex items-center gap-2">
-								<Icon icon="mdi:account-multiple-outline" class="w-4 h-4 text-stone-500" />
+							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
+								<Icon icon="mdi:account-multiple-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
 								User Limits
 							</h2>
 							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Resource limits per user</p>
@@ -1477,7 +1453,7 @@
 								<span class={labelCls}>Max Concurrent Instances</span>
 								<input
 									type="number"
-									value={platformSettings.max_instances_per_user || 1}
+									value={platformSettings.max_instances_per_user ?? 1}
 									on:input={(e) => handleNumberInput(e, 'max_instances_per_user')}
 									min="1"
 									max="5"
@@ -1488,7 +1464,7 @@
 								<span class={labelCls}>Max Daily Submissions</span>
 								<input
 									type="number"
-									value={platformSettings.max_daily_submissions || 100}
+									value={platformSettings.max_daily_submissions ?? 100}
 									on:input={(e) => handleNumberInput(e, 'max_daily_submissions')}
 									min="10"
 									max="1000"
@@ -1501,8 +1477,8 @@
 					<!-- VPN Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
-							<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide flex items-center gap-2">
-								<Icon icon="mdi:vpn" class="w-4 h-4 text-stone-500" />
+							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
+								<Icon icon="mdi:vpn" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
 								VPN Settings
 							</h2>
 							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">WireGuard VPN configuration</p>
@@ -1512,7 +1488,7 @@
 								<span class={labelCls}>VPN Server Endpoint</span>
 								<input
 									type="text"
-									value={platformSettings.vpn_endpoint || 'play.abu.rocks:51820'}
+									value={platformSettings.vpn_endpoint ?? 'play.abu.rocks:51820'}
 									on:input={(e) => handleTextInput(e, 'vpn_endpoint')}
 									class="w-full {fieldCls}"
 								/>
@@ -1520,7 +1496,7 @@
 							<label class="block">
 								<span class={labelCls}>Require VPN for Instances</span>
 								<select
-									value={platformSettings.require_vpn || 'true'}
+									value={platformSettings.require_vpn ?? 'true'}
 									on:change={(e) => handleSelectChange(e, 'require_vpn')}
 									class="w-full {fieldCls}"
 								>
@@ -1534,8 +1510,8 @@
 					<!-- Platform Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
-							<h2 class="text-sm font-semibold text-stone-200 uppercase tracking-wide flex items-center gap-2">
-								<Icon icon="mdi:cog-outline" class="w-4 h-4 text-stone-500" />
+							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
+								<Icon icon="mdi:cog-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
 								Platform Settings
 							</h2>
 							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">General platform configuration</p>
@@ -1544,7 +1520,7 @@
 							<label class="block">
 								<span class={labelCls}>Allow Registration</span>
 								<select
-									value={platformSettings.registration_enabled || 'true'}
+									value={platformSettings.registration_enabled ?? 'true'}
 									on:change={(e) => handleSelectChange(e, 'registration_enabled')}
 									class="w-full {fieldCls}"
 								>
@@ -1555,7 +1531,7 @@
 							<label class="block">
 								<span class={labelCls}>Scoreboard</span>
 								<select
-									value={platformSettings.scoreboard_enabled || 'true'}
+									value={platformSettings.scoreboard_enabled ?? 'true'}
 									on:change={(e) => handleSelectChange(e, 'scoreboard_enabled')}
 									class="w-full {fieldCls}"
 								>
@@ -1571,9 +1547,9 @@
 					<!-- Flag Share Events -->
 					<div>
 						<div class="flex items-center justify-between mb-4">
-							<h3 class="text-sm font-semibold text-stone-200 uppercase tracking-wide">Flag Share Events</h3>
-							<button type="button" on:click={loadIntel} class="text-xs text-stone-500 hover:text-stone-300 flex items-center gap-1 transition-colors">
-								<Icon icon="mdi:refresh" class="w-3.5 h-3.5" />
+							<h3 class="text-sm font-semibold text-stone-200">Flag Share Events</h3>
+							<button type="button" on:click={loadIntel} class="text-xs leading-none text-stone-500 hover:text-stone-300 flex items-center gap-1 transition-colors">
+								<Icon icon="mdi:refresh" class="w-3 h-3 shrink-0" />
 								Refresh
 							</button>
 						</div>
@@ -1619,7 +1595,7 @@
 
 					<!-- Instance Flags -->
 					<div>
-						<h3 class="text-sm font-semibold text-stone-200 uppercase tracking-wide mb-4">Instance Flags ({instanceFlags.length})</h3>
+						<h3 class="text-sm font-semibold text-stone-200 mb-4">Instance Flags ({instanceFlags.length})</h3>
 						{#if intelLoading}
 							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-8 flex justify-center">
 								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />
@@ -1683,17 +1659,17 @@
 					<button
 						type="button"
 						on:click={() => newChallenge.type = 'container'}
-						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm font-medium transition-colors {newChallenge.type === 'container' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
+						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'container' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 					>
-						<Icon icon="mdi:docker" class="w-4 h-4" />
+						<Icon icon="mdi:docker" class="w-3.5 h-3.5 shrink-0" />
 						Docker Container
 					</button>
 					<button
 						type="button"
 						on:click={() => newChallenge.type = 'ova'}
-						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm font-medium transition-colors {newChallenge.type === 'ova' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
+						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'ova' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 					>
-						<Icon icon="mdi:desktop-classic" class="w-4 h-4" />
+						<Icon icon="mdi:desktop-classic" class="w-3.5 h-3.5 shrink-0" />
 						VM (OVA)
 					</button>
 				</div>
@@ -1715,8 +1691,8 @@
 
 				<form on:submit|preventDefault={handleCreateChallenge} class="p-6 space-y-5">
 					{#if uploadError}
-						<div class="flex items-center gap-2 py-3 px-4 bg-down/10 border border-down/30 rounded-md text-down text-sm">
-							<Icon icon="mdi:alert-circle-outline" class="w-5 h-5 flex-shrink-0" />
+						<div class="flex items-start gap-2 py-3 px-4 bg-down/10 border border-down/30 rounded-md text-down text-sm">
+							<Icon icon="mdi:alert-circle-outline" class="w-4 h-4 shrink-0 mt-0.5" />
 							{uploadError}
 						</div>
 					{/if}
@@ -1834,9 +1810,9 @@
 									<button
 										type="button"
 										on:click={() => newChallenge.exposed_ports = [...newChallenge.exposed_ports, { port: 0, protocol: 'tcp', service: 'tcp' }]}
-										class="text-xs text-stone-400 hover:text-stone-200 transition-colors flex items-center gap-1"
+										class="text-xs leading-none text-stone-400 hover:text-stone-200 transition-colors flex items-center gap-1"
 									>
-										<Icon icon="mdi:plus" class="w-3.5 h-3.5" /> Add Port
+										<Icon icon="mdi:plus" class="w-3 h-3 shrink-0" /> Add Port
 									</button>
 								</div>
 								<div class="space-y-2">
@@ -1936,17 +1912,17 @@
 									<button
 										type="button"
 										on:click={() => newChallenge.vm_source = 'template'}
-										class="flex-1 py-2 px-3 rounded text-sm font-medium transition-colors {newChallenge.vm_source === 'template' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
+										class="flex-1 inline-flex items-center justify-center py-2 px-3 rounded text-sm leading-none font-medium transition-colors {newChallenge.vm_source === 'template' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 									>
-										<Icon icon="mdi:harddisk" class="w-4 h-4 inline mr-1" />
+										<Icon icon="mdi:harddisk" class="w-3.5 h-3.5 shrink-0 mr-1" />
 										Use Existing Template
 									</button>
 									<button
 										type="button"
 										on:click={() => newChallenge.vm_source = 'upload'}
-										class="flex-1 py-2 px-3 rounded text-sm font-medium transition-colors {newChallenge.vm_source === 'upload' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
+										class="flex-1 inline-flex items-center justify-center py-2 px-3 rounded text-sm leading-none font-medium transition-colors {newChallenge.vm_source === 'upload' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 									>
-										<Icon icon="mdi:cloud-upload" class="w-4 h-4 inline mr-1" />
+										<Icon icon="mdi:cloud-upload" class="w-3.5 h-3.5 shrink-0 mr-1" />
 										Upload New OVA
 									</button>
 								</div>
@@ -2019,8 +1995,8 @@
 							<div>
 								<div class="flex items-center justify-between mb-3">
 									<span class="block text-xs font-medium text-stone-400">Flags ({newChallenge.flags.length})</span>
-									<button type="button" on:click={addFlag} class="text-sm text-stone-400 hover:text-stone-200 flex items-center gap-1 transition-colors">
-										<Icon icon="mdi:plus" class="w-4 h-4" />
+									<button type="button" on:click={addFlag} class="text-sm leading-none text-stone-400 hover:text-stone-200 flex items-center gap-1 transition-colors">
+										<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
 										Add Flag
 									</button>
 								</div>
@@ -2066,8 +2042,8 @@
 					<div class="pt-4 border-t border-stone-800 space-y-3">
 						<div class="flex items-center justify-between">
 							<span class="block text-xs font-medium text-stone-400">File Attachments <span class="text-stone-500 font-normal">(optional)</span></span>
-							<label class="text-xs text-stone-400 hover:text-stone-200 transition-colors cursor-pointer flex items-center gap-1">
-								<Icon icon="mdi:paperclip" class="w-3.5 h-3.5" />
+							<label class="text-xs leading-none text-stone-400 hover:text-stone-200 transition-colors cursor-pointer flex items-center gap-1">
+								<Icon icon="mdi:paperclip" class="w-3 h-3 shrink-0" />
 								Add Files
 								<input type="file" multiple on:change={addPendingAttachment} class="hidden" />
 							</label>
@@ -2101,8 +2077,8 @@
 							<p class="text-xs text-stone-600">No files selected. Files can also be added after creating the challenge.</p>
 						{/if}
 						{#if attachmentUploadStatus}
-							<p class="text-xs text-stone-400 flex items-center gap-1.5">
-								<Icon icon="mdi:loading" class="w-3.5 h-3.5 animate-spin" />
+								<p class="text-xs leading-none text-stone-400 flex items-center gap-1.5">
+									<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
 								{attachmentUploadStatus}
 							</p>
 						{/if}
@@ -2112,7 +2088,7 @@
 					<div class="flex gap-3 pt-4">
 						<button type="submit" disabled={uploadLoading} class="flex-1 {btnPrimary}">
 							{#if uploadLoading}
-								<Icon icon="mdi:loading" class="w-4 h-4 animate-spin" />
+									<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 								{#if attachmentUploadStatus}
 									Uploading files...
 								{:else if uploadProgress > 0}
@@ -2121,7 +2097,7 @@
 									Creating...
 								{/if}
 							{:else}
-								<Icon icon="mdi:plus" class="w-4 h-4" />
+									<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
 								Create Challenge
 							{/if}
 						</button>
@@ -2209,7 +2185,7 @@
 				<!-- ── Docker-specific ───────────────────────────── -->
 				{#if editingChallenge.resource_type !== 'vm'}
 					<div class="border border-stone-800 rounded-lg p-4 space-y-4">
-						<h3 class="text-xs font-semibold text-stone-400 uppercase tracking-wider">Container Settings</h3>
+						<h3 class="text-xs font-semibold text-stone-400">Container Settings</h3>
 
 						<div class="grid grid-cols-3 gap-3">
 							<label class="block col-span-2">
@@ -2244,9 +2220,9 @@
 								<button
 									type="button"
 									on:click={() => { editingChallenge.exposed_ports = [...(editingChallenge.exposed_ports || []), { port: 0, protocol: 'tcp', service: 'tcp' }]; }}
-									class="text-xs text-stone-400 hover:text-stone-200 transition-colors flex items-center gap-1"
+									class="text-xs leading-none text-stone-400 hover:text-stone-200 transition-colors flex items-center gap-1"
 								>
-									<Icon icon="mdi:plus" class="w-3.5 h-3.5" /> Add Port
+									<Icon icon="mdi:plus" class="w-3 h-3 shrink-0" /> Add Port
 								</button>
 							</div>
 							{#each (editingChallenge.exposed_ports || []) as ep, i}
@@ -2273,7 +2249,7 @@
 				<!-- ── VM-specific ───────────────────────────────── -->
 				{#if editingChallenge.resource_type === 'vm'}
 					<div class="border border-stone-800 rounded-lg p-4">
-						<h3 class="text-xs font-semibold text-stone-400 uppercase tracking-wider mb-3">VM Settings</h3>
+						<h3 class="text-xs font-semibold text-stone-400 mb-3">VM Settings</h3>
 						<label class="block">
 							<span class={labelCls}>VM Template</span>
 							<select bind:value={editingChallenge.vm_template_id} class="w-full {fieldCls}">
@@ -2288,7 +2264,7 @@
 
 				<!-- ── Timer / Instance Settings ─────────────────── -->
 				<div class="border border-stone-800 rounded-lg p-4 space-y-3">
-					<h3 class="text-xs font-semibold text-stone-400 uppercase tracking-wider">Instance Settings</h3>
+					<h3 class="text-xs font-semibold text-stone-400">Instance Settings</h3>
 					<div class="grid grid-cols-3 gap-3">
 						<label class="block">
 							<span class={labelCls}>Timeout (min)</span>

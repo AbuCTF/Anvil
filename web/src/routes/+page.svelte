@@ -38,10 +38,10 @@
 	<div class="mt-8 flex flex-wrap gap-3 justify-center">
 		<a
 			href="/challenges"
-			class="inline-flex items-center gap-1.5 px-6 py-2.5 bg-stone-100 text-stone-950 text-sm font-medium hover:bg-stone-50 transition-colors rounded-full"
+			class="inline-flex items-center gap-1.5 px-6 py-2.5 bg-stone-100 text-stone-950 text-sm leading-none font-medium hover:bg-stone-50 transition-colors rounded-full"
 		>
 			Get Started
-			<Icon icon="mdi:arrow-right" class="w-4 h-4 -translate-y-[2px]" />
+			<Icon icon="mdi:arrow-right" class="w-3.5 h-3.5 shrink-0" />
 		</a>
 		<a
 			href="/register"

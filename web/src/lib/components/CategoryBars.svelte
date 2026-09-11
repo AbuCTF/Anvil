@@ -13,7 +13,7 @@
 <div class="space-y-3">
 	{#each categories as c}
 		<div>
-			<div class="flex items-center gap-2 mb-1.5 text-xs">
+			<div class="flex items-center gap-2 mb-1.5 text-xs leading-none">
 				<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.color};"></span>
 				<span class="text-stone-300 truncate" title={c.name}>{c.name}</span>
 				<span class="text-stone-600 tabular-nums">· {c.segments.length}</span>

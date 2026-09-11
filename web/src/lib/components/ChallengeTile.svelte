@@ -55,31 +55,31 @@
 		<p class="mt-1.5 text-sm text-stone-500 leading-relaxed line-clamp-2">{descText}</p>
 	{/if}
 
-	<div class="mt-3 flex flex-wrap items-center gap-2">
-		<span class="inline-flex items-center rounded border px-2 py-0.5 text-[0.68rem] font-medium capitalize {difficultyClass(challenge.difficulty)}">
+	<div class="mt-3 flex flex-wrap items-center gap-2 leading-none">
+		<span class="inline-flex items-center rounded border px-2 py-0.5 text-[0.68rem] leading-none font-medium capitalize {difficultyClass(challenge.difficulty)}">
 			{challenge.difficulty}
 		</span>
 		{#if challenge.resource_type}
-			<span class="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[0.68rem] font-medium {resourceClass(challenge.resource_type)}">
-				<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3" />
+			<span class="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[0.68rem] leading-none font-medium {resourceClass(challenge.resource_type)}">
+				<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3 shrink-0" />
 				{resourceLabel(challenge.resource_type)}
 			</span>
 		{/if}
 	</div>
 
-	<div class="mt-4 pt-3 border-t border-stone-800/60 flex items-center justify-between text-xs">
+	<div class="mt-4 pt-3 border-t border-stone-800/60 flex items-center justify-between text-xs leading-none">
 		<div class="flex items-center gap-3">
 			<span class="inline-flex items-center gap-1 text-amber-500 font-semibold tabular-nums" title="Points">
-				<Icon icon="mdi:star-outline" class="w-3.5 h-3.5" />
+				<Icon icon="mdi:star-outline" class="w-3 h-3 shrink-0" />
 				{points}
 			</span>
 			<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Flags">
-				<Icon icon="mdi:flag-outline" class="w-3.5 h-3.5" />
+				<Icon icon="mdi:flag-outline" class="w-3 h-3 shrink-0" />
 				{challenge.total_flags}
 			</span>
 		</div>
 		<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Solves">
-			<Icon icon="mdi:account-group" class="w-3.5 h-3.5" />
+			<Icon icon="mdi:account-group" class="w-3 h-3 shrink-0" />
 			{challenge.total_solves}
 		</span>
 	</div>

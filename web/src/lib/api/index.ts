@@ -3,10 +3,30 @@ import { auth } from '$stores/auth';
 import { get } from 'svelte/store';
 import { API_BASE } from '$lib/config';
 
-interface ApiError {
-	status: number;
-	message: string;
-	isAuthError: boolean;
+export type ApiErrorDetails = Record<string, unknown>;
+
+export class ApiError extends Error {
+	[key: string]: unknown;
+
+	readonly status: number;
+	readonly isAuthError: boolean;
+	readonly details: ApiErrorDetails;
+
+	constructor(status: number, details: ApiErrorDetails, fallbackMessage?: string) {
+		const message = typeof details.error === 'string'
+			? details.error
+			: typeof details.message === 'string'
+				? details.message
+				: fallbackMessage ?? `HTTP error ${status}`;
+		super(message);
+		this.name = 'ApiError';
+		this.status = status;
+		this.isAuthError = status === 401 || status === 403;
+		this.details = details;
+		for (const [key, value] of Object.entries(details)) {
+			if (!(key in this)) this[key] = value;
+		}
+	}
 }
 
 class ApiClient {
@@ -40,6 +60,26 @@ class ApiClient {
 		return null;
 	}
 
+	private async apiError(response: Response, fallbackMessage?: string): Promise<ApiError> {
+		let details: ApiErrorDetails = {};
+		try {
+			const body: unknown = await response.json();
+			if (body && typeof body === 'object' && !Array.isArray(body)) {
+				details = body as ApiErrorDetails;
+			}
+		} catch {
+			// Upstream failures may have an empty or non-JSON body.
+		}
+		return new ApiError(response.status, details, fallbackMessage);
+	}
+
+	private async parseResponse<T>(response: Response): Promise<T> {
+		if (!response.ok) throw await this.apiError(response);
+		const contentType = response.headers.get('content-type');
+		if (contentType?.includes('application/json')) return response.json();
+		return {} as T;
+	}
+
 	private async request<T>(
 		endpoint: string,
 		options: RequestInit = {},
@@ -65,46 +105,29 @@ class ApiClient {
 		}
 
 		try {
-			const response = await fetch(url, {
+			let response = await fetch(url, {
 				...options,
 				headers
 			});
 
-			// Handle different response statuses
-			if (response.status === 401) {
+			if (requiresAuth && response.status === 401) {
 				// Token expired or invalid
 				if (browser) {
 					// Try to refresh token
-					const refreshed = await this.tryRefreshToken();
-					if (refreshed) {
-						// Retry the request with new token
-						const newToken = localStorage.getItem('accessToken');
-						if (newToken) {
-							headers['Authorization'] = `Bearer ${newToken}`;
-							const retryResponse = await fetch(url, { ...options, headers });
-							if (retryResponse.ok) {
-								return retryResponse.json();
-							}
-						}
+					const newToken = await auth.refreshAccessToken();
+					if (newToken) {
+						headers['Authorization'] = `Bearer ${newToken}`;
+						response = await fetch(url, { ...options, headers });
+						if (response.status !== 401) return this.parseResponse<T>(response);
 					}
 					// Refresh failed - clear auth and redirect
 					auth.clearAuth();
 					window.location.href = '/login';
 				}
-				throw new Error('Session expired. Please login again.');
+				throw await this.apiError(response, 'Session expired. Please login again.');
 			}
 
-			if (!response.ok) {
-				const error = await response.json().catch(() => ({ error: 'Unknown error' }));
-				throw new Error(error.error || error.message || `HTTP error ${response.status}`);
-			}
-
-			// Handle empty responses
-			const contentType = response.headers.get('content-type');
-			if (contentType && contentType.includes('application/json')) {
-				return response.json();
-			}
-			return {} as T;
+			return this.parseResponse<T>(response);
 		} catch (error) {
 			// Network errors - don't clear auth
 			if (error instanceof TypeError && error.message.includes('fetch')) {
@@ -112,35 +135,6 @@ class ApiClient {
 			}
 			throw error;
 		}
-	}
-
-	private async tryRefreshToken(): Promise<boolean> {
-		const refreshToken = localStorage.getItem('refreshToken');
-		if (!refreshToken) return false;
-
-		try {
-			const response = await fetch(`${this.baseUrl}/api/v1/auth/refresh`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ refresh_token: refreshToken })
-			});
-
-			if (response.ok) {
-				const data = await response.json();
-				if (data.access_token) {
-					localStorage.setItem('accessToken', data.access_token);
-					if (data.refresh_token) {
-						localStorage.setItem('refreshToken', data.refresh_token);
-					}
-					// Update auth store
-					auth.login(data.access_token, data.user, data.refresh_token);
-					return true;
-				}
-			}
-		} catch (error) {
-			console.error('Token refresh failed:', error);
-		}
-		return false;
 	}
 
 	// Platform
@@ -224,6 +218,12 @@ class ApiClient {
 
 	async stopInstance(instanceId: string) {
 		return this.request<any>(`/instances/${instanceId}/stop`, {
+			method: 'POST'
+		});
+	}
+
+	async forceStopAdminInstance(instanceId: string) {
+		return this.request<any>(`/admin/instances/${instanceId}/stop`, {
 			method: 'POST'
 		});
 	}
