@@ -6,6 +6,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
+	import { instantTitle } from '$lib/time';
 
 	let vpnConfig: string | null = null;
 	let vpnStatus: VpnStatusResponse | null = null;
@@ -135,11 +136,12 @@
 	}
 
 	function formatLastHandshake(timestamp: number): string {
-		if (!timestamp) return 'Never';
-		const seconds = Math.floor(Date.now() / 1000) - timestamp;
+		if (!Number.isFinite(timestamp) || timestamp <= 0) return 'Never';
+		const seconds = Math.max(0, Math.floor(Date.now() / 1000) - timestamp);
 		if (seconds < 60) return `${seconds}s ago`;
 		if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-		return `${Math.floor(seconds / 3600)}h ago`;
+		if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+		return `${Math.floor(seconds / 86400)}d ago`;
 	}
 
 	const btnBase =
@@ -201,7 +203,10 @@
 								<OpticalIcon icon="mdi:clock-outline" size={12} box={14} />
 								<span class="optical-label metadata-label">Last handshake</span>
 							</span>
-							<span class="text-stone-300 text-sm font-mono tabular-nums">{formatLastHandshake(vpnStatus.last_handshake ?? 0)}</span>
+							<span
+								class="text-stone-300 text-sm font-mono tabular-nums"
+								title={instantTitle(vpnStatus.last_handshake, 'seconds')}
+							>{formatLastHandshake(vpnStatus.last_handshake ?? 0)}</span>
 						</div>
 						<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
 							<span class="text-stone-500 leading-none flex items-center gap-2">

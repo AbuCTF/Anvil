@@ -6,6 +6,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
+	import { instantTitle } from '$lib/time';
 
 	interface Instance {
 		id: string;
@@ -130,6 +131,7 @@
 	}
 
 	function formatTimeRemaining(expiresAt: number): string {
+		if (!Number.isFinite(expiresAt) || expiresAt <= 0) return '—';
 		const now = Math.floor(Date.now() / 1000);
 		const remaining = expiresAt - now;
 
@@ -301,7 +303,10 @@
 									<OpticalIcon icon="mdi:clock-outline" size={12} box={12} />
 									<span class="optical-label metadata-label">Remaining</span>
 								</div>
-								<div class="font-mono tabular-nums text-lg {expired ? 'text-down' : 'text-amber-500/90'}">
+								<div
+									class="font-mono tabular-nums text-lg {expired ? 'text-down' : 'text-amber-500/90'}"
+									title={instantTitle(instance.expires_at, 'seconds')}
+								>
 									{formatTimeRemaining(instance.expires_at)}
 								</div>
 							</div>

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -76,13 +77,27 @@ func NewChallengeHandlerWithAttachments(cfg *config.Config, db *database.DB, con
 
 // ScoreboardHandler - methods implemented in scoreboard.go
 type ScoreboardHandler struct {
-	config *config.Config
-	db     *database.DB
-	logger *zap.Logger
+	config            *config.Config
+	db                *database.DB
+	logger            *zap.Logger
+	cacheMu           sync.Mutex
+	cache             map[string]scoreboardCacheEntry
+	availability      bool
+	scoreboardPublic  bool
+	availabilityUntil time.Time
+	availabilityMu    sync.Mutex
+	flightMu          sync.Mutex
+	flights           map[string]*scoreboardCacheFlight
 }
 
 func NewScoreboardHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *ScoreboardHandler {
-	return &ScoreboardHandler{config: cfg, db: db, logger: logger}
+	return &ScoreboardHandler{
+		config:  cfg,
+		db:      db,
+		logger:  logger,
+		cache:   make(map[string]scoreboardCacheEntry),
+		flights: make(map[string]*scoreboardCacheFlight),
+	}
 }
 
 // UserHandler - methods implemented in user.go
@@ -786,6 +801,10 @@ func (h *TokenHandler) CreateTeamToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.Expires != nil {
+		expiresUTC := req.Expires.UTC()
+		req.Expires = &expiresUTC
+	}
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -813,7 +832,7 @@ func (h *TokenHandler) CreateTeamToken(c *gin.Context) {
 	}); err != nil {
 		h.logger.Warn("failed to audit team token creation", zap.Error(err))
 	}
-	c.JSON(http.StatusCreated, gin.H{"id": id, "token": token, "team_name": req.TeamName, "max_uses": req.MaxUses, "expires_at": req.Expires, "created_at": createdAt})
+	c.JSON(http.StatusCreated, gin.H{"id": id, "token": token, "team_name": req.TeamName, "max_uses": req.MaxUses, "expires_at": req.Expires, "created_at": createdAt.UTC()})
 }
 func (h *TokenHandler) DeleteTeamToken(c *gin.Context) {
 	h.deleteToken(c, "team_tokens", "team token")
@@ -871,6 +890,10 @@ func (h *TokenHandler) CreateInviteCode(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if req.Expires != nil {
+		expiresUTC := req.Expires.UTC()
+		req.Expires = &expiresUTC
+	}
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -898,7 +921,7 @@ func (h *TokenHandler) CreateInviteCode(c *gin.Context) {
 	}); err != nil {
 		h.logger.Warn("failed to audit invite code creation", zap.Error(err))
 	}
-	c.JSON(http.StatusCreated, gin.H{"id": id, "code": code, "max_uses": req.MaxUses, "expires_at": req.Expires, "created_at": createdAt})
+	c.JSON(http.StatusCreated, gin.H{"id": id, "code": code, "max_uses": req.MaxUses, "expires_at": req.Expires, "created_at": createdAt.UTC()})
 }
 func (h *TokenHandler) DeleteInviteCode(c *gin.Context) {
 	h.deleteToken(c, "invite_codes", "invite code")
@@ -953,9 +976,14 @@ func contextUserID(c *gin.Context) (uuid.UUID, bool) {
 }
 
 func tokenSummary(id, teamName, suffix string, maxUses, currentUses int, expiresAt *time.Time, createdBy *uuid.UUID, createdAt time.Time) gin.H {
+	var expiresAtUTC *time.Time
+	if expiresAt != nil {
+		value := expiresAt.UTC()
+		expiresAtUTC = &value
+	}
 	result := gin.H{
 		"id": id, "token_suffix": suffix, "max_uses": maxUses, "current_uses": currentUses,
-		"expires_at": expiresAt, "created_by": createdBy, "created_at": createdAt,
+		"expires_at": expiresAtUTC, "created_by": createdBy, "created_at": createdAt.UTC(),
 		"active": currentUses < maxUses && (expiresAt == nil || expiresAt.After(time.Now())),
 	}
 	if teamName != "" {
@@ -1199,7 +1227,7 @@ func (h *AuditHandler) List(c *gin.Context) {
 			"id": id, "user_id": actorID, "username": username, "action": action,
 			"entity_type": entityType, "entity_id": entityID, "old_values": oldValues,
 			"new_values": newValues, "ip_address": ipAddress, "user_agent": userAgent,
-			"created_at": createdAt,
+			"created_at": createdAt.UTC(),
 		})
 	}
 	if err := rows.Err(); err != nil {

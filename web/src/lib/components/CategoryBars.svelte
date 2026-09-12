@@ -19,17 +19,19 @@
 				<span class="optical-label text-stone-600 tabular-nums">· {c.segments.length}</span>
 				<span class="optical-label ml-auto font-semibold tabular-nums text-stone-200">{c.total}</span>
 			</div>
-			<div
-				class="flex h-2 items-stretch gap-px overflow-hidden rounded-full"
-				style="width: {(c.total / max) * 100}%"
-			>
-				{#each c.segments as seg}
-					<div
-						class="h-full first:rounded-l-full last:rounded-r-full"
-						style="flex: {seg.points}; background: {c.color};"
-						title="{seg.label} · {seg.points} pts"
-					></div>
-				{/each}
+			<div class="h-2 overflow-hidden rounded-full bg-stone-800/70">
+				<div
+					class="flex h-full items-stretch gap-px overflow-hidden rounded-full"
+					style="width: {(c.total / max) * 100}%"
+				>
+					{#each c.segments as seg, i}
+						<div
+							class="h-full min-w-px first:rounded-l-full last:rounded-r-full"
+							style="flex: {seg.points}; background: {c.color}; opacity: {0.52 + (i % 4) * 0.14};"
+							title="{seg.label} · {seg.points} pts"
+						></div>
+					{/each}
+				</div>
 			</div>
 		</div>
 	{/each}

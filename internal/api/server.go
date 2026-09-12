@@ -133,12 +133,15 @@ func (s *Server) setupRouter() {
 				challengesPublic.GET("/challenges/:slug/attachments/:attachment_id/download", attachmentHandler.Download)
 			}
 
-			// Public scoreboard (if enabled)
+			// Scoreboard routes accept optional auth so scoreboard_public can keep
+			// the same URLs while limiting private events to signed-in players.
 			scoreboardHandler := handlers.NewScoreboardHandler(s.config, s.db, s.logger)
-			public.GET("/scoreboard", scoreboardHandler.Get)
-			public.GET("/scoreboard/history", scoreboardHandler.History)
-			public.GET("/scoreboard/matrix", scoreboardHandler.Matrix)
-			public.GET("/profile/:username", scoreboardHandler.Profile)
+			scoreboardRoutes := public.Group("")
+			scoreboardRoutes.Use(middleware.OptionalAuth(s.config, s.db))
+			scoreboardRoutes.GET("/scoreboard", scoreboardHandler.Get)
+			scoreboardRoutes.GET("/scoreboard/history", scoreboardHandler.History)
+			scoreboardRoutes.GET("/scoreboard/matrix", scoreboardHandler.Matrix)
+			scoreboardRoutes.GET("/profile/:username", scoreboardHandler.Profile)
 
 			// Public stats
 			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)

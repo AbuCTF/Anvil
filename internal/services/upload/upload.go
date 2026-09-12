@@ -126,38 +126,38 @@ const (
 
 // Upload represents an upload session
 type Upload struct {
-	ID            string                   `json:"id"`
-	UserID        string                   `json:"user_id"`
-	ChallengeID   *string                  `json:"challenge_id,omitempty"`
-	Filename      string                   `json:"filename"`
-	FileType      FileType                 `json:"file_type"`
-	ContentType   string                   `json:"content_type"`
-	TotalSize     int64                    `json:"total_size"`
-	UploadedSize  int64                    `json:"uploaded_size"`
-	ChunkSize     int64                    `json:"chunk_size"`
-	TotalChunks   int                      `json:"total_chunks"`
-	UploadedChunks map[int]storage.CompletedPart `json:"uploaded_chunks"`
-	Status        UploadStatus             `json:"status"`
-	StorageKey    string                   `json:"storage_key"`
-	BackendUploadID string                 `json:"backend_upload_id"`
-	Checksum      string                   `json:"checksum"`
-	Error         string                   `json:"error,omitempty"`
-	CreatedAt     time.Time                `json:"created_at"`
-	UpdatedAt     time.Time                `json:"updated_at"`
-	ExpiresAt     time.Time                `json:"expires_at"`
+	ID              string                        `json:"id"`
+	UserID          string                        `json:"user_id"`
+	ChallengeID     *string                       `json:"challenge_id,omitempty"`
+	Filename        string                        `json:"filename"`
+	FileType        FileType                      `json:"file_type"`
+	ContentType     string                        `json:"content_type"`
+	TotalSize       int64                         `json:"total_size"`
+	UploadedSize    int64                         `json:"uploaded_size"`
+	ChunkSize       int64                         `json:"chunk_size"`
+	TotalChunks     int                           `json:"total_chunks"`
+	UploadedChunks  map[int]storage.CompletedPart `json:"uploaded_chunks"`
+	Status          UploadStatus                  `json:"status"`
+	StorageKey      string                        `json:"storage_key"`
+	BackendUploadID string                        `json:"backend_upload_id"`
+	Checksum        string                        `json:"checksum"`
+	Error           string                        `json:"error,omitempty"`
+	CreatedAt       time.Time                     `json:"created_at"`
+	UpdatedAt       time.Time                     `json:"updated_at"`
+	ExpiresAt       time.Time                     `json:"expires_at"`
 }
 
 // UploadProgress contains progress information for an upload
 type UploadProgress struct {
-	UploadID       string       `json:"upload_id"`
-	Status         UploadStatus `json:"status"`
-	TotalSize      int64        `json:"total_size"`
-	UploadedSize   int64        `json:"uploaded_size"`
-	TotalChunks    int          `json:"total_chunks"`
-	UploadedChunks int          `json:"uploaded_chunks"`
-	PercentComplete float64     `json:"percent_complete"`
-	BytesPerSecond  int64       `json:"bytes_per_second,omitempty"`
-	EstimatedTimeRemaining int64 `json:"estimated_time_remaining,omitempty"`
+	UploadID               string       `json:"upload_id"`
+	Status                 UploadStatus `json:"status"`
+	TotalSize              int64        `json:"total_size"`
+	UploadedSize           int64        `json:"uploaded_size"`
+	TotalChunks            int          `json:"total_chunks"`
+	UploadedChunks         int          `json:"uploaded_chunks"`
+	PercentComplete        float64      `json:"percent_complete"`
+	BytesPerSecond         int64        `json:"bytes_per_second,omitempty"`
+	EstimatedTimeRemaining int64        `json:"estimated_time_remaining,omitempty"`
 }
 
 // InitUploadRequest contains parameters for initializing an upload
@@ -173,11 +173,11 @@ type InitUploadRequest struct {
 
 // Service handles file uploads
 type Service struct {
-	storage     storage.StorageBackend
-	logger      *zap.Logger
-	mu          sync.RWMutex
-	uploads     map[string]*Upload
-	config      Config
+	storage storage.StorageBackend
+	logger  *zap.Logger
+	mu      sync.RWMutex
+	uploads map[string]*Upload
+	config  Config
 }
 
 // Config contains upload service configuration
@@ -269,6 +269,7 @@ func (s *Service) InitUpload(ctx context.Context, userID string, req InitUploadR
 		return nil, fmt.Errorf("failed to initialize storage upload: %w", err)
 	}
 
+	now := time.Now().UTC()
 	upload := &Upload{
 		ID:              uploadID,
 		UserID:          userID,
@@ -285,9 +286,9 @@ func (s *Service) InitUpload(ctx context.Context, userID string, req InitUploadR
 		StorageKey:      storageKey,
 		BackendUploadID: backendUploadID,
 		Checksum:        req.Checksum,
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
-		ExpiresAt:       time.Now().Add(s.config.UploadExpiry),
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		ExpiresAt:       now.Add(s.config.UploadExpiry),
 	}
 
 	s.mu.Lock()

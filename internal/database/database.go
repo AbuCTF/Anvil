@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -41,6 +43,27 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 	poolConfig, err := pgxpool.ParseConfig(cfg.DSN())
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse database config: %w", err)
+	}
+	// TIMESTAMPTZ is stored as an instant; make every connection serialize and
+	// compare it from the same UTC session baseline. Browsers localize it for the
+	// viewer at the presentation edge.
+	if poolConfig.ConnConfig.RuntimeParams == nil {
+		poolConfig.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	poolConfig.ConnConfig.RuntimeParams["timezone"] = "UTC"
+	previousAfterConnect := poolConfig.AfterConnect
+	poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if previousAfterConnect != nil {
+			if err := previousAfterConnect(ctx, conn); err != nil {
+				return err
+			}
+		}
+		conn.TypeMap().RegisterType(&pgtype.Type{
+			Name:  "timestamptz",
+			OID:   pgtype.TimestamptzOID,
+			Codec: &pgtype.TimestamptzCodec{ScanLocation: time.UTC},
+		})
+		return nil
 	}
 
 	// Connection pool settings for better performance

@@ -253,6 +253,7 @@
 	}
 	const fmt = (n: number | null | undefined) => (typeof n === 'number' && Number.isFinite(n) ? n.toFixed(0) : '—');
 	function ago(at: number) {
+		if (!Number.isFinite(at) || at <= 0) return '—';
 		const s = Math.max(0, Math.floor(now / 1000) - at);
 		if (s < 60) return `${s}s`;
 		const m = Math.floor(s / 60);

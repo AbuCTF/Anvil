@@ -89,9 +89,9 @@ func publicUpload(uploadSession *upload.Upload) UploadResponse {
 		TotalChunks:    uploadSession.TotalChunks,
 		UploadedChunks: len(uploadSession.UploadedChunks),
 		Status:         uploadSession.Status,
-		CreatedAt:      uploadSession.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:      uploadSession.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		ExpiresAt:      uploadSession.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:      uploadSession.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:      uploadSession.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		ExpiresAt:      uploadSession.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 
@@ -294,7 +294,7 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 		UploadID:    uploadSession.ID,
 		ChunkSize:   uploadSession.ChunkSize,
 		TotalChunks: uploadSession.TotalChunks,
-		ExpiresAt:   uploadSession.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
+		ExpiresAt:   uploadSession.ExpiresAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	})
 }
 

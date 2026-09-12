@@ -390,7 +390,7 @@ func (h *VMHandler) ListTemplates(c *gin.Context) {
 			"vcpu":        t.VCPU,
 			"memory_mb":   t.MemoryMB,
 			"disk_gb":     t.DiskGB,
-			"created_at":  t.CreatedAt.Format(time.RFC3339),
+			"created_at":  t.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -420,8 +420,8 @@ func (h *VMHandler) GetTemplate(c *gin.Context) {
 		"memory_mb":   template.MemoryMB,
 		"disk_gb":     template.DiskGB,
 		"metadata":    template.Metadata,
-		"created_at":  template.CreatedAt.Format(time.RFC3339),
-		"updated_at":  template.UpdatedAt.Format(time.RFC3339),
+		"created_at":  template.CreatedAt.UTC().Format(time.RFC3339),
+		"updated_at":  template.UpdatedAt.UTC().Format(time.RFC3339),
 	})
 }
 
@@ -439,12 +439,12 @@ func vmInstanceToResponse(inst *vm.VMInstance) VMResponse {
 		ExposedPorts: inst.ExposedPorts,
 		VCPU:         inst.VCPU,
 		MemoryMB:     inst.MemoryMB,
-		CreatedAt:    inst.CreatedAt.Format(time.RFC3339),
-		ExpiresAt:    inst.ExpiresAt.Format(time.RFC3339),
+		CreatedAt:    inst.CreatedAt.UTC().Format(time.RFC3339),
+		ExpiresAt:    inst.ExpiresAt.UTC().Format(time.RFC3339),
 	}
 
 	if inst.StartedAt != nil {
-		s := inst.StartedAt.Format(time.RFC3339)
+		s := inst.StartedAt.UTC().Format(time.RFC3339)
 		resp.StartedAt = &s
 	}
 

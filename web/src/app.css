@@ -3,129 +3,171 @@
 @tailwind utilities;
 
 @layer base {
-	/* Dark theme (default). Meaning is fixed: 950 = page ground, 100 = primary text. */
-	:root {
-		--st-50: 250 250 249;
-		--st-100: 245 245 244;
-		--st-200: 231 229 228;
-		--st-300: 214 211 209;
-		--st-400: 168 162 158;
-		--st-500: 120 113 108;
-		--st-600: 87 83 78;
-		--st-700: 68 64 60;
-		--st-800: 41 37 36;
-		--st-900: 28 25 23;
-		--st-950: 12 10 9;
-		--challenge-solved-surface: rgb(111 174 127 / 0.04);
-		--challenge-solved-border: rgb(111 174 127 / 0.25);
-		--challenge-solved-border-hover: rgb(111 174 127 / 0.4);
-		--challenge-solved-mark: rgb(111 174 127);
-		color-scheme: dark;
-	}
-	/* Light theme — the scale inverts, so every stone-* class flips automatically. */
-	:root[data-theme='light'] {
-		--st-50: 28 25 23;
-		--st-100: 28 25 23;
-		--st-200: 41 37 36;
-		--st-300: 62 58 54;
-		--st-400: 92 87 81;
-		--st-500: 122 115 108;
-		--st-600: 150 143 135;
-		--st-700: 185 179 170;
-		--st-800: 214 209 200;
-		--st-900: 228 223 215;
-		--st-950: 250 249 246;
-		--challenge-solved-surface: rgb(73 112 80 / 0.12);
-		--challenge-solved-border: rgb(62 103 70 / 0.5);
-		--challenge-solved-border-hover: rgb(52 91 61 / 0.68);
-		--challenge-solved-mark: rgb(47 94 58);
-		color-scheme: light;
-	}
+  /* Dark theme (default). Meaning is fixed: 950 = page ground, 100 = primary text. */
+  :root {
+    --st-50: 250 250 249;
+    --st-100: 245 245 244;
+    --st-200: 231 229 228;
+    --st-300: 214 211 209;
+    --st-400: 168 162 158;
+    --st-500: 120 113 108;
+    --st-600: 87 83 78;
+    --st-700: 68 64 60;
+    --st-800: 41 37 36;
+    --st-900: 28 25 23;
+    --st-950: 12 10 9;
+    --challenge-solved-surface: rgb(111 174 127 / 0.04);
+    --challenge-solved-border: rgb(111 174 127 / 0.25);
+    --challenge-solved-border-hover: rgb(111 174 127 / 0.4);
+    --challenge-solved-mark: rgb(111 174 127);
+    --chart-dim-opacity: 0.5;
+    color-scheme: dark;
+  }
+  /* Light theme — the scale inverts, so every stone-* class flips automatically. */
+  :root[data-theme="light"] {
+    --st-50: 28 25 23;
+    --st-100: 28 25 23;
+    --st-200: 41 37 36;
+    --st-300: 62 58 54;
+    --st-400: 92 87 81;
+    --st-500: 122 115 108;
+    --st-600: 150 143 135;
+    --st-700: 185 179 170;
+    --st-800: 214 209 200;
+    --st-900: 228 223 215;
+    --st-950: 250 249 246;
+    --challenge-solved-surface: rgb(73 112 80 / 0.12);
+    --challenge-solved-border: rgb(62 103 70 / 0.5);
+    --challenge-solved-border-hover: rgb(52 91 61 / 0.68);
+    --challenge-solved-mark: rgb(47 94 58);
+    --chart-dim-opacity: 0.75;
+    color-scheme: light;
+  }
 
-	* {
-		@apply border-stone-800;
-	}
-	html, body {
-		@apply bg-stone-950 text-stone-100 antialiased;
-		font-family: 'JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier', monospace;
-		overflow-x: hidden;
-		max-width: 100vw;
-	}
-	h1, h2, h3, h4, h5, h6, p, a, button, input, textarea, select, label, span, div {
-		font-family: inherit;
-	}
-	p, span, div {
-		word-wrap: break-word;
-		overflow-wrap: break-word;
-	}
-	:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
-		outline: 2px solid rgb(245 158 11 / 0.8) !important;
-		outline-offset: 2px !important;
-	}
+  * {
+    @apply border-stone-800;
+  }
+  html,
+  body {
+    @apply bg-stone-950 text-stone-100 antialiased;
+    font-family:
+      "JetBrains Mono Variable", "JetBrains Mono", "SF Mono", "Consolas",
+      "Liberation Mono", "Menlo", "Courier", monospace;
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  p,
+  a,
+  button,
+  input,
+  textarea,
+  select,
+  label,
+  span,
+  div {
+    font-family: inherit;
+  }
+  p,
+  span,
+  div {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+  }
+  :where(
+    a,
+    button,
+    input,
+    textarea,
+    select,
+    summary,
+    [tabindex]
+  ):focus-visible {
+    outline: 2px solid rgb(245 158 11 / 0.8) !important;
+    outline-offset: 2px !important;
+  }
 }
 
 @layer components {
-	/* SVG artwork and type rarely share a visual center; keep the correction explicit. */
-	.optical-label {
-		position: relative;
-		top: 0.5px;
-	}
+  /* SVG artwork and type rarely share a visual center; keep the correction explicit. */
+  .optical-label {
+    position: relative;
+    top: 0.5px;
+  }
 
-	/* Smaller pill type needs a full pixel to sit visually centered inside its border. */
-	.badge-label {
-		position: relative;
-		top: 1px;
-	}
+  /* Smaller pill type needs a full pixel to sit visually centered inside its border. */
+  .badge-label {
+    position: relative;
+    top: 1px;
+  }
 
-	/* Human-readable microcopy is distinct from the monospaced value beside it. */
-	.metadata-label {
-		font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-		font-size: 0.65rem;
-		font-weight: 600;
-		line-height: 1;
-		letter-spacing: 0.1em;
-		text-transform: uppercase;
-	}
+  /* Single digits sit lower than words; half a pixel centers blood ranks in circles. */
+  .blood-label {
+    position: relative;
+    top: 0.5px;
+    line-height: 1;
+  }
 
-	.challenge-tile-solved {
-		background-color: var(--challenge-solved-surface);
-		border-color: var(--challenge-solved-border);
-	}
-	.challenge-tile-solved:hover {
-		border-color: var(--challenge-solved-border-hover);
-	}
-	.challenge-tile-solved-mark {
-		color: var(--challenge-solved-mark);
-	}
+  /* Human-readable microcopy is distinct from the monospaced value beside it. */
+  .metadata-label {
+    font-family:
+      "Inter Variable",
+      "Inter",
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif;
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .challenge-tile-solved {
+    background-color: var(--challenge-solved-surface);
+    border-color: var(--challenge-solved-border);
+  }
+  .challenge-tile-solved:hover {
+    border-color: var(--challenge-solved-border-hover);
+  }
+  .challenge-tile-solved-mark {
+    color: var(--challenge-solved-mark);
+  }
 }
 
 /* Theme-aware hero highlight — cyan reads darker on a light ground. */
 .hero-accent {
-	color: #22d3ee;
+  color: #22d3ee;
 }
-:root[data-theme='light'] .hero-accent {
-	color: #0e7490;
+:root[data-theme="light"] .hero-accent {
+  color: #0e7490;
 }
 
 /* Hide scrollbar globally but keep functionality */
 html {
-	overflow-y: scroll;
-	scrollbar-width: none;
-	-ms-overflow-style: none;
+  overflow-y: scroll;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 html::-webkit-scrollbar {
-	display: none;
+  display: none;
 }
 
 @media (max-width: 768px) {
-	.mobile-table-wrapper {
-		overflow-x: auto;
-		-webkit-overflow-scrolling: touch;
-	}
+  .mobile-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-	html {
-		scroll-behavior: smooth;
-	}
+  html {
+    scroll-behavior: smooth;
+  }
 }

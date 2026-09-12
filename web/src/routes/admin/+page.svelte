@@ -7,6 +7,7 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
+	import { formatLocalDateLong, formatLocalDateTimeWithZone, instantTitle } from '$lib/time';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -542,7 +543,7 @@
 	}
 
 	function formatDate(timestamp: number): string {
-		return new Date(timestamp * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+		return formatLocalDateLong(timestamp, 'seconds');
 	}
 
 	async function handleCreateChallenge() {
@@ -809,7 +810,7 @@
 												<p class="text-xs text-stone-500 truncate">{user.email}</p>
 											</div>
 										</div>
-										<span class="text-xs text-stone-600 tabular-nums shrink-0">{formatDate(user.created_at)}</span>
+										<span class="text-xs text-stone-600 tabular-nums shrink-0" title={instantTitle(user.created_at, 'seconds')}>{formatDate(user.created_at)}</span>
 									</div>
 								{/each}
 							</div>
@@ -1032,7 +1033,7 @@
 								</div>
 								<div class="flex items-center justify-between text-xs text-stone-500 pt-3 border-t border-stone-800 tabular-nums">
 									<span>{user.total_score || 0} points</span>
-									<span>Joined {formatDate(user.created_at)}</span>
+									<span title={instantTitle(user.created_at, 'seconds')}>Joined {formatDate(user.created_at)}</span>
 								</div>
 								<div class="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-stone-800">
 									<select
@@ -1089,7 +1090,7 @@
 													<span class="text-xs {user.role === 'admin' ? 'text-amber-500/90' : 'text-stone-400'}">{user.role}</span>
 												</td>
 												<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">{user.total_score || 0}</td>
-												<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden md:table-cell">{formatDate(user.created_at)}</td>
+											<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden md:table-cell" title={instantTitle(user.created_at, 'seconds')}>{formatDate(user.created_at)}</td>
 												<td class="px-4 py-2.5">
 													<div class="flex items-center justify-end gap-3">
 														<select
@@ -1299,7 +1300,9 @@
 													<span class="text-xs {instance.status === 'running' ? 'text-up' : 'text-warn'}">{instance.status}</span>
 												</td>
 												<td class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums">
-													{instance.expires_at ? new Date(instance.expires_at * 1000).toLocaleTimeString() : '—'}
+													{instance.expires_at
+														? formatLocalDateTimeWithZone(instance.expires_at, 'seconds')
+														: '—'}
 												</td>
 												<td class="px-4 py-2.5 text-right">
 													<button
@@ -1348,7 +1351,9 @@
 												<span class="text-xs {instance.status === 'running' ? 'text-up' : 'text-warn'}">{instance.status}</span>
 											</td>
 											<td class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums">
-												{instance.expires_at ? new Date(instance.expires_at * 1000).toLocaleTimeString() : '—'}
+												{instance.expires_at
+													? formatLocalDateTimeWithZone(instance.expires_at, 'seconds')
+													: '—'}
 											</td>
 											<td class="px-4 py-2.5 text-right">
 												<button
@@ -1629,7 +1634,10 @@
 													<td class="px-4 py-2.5 text-down">{ev.submitter_username ?? ev.submitter_user_id}</td>
 													<td class="px-4 py-2.5 text-xs text-stone-400 font-mono">{ev.submitter_ip ?? '—'}</td>
 													<td class="px-4 py-2.5 text-xs text-stone-300 font-mono max-w-xs truncate">{ev.flag_value}</td>
-													<td class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums">{new Date(ev.created_at).toLocaleString()}</td>
+												<td
+													class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums"
+													title={instantTitle(ev.created_at, 'seconds')}
+												>{formatLocalDateTimeWithZone(ev.created_at, 'seconds')}</td>
 												</tr>
 											{/each}
 										</tbody>

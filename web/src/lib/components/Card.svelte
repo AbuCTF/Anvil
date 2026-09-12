@@ -3,9 +3,10 @@
 	export let title = '';
 	export let bodyClass = 'p-4';
 	export let hasHeader = true;
+	export let className = '';
 </script>
 
-<div class="bg-stone-900/40 border border-stone-800 rounded-lg overflow-hidden">
+<div class="bg-stone-900/40 border border-stone-800 rounded-lg overflow-hidden {className}">
 	{#if hasHeader && (title || $$slots.header || $$slots.meta)}
 		<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
 			<slot name="header">

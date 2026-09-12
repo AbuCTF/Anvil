@@ -8,6 +8,7 @@
 	import { API_BASE } from '$lib/config';
 	import Card from '$lib/components/Card.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
+	import { formatLocalDateTime, instantTitle } from '$lib/time';
 
 	let challenge: any = null;
 	let instance: any = null;
@@ -131,9 +132,8 @@
 
 	function formatSolvedAt(ts: string | number | null): string {
 		if (!ts) return '';
-		const d = typeof ts === 'number' ? new Date(ts * 1000) : new Date(ts);
-		if (isNaN(d.getTime())) return '';
-		return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+		const formatted = formatLocalDateTime(ts, typeof ts === 'number' ? 'seconds' : 'auto');
+		return formatted === '—' ? '' : formatted;
 	}
 
 	const podiumRank: Record<number, { cls: string; label: string }> = {
@@ -348,6 +348,7 @@
 	}
 
 	function formatTimeRemaining(expiresAt: number): string {
+		if (!Number.isFinite(expiresAt) || expiresAt <= 0) return '—';
 		const now = Math.floor(Date.now() / 1000);
 		const remaining = expiresAt - now;
 		if (remaining <= 0) return 'Expired';
@@ -368,6 +369,7 @@
 	}
 
 	function getSecondsRemaining(expiresAt: number): number {
+		if (!Number.isFinite(expiresAt) || expiresAt <= 0) return Number.POSITIVE_INFINITY;
 		return expiresAt - Math.floor(Date.now() / 1000);
 	}
 
@@ -1013,7 +1015,10 @@
 									<div class="grid grid-cols-2 gap-3">
 										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
 											<p class="metadata-label text-stone-500 mb-1">Time left</p>
-											<p class="text-base font-mono font-medium tabular-nums {getTimeColorClass(instance.expires_at)}">{timeRemaining}</p>
+											<p
+												class="text-base font-mono font-medium tabular-nums {getTimeColorClass(instance.expires_at)}"
+												title={instantTitle(instance.expires_at, 'seconds')}
+											>{timeRemaining}</p>
 											{#if getSecondsRemaining(instance.expires_at) < 300}
 												<p class="text-xs text-down mt-1">Expiring soon</p>
 											{/if}
@@ -1128,7 +1133,10 @@
 												<span class="optical-label text-sm truncate {s.rank === 1 ? 'font-medium' : 'text-stone-200'}">{s.name}</span>
 											</div>
 											{#if formatSolvedAt(s.at)}
-												<span class="text-[0.68rem] text-stone-500 tabular-nums shrink-0 ml-2">{formatSolvedAt(s.at)}</span>
+												<span
+													class="text-[0.68rem] text-stone-500 tabular-nums shrink-0 ml-2"
+													title={instantTitle(s.at, typeof s.at === 'number' ? 'seconds' : 'auto')}
+												>{formatSolvedAt(s.at)}</span>
 											{/if}
 										</li>
 									{/each}
