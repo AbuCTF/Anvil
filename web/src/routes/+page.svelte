@@ -3,20 +3,29 @@
 	import { onMount } from 'svelte';
 	import { api } from '$api';
 
-	let stats = { challenges: 0, users: 0, solves: 0 };
+	let stats: { challenges: number | null; users: number | null; solves: number | null } = {
+		challenges: null,
+		users: null,
+		solves: null
+	};
+	let statsError = '';
 
 	onMount(async () => {
-		try {
-			const [challengesRes, statsRes] = await Promise.all([
-				api.getChallenges().catch(() => ({ challenges: [] })),
-				api.getStats().catch(() => ({ total_users: 0, total_solves: 0 }))
-			]);
-			stats.challenges = challengesRes.challenges?.length || 0;
-			stats.users = statsRes.total_users || 0;
-			stats.solves = statsRes.total_solves || 0;
-		} catch (e) {
-			/* ignore */
-		}
+		const [challengesResult, statsResult] = await Promise.allSettled([
+			api.getChallenges(),
+			api.getStats()
+		]);
+
+		stats = {
+			challenges: challengesResult.status === 'fulfilled'
+				? challengesResult.value.challenges?.length ?? 0
+				: null,
+			users: statsResult.status === 'fulfilled' ? statsResult.value.total_users ?? 0 : null,
+			solves: statsResult.status === 'fulfilled' ? statsResult.value.total_solves ?? 0 : null
+		};
+		statsError = challengesResult.status === 'rejected' || statsResult.status === 'rejected'
+			? 'Some live totals are unavailable.'
+			: '';
 	});
 </script>
 
@@ -53,16 +62,19 @@
 
 	<div class="mt-14 flex items-start justify-center gap-10 sm:gap-14">
 		<div>
-			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.challenges}</div>
-			<div class="text-xs text-stone-500 mt-1">Challenges</div>
+			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.challenges ?? '—'}</div>
+			<div class="metadata-label text-stone-500 mt-1">Challenges</div>
 		</div>
 		<div>
-			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.users}</div>
-			<div class="text-xs text-stone-500 mt-1">Users</div>
+			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.users ?? '—'}</div>
+			<div class="metadata-label text-stone-500 mt-1">Users</div>
 		</div>
 		<div>
-			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.solves}</div>
-			<div class="text-xs text-stone-500 mt-1">Solves</div>
+			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.solves ?? '—'}</div>
+			<div class="metadata-label text-stone-500 mt-1">Solves</div>
 		</div>
 	</div>
+	{#if statsError}
+		<p class="mt-3 text-[0.7rem] text-stone-600" aria-live="polite">{statsError}</p>
+	{/if}
 </div>

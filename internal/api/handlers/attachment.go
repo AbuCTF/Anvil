@@ -1,17 +1,20 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -28,6 +31,12 @@ type AttachmentResponse struct {
 
 // maxAttachmentSize is the upper limit for a single-request attachment upload (500 MB)
 const maxAttachmentSize = 500 * 1024 * 1024
+
+const (
+	maxAttachmentRequestOverhead = 1 * 1024 * 1024
+	maxAttachmentFilenameLength  = 500
+	maxAttachmentDescription     = 5000
+)
 
 // allowedAttachmentTypes whitelists MIME types and extensions for challenge files.
 // Path-traversal safety: we never use the original filename as a storage path —
@@ -59,7 +68,7 @@ func sanitiseFilename(name string) string {
 			b.WriteRune(r)
 		}
 	}
-	result := b.String()
+	result := strings.TrimSpace(b.String())
 	if result == "" || result == "." {
 		return "file"
 	}
@@ -69,9 +78,19 @@ func sanitiseFilename(name string) string {
 // UploadAttachment allows an admin to attach a file to a challenge.
 // POST /api/v1/admin/challenges/:id/attachments
 func (h *AttachmentHandler) Upload(c *gin.Context) {
+	uploaderUID, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
 	challengeID := c.Param("id")
 	if _, err := uuid.Parse(challengeID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge ID"})
+		return
+	}
+	if h.storageSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "attachment storage is unavailable"})
 		return
 	}
 
@@ -79,16 +98,29 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	var exists bool
 	if err := h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT EXISTS(SELECT 1 FROM challenges WHERE id = $1)`, challengeID,
-	).Scan(&exists); err != nil || !exists {
+	).Scan(&exists); err != nil {
+		h.logger.Error("failed to query challenge for attachment upload", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to upload attachment"})
+		return
+	} else if !exists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
 	}
 
-	// Limit request body size
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAttachmentSize)
+	// Allow a small amount of multipart framing overhead in addition to the file
+	// limit, then enforce the file's own size below.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAttachmentSize+maxAttachmentRequestOverhead)
 	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large or invalid multipart form"})
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file exceeds 500 MB limit"})
+		} else {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid multipart form"})
+		}
 		return
+	}
+	if c.Request.MultipartForm != nil {
+		defer c.Request.MultipartForm.RemoveAll()
 	}
 
 	file, header, err := c.Request.FormFile("file")
@@ -98,27 +130,46 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	}
 	defer file.Close()
 
+	if header.Size <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file must not be empty"})
+		return
+	}
 	if header.Size > maxAttachmentSize {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "file exceeds 500 MB limit"})
 		return
 	}
 
 	originalName := sanitiseFilename(header.Filename)
+	if len(originalName) > maxAttachmentFilenameLength {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "filename is too long"})
+		return
+	}
 	ext := strings.ToLower(filepath.Ext(originalName))
 	if !allowedAttachmentExtensions[ext] {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("file type '%s' is not allowed", ext)})
 		return
 	}
 
-	// Detect content type from the extension / header
-	contentType := header.Header.Get("Content-Type")
-	if contentType == "" || contentType == "application/octet-stream" {
-		if ext != "" {
-			contentType = mime.TypeByExtension(ext)
+	// Derive the response type from the accepted extension rather than trusting
+	// a client-supplied multipart header.
+	contentType := mime.TypeByExtension(ext)
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	description := strings.TrimSpace(c.PostForm("description"))
+	if len(description) > maxAttachmentDescription {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "description is too long"})
+		return
+	}
+	sortOrder := 0
+	if soStr := c.PostForm("sort_order"); soStr != "" {
+		parsed, err := strconv.ParseInt(soStr, 10, 32)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "sort_order must be an integer"})
+			return
 		}
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
+		sortOrder = int(parsed)
 	}
 
 	// Generate a UUID storage key to prevent path traversal
@@ -131,21 +182,8 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Optional fields
-	description := c.PostForm("description")
-	sortOrder := 0
-	if soStr := c.PostForm("sort_order"); soStr != "" {
-		if n, err := fmt.Sscanf(soStr, "%d", &sortOrder); n != 1 || err != nil {
-			sortOrder = 0
-		}
-	}
-
-	// Get uploader ID
-	uploaderID, _ := c.Get("user_id")
-	uploaderUID := uploaderID.(uuid.UUID)
-
 	// Save metadata
-	_, err = h.db.Pool.Exec(c.Request.Context(),
+	result, err := h.db.Pool.Exec(c.Request.Context(),
 		`INSERT INTO challenge_attachments
 		 (id, challenge_id, uploaded_by, filename, file_size, content_type, storage_key, description, sort_order, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
@@ -154,9 +192,18 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		storageKey, description, sortOrder,
 	)
 	if err != nil {
-		// Best-effort cleanup of stored file
-		h.storageSvc.Delete(c.Request.Context(), storageKey) //nolint:errcheck
+		if cleanupErr := h.storageSvc.Delete(c.Request.Context(), storageKey); cleanupErr != nil {
+			h.logger.Warn("failed to clean up attachment after metadata error", zap.Error(cleanupErr), zap.String("key", storageKey))
+		}
 		h.logger.Error("failed to save attachment metadata", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		if cleanupErr := h.storageSvc.Delete(c.Request.Context(), storageKey); cleanupErr != nil {
+			h.logger.Warn("failed to clean up attachment after metadata error", zap.Error(cleanupErr), zap.String("key", storageKey))
+		}
+		h.logger.Error("attachment metadata insert affected an unexpected number of rows", zap.Int64("rows_affected", result.RowsAffected()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
 		return
 	}
@@ -181,6 +228,21 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 // GET /api/v1/admin/challenges/:id/attachments
 func (h *AttachmentHandler) List(c *gin.Context) {
 	challengeID := c.Param("id")
+	if _, err := uuid.Parse(challengeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge ID"})
+		return
+	}
+	var exists bool
+	if err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT EXISTS(SELECT 1 FROM challenges WHERE id = $1)`, challengeID,
+	).Scan(&exists); err != nil {
+		h.logger.Error("failed to query challenge for attachment list", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch attachments"})
+		return
+	} else if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	}
 	attachments, err := h.queryAttachments(c, challengeID)
 	if err != nil {
 		h.logger.Error("failed to list attachments", zap.Error(err))
@@ -195,29 +257,37 @@ func (h *AttachmentHandler) List(c *gin.Context) {
 func (h *AttachmentHandler) Delete(c *gin.Context) {
 	challengeID := c.Param("id")
 	attachmentID := c.Param("attachment_id")
+	if _, err := uuid.Parse(challengeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge ID"})
+		return
+	}
+	if _, err := uuid.Parse(attachmentID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment ID"})
+		return
+	}
+	if h.storageSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "attachment storage is unavailable"})
+		return
+	}
 
 	var storageKey string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT storage_key FROM challenge_attachments WHERE id = $1 AND challenge_id = $2`,
+		`DELETE FROM challenge_attachments WHERE id = $1 AND challenge_id = $2 RETURNING storage_key`,
 		attachmentID, challengeID,
 	).Scan(&storageKey)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
 		return
-	}
-
-	// Remove stored file (best-effort)
-	if err := h.storageSvc.Delete(c.Request.Context(), storageKey); err != nil {
-		h.logger.Warn("failed to delete attachment file", zap.Error(err), zap.String("key", storageKey))
-	}
-
-	// Remove metadata
-	if _, err := h.db.Pool.Exec(c.Request.Context(),
-		`DELETE FROM challenge_attachments WHERE id = $1`, attachmentID,
-	); err != nil {
+	} else if err != nil {
 		h.logger.Error("failed to delete attachment metadata", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete attachment"})
 		return
+	}
+
+	// Metadata is removed first: if object deletion fails, the unreachable file
+	// can be cleaned up later without leaving a public record that cannot download.
+	if err := h.storageSvc.Delete(c.Request.Context(), storageKey); err != nil {
+		h.logger.Warn("failed to delete attachment file", zap.Error(err), zap.String("key", storageKey))
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "attachment deleted"})
@@ -228,6 +298,14 @@ func (h *AttachmentHandler) Delete(c *gin.Context) {
 func (h *AttachmentHandler) Download(c *gin.Context) {
 	slug := c.Param("slug")
 	attachmentID := c.Param("attachment_id")
+	if _, err := uuid.Parse(attachmentID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment ID"})
+		return
+	}
+	if h.storageSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "attachment storage is unavailable"})
+		return
+	}
 
 	// Look up attachment (join with challenge to validate slug ownership and published status)
 	var storageKey, filename, contentType string
@@ -236,11 +314,37 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 		`SELECT ca.storage_key, ca.filename, COALESCE(ca.content_type, 'application/octet-stream'), ca.file_size
 		 FROM challenge_attachments ca
 		 JOIN challenges c ON c.id = ca.challenge_id
-		 WHERE ca.id = $1 AND c.slug = $2 AND c.status = 'published'`,
+		 WHERE ca.id = $1 AND c.slug = $2 AND c.status = 'published'
+		   AND (c.release_date IS NULL OR c.release_date <= NOW())`,
 		attachmentID, slug,
 	).Scan(&storageKey, &filename, &contentType, &fileSize)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
+		return
+	} else if err != nil {
+		h.logger.Error("failed to query attachment for download", zap.String("attachment_id", attachmentID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "file unavailable"})
+		return
+	}
+	if fileSize < 0 {
+		h.logger.Error("attachment has invalid negative size", zap.String("attachment_id", attachmentID), zap.Int64("file_size", fileSize))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "file unavailable"})
+		return
+	}
+	if parsedType, _, parseErr := mime.ParseMediaType(contentType); parseErr == nil {
+		contentType = parsedType
+	} else {
+		contentType = "application/octet-stream"
+	}
+	actualSize, err := h.storageSvc.GetSize(c.Request.Context(), storageKey)
+	if err != nil {
+		h.logger.Error("failed to inspect attachment", zap.Error(err), zap.String("key", storageKey))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "file unavailable"})
+		return
+	}
+	if actualSize != fileSize {
+		h.logger.Error("attachment size does not match metadata", zap.String("key", storageKey), zap.Int64("expected", fileSize), zap.Int64("actual", actualSize))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "file unavailable"})
 		return
 	}
 
@@ -290,10 +394,16 @@ func (h *AttachmentHandler) queryAttachments(c *gin.Context, challengeID string)
 		var a AttachmentResponse
 		var createdAt time.Time
 		if err := rows.Scan(&a.ID, &a.Filename, &a.FileSize, &a.ContentType, &a.Description, &a.SortOrder, &createdAt); err != nil {
-			continue
+			return nil, fmt.Errorf("scan attachment: %w", err)
+		}
+		if a.FileSize < 0 {
+			return nil, fmt.Errorf("attachment %s has a negative file size", a.ID)
 		}
 		a.CreatedAt = createdAt.Unix()
 		attachments = append(attachments, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate attachments: %w", err)
 	}
 	if attachments == nil {
 		attachments = []AttachmentResponse{}

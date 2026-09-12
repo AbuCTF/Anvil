@@ -11,7 +11,7 @@ export interface RankCardData {
 	color: string;
 }
 
-const mono = (weight: number, size: number) => `${weight} ${size}px "JetBrains Mono", ui-monospace, monospace`;
+const mono = (weight: number, size: number) => `${weight} ${size}px "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace`;
 
 function drawSpark(ctx: CanvasRenderingContext2D, data: number[], color: string, x: number, y: number, w: number, h: number) {
 	if (data.length < 2) return;

@@ -58,7 +58,6 @@
 </script>
 
 <div class="relative w-full" bind:clientWidth={width}>
-	<!-- svelte-ignore a11y-no-static-element-interactions -->
 	<svg
 		{width}
 		{height}
@@ -108,8 +107,8 @@
 			{#each hoverRows.slice(0, 8) as r}
 				<div class="flex items-center gap-1.5 leading-none">
 					<span class="w-2 h-2 rounded-full shrink-0" style="background: {r.color};"></span>
-					<span class="text-stone-300 truncate">{r.label}</span>
-					<span class="ml-auto text-stone-400 tabular-nums">{Math.round(r.value ?? 0)}</span>
+					<span class="optical-label text-stone-300 truncate">{r.label}</span>
+					<span class="optical-label ml-auto text-stone-400 tabular-nums">{Math.round(r.value ?? 0)}</span>
 				</div>
 			{/each}
 			{#if hoverRows.length > 8}<div class="text-stone-600 mt-0.5">+{hoverRows.length - 8} more</div>{/if}

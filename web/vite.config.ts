@@ -15,7 +15,6 @@ export default defineConfig({
 			output: {
 				manualChunks: {
 					'svelte-vendor': ['svelte'],
-					'bits-ui': ['bits-ui'],
 					'icons': ['@iconify/svelte']
 				}
 			}

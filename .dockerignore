@@ -1,0 +1,10 @@
+.git
+.env
+.env.*
+CODEX_HANDOFF.md
+data/
+server
+web/.svelte-kit/
+web/build/
+web/node_modules/
+web/vite.config.ts.timestamp-*.mjs

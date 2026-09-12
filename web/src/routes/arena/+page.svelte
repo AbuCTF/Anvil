@@ -4,6 +4,7 @@
 	import { API_BASE } from '$lib/config';
 	import LineChart from '$lib/components/LineChart.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { teamColor as seriesColor } from '$lib/rank';
 	import type { Series } from '$lib/chart/path';
 
@@ -66,6 +67,12 @@
 	}
 
 	const POLL_MS = 5000;
+	const PREVIEW_TEAMS = [
+		{ id: 'preview-forge', name: 'Forge' },
+		{ id: 'preview-null', name: 'Null Sector' },
+		{ id: 'preview-vector', name: 'Vector 7' },
+		{ id: 'preview-heap', name: 'Heap Union' }
+	];
 
 	let standings: Standing[] = [];
 	let hills: Hill[] = [];
@@ -78,7 +85,7 @@
 
 	let loading = true;
 	let error = '';
-	let gameActive = true;
+	let previewMode = false;
 
 	let initialized = false;
 	let prevControllers: Record<string, string | null> = {};
@@ -88,6 +95,48 @@
 
 	let inFlight = false;
 	let timer: ReturnType<typeof setInterval>;
+
+	function previewState(): ArenaState {
+		const at = Math.floor(Date.now() / 1000);
+		return {
+			status: { tick: 184, round: 7, tick_interval_seconds: 120 },
+			hills: [
+				{ hill_id: 'preview-hill-root', name: 'Root Access', controller: 'Forge' },
+				{ hill_id: 'preview-hill-relay', name: 'Relay Station', controller: 'Null Sector' },
+				{ hill_id: 'preview-hill-vault', name: 'The Vault', controller: null }
+			],
+			standings: [
+				{ rank: 1, team_id: PREVIEW_TEAMS[0].id, team: PREVIEW_TEAMS[0].name, attack: 2840, defense: 720, sla: 1260, koth: 680, total: 5500 },
+				{ rank: 2, team_id: PREVIEW_TEAMS[1].id, team: PREVIEW_TEAMS[1].name, attack: 2520, defense: 810, sla: 1320, koth: 540, total: 5190 },
+				{ rank: 3, team_id: PREVIEW_TEAMS[2].id, team: PREVIEW_TEAMS[2].name, attack: 2730, defense: 420, sla: 1180, koth: 390, total: 4720 },
+				{ rank: 4, team_id: PREVIEW_TEAMS[3].id, team: PREVIEW_TEAMS[3].name, attack: 1980, defense: 650, sla: 1270, koth: 260, total: 4160 }
+			],
+			services: [
+				{ service_id: 'preview-notes', name: 'Notes', category: 'web', tier: 'core' },
+				{ service_id: 'preview-cache', name: 'Cache', category: 'pwn', tier: 'core' },
+				{ service_id: 'preview-signer', name: 'Signer', category: 'crypto', tier: 'core' },
+				{ service_id: 'preview-agent', name: 'Agent', category: 'rev', tier: 'core' }
+			],
+			rows: [
+				{ team_id: PREVIEW_TEAMS[0].id, team: PREVIEW_TEAMS[0].name, rank: 1, cells: [{ status: 'OK', latency_ms: 42 }, { status: 'OK', latency_ms: 28 }, { status: 'OK', latency_ms: 51 }, { status: 'RECOVERING', latency_ms: 210 }] },
+				{ team_id: PREVIEW_TEAMS[1].id, team: PREVIEW_TEAMS[1].name, rank: 2, cells: [{ status: 'OK', latency_ms: 61 }, { status: 'FAULTY', latency_ms: 340 }, { status: 'OK', latency_ms: 47 }, { status: 'OK', latency_ms: 39 }] },
+				{ team_id: PREVIEW_TEAMS[2].id, team: PREVIEW_TEAMS[2].name, rank: 3, cells: [{ status: 'DOWN' }, { status: 'OK', latency_ms: 33 }, { status: 'FLAG_NOT_FOUND' }, { status: 'OK', latency_ms: 55 }] },
+				{ team_id: PREVIEW_TEAMS[3].id, team: PREVIEW_TEAMS[3].name, rank: 4, cells: [{ status: 'OK', latency_ms: 72 }, { status: 'OK', latency_ms: 49 }, { status: 'OK', latency_ms: 58 }, { status: 'OK', latency_ms: 64 }] }
+			],
+			events: [
+				{ tick: 184, attacker: 'Forge', victim: 'Vector 7', service: 'Cache', at: at - 18 },
+				{ tick: 184, attacker: 'Null Sector', victim: 'Heap Union', service: 'Notes', at: at - 39 },
+				{ tick: 183, attacker: 'Vector 7', victim: 'Forge', service: 'Signer', at: at - 148 },
+				{ tick: 183, attacker: 'Forge', victim: 'Null Sector', service: 'Agent', at: at - 173 }
+			],
+			history: [
+				{ team_id: PREVIEW_TEAMS[0].id, team: PREVIEW_TEAMS[0].name, points: [{ x: 177, y: 4300 }, { x: 178, y: 4470 }, { x: 179, y: 4610 }, { x: 180, y: 4830 }, { x: 181, y: 5010 }, { x: 182, y: 5180 }, { x: 183, y: 5310 }, { x: 184, y: 5500 }] },
+				{ team_id: PREVIEW_TEAMS[1].id, team: PREVIEW_TEAMS[1].name, points: [{ x: 177, y: 4180 }, { x: 178, y: 4380 }, { x: 179, y: 4540 }, { x: 180, y: 4690 }, { x: 181, y: 4810 }, { x: 182, y: 4930 }, { x: 183, y: 5070 }, { x: 184, y: 5190 }] },
+				{ team_id: PREVIEW_TEAMS[2].id, team: PREVIEW_TEAMS[2].name, points: [{ x: 177, y: 3820 }, { x: 178, y: 4010 }, { x: 179, y: 4190 }, { x: 180, y: 4310 }, { x: 181, y: 4460 }, { x: 182, y: 4590 }, { x: 183, y: 4660 }, { x: 184, y: 4720 }] },
+				{ team_id: PREVIEW_TEAMS[3].id, team: PREVIEW_TEAMS[3].name, points: [{ x: 177, y: 3410 }, { x: 178, y: 3520 }, { x: 179, y: 3680 }, { x: 180, y: 3770 }, { x: 181, y: 3890 }, { x: 182, y: 3980 }, { x: 183, y: 4070 }, { x: 184, y: 4160 }] }
+			]
+		};
+	}
 
 	// Muted status colors — only a genuine problem is meant to draw the eye.
 	const SLA: Record<string, { color: string; label: string }> = {
@@ -114,8 +163,7 @@
 		try {
 			const res = await fetch(`${API_BASE}/api/v1/arena/state`, { headers: { 'Content-Type': 'application/json' } });
 			if (res.status === 404) {
-				gameActive = false;
-				error = '';
+				if (!previewMode) applyState(previewState(), true);
 				return;
 			}
 			if (!res.ok) {
@@ -124,32 +172,34 @@
 			}
 			const s = (await res.json()) as ArenaState & { error?: string };
 			if (s.error) {
-				gameActive = false;
-				error = '';
+				if (!previewMode) applyState(previewState(), true);
 				return;
 			}
-
-			gameActive = true;
-			now = Date.now();
-			status = s.status ?? status;
-			applyHills(s.hills ?? []);
-			standings = s.standings ?? [];
-			matrixServices = s.services ?? [];
-			matrixRows = s.rows ?? [];
-			applyEvents(s.events ?? []);
-			raceSeries = (s.history ?? []).map((h) => ({
-				label: h.team,
-				color: seriesColor(h.team_id),
-				points: h.points
-			}));
-			initialized = true;
-			error = '';
+			applyState(s, false);
 		} catch (e) {
 			if (!initialized) error = e instanceof Error ? e.message : 'Failed to load game state';
 		} finally {
 			loading = false;
 			inFlight = false;
 		}
+	}
+
+	function applyState(s: ArenaState, preview: boolean) {
+		now = Date.now();
+		status = s.status ?? status;
+		applyHills(s.hills ?? []);
+		standings = s.standings ?? [];
+		matrixServices = s.services ?? [];
+		matrixRows = s.rows ?? [];
+		applyEvents(s.events ?? []);
+		raceSeries = (s.history ?? []).map((h) => ({
+			label: h.team,
+			color: seriesColor(h.team_id),
+			points: h.points
+		}));
+		previewMode = preview;
+		initialized = true;
+		error = '';
 	}
 
 	function applyHills(next: Hill[]) {
@@ -211,7 +261,7 @@
 	}
 	const upCount = (r: MatrixRow) => r.cells.filter((c) => c.status === 'OK').length;
 	$: leaderIdx = standings.length ? raceSeries.findIndex((s) => s.label === standings[0].team) : -1;
-	$: bd = { attack: '#9e574f', defense: '#57748c', sla: '#57805f', koth: '#b0862f' };
+	const bd = { attack: '#9e574f', defense: '#57748c', sla: '#57805f', koth: '#b0862f' };
 </script>
 
 <svelte:head>
@@ -229,28 +279,36 @@
 			<p class="text-stone-400">{error}</p>
 			<p class="text-stone-600 text-sm mt-1">Retrying every {POLL_MS / 1000}s…</p>
 		</div>
-	{:else if !gameActive}
-		<div class="flex flex-col items-center justify-center py-24 text-center">
-			<Icon icon="mdi:flag-off-outline" class="w-16 h-16 text-stone-700 mb-4" />
-			<h1 class="text-xl font-semibold text-stone-200 mb-1">Game not active</h1>
-			<p class="text-stone-500">The finals board comes online when the game starts.</p>
-		</div>
 	{:else}
-		<PageHeader title="Arena" subtitle="Attack · Defense · King of the Hill">
+		<PageHeader title="Arena" subtitle={previewMode ? '' : 'Attack · Defense · King of the Hill'} compact={previewMode}>
 			<div slot="actions" class="flex items-center gap-2 text-sm leading-none">
-				<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
-					<span class="text-stone-500 text-xs">Tick</span>
-					<span class="text-stone-100 font-semibold tabular-nums">{status?.tick ?? '—'}</span>
-				</div>
-				<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
-					<span class="text-stone-500 text-xs">Round</span>
-					<span class="text-stone-100 font-semibold tabular-nums">{status?.round ?? '—'}</span>
-				</div>
-				<span class="hidden sm:inline-flex items-center gap-1.5 text-stone-600 text-xs leading-none pl-1">
-					<span class="w-1.5 h-1.5 rounded-full bg-amber-500/70 animate-pulse"></span>live
-				</span>
+				{#if previewMode}
+					<div class="flex items-center gap-1.5 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5 text-stone-300 text-xs">
+						<OpticalIcon icon="mdi:eye-outline" size={14} box={14} />
+						<span class="optical-label">Preview data</span>
+					</div>
+				{:else}
+					<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
+						<span class="optical-label metadata-label text-stone-500">Tick</span>
+						<span class="optical-label text-stone-100 font-semibold tabular-nums">{status?.tick ?? '—'}</span>
+					</div>
+					<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
+						<span class="optical-label metadata-label text-stone-500">Round</span>
+						<span class="optical-label text-stone-100 font-semibold tabular-nums">{status?.round ?? '—'}</span>
+					</div>
+					<span class="hidden sm:inline-flex items-center gap-1.5 text-stone-600 text-xs leading-none pl-1">
+						<span class="w-1.5 h-1.5 rounded-full bg-amber-500/70 animate-pulse"></span><span class="optical-label">live</span>
+					</span>
+				{/if}
 			</div>
 		</PageHeader>
+
+		{#if previewMode}
+			<div class="mb-6 flex items-center gap-2 border-y border-stone-800/70 py-2 text-xs text-stone-500">
+				<OpticalIcon icon="mdi:information-outline" size={14} box={14} />
+				<span class="optical-label">The live game engine is off. These sample teams and scores are only here for layout review.</span>
+			</div>
+		{/if}
 
 		<!-- King of the Hill -->
 		{#if hills.length}
@@ -271,8 +329,8 @@
 								: ''}"
 						>
 							<div class="flex items-center gap-1.5 text-xs leading-none text-stone-500 mb-2">
-								<Icon icon={held ? 'mdi:crown' : 'mdi:crown-outline'} class="w-3 h-3 shrink-0 {held ? 'text-amber-500/70' : 'text-stone-700'}" />
-								{hill.name}
+								<OpticalIcon icon={held ? 'mdi:crown' : 'mdi:crown-outline'} size={12} box={12} className={held ? 'text-amber-500/70' : 'text-stone-700'} />
+								<span class="optical-label">{hill.name}</span>
 							</div>
 							{#key hill.controller ?? '__none__'}
 								<div class="fade-in flex items-center gap-2">
@@ -295,7 +353,7 @@
 			<div class="lg:col-span-2 bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
 					<h2 class="text-[0.95rem] font-semibold text-stone-200">Service status</h2>
-					<span class="text-stone-600 text-xs ml-auto">latest tick</span>
+					<span class="metadata-label text-stone-600 ml-auto">latest tick</span>
 				</div>
 				<div class="overflow-x-auto">
 					{#if matrixRows.length === 0}
@@ -304,18 +362,18 @@
 						<table class="w-full min-w-[560px] border-separate border-spacing-0">
 							<thead>
 								<tr>
-									<th class="sticky left-0 z-10 bg-stone-900/40 px-4 py-2 text-left text-[0.7rem] uppercase tracking-wider font-medium text-stone-500">
+									<th class="metadata-label sticky left-0 z-10 bg-stone-900/40 px-4 py-2 text-left text-stone-500">
 										Team
 									</th>
 									{#each matrixServices as s}
-										<th class="px-2 py-2 text-center text-xs font-medium text-stone-400">
-										<span class="inline-flex items-center gap-1.5 leading-none">
+										<th class="metadata-label px-2 py-2 text-center text-stone-400">
+											<span class="inline-flex items-center gap-1.5 leading-none">
 												<span class="w-1.5 h-1.5 rounded-full" style="background: {CAT[s.category] ?? '#6b6560'};"></span>
-												{s.name}
+												<span class="optical-label">{s.name}</span>
 											</span>
 										</th>
 									{/each}
-									<th class="px-3 py-2 text-right text-[0.7rem] uppercase tracking-wider font-medium text-stone-600">Up</th>
+									<th class="metadata-label px-3 py-2 text-right text-stone-600">Up</th>
 								</tr>
 							</thead>
 							<tbody>
@@ -324,9 +382,9 @@
 									<tr>
 										<td class="sticky left-0 z-10 bg-stone-950/70 px-4 py-1.5 whitespace-nowrap border-t border-stone-800/60">
 											<div class="flex items-center gap-2 leading-none">
-												<span class="text-stone-600 text-xs tabular-nums w-5 text-right">{r.rank ?? '—'}</span>
+												<span class="optical-label text-stone-600 text-xs tabular-nums w-5 text-right">{r.rank ?? '—'}</span>
 												<span class="w-2 h-2 rounded-full shrink-0" style="background: {tc.dot};"></span>
-												<a href="/scoreboard" class="text-stone-300 text-sm truncate max-w-[140px] hover:text-amber-400 transition">{r.team}</a>
+												<a href="/scoreboard" class="optical-label text-stone-300 text-sm truncate max-w-[140px] hover:text-amber-400 transition">{r.team}</a>
 											</div>
 										</td>
 										{#each r.cells as cell}
@@ -348,12 +406,12 @@
 						</table>
 					{/if}
 				</div>
-				<div class="px-4 py-2.5 border-t border-stone-800 flex flex-wrap gap-x-4 gap-y-1.5">
-					{#each ['OK', 'DOWN', 'FAULTY', 'RECOVERING', 'FLAG_NOT_FOUND'] as s}
-					<span class="inline-flex items-center gap-1.5 text-[0.7rem] leading-none text-stone-500">
-							<span class="w-2.5 h-2.5 rounded-sm" style="background: {slaStyle(s).color};"></span>{slaStyle(s).label}
-						</span>
-					{/each}
+					<div class="px-4 py-2.5 border-t border-stone-800 flex flex-wrap gap-x-4 gap-y-1.5">
+						{#each ['OK', 'DOWN', 'FAULTY', 'RECOVERING', 'FLAG_NOT_FOUND'] as s}
+							<span class="inline-flex items-center gap-1.5 text-[0.7rem] leading-none text-stone-500">
+								<span class="w-2.5 h-2.5 rounded-sm" style="background: {slaStyle(s).color};"></span><span class="optical-label">{slaStyle(s).label}</span>
+							</span>
+						{/each}
 				</div>
 			</div>
 
@@ -411,19 +469,19 @@
 			<div class="overflow-x-auto">
 				<table class="w-full min-w-[720px] text-sm">
 					<thead>
-						<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider">
-							<th class="px-4 py-2.5 text-left font-medium w-12">#</th>
-							<th class="px-4 py-2.5 text-left font-medium">Team</th>
-							<th class="px-4 py-2.5 text-left font-medium hidden lg:table-cell w-36">Breakdown</th>
-							<th class="px-4 py-2.5 text-right font-medium">Atk</th>
-							<th class="px-4 py-2.5 text-right font-medium">Def</th>
-							<th class="px-4 py-2.5 text-right font-medium">SLA</th>
-							<th class="px-4 py-2.5 text-right font-medium">KotH</th>
-							<th class="px-4 py-2.5 text-right font-medium">Total</th>
+						<tr class="metadata-label text-stone-500">
+							<th class="px-4 py-2.5 text-left w-12">#</th>
+							<th class="px-4 py-2.5 text-left">Team</th>
+							<th class="px-4 py-2.5 text-left hidden lg:table-cell w-36">Breakdown</th>
+							<th class="px-4 py-2.5 text-right">Atk</th>
+							<th class="px-4 py-2.5 text-right">Def</th>
+							<th class="px-4 py-2.5 text-right">SLA</th>
+							<th class="px-4 py-2.5 text-right">KotH</th>
+							<th class="px-4 py-2.5 text-right">Total</th>
 						</tr>
 					</thead>
 					<tbody>
-						{#each standings as team, i (team.team_id)}
+						{#each standings as team (team.team_id)}
 							{@const c = teamColor(team.team_id || team.team)}
 							{@const sum = Math.max(1, team.attack + team.defense + team.sla + team.koth)}
 							<tr class="border-t border-stone-800/60 hover:bg-stone-800/20 transition-colors">
@@ -431,7 +489,7 @@
 								<td class="px-4 py-2.5 whitespace-nowrap">
 									<div class="flex items-center gap-2.5 leading-none">
 										<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.dot};"></span>
-										<span class="text-stone-200 truncate max-w-[220px]">{team.team}</span>
+										<span class="optical-label text-stone-200 truncate max-w-[220px]">{team.team}</span>
 									</div>
 								</td>
 								<td class="px-4 py-2.5 hidden lg:table-cell">

@@ -89,6 +89,19 @@ func TestLoginRouteUsesEndpointLimiter(t *testing.T) {
 	}
 }
 
+func TestRevertRouteRequiresAuthentication(t *testing.T) {
+	g := newTestServer(t, &config.Config{})
+	req := httptest.NewRequest(http.MethodPost,
+		"/api/v1/instances/00000000-0000-4000-8000-000000000101/revert", nil)
+	res := httptest.NewRecorder()
+
+	g.Router().ServeHTTP(res, req)
+
+	if res.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", res.Code, http.StatusUnauthorized)
+	}
+}
+
 func newTestServer(t *testing.T, cfg *config.Config) *Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

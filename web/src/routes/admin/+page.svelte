@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { goto } from '$app/navigation';
 	import { api } from '$api';
 	import Icon from '@iconify/svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
 
 	let activeTab = 'overview';
@@ -14,6 +14,7 @@
 	let users: any[] = [];
 	let challenges: any[] = [];
 	let error = '';
+	let categoriesError = '';
 	let showCreateModal = false;
 	let showEditModal = false;
 	let editingChallenge: any = null;
@@ -25,11 +26,13 @@
 	let templates: any[] = [];
 	let activeInstances: any[] = [];
 	let activeDockerInstances: any[] = [];
+	let infrastructureError = '';
 
 	// Audit data
 	let intelLoading = false;
 	let flagShares: any[] = [];
 	let instanceFlags: any[] = [];
+	let intelError = '';
 
 	let showNodeModal = false;
 	let showTemplateUploadModal = false;
@@ -60,6 +63,7 @@
 	let platformSettings: Record<string, any> = {};
 	let savingSettings = false;
 	let settingsChanged = false;
+	let settingsError = '';
 
 	// Challenge creation
 	let categories: any[] = [];
@@ -104,7 +108,7 @@
 
 	// Shared design-system class tokens (see DESIGN.md).
 	const fieldCls = 'px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-500 transition-colors';
-	const labelCls = 'block text-xs font-medium text-stone-400 mb-1.5';
+	const labelCls = 'metadata-label block text-stone-400 mb-1.5';
 	const btnPrimary = 'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md bg-amber-500/90 text-stone-950 text-sm leading-none font-medium hover:bg-amber-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 	const btnGhost = 'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md border border-stone-700 text-stone-300 text-sm leading-none font-medium hover:bg-stone-800/40 hover:text-stone-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
 
@@ -274,12 +278,16 @@
 
 	async function loadDashboard() {
 		loading = true;
+		categoriesError = '';
 		try {
 			const [statsRes, usersRes, challengesRes, categoriesRes] = await Promise.all([
 				api.getAdminStats(),
 				api.getAdminUsers(),
 				api.getAdminChallenges(),
-				api.getAdminCategories().catch(() => ({ categories: [] }))
+				api.getAdminCategories().catch((e) => {
+					categoriesError = e instanceof Error ? e.message : 'Failed to load categories';
+					return { categories: [] };
+				})
 			]);
 			stats = statsRes;
 			users = usersRes.users || [];
@@ -301,8 +309,9 @@
 				templates = templatesRes.templates || [];
 				activeInstances = instancesRes.instances || [];
 				activeDockerInstances = dockerInstancesRes.instances || [];
-			} catch {
-				// Infrastructure endpoints may not be available yet
+				infrastructureError = '';
+			} catch (e) {
+				infrastructureError = e instanceof Error ? e.message : 'Failed to load infrastructure data';
 				infraStats = null;
 				nodes = [];
 				templates = [];
@@ -314,7 +323,9 @@
 			try {
 				const settingsRes = await api.getPlatformSettings();
 				platformSettings = settingsRes.settings || {};
-			} catch {
+				settingsError = '';
+			} catch (e) {
+				settingsError = e instanceof Error ? e.message : 'Failed to load platform settings';
 				platformSettings = {};
 			}
 		} catch (e) {
@@ -326,6 +337,7 @@
 
 	async function loadIntel() {
 		intelLoading = true;
+		intelError = '';
 		try {
 			const [sharesRes, flagsRes] = await Promise.all([
 				api.getFlagShares(),
@@ -333,8 +345,8 @@
 			]);
 			flagShares = sharesRes.flag_shares || [];
 			instanceFlags = flagsRes.instance_flags || [];
-		} catch {
-			// non-critical
+		} catch (e) {
+			intelError = e instanceof Error ? e.message : 'Failed to load audit data';
 		} finally {
 			intelLoading = false;
 		}
@@ -348,6 +360,7 @@
 	}
 
 	async function savePlatformSettings() {
+		if (settingsError) return;
 		savingSettings = true;
 		try {
 			await api.updatePlatformSettings(platformSettings);
@@ -377,6 +390,34 @@
 	function handleSelectChange(e: Event, key: string) {
 		const target = e.target as HTMLSelectElement;
 		updateSetting(key, target.value === 'true');
+	}
+
+	function numberSetting(key: string, fallback: number, min: number, max: number): number {
+		const value = Number(platformSettings[key]);
+		if (!Number.isFinite(value)) return fallback;
+		return Math.min(max, Math.max(min, Math.round(value)));
+	}
+
+	function applyChallengeDefaults(difficulty = newChallenge.difficulty) {
+		newChallenge = {
+			...newChallenge,
+			difficulty,
+			instance_timeout: numberSetting('instance.default_timeout_minutes', 60, 1, 1440),
+			max_extensions: numberSetting('instance.max_extensions', 3, 0, 10),
+			vm_timeout_minutes: numberSetting(`vm_default_timeout_${difficulty}`, 120, 30, 480),
+			vm_max_extensions: numberSetting('instance.max_extensions', 3, 0, 10),
+			vm_extension_minutes: numberSetting('instance.extension_minutes', 30, 1, 240),
+			cooldown_minutes: numberSetting(`cooldown.${difficulty}_minutes`, 10, 0, 120)
+		};
+	}
+
+	function openCreateChallenge() {
+		applyChallengeDefaults();
+		showCreateModal = true;
+	}
+
+	function changeChallengeDifficulty(e: Event) {
+		applyChallengeDefaults((e.target as HTMLSelectElement).value);
 	}
 
 	async function createNode() {
@@ -687,7 +728,7 @@
 		<PageHeader title="Admin" subtitle="Platform management">
 			<div slot="actions">
 				{#if activeTab === 'challenges'}
-					<button on:click={() => showCreateModal = true} class={btnPrimary}>
+					<button on:click={openCreateChallenge} class={btnPrimary}>
 						<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
 						New Challenge
 					</button>
@@ -722,8 +763,8 @@
 							on:click={() => setTab(tab.id)}
 							class="relative px-3.5 py-2.5 text-sm leading-none font-medium whitespace-nowrap flex items-center gap-2 transition-colors {activeTab === tab.id ? 'text-stone-100' : 'text-stone-500 hover:text-stone-300'}"
 						>
-							<Icon icon={tab.icon} class="w-3.5 h-3.5 shrink-0" />
-							{tab.label}
+							<OpticalIcon icon={tab.icon} size={14} box={14} />
+							<span class="optical-label">{tab.label}</span>
 							{#if activeTab === tab.id}
 								<span class="absolute inset-x-2 -bottom-px h-0.5 bg-stone-400"></span>
 							{/if}
@@ -743,7 +784,7 @@
 						{ label: 'Total Solves', value: stats?.total_solves || 0 }
 					] as stat}
 						<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-							<p class="text-xs text-stone-500 uppercase tracking-wide">{stat.label}</p>
+							<p class="metadata-label text-stone-500">{stat.label}</p>
 							<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">{stat.value.toLocaleString()}</p>
 						</div>
 					{/each}
@@ -785,7 +826,7 @@
 									<div class="px-4 py-3 flex items-center justify-between gap-3">
 										<div class="min-w-0">
 											<p class="text-sm text-stone-200 truncate">{challenge.name}</p>
-											<span class="inline-flex items-center px-2 py-0.5 mt-1 rounded-full border text-[0.7rem] capitalize {difficultyClass(challenge.difficulty)}">{challenge.difficulty}</span>
+											<span class="inline-flex items-center px-2 py-0.5 mt-1 rounded-full border text-[0.7rem] capitalize {difficultyClass(challenge.difficulty)}"><span class="badge-label">{challenge.difficulty}</span></span>
 										</div>
 										<span class="text-xs text-stone-400 tabular-nums shrink-0">{challenge.total_solves || 0} solves</span>
 									</div>
@@ -798,10 +839,16 @@
 
 			<!-- Challenges Tab -->
 			{#if activeTab === 'challenges'}
+				{#if categoriesError}
+					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-warn/20 bg-warn/5 px-4 py-3 text-sm text-warn" aria-live="polite">
+						<span>Categories could not be loaded: {categoriesError}</span>
+						<button type="button" on:click={loadDashboard} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
+					</div>
+				{/if}
 				{#if challenges.length === 0}
 					<Card hasHeader={false}>
 						<EmptyState icon="mdi:flag-outline" text="No challenges yet.">
-							<button on:click={() => showCreateModal = true} class="mt-3 text-sm text-amber-500/90 hover:text-amber-400 transition-colors">
+							<button on:click={openCreateChallenge} class="mt-3 text-sm text-amber-500/90 hover:text-amber-400 transition-colors">
 								Create your first challenge →
 							</button>
 						</EmptyState>
@@ -814,16 +861,16 @@
 								<div class="flex items-start justify-between gap-3 mb-3">
 									<div class="min-w-0">
 										<a href="/challenges/{challenge.slug}" class="text-sm font-medium text-stone-200 hover:text-amber-400 transition-colors">{challenge.name}</a>
-									<div class="flex items-center flex-wrap gap-1.5 mt-1.5 leading-none">
-										<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}">{challenge.difficulty}</span>
-										<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
-											<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3 shrink-0" />{resourceLabel(challenge.resource_type)}
+										<div class="flex items-center flex-wrap gap-1.5 mt-1.5 leading-none">
+											<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}"><span class="badge-label">{challenge.difficulty}</span></span>
+											<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
+												<OpticalIcon icon={resourceIcon(challenge.resource_type)} size={12} box={12} /><span class="badge-label">{resourceLabel(challenge.resource_type)}</span>
 											</span>
 										</div>
 									</div>
-								<span class="inline-flex items-center gap-1.5 text-xs leading-none shrink-0 {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
+									<span class="inline-flex items-center gap-1.5 text-xs leading-none shrink-0 {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
 										<span class="w-1.5 h-1.5 rounded-full {challenge.status === 'published' ? 'bg-up' : 'bg-warn'}"></span>
-										{challenge.status === 'published' ? 'Published' : 'Draft'}
+										<span class="optical-label">{challenge.status === 'published' ? 'Published' : 'Draft'}</span>
 									</span>
 								</div>
 								<div class="flex items-center justify-between text-xs text-stone-500 mb-3 tabular-nums">
@@ -833,41 +880,41 @@
 								<div class="flex items-center gap-2 pt-3 border-t border-stone-800">
 									<button
 										on:click={() => openEditModal(challenge)}
-									class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-stone-300 border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
+										class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-stone-300 border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 										disabled={actionLoading === challenge.id}
 										title="Edit challenge"
 									>
-									<Icon icon="mdi:pencil" class="w-3 h-3 shrink-0" />
+										<Icon icon="mdi:pencil" class="w-3 h-3 shrink-0" />
 										Edit
 									</button>
 									{#if challenge.status === 'draft'}
 										<button
 											on:click={() => publishChallenge(challenge)}
-										class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-up border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
+											class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-up border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 											disabled={actionLoading === challenge.id}
 											title="Publish challenge"
 										>
-										<Icon icon="mdi:rocket-launch-outline" class="w-3 h-3 shrink-0" />
+											<Icon icon="mdi:rocket-launch-outline" class="w-3 h-3 shrink-0" />
 											Publish
 										</button>
 									{:else}
 										<button
 											on:click={() => unpublishChallenge(challenge)}
-										class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-warn border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
+											class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-warn border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 											disabled={actionLoading === challenge.id}
 											title="Unpublish challenge"
 										>
-										<Icon icon="mdi:eye-off-outline" class="w-3 h-3 shrink-0" />
+											<Icon icon="mdi:eye-off-outline" class="w-3 h-3 shrink-0" />
 											Unpublish
 										</button>
 									{/if}
 									<button
 										on:click={() => deleteChallenge(challenge)}
-									class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs leading-none font-medium text-down border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50 ml-auto"
+										class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs leading-none font-medium text-down border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50 ml-auto"
 										disabled={actionLoading === challenge.id}
 										title="Delete challenge"
 									>
-									<Icon icon="mdi:trash-can-outline" class="w-3 h-3 shrink-0" />
+										<Icon icon="mdi:trash-can-outline" class="w-3 h-3 shrink-0" />
 									</button>
 								</div>
 							</div>
@@ -881,14 +928,14 @@
 							<div class="overflow-x-auto">
 								<table class="w-full min-w-[720px] text-sm">
 									<thead>
-										<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider border-b border-stone-800">
-											<th class="px-4 py-2.5 text-left font-medium">Name</th>
-											<th class="px-4 py-2.5 text-left font-medium">Difficulty</th>
-											<th class="px-4 py-2.5 text-left font-medium">Type</th>
-											<th class="px-4 py-2.5 text-right font-medium">Points</th>
-											<th class="px-4 py-2.5 text-right font-medium">Solves</th>
-											<th class="px-4 py-2.5 text-left font-medium">Status</th>
-											<th class="px-4 py-2.5 text-right font-medium">Actions</th>
+										<tr class="metadata-label text-stone-500 border-b border-stone-800">
+											<th class="px-4 py-2.5 text-left">Name</th>
+											<th class="px-4 py-2.5 text-left">Difficulty</th>
+											<th class="px-4 py-2.5 text-left">Type</th>
+											<th class="px-4 py-2.5 text-right">Points</th>
+											<th class="px-4 py-2.5 text-right">Solves</th>
+											<th class="px-4 py-2.5 text-left">Status</th>
+											<th class="px-4 py-2.5 text-right">Actions</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -898,19 +945,19 @@
 													<a href="/challenges/{challenge.slug}" class="text-stone-200 hover:text-amber-400 transition-colors">{challenge.name}</a>
 												</td>
 												<td class="px-4 py-2.5">
-												<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}">{challenge.difficulty}</span>
+													<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}"><span class="badge-label">{challenge.difficulty}</span></span>
 												</td>
 												<td class="px-4 py-2.5">
-												<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
-													<Icon icon={resourceIcon(challenge.resource_type)} class="w-3 h-3 shrink-0" />{resourceLabel(challenge.resource_type)}
+													<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
+														<OpticalIcon icon={resourceIcon(challenge.resource_type)} size={12} box={12} /><span class="badge-label">{resourceLabel(challenge.resource_type)}</span>
 													</span>
 												</td>
 												<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">{challenge.base_points}</td>
 												<td class="px-4 py-2.5 text-right text-stone-400 tabular-nums">{challenge.total_solves || 0}</td>
 												<td class="px-4 py-2.5">
-												<span class="inline-flex items-center gap-1.5 text-xs leading-none {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
+													<span class="inline-flex items-center gap-1.5 text-xs leading-none {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
 														<span class="w-1.5 h-1.5 rounded-full {challenge.status === 'published' ? 'bg-up' : 'bg-warn'}"></span>
-														{challenge.status === 'published' ? 'Published' : 'Draft'}
+														<span class="optical-label">{challenge.status === 'published' ? 'Published' : 'Draft'}</span>
 													</span>
 												</td>
 												<td class="px-4 py-2.5">
@@ -1017,13 +1064,13 @@
 							<div class="overflow-x-auto">
 								<table class="w-full min-w-[680px] text-sm">
 									<thead>
-										<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider border-b border-stone-800">
-											<th class="px-4 py-2.5 text-left font-medium">User</th>
-											<th class="px-4 py-2.5 text-left font-medium hidden md:table-cell">Email</th>
-											<th class="px-4 py-2.5 text-left font-medium">Role</th>
-											<th class="px-4 py-2.5 text-right font-medium">Score</th>
-											<th class="px-4 py-2.5 text-right font-medium hidden md:table-cell">Joined</th>
-											<th class="px-4 py-2.5 text-right font-medium">Actions</th>
+										<tr class="metadata-label text-stone-500 border-b border-stone-800">
+											<th class="px-4 py-2.5 text-left">User</th>
+											<th class="px-4 py-2.5 text-left hidden md:table-cell">Email</th>
+											<th class="px-4 py-2.5 text-left">Role</th>
+											<th class="px-4 py-2.5 text-right">Score</th>
+											<th class="px-4 py-2.5 text-right hidden md:table-cell">Joined</th>
+											<th class="px-4 py-2.5 text-right">Actions</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -1076,31 +1123,37 @@
 
 			<!-- Infrastructure Tab -->
 			{#if activeTab === 'infrastructure'}
+				{#if infrastructureError}
+					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-warn/20 bg-warn/5 px-4 py-3 text-sm text-warn" aria-live="polite">
+						<span>Infrastructure data could not be loaded: {infrastructureError}</span>
+						<button type="button" on:click={loadDashboard} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
+					</div>
+				{/if}
 				<!-- Stats Cards -->
 				<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-						<p class="text-xs text-stone-500 uppercase tracking-wide">Nodes</p>
+						<p class="metadata-label text-stone-500">Nodes</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">
 							{infraStats?.nodes?.online || 0}/{infraStats?.nodes?.total || 0}
 						</p>
 						<p class="text-xs text-up mt-1">online</p>
 					</div>
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-						<p class="text-xs text-stone-500 uppercase tracking-wide">vCPU</p>
+						<p class="metadata-label text-stone-500">vCPU</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">
 							{infraStats?.resources?.vcpu?.used || 0}/{infraStats?.resources?.vcpu?.total || 0}
 						</p>
 						<p class="text-xs text-stone-400 mt-1 tabular-nums">{infraStats?.resources?.vcpu?.available || 0} available</p>
 					</div>
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-						<p class="text-xs text-stone-500 uppercase tracking-wide">Memory</p>
+						<p class="metadata-label text-stone-500">Memory</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">
 							{infraStats?.resources?.memory_gb?.used || 0}/{infraStats?.resources?.memory_gb?.total || 0} GB
 						</p>
 						<p class="text-xs text-stone-400 mt-1 tabular-nums">{infraStats?.resources?.memory_gb?.available || 0} GB free</p>
 					</div>
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-						<p class="text-xs text-stone-500 uppercase tracking-wide">Running VMs</p>
+						<p class="metadata-label text-stone-500">Running VMs</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">{infraStats?.vms?.running || 0}</p>
 						<p class="text-xs text-stone-400 mt-1 tabular-nums">of {infraStats?.vms?.total || 0} total</p>
 					</div>
@@ -1123,7 +1176,7 @@
 										<div class="flex items-center justify-between gap-2 mb-2">
 											<div class="flex items-center gap-2 min-w-0 leading-none">
 												<div class="w-2 h-2 rounded-full shrink-0 {node.status === 'online' ? 'bg-up' : 'bg-down'}"></div>
-												<span class="text-sm text-stone-200 font-medium truncate">{node.name}</span>
+												<span class="optical-label text-sm text-stone-200 font-medium truncate">{node.name}</span>
 												{#if node.is_primary}
 													<span class="text-[0.7rem] text-amber-500/90 border border-amber-500/30 px-1.5 py-0.5 rounded-full shrink-0">primary</span>
 												{/if}
@@ -1147,7 +1200,7 @@
 										<!-- Resource bars -->
 										<div class="mt-2 space-y-1">
 											<div class="flex items-center gap-2">
-												<span class="text-xs text-stone-600 w-10">CPU</span>
+												<span class="metadata-label text-stone-600 w-10">CPU</span>
 												<div class="flex-1 h-1.5 bg-stone-800 rounded-full overflow-hidden">
 													<div
 														class="h-full bg-stone-400 transition-all"
@@ -1156,7 +1209,7 @@
 												</div>
 											</div>
 											<div class="flex items-center gap-2">
-												<span class="text-xs text-stone-600 w-10">RAM</span>
+												<span class="metadata-label text-stone-600 w-10">RAM</span>
 												<div class="flex-1 h-1.5 bg-stone-800 rounded-full overflow-hidden">
 													<div
 														class="h-full bg-stone-400 transition-all"
@@ -1227,13 +1280,13 @@
 							<div class="overflow-x-auto">
 								<table class="w-full min-w-[640px] text-sm">
 									<thead>
-										<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider border-b border-stone-800">
-											<th class="px-4 py-2.5 text-left font-medium">User</th>
-											<th class="px-4 py-2.5 text-left font-medium">Challenge</th>
-											<th class="px-4 py-2.5 text-left font-medium">IP</th>
-											<th class="px-4 py-2.5 text-left font-medium">Status</th>
-											<th class="px-4 py-2.5 text-right font-medium">Expires</th>
-											<th class="px-4 py-2.5 text-right font-medium">Actions</th>
+										<tr class="metadata-label text-stone-500 border-b border-stone-800">
+											<th class="px-4 py-2.5 text-left">User</th>
+											<th class="px-4 py-2.5 text-left">Challenge</th>
+											<th class="px-4 py-2.5 text-left">IP</th>
+											<th class="px-4 py-2.5 text-left">Status</th>
+											<th class="px-4 py-2.5 text-right">Expires</th>
+											<th class="px-4 py-2.5 text-right">Actions</th>
 										</tr>
 									</thead>
 									<tbody>
@@ -1276,13 +1329,13 @@
 						<div class="overflow-x-auto">
 							<table class="w-full min-w-[640px] text-sm">
 								<thead>
-									<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider border-b border-stone-800">
-										<th class="px-4 py-2.5 text-left font-medium">User</th>
-										<th class="px-4 py-2.5 text-left font-medium">Challenge</th>
-										<th class="px-4 py-2.5 text-left font-medium">IP</th>
-										<th class="px-4 py-2.5 text-left font-medium">Status</th>
-										<th class="px-4 py-2.5 text-right font-medium">Expires</th>
-										<th class="px-4 py-2.5 text-right font-medium">Actions</th>
+									<tr class="metadata-label text-stone-500 border-b border-stone-800">
+										<th class="px-4 py-2.5 text-left">User</th>
+										<th class="px-4 py-2.5 text-left">Challenge</th>
+										<th class="px-4 py-2.5 text-left">IP</th>
+										<th class="px-4 py-2.5 text-left">Status</th>
+										<th class="px-4 py-2.5 text-right">Expires</th>
+										<th class="px-4 py-2.5 text-right">Actions</th>
 									</tr>
 								</thead>
 								<tbody>
@@ -1318,7 +1371,13 @@
 
 			<!-- Settings Tab -->
 			{#if activeTab === 'settings'}
-				<div class="space-y-6">
+				{#if settingsError}
+					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-down/20 bg-down/10 px-4 py-3 text-sm text-down" aria-live="polite">
+						<span>Settings could not be loaded: {settingsError}</span>
+						<button type="button" on:click={loadDashboard} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
+					</div>
+				{/if}
+				<div class="space-y-6 {settingsError ? 'pointer-events-none select-none opacity-40' : ''}" aria-disabled={settingsError ? 'true' : undefined}>
 					<!-- Save Button -->
 					{#if settingsChanged}
 						<div class="flex justify-end">
@@ -1337,17 +1396,17 @@
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
-								<Icon icon="mdi:timer-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
-								Instance Timeouts
+								<OpticalIcon icon="mdi:timer-outline" size={14} box={14} className="text-stone-500" />
+								<span class="optical-label">Instance Timeouts</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Default session durations for VM instances by difficulty</p>
+							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Defaults applied when a new VM challenge is created</p>
 						</div>
 						<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
 							{#each [
-								{ key: 'vm_timeout_easy', label: 'Easy', default: 90 },
-								{ key: 'vm_timeout_medium', label: 'Medium', default: 120 },
-								{ key: 'vm_timeout_hard', label: 'Hard', default: 180 },
-								{ key: 'vm_timeout_insane', label: 'Insane', default: 240 }
+								{ key: 'vm_default_timeout_easy', label: 'Easy', default: 60 },
+								{ key: 'vm_default_timeout_medium', label: 'Medium', default: 120 },
+								{ key: 'vm_default_timeout_hard', label: 'Hard', default: 180 },
+								{ key: 'vm_default_timeout_insane', label: 'Insane', default: 240 }
 							] as setting}
 								<label class="block">
 									<span class={labelCls}>{setting.label}</span>
@@ -1371,17 +1430,17 @@
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
-								<Icon icon="mdi:timer-sand" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
-								Cooldown Periods
+								<OpticalIcon icon="mdi:timer-sand" size={14} box={14} className="text-stone-500" />
+								<span class="optical-label">Cooldown Periods</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Wait time before users can restart an instance after stopping</p>
+							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Defaults applied when a new challenge is created</p>
 						</div>
 						<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
 							{#each [
-								{ key: 'cooldown_easy', label: 'Easy', default: 5 },
-								{ key: 'cooldown_medium', label: 'Medium', default: 10 },
-								{ key: 'cooldown_hard', label: 'Hard', default: 15 },
-								{ key: 'cooldown_insane', label: 'Insane', default: 20 }
+								{ key: 'cooldown.easy_minutes', label: 'Easy', default: 5 },
+								{ key: 'cooldown.medium_minutes', label: 'Medium', default: 10 },
+								{ key: 'cooldown.hard_minutes', label: 'Hard', default: 15 },
+								{ key: 'cooldown.insane_minutes', label: 'Insane', default: 20 }
 							] as setting}
 								<label class="block">
 									<span class={labelCls}>{setting.label}</span>
@@ -1405,18 +1464,18 @@
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
-								<Icon icon="mdi:clock-plus-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
-								Extension Settings
+								<OpticalIcon icon="mdi:clock-plus-outline" size={14} box={14} className="text-stone-500" />
+								<span class="optical-label">Extension Settings</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">How many times and by how much users can extend their session</p>
+							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Default extension count for new challenges; duration applies to every extension</p>
 						</div>
 						<div class="grid grid-cols-2 gap-4">
 							<label class="block">
-								<span class={labelCls}>Max Extensions</span>
+								<span class={labelCls}>Default Max Extensions</span>
 								<input
 									type="number"
-									value={platformSettings.max_extensions ?? 3}
-									on:input={(e) => handleNumberInput(e, 'max_extensions')}
+							value={platformSettings['instance.max_extensions'] ?? 3}
+							on:input={(e) => handleNumberInput(e, 'instance.max_extensions')}
 									min="0"
 									max="10"
 									class="w-full {fieldCls} tabular-nums"
@@ -1427,8 +1486,8 @@
 								<div class="flex items-center gap-2">
 									<input
 										type="number"
-										value={platformSettings.extension_minutes ?? 30}
-										on:input={(e) => handleNumberInput(e, 'extension_minutes')}
+								value={platformSettings['instance.extension_minutes'] ?? 30}
+								on:input={(e) => handleNumberInput(e, 'instance.extension_minutes')}
 										min="15"
 										max="120"
 										class="w-full {fieldCls} tabular-nums"
@@ -1443,61 +1502,41 @@
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
-								<Icon icon="mdi:account-multiple-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
-								User Limits
+								<OpticalIcon icon="mdi:account-multiple-outline" size={14} box={14} className="text-stone-500" />
+								<span class="optical-label">User Limits</span>
 							</h2>
 							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Resource limits per user</p>
 						</div>
-						<div class="grid grid-cols-2 gap-4">
-							<label class="block">
-								<span class={labelCls}>Max Concurrent Instances</span>
-								<input
-									type="number"
-									value={platformSettings.max_instances_per_user ?? 1}
-									on:input={(e) => handleNumberInput(e, 'max_instances_per_user')}
-									min="1"
-									max="5"
-									class="w-full {fieldCls} tabular-nums"
-								/>
-							</label>
-							<label class="block">
-								<span class={labelCls}>Max Daily Submissions</span>
-								<input
-									type="number"
-									value={platformSettings.max_daily_submissions ?? 100}
-									on:input={(e) => handleNumberInput(e, 'max_daily_submissions')}
-									min="10"
-									max="1000"
-									class="w-full {fieldCls} tabular-nums"
-								/>
-							</label>
-						</div>
+					<div class="max-w-sm">
+						<label class="block">
+							<span class={labelCls}>Max Concurrent Instances</span>
+							<input
+								type="number"
+								value={platformSettings['instance.max_per_user'] ?? 2}
+								on:input={(e) => handleNumberInput(e, 'instance.max_per_user')}
+								min="1"
+								max="5"
+								class="w-full {fieldCls} tabular-nums"
+							/>
+						</label>
+					</div>
 					</Card>
 
 					<!-- VPN Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
-								<Icon icon="mdi:vpn" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
-								VPN Settings
+								<OpticalIcon icon="mdi:vpn" size={14} box={14} className="text-stone-500" />
+								<span class="optical-label">VPN Settings</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">WireGuard VPN configuration</p>
+							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Instance access policy; server keys and endpoint remain deployment configuration</p>
 						</div>
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-							<label class="block">
-								<span class={labelCls}>VPN Server Endpoint</span>
-								<input
-									type="text"
-									value={platformSettings.vpn_endpoint ?? 'play.abu.rocks:51820'}
-									on:input={(e) => handleTextInput(e, 'vpn_endpoint')}
-									class="w-full {fieldCls}"
-								/>
-							</label>
+						<div class="max-w-sm">
 							<label class="block">
 								<span class={labelCls}>Require VPN for Instances</span>
 								<select
-									value={platformSettings.require_vpn ?? 'true'}
-									on:change={(e) => handleSelectChange(e, 'require_vpn')}
+									value={platformSettings['platform.require_vpn'] ?? 'true'}
+									on:change={(e) => handleSelectChange(e, 'platform.require_vpn')}
 									class="w-full {fieldCls}"
 								>
 									<option value="true">Yes</option>
@@ -1511,21 +1550,22 @@
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
-								<Icon icon="mdi:cog-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
-								Platform Settings
+								<OpticalIcon icon="mdi:cog-outline" size={14} box={14} className="text-stone-500" />
+								<span class="optical-label">Platform Settings</span>
 							</h2>
 							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">General platform configuration</p>
 						</div>
 						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 							<label class="block">
-								<span class={labelCls}>Allow Registration</span>
+								<span class={labelCls}>Registration</span>
 								<select
-									value={platformSettings.registration_enabled ?? 'true'}
-									on:change={(e) => handleSelectChange(e, 'registration_enabled')}
+									value={platformSettings.registration_mode ?? 'open'}
+									on:change={(e) => handleTextInput(e, 'registration_mode')}
 									class="w-full {fieldCls}"
 								>
-									<option value="true">Open</option>
-									<option value="false">Closed</option>
+									<option value="open">Open</option>
+									<option value="invite">Invite only</option>
+									<option value="disabled">Closed</option>
 								</select>
 							</label>
 							<label class="block">
@@ -1544,6 +1584,12 @@
 				</div>
 			{:else if activeTab === 'intel'}
 				<div class="space-y-8">
+					{#if intelError}
+						<div class="flex items-center justify-between gap-3 rounded-lg border border-down/20 bg-down/10 px-4 py-3 text-sm text-down" aria-live="polite">
+							<span>Audit data could not be loaded: {intelError}</span>
+							<button type="button" on:click={loadIntel} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
+						</div>
+					{/if}
 					<!-- Flag Share Events -->
 					<div>
 						<div class="flex items-center justify-between mb-4">
@@ -1566,13 +1612,13 @@
 								<div class="overflow-x-auto">
 									<table class="w-full min-w-[760px] text-sm">
 										<thead>
-											<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider border-b border-stone-800">
-												<th class="px-4 py-2.5 text-left font-medium">Challenge</th>
-												<th class="px-4 py-2.5 text-left font-medium">Flag Owner</th>
-												<th class="px-4 py-2.5 text-left font-medium">Submitter</th>
-												<th class="px-4 py-2.5 text-left font-medium">IP</th>
-												<th class="px-4 py-2.5 text-left font-medium">Flag Value</th>
-												<th class="px-4 py-2.5 text-right font-medium">Time</th>
+											<tr class="metadata-label text-stone-500 border-b border-stone-800">
+												<th class="px-4 py-2.5 text-left">Challenge</th>
+												<th class="px-4 py-2.5 text-left">Flag Owner</th>
+												<th class="px-4 py-2.5 text-left">Submitter</th>
+												<th class="px-4 py-2.5 text-left">IP</th>
+												<th class="px-4 py-2.5 text-left">Flag Value</th>
+												<th class="px-4 py-2.5 text-right">Time</th>
 											</tr>
 										</thead>
 										<tbody>
@@ -1609,11 +1655,11 @@
 								<div class="overflow-x-auto">
 									<table class="w-full min-w-[640px] text-sm">
 										<thead>
-											<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider border-b border-stone-800">
-												<th class="px-4 py-2.5 text-left font-medium">User</th>
-												<th class="px-4 py-2.5 text-left font-medium">Challenge</th>
-												<th class="px-4 py-2.5 text-left font-medium">Flag Value</th>
-												<th class="px-4 py-2.5 text-left font-medium">Instance ID</th>
+											<tr class="metadata-label text-stone-500 border-b border-stone-800">
+												<th class="px-4 py-2.5 text-left">User</th>
+												<th class="px-4 py-2.5 text-left">Challenge</th>
+												<th class="px-4 py-2.5 text-left">Flag Value</th>
+												<th class="px-4 py-2.5 text-left">Instance ID</th>
 											</tr>
 										</thead>
 										<tbody>
@@ -1746,7 +1792,7 @@
 
 						<label class="block">
 							<span class={labelCls}>Difficulty *</span>
-							<select bind:value={newChallenge.difficulty} class="w-full {fieldCls}">
+							<select value={newChallenge.difficulty} on:change={changeChallengeDifficulty} class="w-full {fieldCls}">
 								<option value="easy">Easy</option>
 								<option value="medium">Medium</option>
 								<option value="hard">Hard</option>
@@ -1806,7 +1852,7 @@
 							<!-- Exposed Ports -->
 							<div>
 								<div class="flex items-center justify-between mb-2">
-									<span class="block text-xs font-medium text-stone-400">Exposed Ports</span>
+									<span class="metadata-label block text-stone-400">Exposed Ports</span>
 									<button
 										type="button"
 										on:click={() => newChallenge.exposed_ports = [...newChallenge.exposed_ports, { port: 0, protocol: 'tcp', service: 'tcp' }]}
@@ -1846,7 +1892,7 @@
 							<!-- Flags -->
 							<div>
 								<div class="flex items-center justify-between mb-2">
-									<span class="block text-xs font-medium text-stone-400">Flags</span>
+									<span class="metadata-label block text-stone-400">Flags</span>
 									<button
 										type="button"
 										on:click={() => newChallenge.flags = [...newChallenge.flags, { name: `Flag ${newChallenge.flags.length + 1}`, flag: '', points: 25, flag_type: 'static', dynamic_flag_prefix: '' }]}
@@ -1885,18 +1931,18 @@
 
 							<!-- Timer & Limits -->
 							<div>
-								<span class="block text-xs font-medium text-stone-400 mb-3">Instance Settings</span>
+								<span class="metadata-label block text-stone-400 mb-3">Instance Settings</span>
 								<div class="grid grid-cols-3 gap-3">
 									<label class="block">
-										<span class="block text-stone-500 text-xs mb-1">Timeout (min)</span>
+										<span class="metadata-label block text-stone-500 mb-1">Timeout (min)</span>
 										<input type="number" bind:value={newChallenge.instance_timeout} min="1" class="w-full {fieldCls} tabular-nums" />
 									</label>
 									<label class="block">
-										<span class="block text-stone-500 text-xs mb-1">Max Extensions</span>
+										<span class="metadata-label block text-stone-500 mb-1">Max Extensions</span>
 										<input type="number" bind:value={newChallenge.max_extensions} min="0" class="w-full {fieldCls} tabular-nums" />
 									</label>
 									<label class="block">
-										<span class="block text-stone-500 text-xs mb-1">Cooldown (min)</span>
+										<span class="metadata-label block text-stone-500 mb-1">Cooldown (min)</span>
 										<input type="number" bind:value={newChallenge.cooldown_minutes} min="0" class="w-full {fieldCls} tabular-nums" />
 									</label>
 								</div>
@@ -1994,7 +2040,7 @@
 							<!-- Multiple Flags -->
 							<div>
 								<div class="flex items-center justify-between mb-3">
-									<span class="block text-xs font-medium text-stone-400">Flags ({newChallenge.flags.length})</span>
+									<span class="metadata-label block text-stone-400">Flags <span class="font-mono tracking-normal tabular-nums">({newChallenge.flags.length})</span></span>
 									<button type="button" on:click={addFlag} class="text-sm leading-none text-stone-400 hover:text-stone-200 flex items-center gap-1 transition-colors">
 										<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
 										Add Flag
@@ -2041,7 +2087,7 @@
 					<!-- File Attachments -->
 					<div class="pt-4 border-t border-stone-800 space-y-3">
 						<div class="flex items-center justify-between">
-							<span class="block text-xs font-medium text-stone-400">File Attachments <span class="text-stone-500 font-normal">(optional)</span></span>
+							<span class="metadata-label block text-stone-400">File Attachments <span class="text-stone-500 font-normal">(optional)</span></span>
 							<label class="text-xs leading-none text-stone-400 hover:text-stone-200 transition-colors cursor-pointer flex items-center gap-1">
 								<Icon icon="mdi:paperclip" class="w-3 h-3 shrink-0" />
 								Add Files
@@ -2185,7 +2231,7 @@
 				<!-- ── Docker-specific ───────────────────────────── -->
 				{#if editingChallenge.resource_type !== 'vm'}
 					<div class="border border-stone-800 rounded-lg p-4 space-y-4">
-						<h3 class="text-xs font-semibold text-stone-400">Container Settings</h3>
+						<h3 class="metadata-label text-stone-400">Container Settings</h3>
 
 						<div class="grid grid-cols-3 gap-3">
 							<label class="block col-span-2">
@@ -2216,7 +2262,7 @@
 						<!-- Exposed Ports -->
 						<div>
 							<div class="flex items-center justify-between mb-2">
-								<span class="block text-xs font-medium text-stone-400">Exposed Ports</span>
+								<span class="metadata-label block text-stone-400">Exposed Ports</span>
 								<button
 									type="button"
 									on:click={() => { editingChallenge.exposed_ports = [...(editingChallenge.exposed_ports || []), { port: 0, protocol: 'tcp', service: 'tcp' }]; }}
@@ -2249,7 +2295,7 @@
 				<!-- ── VM-specific ───────────────────────────────── -->
 				{#if editingChallenge.resource_type === 'vm'}
 					<div class="border border-stone-800 rounded-lg p-4">
-						<h3 class="text-xs font-semibold text-stone-400 mb-3">VM Settings</h3>
+						<h3 class="metadata-label text-stone-400 mb-3">VM Settings</h3>
 						<label class="block">
 							<span class={labelCls}>VM Template</span>
 							<select bind:value={editingChallenge.vm_template_id} class="w-full {fieldCls}">
@@ -2264,7 +2310,7 @@
 
 				<!-- ── Timer / Instance Settings ─────────────────── -->
 				<div class="border border-stone-800 rounded-lg p-4 space-y-3">
-					<h3 class="text-xs font-semibold text-stone-400">Instance Settings</h3>
+					<h3 class="metadata-label text-stone-400">Instance Settings</h3>
 					<div class="grid grid-cols-3 gap-3">
 						<label class="block">
 							<span class={labelCls}>Timeout (min)</span>

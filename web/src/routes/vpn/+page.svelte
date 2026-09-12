@@ -2,72 +2,68 @@
 	import { onMount, onDestroy } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
+	import type { VpnStatusResponse } from '$api';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
-
-	// The VPN endpoints return a superset of the base client types; describe the
-	// fields this page reads so property access is type-checked.
-	interface VpnConfigResponse {
-		config?: string;
-		config_file?: string;
-		assigned_ip?: string;
-		ip_address?: string;
-		has_config?: boolean;
-	}
-	interface VpnStatus {
-		connected?: boolean;
-		ip_address?: string;
-		last_handshake?: number;
-		bytes_sent?: number;
-		bytes_received?: number;
-	}
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 
 	let vpnConfig: string | null = null;
-	let vpnStatus: VpnStatus | null = null;
+	let vpnStatus: VpnStatusResponse | null = null;
 	let loading = true;
 	let generating = false;
 	let regenerating = false;
 	let error = '';
+	let loadFailed = false;
+	let statusError = '';
 	let copied = false;
 	let statusInterval: ReturnType<typeof setInterval>;
 	let showRegenerateConfirm = false;
 
 	onMount(async () => {
-		await loadVPNData();
+		if (await loadVPNData()) startStatusPolling();
+	});
 
-		// Poll status frequently for responsive connect/disconnect state.
+	function startStatusPolling() {
+		if (statusInterval) clearInterval(statusInterval);
 		statusInterval = setInterval(async () => {
 			try {
 				vpnStatus = await api.getVPNStatus();
+				statusError = '';
 			} catch (e) {
-				// Silently fail status checks
+				statusError = e instanceof Error ? e.message : 'Unable to refresh VPN status';
 			}
 		}, 3000);
-	});
+	}
 
 	onDestroy(() => {
 		if (statusInterval) clearInterval(statusInterval);
 	});
 
-	async function loadVPNData() {
+	async function loadVPNData(): Promise<boolean> {
 		try {
 			const [configRes, statusRes] = await Promise.all([
-				api.getVPNConfig().catch(() => null),
-				api.getVPNStatus().catch(() => null)
+				api.getVPNConfig(),
+				api.getVPNStatus()
 			]);
 
-			const cfg = configRes as VpnConfigResponse | null;
-			if (cfg?.config_file) {
-				vpnConfig = cfg.config_file;
-			} else if (cfg?.has_config === false) {
-				vpnConfig = null;
-			}
+			vpnConfig = configRes.config_file ?? null;
 			vpnStatus = statusRes || null;
+			error = '';
+			statusError = '';
+			loadFailed = false;
+			return true;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load VPN data';
+			loadFailed = true;
+			return false;
 		} finally {
 			loading = false;
 		}
+	}
+
+	async function retryLoad() {
+		loading = true;
+		if (await loadVPNData()) startStatusPolling();
 	}
 
 	async function generateConfig() {
@@ -75,7 +71,7 @@
 		error = '';
 
 		try {
-			const response = (await api.generateVPNConfig()) as VpnConfigResponse;
+			const response = await api.generateVPNConfig();
 			if (response.config_file) {
 				vpnConfig = response.config_file;
 			}
@@ -92,7 +88,7 @@
 		error = '';
 
 		try {
-			const response = (await api.regenerateVPNConfig()) as VpnConfigResponse;
+			const response = await api.regenerateVPNConfig();
 			if (response.config_file) {
 				vpnConfig = response.config_file;
 			}
@@ -121,9 +117,13 @@
 
 	async function copyConfig() {
 		if (!vpnConfig) return;
-		await navigator.clipboard.writeText(vpnConfig);
-		copied = true;
-		setTimeout(() => copied = false, 2000);
+		try {
+			await navigator.clipboard.writeText(vpnConfig);
+			copied = true;
+			setTimeout(() => copied = false, 2000);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to copy VPN config';
+		}
 	}
 
 	function formatBytes(bytes: number): string {
@@ -160,54 +160,72 @@
 		<div class="flex items-center justify-center py-16">
 			<Icon icon="mdi:loading" class="w-6 h-6 text-stone-500 animate-spin" />
 		</div>
+	{:else if loadFailed}
+		<Card title="VPN Unavailable">
+			<div class="flex items-start gap-3">
+				<Icon icon="mdi:alert-circle-outline" class="w-4 h-4 text-down shrink-0 mt-0.5" />
+				<div>
+					<p class="text-down text-sm">{error}</p>
+					<button on:click={retryLoad} class="mt-3 {btnBase} {btnNeutral} py-2">
+						<Icon icon="mdi:refresh" class="w-3.5 h-3.5 shrink-0" />
+						<span>Try again</span>
+					</button>
+				</div>
+			</div>
+		</Card>
 	{:else}
-		<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-4 sm:mb-6">
+		<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-4 sm:gap-6 items-start">
 			<!-- Status -->
-			<Card title="Connection Status">
+			<Card title="Connection Status" bodyClass="p-5 sm:p-6">
+				{#if statusError}
+					<div class="mb-4 border border-warn/30 bg-warn/5 rounded-md px-3 py-2 text-warn text-xs" aria-live="polite">
+						{statusError}
+					</div>
+				{/if}
 				{#if vpnStatus?.connected}
 					<div class="flex items-center gap-2.5 mb-4 leading-none">
 						<span class="w-2 h-2 rounded-full bg-up animate-pulse"></span>
-						<span class="text-up font-medium">Connected</span>
+						<span class="optical-label text-up font-medium">Connected</span>
 					</div>
 
 					<div class="space-y-3 bg-stone-950/50 border border-stone-800 rounded-md p-4">
 						<div class="flex items-center justify-between gap-3">
-							<span class="text-stone-500 text-sm leading-none flex items-center gap-2">
-								<Icon icon="mdi:ip-network" class="w-3.5 h-3.5 shrink-0" />
-								<span>Internal IP</span>
+							<span class="text-stone-500 leading-none flex items-center gap-2">
+								<OpticalIcon icon="mdi:ip-network" size={12} box={14} />
+								<span class="optical-label metadata-label">Internal IP</span>
 							</span>
 							<code class="font-mono text-sm text-stone-200 tabular-nums break-all text-right">{vpnStatus.ip_address}</code>
 						</div>
 						<div class="flex items-center justify-between gap-3">
-							<span class="text-stone-500 text-sm leading-none flex items-center gap-2">
-								<Icon icon="mdi:clock-outline" class="w-3.5 h-3.5 shrink-0" />
-								<span>Last handshake</span>
+							<span class="text-stone-500 leading-none flex items-center gap-2">
+								<OpticalIcon icon="mdi:clock-outline" size={12} box={14} />
+								<span class="optical-label metadata-label">Last handshake</span>
 							</span>
 							<span class="text-stone-300 text-sm font-mono tabular-nums">{formatLastHandshake(vpnStatus.last_handshake ?? 0)}</span>
 						</div>
-						<div class="flex items-center justify-between gap-3">
-							<span class="text-stone-500 text-sm leading-none flex items-center gap-2">
-								<Icon icon="mdi:swap-vertical" class="w-3.5 h-3.5 shrink-0" />
-								<span>Data transfer</span>
+						<div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+							<span class="text-stone-500 leading-none flex items-center gap-2">
+								<OpticalIcon icon="mdi:swap-vertical" size={12} box={14} />
+								<span class="optical-label metadata-label">Data transfer</span>
 							</span>
-							<span class="text-stone-300 text-sm leading-none font-mono tabular-nums inline-flex items-center gap-1">
-								<Icon icon="mdi:arrow-up" class="w-3.5 h-3.5 shrink-0 text-up" />
-								{formatBytes(vpnStatus.bytes_sent || 0)}
-								<span class="text-stone-600">/</span>
-								<Icon icon="mdi:arrow-down" class="w-3.5 h-3.5 shrink-0 text-info" />
-								{formatBytes(vpnStatus.bytes_received || 0)}
+							<span class="self-end sm:self-auto text-stone-300 text-sm leading-none font-mono tabular-nums inline-flex items-center gap-1">
+								<OpticalIcon icon="mdi:arrow-up" size={11.5} box={12} className="text-up" />
+								<span class="optical-label whitespace-nowrap">{formatBytes(vpnStatus.bytes_sent || 0)}</span>
+								<span class="optical-label text-stone-600">/</span>
+								<OpticalIcon icon="mdi:arrow-down" size={11.5} box={12} className="text-info" />
+								<span class="optical-label whitespace-nowrap">{formatBytes(vpnStatus.bytes_received || 0)}</span>
 							</span>
 						</div>
 					</div>
 
-					<p class="text-xs leading-none text-stone-600 mt-3 flex items-center gap-1.5">
-						<Icon icon="mdi:information-outline" class="w-3 h-3 shrink-0" />
-						<span>Status updates every 3 seconds</span>
+					<p class="leading-none text-stone-600 mt-3 flex items-center gap-1.5">
+						<OpticalIcon icon="mdi:information-outline" size={11} box={12} />
+						<span class="optical-label metadata-label">Status updates every 3 seconds</span>
 					</p>
 				{:else}
 					<div class="flex items-center gap-2.5 mb-4 leading-none">
 						<span class="w-2 h-2 rounded-full bg-stone-600"></span>
-						<span class="text-stone-400 font-medium">Not connected</span>
+						<span class="optical-label text-stone-400 font-medium">Not connected</span>
 					</div>
 
 					<div class="bg-stone-950/50 border border-stone-800 rounded-md p-4">
@@ -221,15 +239,16 @@
 					</div>
 
 					{#if vpnStatus?.ip_address}
-						<p class="text-xs text-stone-500 mt-3">
-							Your assigned IP: <code class="text-stone-300 font-mono tabular-nums">{vpnStatus.ip_address}</code>
+						<p class="text-stone-500 mt-3 flex items-baseline gap-2">
+							<span class="optical-label metadata-label">Your assigned IP</span>
+							<code class="text-stone-300 text-xs font-mono tabular-nums">{vpnStatus.ip_address}</code>
 						</p>
 					{/if}
 				{/if}
 			</Card>
 
 			<!-- Configuration -->
-			<Card title="Configuration">
+			<Card title="Configuration" bodyClass="p-5 sm:p-6">
 				{#if vpnConfig}
 					<div class="space-y-4">
 						<div class="flex gap-2">
@@ -248,7 +267,7 @@
 
 						<div class="relative">
 							<pre class="bg-stone-950/60 border border-stone-800 rounded-md p-3 pt-9 text-xs text-stone-300 font-mono whitespace-pre-wrap break-all overflow-y-auto max-h-64">{vpnConfig}</pre>
-							<span class="absolute top-2.5 right-2.5 px-2 py-0.5 bg-stone-900 border border-stone-800 rounded text-[0.65rem] uppercase tracking-wide text-stone-500">WireGuard</span>
+							<span class="metadata-label absolute top-2.5 right-2.5 px-2 py-1 bg-stone-900 border border-stone-800 rounded text-stone-500">WireGuard</span>
 						</div>
 
 						{#if showRegenerateConfirm}
@@ -304,65 +323,6 @@
 				{/if}
 			</Card>
 		</div>
-
-		<!-- Setup Instructions -->
-		<Card title="Setup Instructions">
-			<div class="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
-				<div class="space-y-3">
-					<h3 class="text-stone-200 text-sm font-medium">GNU/Linux</h3>
-					<div class="bg-stone-950/50 border border-stone-800 rounded-md p-4 space-y-3 text-sm">
-						<div>
-							<p class="text-stone-500 text-xs mb-1">Install WireGuard</p>
-							<code class="block text-stone-300 font-mono text-xs break-all">sudo apt install wireguard</code>
-						</div>
-						<div>
-							<p class="text-stone-500 text-xs mb-1">Copy config</p>
-							<code class="block text-stone-300 font-mono text-xs break-all">sudo cp anvil.conf /etc/wireguard/</code>
-						</div>
-						<div>
-							<p class="text-stone-500 text-xs mb-1">Connect</p>
-							<code class="block text-stone-300 font-mono text-xs break-all">sudo wg-quick up anvil</code>
-						</div>
-					</div>
-				</div>
-
-				<div class="space-y-3">
-					<h3 class="text-stone-200 text-sm font-medium">macOS</h3>
-					<div class="bg-stone-950/50 border border-stone-800 rounded-md p-4 space-y-3 text-sm">
-						<div class="flex items-start gap-2">
-							<span class="text-stone-600 font-mono tabular-nums shrink-0">1.</span>
-							<p class="text-stone-300">Install WireGuard from the App Store</p>
-						</div>
-						<div class="flex items-start gap-2">
-							<span class="text-stone-600 font-mono tabular-nums shrink-0">2.</span>
-							<p class="text-stone-300">Open app and click "Import tunnel(s) from file"</p>
-						</div>
-						<div class="flex items-start gap-2">
-							<span class="text-stone-600 font-mono tabular-nums shrink-0">3.</span>
-							<p class="text-stone-300">Select downloaded config and activate</p>
-						</div>
-					</div>
-				</div>
-
-				<div class="space-y-3">
-					<h3 class="text-stone-200 text-sm font-medium">Windows</h3>
-					<div class="bg-stone-950/50 border border-stone-800 rounded-md p-4 space-y-3 text-sm">
-						<div class="flex items-start gap-2">
-							<span class="text-stone-600 font-mono tabular-nums shrink-0">1.</span>
-							<p class="text-stone-300">Download WireGuard for Windows</p>
-						</div>
-						<div class="flex items-start gap-2">
-							<span class="text-stone-600 font-mono tabular-nums shrink-0">2.</span>
-							<p class="text-stone-300">Click "Add Tunnel", then choose "Import from file"</p>
-						</div>
-						<div class="flex items-start gap-2">
-							<span class="text-stone-600 font-mono tabular-nums shrink-0">3.</span>
-							<p class="text-stone-300">Select config and activate the tunnel</p>
-						</div>
-					</div>
-				</div>
-			</div>
-		</Card>
 
 		{#if error}
 			<div class="mt-4 sm:mt-6 border border-down/30 bg-down/5 rounded-lg p-4 flex items-start gap-3">

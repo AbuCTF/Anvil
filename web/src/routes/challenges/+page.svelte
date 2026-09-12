@@ -7,6 +7,7 @@
 	import ChallengeTile from '$lib/components/ChallengeTile.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 
 	interface Challenge {
 		id: string;
@@ -35,18 +36,18 @@
 	let showSolved = false;
 
 	// Icons only — the accent color always comes from the muted categoryColor palette.
-	const categoryIcons: Record<string, string> = {
-		'Web Exploitation': 'mdi:web',
-		'Binary Exploitation': 'mdi:memory',
-		'Reverse Engineering': 'mdi:cog-outline',
-		Cryptography: 'mdi:key-variant',
-		Forensics: 'mdi:fingerprint',
-		OSINT: 'mdi:earth',
-		Misc: 'mdi:shape-outline'
+	const categoryIcons: Record<string, { icon: string; size: number }> = {
+		'Web Exploitation': { icon: 'mdi:web', size: 13.75 },
+		'Binary Exploitation': { icon: 'mdi:memory', size: 15.25 },
+		'Reverse Engineering': { icon: 'mdi:cog-outline', size: 13.75 },
+		Cryptography: { icon: 'mdi:key-variant', size: 13.75 },
+		Forensics: { icon: 'mdi:fingerprint', size: 13.75 },
+		OSINT: { icon: 'mdi:earth', size: 13.75 },
+		Misc: { icon: 'mdi:shape-outline', size: 13.75 }
 	};
 
-	function catIcon(name: string): string {
-		return categoryIcons[name] ?? 'mdi:flag-outline';
+	function catIcon(name: string) {
+		return categoryIcons[name] ?? { icon: 'mdi:flag-outline', size: 15.25 };
 	}
 
 	$: categories = [...new Set(challenges.map((c) => c.category).filter(Boolean))].sort() as string[];
@@ -118,16 +119,30 @@
 			<svelte:fragment slot="actions">
 				{#if !loading}
 					<div class="flex items-center gap-5 text-sm leading-none">
-						<div class="flex items-center gap-2">
-							<Icon icon="mdi:flag-outline" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
-							<span class="text-stone-200 tabular-nums">{challenges.length}</span>
-							<span class="text-stone-500 text-xs uppercase tracking-wide">challenges</span>
+						<div class="inline-flex items-center gap-1.5 whitespace-nowrap">
+							<OpticalIcon
+								icon="mdi:flag-outline"
+								size={13.5}
+								box={14}
+								className="text-stone-500"
+							/>
+							<span class="optical-label inline-flex items-baseline gap-1.5">
+								<span class="font-semibold text-stone-200 tabular-nums">{challenges.length}</span>
+								<span class="metadata-label text-stone-500">Challenges</span>
+							</span>
 						</div>
 						{#if $auth.isAuthenticated}
-							<div class="flex items-center gap-2">
-								<Icon icon="mdi:check-circle" class="w-3.5 h-3.5 shrink-0 text-up" />
-								<span class="text-stone-200 tabular-nums">{solvedCount}</span>
-								<span class="text-stone-500 text-xs uppercase tracking-wide">solved</span>
+							<div class="inline-flex items-center gap-1.5 whitespace-nowrap">
+								<OpticalIcon
+									icon="mdi:check-circle"
+									size={13}
+									box={14}
+									className="text-up"
+								/>
+								<span class="optical-label inline-flex items-baseline gap-1.5">
+									<span class="font-semibold text-stone-200 tabular-nums">{solvedCount}</span>
+									<span class="metadata-label text-stone-500">Solved</span>
+								</span>
 							</div>
 						{/if}
 					</div>
@@ -187,15 +202,15 @@
 								bind:checked={showSolved}
 								class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-stone-950 accent-amber-600 focus:ring-0 focus:ring-offset-0"
 							/>
-							<span class="text-stone-400 text-xs uppercase tracking-wide">Solved only</span>
+							<span class="relative top-px metadata-label text-stone-400">Solved only</span>
 						</label>
 					{:else}
 						<span></span>
 					{/if}
 					{#if hasFilters}
-					<button on:click={resetFilters} class="text-xs leading-none text-stone-500 hover:text-stone-300 transition-colors inline-flex items-center gap-1">
-						<Icon icon="mdi:filter-remove-outline" class="w-3 h-3 shrink-0" />
-							Reset filters
+						<button on:click={resetFilters} class="text-xs leading-none text-stone-500 hover:text-stone-300 transition-colors inline-flex items-center gap-1">
+							<OpticalIcon icon="mdi:filter-remove-outline" size={12} box={12} />
+							<span class="optical-label">Reset filters</span>
 						</button>
 					{/if}
 				</div>
@@ -237,11 +252,11 @@
 				{#each groups as group (group.category)}
 					{@const color = categoryColor(group.category)}
 					<section>
-						<div class="flex items-center gap-2.5 mb-4 leading-none">
-							<Icon icon={catIcon(group.category)} class="w-3.5 h-3.5 shrink-0" style="color:{color}" />
-							<h2 class="text-[0.95rem] font-semibold text-stone-200 leading-none">{group.category}</h2>
+						<div class="flex min-h-4 items-center gap-2.5 mb-4 leading-none">
+							<OpticalIcon {...catIcon(group.category)} box={16} {color} />
+							<h2 class="optical-label text-[0.95rem] font-semibold text-stone-200 leading-[16px]">{group.category}</h2>
 							<span class="text-[0.68rem] leading-none tabular-nums rounded-full px-2 py-0.5 border border-stone-800 bg-stone-900/40 {group.solved === group.challenges.length && $auth.isAuthenticated ? 'text-up' : 'text-stone-400'}">
-								{#if $auth.isAuthenticated}{group.solved}/{group.challenges.length}{:else}{group.challenges.length}{/if}
+								<span class="badge-label">{#if $auth.isAuthenticated}{group.solved}/{group.challenges.length}{:else}{group.challenges.length}{/if}</span>
 							</span>
 							<div class="flex-1 h-px bg-stone-800/60"></div>
 						</div>

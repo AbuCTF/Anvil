@@ -125,7 +125,7 @@ If you change `container.network_subnet` in `config/config.yaml`, update both th
 
 #### **Game engine (Attack-Defense + KotH)**
 
-Off by default — Anvil is a B2R/Jeopardy platform until `game.enabled` is set. When on, a background controller runs the game clock: each tick it plants a fresh flag into every team's services, records an SLA verdict, and recomputes ranked standings. Migration `010` adds the `game_*` tables.
+Off by default — Anvil is a B2R/Jeopardy platform until `game.enabled` is set. When on, a background controller runs the game clock: each tick it retrieves the last planted flag, places the next one, records the resulting SLA verdict, and recomputes ranked standings. Tick ownership and flag reservations live in PostgreSQL, so multiple API replicas cannot dispatch the same tick and an interrupted tick resumes with the same flag values. Migration `010` adds the `game_*` tables.
 
 | `game.*` | What |
 |----------|------|

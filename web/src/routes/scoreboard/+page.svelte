@@ -8,6 +8,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { teamColor, rankAccent } from '$lib/rank';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { downloadRankCard } from '$lib/share';
 	import type { Series } from '$lib/chart/path';
 
@@ -159,13 +160,13 @@
 			<div class="overflow-x-auto">
 				<table class="w-full min-w-[680px] text-sm">
 					<thead>
-						<tr class="text-stone-500 text-[0.7rem] uppercase tracking-wider border-b border-stone-800">
-							<th class="px-4 py-2.5 text-left font-medium w-16">Rank</th>
-							<th class="px-4 py-2.5 text-left font-medium">Player</th>
-							<th class="px-4 py-2.5 text-left font-medium hidden sm:table-cell w-28">Trend</th>
-							<th class="px-4 py-2.5 text-right font-medium hidden md:table-cell">Solves</th>
-							<th class="px-4 py-2.5 text-right font-medium">Score</th>
-							<th class="px-4 py-2.5 text-right font-medium hidden xl:table-cell">Last solve</th>
+						<tr class="metadata-label text-stone-500 border-b border-stone-800">
+							<th class="px-4 py-2.5 text-left w-16">Rank</th>
+							<th class="px-4 py-2.5 text-left">Player</th>
+							<th class="px-4 py-2.5 text-left hidden sm:table-cell w-28">Trend</th>
+							<th class="px-4 py-2.5 text-right hidden md:table-cell">Solves</th>
+							<th class="px-4 py-2.5 text-right">Score</th>
+							<th class="px-4 py-2.5 text-right hidden xl:table-cell">Last solve</th>
 							<th class="px-3 py-2.5 w-10"></th>
 						</tr>
 					</thead>
@@ -173,24 +174,26 @@
 						{#each filtered as e (e.user_id)}
 							{@const c = teamColor(e.user_id)}
 							{@const ti = tierIcon(e.rank)}
-							<tr class="group border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors {e.rank === 1 ? 'bg-amber-500/[0.04]' : ''}">
-								<td class="px-4 py-2.5 whitespace-nowrap">
-								<div class="flex items-center gap-1.5 leading-none">
-									<span class="w-3.5 h-3.5 shrink-0 inline-flex items-center justify-center">
-										{#if ti}<Icon icon={ti} class="w-3.5 h-3.5 {rankAccent(e.rank)}" />{/if}
-									</span>
-									<span class="text-stone-200 font-semibold tabular-nums">{e.rank}</span>
-									{#if e.delta > 0}
-										<span class="text-up text-[0.65rem] leading-none tabular-nums inline-flex items-center"><Icon icon="mdi:menu-up" class="w-3 h-3 shrink-0" />{e.delta}</span>
-									{:else if e.delta < 0}
-										<span class="text-down text-[0.65rem] leading-none tabular-nums inline-flex items-center"><Icon icon="mdi:menu-down" class="w-3 h-3 shrink-0" />{-e.delta}</span>
-										{/if}
-									</div>
-								</td>
-								<td class="px-4 py-2.5 whitespace-nowrap">
-								<div class="flex items-center gap-2.5 leading-none">
-										<span class="w-2 h-2 rounded-full shrink-0" style="background: {c};"></span>
-										<a href="/profile/{e.username}" class="text-stone-200 truncate max-w-[200px] hover:text-amber-400 transition">{displayName(e)}</a>
+								<tr class="group border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors {e.rank === 1 ? 'bg-amber-500/[0.04]' : ''}">
+									<td class="px-4 py-2.5 whitespace-nowrap">
+										<div class="flex h-4 items-center gap-1.5 leading-none">
+											{#if ti}
+												<OpticalIcon icon={ti} size={14} box={16} className={rankAccent(e.rank)} />
+											{:else}
+												<span class="w-4 h-4 shrink-0"></span>
+											{/if}
+											<span class="optical-label text-stone-200 font-semibold tabular-nums leading-[14px]">{e.rank}</span>
+											{#if e.delta > 0}
+												<span class="text-up text-[0.65rem] leading-none tabular-nums inline-flex items-center"><OpticalIcon icon="mdi:menu-up" size={12} box={12} /><span class="optical-label">{e.delta}</span></span>
+											{:else if e.delta < 0}
+												<span class="text-down text-[0.65rem] leading-none tabular-nums inline-flex items-center"><OpticalIcon icon="mdi:menu-down" size={12} box={12} /><span class="optical-label">{-e.delta}</span></span>
+											{/if}
+										</div>
+									</td>
+									<td class="px-4 py-2.5 whitespace-nowrap">
+										<div class="flex items-center gap-2.5 leading-none">
+											<span class="w-2 h-2 rounded-full shrink-0" style="background: {c};"></span>
+											<a href="/profile/{e.username}" class="optical-label text-stone-200 truncate max-w-[200px] hover:text-amber-400 transition">{displayName(e)}</a>
 									</div>
 								</td>
 								<td class="px-4 py-2.5 hidden sm:table-cell">

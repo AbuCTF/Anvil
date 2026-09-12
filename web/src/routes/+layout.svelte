@@ -1,9 +1,12 @@
 <script lang="ts">
+	import '@fontsource-variable/jetbrains-mono/wght.css';
+	import '@fontsource-variable/inter/wght.css';
 	import '../app.css';
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { auth } from '$stores/auth';
 	import Icon from '@iconify/svelte';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 
 	let mobileMenuOpen = false;
 	let userMenuOpen = false;
@@ -21,6 +24,20 @@
 		{ name: 'VPN', href: '/vpn', icon: 'mdi:vpn' }
 	];
 
+	const iconMetrics: Record<string, { size: number }> = {
+		'mdi:flag': { size: 15.5 },
+		'mdi:trophy': { size: 13.5 },
+		'mdi:sword-cross': { size: 14 },
+		'mdi:server': { size: 12.75 },
+		'mdi:shield-crown': { size: 12.75 },
+		'mdi:chevron-down': { size: 14 },
+		'mdi:logout': { size: 13.5 }
+	};
+
+	function iconMetric(icon: string) {
+		return iconMetrics[icon] ?? { size: 14 };
+	}
+
 	let theme: 'dark' | 'light' = 'dark';
 
 	onMount(() => {
@@ -35,7 +52,7 @@
 		else document.documentElement.removeAttribute('data-theme');
 		try {
 			localStorage.setItem('theme', theme);
-		} catch (e) {
+		} catch {
 			/* ignore */
 		}
 	}
@@ -67,8 +84,8 @@
 									? 'bg-stone-800 text-stone-50'
 									: 'text-stone-400 hover:text-stone-50'}"
 							>
-								<Icon icon={item.icon} class="w-3.5 h-3.5 shrink-0" />
-								<span>{item.name}</span>
+								<OpticalIcon icon={item.icon} {...iconMetric(item.icon)} box={16} />
+								<span class="optical-label leading-[14px]">{item.name}</span>
 							</a>
 						{/each}
 					</div>
@@ -90,8 +107,8 @@
 								href="/admin"
 								class="flex items-center gap-1.5 px-3 py-1.5 text-sm leading-none font-medium text-amber-500 hover:text-amber-400 transition-colors"
 							>
-								<Icon icon="mdi:shield-crown" class="w-3.5 h-3.5 shrink-0" />
-								<span>Admin</span>
+								<OpticalIcon icon="mdi:shield-crown" {...iconMetric('mdi:shield-crown')} box={16} />
+								<span class="optical-label leading-[14px]">Admin</span>
 							</a>
 						{/if}
 						<div class="relative">
@@ -101,8 +118,13 @@
 								aria-expanded={userMenuOpen}
 								class="flex items-center gap-1.5 px-3 py-1.5 text-sm leading-none text-stone-300 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40"
 							>
-								<span class="font-medium">{$auth.user?.username}</span>
-								<Icon icon="mdi:chevron-down" class="w-3.5 h-3.5 shrink-0 text-stone-500" />
+								<span class="optical-label font-medium leading-[14px]">{$auth.user?.username}</span>
+								<OpticalIcon
+									icon="mdi:chevron-down"
+									{...iconMetric('mdi:chevron-down')}
+									box={14}
+									className="text-stone-500"
+								/>
 							</button>
 
 							{#if userMenuOpen}
@@ -117,8 +139,8 @@
 											on:click={() => userMenuOpen = false}
 											class="flex items-center gap-3 px-4 py-2.5 text-sm leading-none text-stone-400 hover:bg-stone-800/40 hover:text-stone-100 transition-colors"
 										>
-											<Icon icon={item.icon} class="w-3.5 h-3.5 shrink-0" />
-											<span>{item.name}</span>
+											<OpticalIcon icon={item.icon} {...iconMetric(item.icon)} box={16} />
+											<span class="optical-label leading-[14px]">{item.name}</span>
 										</a>
 									{/each}
 									<div class="border-t border-stone-800">
@@ -126,8 +148,8 @@
 											on:click={handleLogout}
 											class="flex items-center gap-3 px-4 py-2.5 text-sm leading-none text-stone-400 hover:bg-stone-800/40 hover:text-danger transition-colors w-full text-left"
 										>
-											<Icon icon="mdi:logout" class="w-3.5 h-3.5 shrink-0" />
-											<span>Logout</span>
+											<OpticalIcon icon="mdi:logout" {...iconMetric('mdi:logout')} box={16} />
+											<span class="optical-label leading-[14px]">Logout</span>
 										</button>
 									</div>
 								</div>
@@ -179,8 +201,8 @@
 								? 'text-amber-500'
 								: 'text-stone-400 hover:bg-stone-800/40 hover:text-stone-100'}"
 						>
-							<Icon icon={item.icon} class="w-3.5 h-3.5 shrink-0" />
-							<span>{item.name}</span>
+						<OpticalIcon icon={item.icon} {...iconMetric(item.icon)} box={16} />
+						<span class="optical-label leading-[14px]">{item.name}</span>
 						</a>
 					{/each}
 
@@ -192,16 +214,16 @@
 									on:click={() => mobileMenuOpen = false}
 									class="flex items-center gap-3 px-3 py-2.5 text-sm leading-none font-medium text-stone-400 hover:bg-stone-800/40 hover:text-stone-100 rounded-md transition-colors"
 								>
-									<Icon icon={item.icon} class="w-3.5 h-3.5 shrink-0" />
-									<span>{item.name}</span>
+									<OpticalIcon icon={item.icon} {...iconMetric(item.icon)} box={16} />
+									<span class="optical-label leading-[14px]">{item.name}</span>
 								</a>
 							{/each}
 							<button
 								on:click={() => { handleLogout(); mobileMenuOpen = false; }}
 								class="flex items-center gap-3 px-3 py-2.5 text-sm leading-none font-medium text-stone-400 hover:bg-stone-800/40 hover:text-danger rounded-md transition-colors w-full text-left"
 							>
-								<Icon icon="mdi:logout" class="w-3.5 h-3.5 shrink-0" />
-								<span>Logout</span>
+								<OpticalIcon icon="mdi:logout" {...iconMetric('mdi:logout')} box={16} />
+								<span class="optical-label leading-[14px]">Logout</span>
 							</button>
 						</div>
 					{:else}

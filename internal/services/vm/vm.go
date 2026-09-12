@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/anvil-lab/anvil/internal/services/vmimage"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
@@ -699,8 +700,8 @@ func (s *Service) generateDomainXML(name, uuid string, vcpu, memoryMB int, diskP
       <source network='%s'/>
       <model type='virtio'/>
     </interface>
-    <graphics type='vnc' port='%d' autoport='no' listen='0.0.0.0'>
-      <listen type='address' address='0.0.0.0'/>
+    <graphics type='vnc' port='%d' autoport='no' listen='127.0.0.1'>
+      <listen type='address' address='127.0.0.1'/>
     </graphics>
     <video>
       <model type='virtio'/>
@@ -1100,6 +1101,66 @@ func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) 
 	return nil
 }
 
+// DestroyInstanceByNameOnNode destroys an instance on the node where it was
+// admitted. New instance rows retain that node assignment; the older local
+// method remains as a compatibility fallback for legacy rows.
+func (s *Service) DestroyInstanceByNameOnNode(ctx context.Context, vmNameOrID string, node *NodeInfo) error {
+	if node == nil {
+		return errors.New("VM node cannot be nil")
+	}
+
+	instanceID, parseErr := uuid.Parse(vmNameOrID)
+	vmName := vmNameOrID
+	if parseErr == nil {
+		vmName = fmt.Sprintf("anvil-%s", instanceID.String()[:8])
+	} else {
+		if !strings.HasPrefix(vmNameOrID, "anvil-") || len(vmNameOrID) != len("anvil-")+8 {
+			return errors.New("invalid VM runtime identifier")
+		}
+		for _, r := range strings.TrimPrefix(vmNameOrID, "anvil-") {
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+				return errors.New("invalid VM runtime identifier")
+			}
+		}
+	}
+
+	if err := s.stopVMOnNode(ctx, node, vmName); err != nil {
+		return fmt.Errorf("stop VM on node: %w", err)
+	}
+	if err := s.undefineVMOnNode(ctx, node, vmName); err != nil {
+		return fmt.Errorf("undefine VM on node: %w", err)
+	}
+	if parseErr == nil {
+		overlayPath := filepath.Join("/var/lib/anvil/storage/vms/overlays", instanceID.String()+".qcow2")
+		if _, err := s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f -- %s", overlayPath)); err != nil {
+			return fmt.Errorf("remove VM overlay on node: %w", err)
+		}
+	}
+
+	var vncPort int
+	var ipAddress string
+	s.mu.Lock()
+	for id, inst := range s.instances {
+		if inst.Name == vmName {
+			vncPort = inst.VNCPort
+			ipAddress = inst.IPAddress
+			delete(s.instances, id)
+			break
+		}
+	}
+	s.mu.Unlock()
+	if vncPort > 0 {
+		s.releaseVNCPort(vncPort)
+	}
+	if ipAddress != "" {
+		s.releaseIP(ipAddress)
+	}
+
+	s.logger.Info("VM instance destroyed on assigned node",
+		zap.String("vm_name", vmName), zap.String("node", node.Name))
+	return nil
+}
+
 // ListUserInstances returns all instances for a user
 func (s *Service) ListUserInstances(ctx context.Context, userID string) ([]*VMInstance, error) {
 	s.mu.RLock()
@@ -1267,6 +1328,7 @@ func (s *Service) convertToQCOW2(ctx context.Context, imagePath string, format I
 		if err != nil {
 			return "", err
 		}
+		defer os.RemoveAll(filepath.Dir(extractedPath))
 		imagePath = extractedPath
 		inputFormat = "vmdk"
 	case ImageFormatVMDK:
@@ -1303,33 +1365,19 @@ func (s *Service) convertToQCOW2(ctx context.Context, imagePath string, format I
 
 // extractOVA extracts VMDK from OVA file
 func (s *Service) extractOVA(ctx context.Context, ovaPath string) (string, error) {
-	extractDir := filepath.Join(s.config.ImageStorePath, "extracted", filepath.Base(ovaPath))
-	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		return "", err
+	extractedRoot := filepath.Join(s.config.ImageStorePath, "extracted")
+	if err := os.MkdirAll(extractedRoot, 0750); err != nil {
+		return "", fmt.Errorf("create OVA extraction root: %w", err)
 	}
-
-	// OVA is just a tar file
-	cmd := exec.CommandContext(ctx, "tar", "-xvf", ovaPath, "-C", extractDir)
-	output, err := cmd.CombinedOutput()
+	extractDir, err := os.MkdirTemp(extractedRoot, "ova-")
 	if err != nil {
-		return "", fmt.Errorf("failed to extract OVA: %s: %w", string(output), err)
+		return "", fmt.Errorf("create OVA extraction directory: %w", err)
 	}
 
-	// Find the VMDK file
-	var vmdkPath string
-	filepath.Walk(extractDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if strings.HasSuffix(strings.ToLower(path), ".vmdk") {
-			vmdkPath = path
-			return filepath.SkipAll
-		}
-		return nil
-	})
-
-	if vmdkPath == "" {
-		return "", fmt.Errorf("no VMDK found in OVA")
+	vmdkPath, err := vmimage.ExtractVMDK(ctx, ovaPath, extractDir)
+	if err != nil {
+		_ = os.RemoveAll(extractDir)
+		return "", err
 	}
 
 	return vmdkPath, nil

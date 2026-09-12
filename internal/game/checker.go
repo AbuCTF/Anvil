@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/models"
@@ -50,6 +53,28 @@ type execChecker struct {
 	command string
 }
 
+// runCheckerCommand gives every checker its own process group. CommandContext
+// otherwise kills only the direct child on cancellation, leaving checker
+// grandchildren alive with inherited stdout pipes and making a short timeout
+// block until those descendants eventually exit.
+func runCheckerCommand(ctx context.Context, command string, input []byte) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, command)
+	cmd.Stdin = bytes.NewReader(input)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return err
+	}
+	cmd.WaitDelay = 500 * time.Millisecond
+	return cmd.Output()
+}
+
 func (e execChecker) Place(ctx context.Context, t Target, flag string) Result {
 	return e.run(ctx, "place", t, flag)
 }
@@ -62,9 +87,7 @@ func (e execChecker) run(ctx context.Context, action string, t Target, flag stri
 	start := time.Now()
 	task, _ := json.Marshal(checkerTask{Action: action, Host: t.Host, Port: t.Port, Flag: flag})
 
-	cmd := exec.CommandContext(ctx, e.command)
-	cmd.Stdin = bytes.NewReader(task)
-	out, err := cmd.Output()
+	out, err := runCheckerCommand(ctx, e.command, task)
 	latency := time.Since(start)
 
 	if ctx.Err() != nil {

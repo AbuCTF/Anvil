@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gosimple/slug"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 )
 
@@ -684,6 +685,8 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("failed to update flag count", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create challenge"})
+		return
 	}
 
 	// If VM challenge with template, create resource link
@@ -1007,34 +1010,76 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		}
 		req.CategoryID = catID
 	}
+	if req.ResourceType == nil || (*req.ResourceType != "docker" && *req.ResourceType != "vm") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "resource_type must be docker or vm"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin challenge update", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
+		return
+	}
+	defer tx.Rollback(ctx)
 
 	// Update challenge - handle both container and VM fields
-	var err error
+	var result pgconn.CommandTag
 	if req.ResourceType != nil && *req.ResourceType == "vm" {
 		// VM challenge - update VM-specific fields
-		_, err = h.db.Pool.Exec(c.Request.Context(),
+		result, err = tx.Exec(ctx,
 			`UPDATE challenges SET
 				name = $1, description = $2, difficulty = $3, category_id = $4,
 				base_points = $5, instance_timeout = $6, max_extensions = $7,
-				cooldown_minutes = $8, author_name = $9, resource_type = $10, updated_at = NOW()
-			WHERE id = $11`,
+				vm_timeout_minutes = $8, vm_max_extensions = $9, vm_extension_minutes = $10,
+				cooldown_minutes = $11, author_name = $12, resource_type = $13,
+				supports_vm = true, supports_docker = false, updated_at = NOW()
+			WHERE id = $14`,
 			req.Name, req.Description, req.Difficulty, req.CategoryID,
 			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
+			req.VMTimeoutMinutes, req.VMMaxExtensions, req.VMExtensionMinutes,
 			req.CooldownMinutes, req.AuthorName, req.ResourceType, challengeID,
 		)
+		if err != nil {
+			h.logger.Error("failed to update VM challenge", zap.Error(err))
+			if postgresErrorCode(err) == "23503" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "category does not exist"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
+			return
+		}
+		if result.RowsAffected() == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+			return
+		}
 
 		// Update VM template association if provided
 		if req.VMTemplateID != nil {
-			// First, remove old resource if exists
-			_, _ = h.db.Pool.Exec(c.Request.Context(),
-				`DELETE FROM challenge_resources WHERE challenge_id = $1`, challengeID)
+			if _, err = tx.Exec(ctx,
+				`UPDATE challenge_resources SET is_active = false, updated_at = NOW()
+				 WHERE challenge_id = $1 AND resource_type = 'vm' AND is_active = true`, challengeID); err != nil {
+				h.logger.Error("failed to deactivate old VM resource", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
+				return
+			}
 
 			// Add new resource
-			_, err = h.db.Pool.Exec(c.Request.Context(),
+			_, err = tx.Exec(ctx,
 				`INSERT INTO challenge_resources (challenge_id, resource_type, vm_template_id, created_at, updated_at)
 				 VALUES ($1, 'vm', $2, NOW(), NOW())`,
 				challengeID, req.VMTemplateID,
 			)
+			if err != nil {
+				h.logger.Error("failed to associate VM template", zap.Error(err))
+				if postgresErrorCode(err) == "23503" {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "VM template does not exist"})
+					return
+				}
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
+				return
+			}
 		}
 	} else {
 		// Docker challenge - update container fields
@@ -1044,13 +1089,14 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to process exposed ports"})
 			return
 		}
-		_, err = h.db.Pool.Exec(c.Request.Context(),
+		result, err = tx.Exec(ctx,
 			`UPDATE challenges SET
 				name = $1, description = $2, difficulty = $3, category_id = $4,
 				container_image = $5, container_tag = $6, container_platform = $7,
 				cpu_limit = $8, memory_limit = $9, exposed_ports = $10,
 				base_points = $11, instance_timeout = $12, max_extensions = $13,
-				cooldown_minutes = $14, author_name = $15, updated_at = NOW()
+				cooldown_minutes = $14, author_name = $15, resource_type = 'docker',
+				supports_vm = false, supports_docker = true, updated_at = NOW()
 			WHERE id = $16`,
 			req.Name, req.Description, req.Difficulty, req.CategoryID,
 			req.ContainerImage, req.ContainerTag, req.ContainerPlatform,
@@ -1058,9 +1104,27 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 			req.CooldownMinutes, req.AuthorName, challengeID,
 		)
+		if err == nil && result.RowsAffected() == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+			return
+		}
+		if err == nil {
+			_, err = tx.Exec(ctx,
+				`UPDATE challenge_resources SET is_active = false, updated_at = NOW()
+				 WHERE challenge_id = $1 AND resource_type = 'vm' AND is_active = true`, challengeID)
+		}
 	}
 	if err != nil {
 		h.logger.Error("failed to update challenge", zap.Error(err))
+		if postgresErrorCode(err) == "23503" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "category does not exist"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit challenge update", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
 		return
 	}
@@ -1071,21 +1135,69 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 // DeleteChallenge deletes a challenge
 func (h *AdminChallengeHandler) Delete(c *gin.Context) {
 	challengeID := c.Param("id")
-
-	// First, delete all instances for this challenge
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`DELETE FROM instances WHERE challenge_id = $1`, challengeID)
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
-		h.logger.Error("failed to delete instances", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge instances"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var lockedID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM challenges WHERE id = $1 FOR UPDATE`, challengeID).Scan(&lockedID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		} else {
+			h.logger.Error("failed to lock challenge for deletion", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge"})
+		}
 		return
 	}
 
-	// Then delete the challenge
-	_, err = h.db.Pool.Exec(c.Request.Context(),
+	var activeInstances int
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM instances WHERE challenge_id = $1 AND status IN ('pending','creating','running','stopping')) +
+			(SELECT COUNT(*) FROM vm_instances WHERE challenge_id = $1 AND status IN ('provisioning','starting','running','paused','stopping'))
+	`, challengeID).Scan(&activeInstances); err != nil {
+		h.logger.Error("failed to check active challenge instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge"})
+		return
+	}
+	if activeInstances > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "stop active challenge instances before deleting the challenge"})
+		return
+	}
+
+	cleanupStatements := []string{
+		`DELETE FROM solved_flags WHERE challenge_id = $1`,
+		`DELETE FROM submissions WHERE challenge_id = $1`,
+		`DELETE FROM vm_instances WHERE challenge_id = $1`,
+		`DELETE FROM instances WHERE challenge_id = $1`,
+		`DELETE FROM docker_builds WHERE challenge_id = $1`,
+		`UPDATE uploads SET challenge_id = NULL WHERE challenge_id = $1`,
+	}
+	for _, statement := range cleanupStatements {
+		if _, err := tx.Exec(ctx, statement, challengeID); err != nil {
+			h.logger.Error("failed to remove challenge data", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge"})
+			return
+		}
+	}
+
+	result, err := tx.Exec(ctx,
 		`DELETE FROM challenges WHERE id = $1`, challengeID)
 	if err != nil {
 		h.logger.Error("failed to delete challenge", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit challenge deletion", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete challenge"})
 		return
 	}
@@ -1096,21 +1208,47 @@ func (h *AdminChallengeHandler) Delete(c *gin.Context) {
 // PublishChallenge publishes a challenge
 func (h *AdminChallengeHandler) Publish(c *gin.Context) {
 	challengeID := c.Param("id")
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish challenge"})
+		return
+	}
+	defer tx.Rollback(ctx)
 
-	// Check if challenge has at least one flag
+	var lockedID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM challenges WHERE id = $1 FOR UPDATE`, challengeID).Scan(&lockedID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish challenge"})
+		}
+		return
+	}
+
 	var flagCount int
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM flags WHERE challenge_id = $1`, challengeID).Scan(&flagCount)
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM flags WHERE challenge_id = $1`, challengeID).Scan(&flagCount); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish challenge"})
+		return
+	}
 
 	if flagCount == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "challenge must have at least one flag"})
 		return
 	}
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
+	result, err := tx.Exec(ctx,
 		`UPDATE challenges SET status = 'published', release_date = NOW(), updated_at = NOW() WHERE id = $1`,
 		challengeID)
 	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish challenge"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish challenge"})
 		return
 	}
@@ -1122,10 +1260,14 @@ func (h *AdminChallengeHandler) Publish(c *gin.Context) {
 func (h *AdminChallengeHandler) Unpublish(c *gin.Context) {
 	challengeID := c.Param("id")
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
+	result, err := h.db.Pool.Exec(c.Request.Context(),
 		`UPDATE challenges SET status = 'draft', updated_at = NOW() WHERE id = $1`, challengeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unpublish challenge"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
 	}
 
@@ -1136,10 +1278,14 @@ func (h *AdminChallengeHandler) Unpublish(c *gin.Context) {
 func (h *AdminChallengeHandler) Archive(c *gin.Context) {
 	challengeID := c.Param("id")
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
+	result, err := h.db.Pool.Exec(c.Request.Context(),
 		`UPDATE challenges SET status = 'archived', updated_at = NOW() WHERE id = $1`, challengeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to archive challenge"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
 	}
 
@@ -1152,7 +1298,7 @@ type CreateFlagRequest struct {
 	Flag              string `json:"flag"` // empty when FlagType == "dynamic"
 	Points            int    `json:"points"`
 	Order             int    `json:"order"`
-	CaseSensitive     bool   `json:"case_sensitive"`
+	CaseSensitive     *bool  `json:"case_sensitive"`
 	FlagType          string `json:"flag_type"`           // "static" | "dynamic"
 	DynamicFlagPrefix string `json:"dynamic_flag_prefix"` // e.g. "H7CTF"
 }
@@ -1176,16 +1322,23 @@ func (h *AdminChallengeHandler) ListFlags(c *gin.Context) {
 		var points, order int
 		var caseSensitive bool
 		if err := rows.Scan(&id, &name, &flag, &points, &order, &caseSensitive); err != nil {
-			continue
+			h.logger.Error("failed to scan flag", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
+			return
 		}
 		flags = append(flags, gin.H{
 			"id":             id,
 			"name":           name,
-			"flag":           flag,
+			"has_value":      flag != "",
 			"points":         points,
 			"order":          order,
 			"case_sensitive": caseSensitive,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing flags", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
+		return
 	}
 
 	if flags == nil {
@@ -1208,50 +1361,87 @@ func (h *AdminChallengeHandler) CreateFlag(c *gin.Context) {
 	if req.Points == 0 {
 		req.Points = 100
 	}
+	if req.Points < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "points must be positive"})
+		return
+	}
 
-	flagType := req.FlagType
-	if flagType == "" {
-		flagType = "static"
+	flagType, flagHash, err := prepareNewFlag(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
-	flagHash := ""
-	if flagType == "static" {
-		flagHash = hashFlag(req.Flag)
-	} else if flagType == "regex" {
-		if _, err := regexp.Compile(req.Flag); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid regex pattern: " + err.Error()})
-			return
-		}
-		flagHash = req.Flag
-	}
+	caseSensitive := requestedCaseSensitivity(req.CaseSensitive, true)
 	var dynPrefix *string
-	if req.DynamicFlagPrefix != "" {
-		s := req.DynamicFlagPrefix
+	if strings.TrimSpace(req.DynamicFlagPrefix) != "" {
+		s := strings.TrimSpace(req.DynamicFlagPrefix)
 		dynPrefix = &s
 	}
 
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin flag creation", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create flag"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var lockedChallengeID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM challenges WHERE id = $1 FOR UPDATE`, challengeID).Scan(&lockedChallengeID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		} else {
+			h.logger.Error("failed to lock challenge for flag creation", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create flag"})
+		}
+		return
+	}
+	order := req.Order
+	if order <= 0 {
+		if err := tx.QueryRow(ctx,
+			`SELECT COALESCE(MAX(sort_order), 0) + 1 FROM flags WHERE challenge_id = $1`,
+			challengeID).Scan(&order); err != nil {
+			h.logger.Error("failed to choose flag order", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create flag"})
+			return
+		}
+	}
+
 	flagID := uuid.New()
-	_, err := h.db.Pool.Exec(c.Request.Context(),
+	_, err = tx.Exec(ctx,
 		`INSERT INTO flags (id, challenge_id, name, flag_hash, points, sort_order, case_sensitive,
 		                    flag_type, dynamic_flag_prefix, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
-		flagID, challengeID, req.Name, flagHash, req.Points, req.Order, req.CaseSensitive,
+		flagID, challengeID, req.Name, flagHash, req.Points, order, caseSensitive,
 		flagType, dynPrefix)
 	if err != nil {
 		h.logger.Error("failed to create flag", zap.Error(err))
+		if postgresErrorCode(err) == "23505" {
+			c.JSON(http.StatusConflict, gin.H{"error": "another flag already uses this order"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create flag"})
 		return
 	}
 
-	// Update flag count
-	h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE challenges SET total_flags = (SELECT COUNT(*) FROM flags WHERE challenge_id = $1) WHERE id = $1`,
-		challengeID)
+	if err := recalculateChallengeFlagTotals(ctx, tx, challengeID); err != nil {
+		h.logger.Error("failed to update challenge flag count", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create flag"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit flag creation", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create flag"})
+		return
+	}
 
 	c.JSON(http.StatusCreated, gin.H{"id": flagID.String(), "message": "flag created"})
 }
 
 // UpdateFlag updates a flag
 func (h *AdminChallengeHandler) UpdateFlag(c *gin.Context) {
+	challengeID := c.Param("id")
 	flagID := c.Param("flag_id")
 
 	var req CreateFlagRequest
@@ -1260,45 +1450,87 @@ func (h *AdminChallengeHandler) UpdateFlag(c *gin.Context) {
 		return
 	}
 
-	// Resolve flag_type
-	if req.FlagType != "" {
-		_, err := h.db.Pool.Exec(c.Request.Context(),
-			`UPDATE flags SET flag_type = $1, dynamic_flag_prefix = NULLIF($2,'') WHERE id = $3`,
-			req.FlagType, req.DynamicFlagPrefix, flagID)
-		if err != nil {
-			h.logger.Warn("failed to update flag_type", zap.Error(err))
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var currentType, currentHash string
+	var currentCaseSensitive bool
+	var currentOrder int
+	if err := tx.QueryRow(ctx,
+		`SELECT flag_type, flag_hash, case_sensitive, sort_order FROM flags WHERE id = $1 AND challenge_id = $2 FOR UPDATE`,
+		flagID, challengeID).Scan(&currentType, &currentHash, &currentCaseSensitive, &currentOrder); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "flag not found"})
+		} else {
+			h.logger.Error("failed to load flag for update", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
 		}
+		return
 	}
 
-	// Only update flag_hash if a new flag value is provided
+	flagType := currentType
+	if req.FlagType != "" {
+		flagType = strings.ToLower(strings.TrimSpace(req.FlagType))
+	}
+	if !validFlagType(flagType) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "flag_type must be static, regex, or dynamic"})
+		return
+	}
+	if req.Points < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "points must be positive"})
+		return
+	}
+	order := req.Order
+	if order <= 0 {
+		order = currentOrder
+	}
+	caseSensitive := requestedCaseSensitivity(req.CaseSensitive, currentCaseSensitive)
+	flagHash := currentHash
 	if req.Flag != "" {
-		var flagHash string
-		if req.FlagType == "regex" {
-			if _, err := regexp.Compile(req.Flag); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "invalid regex pattern: " + err.Error()})
-				return
-			}
-			flagHash = req.Flag
-		} else {
-			flagHash = hashFlag(req.Flag)
-		}
-		_, err := h.db.Pool.Exec(c.Request.Context(),
-			`UPDATE flags SET name = $1, flag_hash = $2, points = $3, sort_order = $4, case_sensitive = $5, updated_at = NOW()
-			 WHERE id = $6`,
-			req.Name, flagHash, req.Points, req.Order, req.CaseSensitive, flagID)
+		flagHash, err = encodeFlagValue(flagType, req.Flag, caseSensitive)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-	} else {
-		_, err := h.db.Pool.Exec(c.Request.Context(),
-			`UPDATE flags SET name = $1, points = $2, sort_order = $3, case_sensitive = $4, updated_at = NOW()
-			 WHERE id = $5`,
-			req.Name, req.Points, req.Order, req.CaseSensitive, flagID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
+	} else if flagType != currentType {
+		if flagType != "dynamic" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "flag is required when changing to static or regex"})
 			return
 		}
+		flagHash = ""
+	} else if caseSensitive != currentCaseSensitive && flagType != "dynamic" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "flag is required when changing case sensitivity"})
+		return
+	}
+
+	result, err := tx.Exec(ctx,
+		`UPDATE flags SET name = $1, flag_hash = $2, points = $3, sort_order = $4,
+		 case_sensitive = $5, flag_type = $6, dynamic_flag_prefix = NULLIF($7, ''), updated_at = NOW()
+		 WHERE id = $8 AND challenge_id = $9`,
+		req.Name, flagHash, req.Points, order, caseSensitive, flagType,
+		strings.TrimSpace(req.DynamicFlagPrefix), flagID, challengeID)
+	if err != nil {
+		h.logger.Error("failed to update flag", zap.Error(err))
+		if postgresErrorCode(err) == "23505" {
+			c.JSON(http.StatusConflict, gin.H{"error": "another flag already uses this order"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "flag not found"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit flag update", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update flag"})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "flag updated"})
@@ -1309,19 +1541,124 @@ func (h *AdminChallengeHandler) DeleteFlag(c *gin.Context) {
 	challengeID := c.Param("id")
 	flagID := c.Param("flag_id")
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`DELETE FROM flags WHERE id = $1`, flagID)
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete flag"})
 		return
 	}
+	defer tx.Rollback(ctx)
 
-	// Update flag count
-	h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE challenges SET total_flags = (SELECT COUNT(*) FROM flags WHERE challenge_id = $1) WHERE id = $1`,
-		challengeID)
+	var lockedChallengeID string
+	if err := tx.QueryRow(ctx, `SELECT id FROM challenges WHERE id = $1 FOR UPDATE`, challengeID).Scan(&lockedChallengeID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete flag"})
+		}
+		return
+	}
+
+	result, err := tx.Exec(ctx,
+		`DELETE FROM flags WHERE id = $1 AND challenge_id = $2`, flagID, challengeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete flag"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "flag not found"})
+		return
+	}
+
+	if err := recalculateChallengeFlagTotals(ctx, tx, challengeID); err != nil {
+		h.logger.Error("failed to update challenge flag count", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete flag"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit flag deletion", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete flag"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "flag deleted"})
+}
+
+func recalculateChallengeFlagTotals(ctx context.Context, tx pgx.Tx, challengeID string) error {
+	result, err := tx.Exec(ctx, `
+		UPDATE challenges
+		SET total_flags = (SELECT COUNT(*) FROM flags WHERE challenge_id = $1),
+			total_solves = (
+				SELECT COUNT(*) FROM (
+					SELECT s.user_id
+					FROM solves s
+					JOIN flags f ON f.id = s.flag_id
+					WHERE f.challenge_id = $1
+					GROUP BY s.user_id
+					HAVING COUNT(DISTINCT s.flag_id) = (
+						SELECT COUNT(*) FROM flags WHERE challenge_id = $1
+					)
+				) completed
+			),
+			updated_at = NOW()
+		WHERE id = $1
+	`, challengeID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("challenge total update affected %d rows", result.RowsAffected())
+	}
+	return nil
+}
+
+func prepareNewFlag(req CreateFlagRequest) (string, string, error) {
+	flagType := strings.ToLower(strings.TrimSpace(req.FlagType))
+	if flagType == "" {
+		flagType = "static"
+	}
+	if !validFlagType(flagType) {
+		return "", "", errors.New("flag_type must be static, regex, or dynamic")
+	}
+	if flagType == "dynamic" {
+		return flagType, "", nil
+	}
+	if strings.TrimSpace(req.Flag) == "" {
+		return "", "", errors.New("flag is required for static and regex flags")
+	}
+	flagHash, err := encodeFlagValue(flagType, req.Flag, requestedCaseSensitivity(req.CaseSensitive, true))
+	return flagType, flagHash, err
+}
+
+func validFlagType(flagType string) bool {
+	return flagType == "static" || flagType == "regex" || flagType == "dynamic"
+}
+
+func requestedCaseSensitivity(requested *bool, fallback bool) bool {
+	if requested == nil {
+		return fallback
+	}
+	return *requested
+}
+
+func encodeFlagValue(flagType, value string, caseSensitive bool) (string, error) {
+	if flagType == "regex" {
+		pattern := value
+		if !caseSensitive {
+			pattern = "(?i:" + value + ")"
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return "", fmt.Errorf("invalid regex pattern: %w", err)
+		}
+		return value, nil
+	}
+	if flagType != "static" {
+		return "", errors.New("dynamic flags do not store a fixed value")
+	}
+	if !caseSensitive {
+		value = strings.ToLower(value)
+	}
+	return hashFlag(value), nil
 }
 
 // ListHints lists all hints for a challenge
@@ -1347,7 +1684,9 @@ func (h *AdminChallengeHandler) ListHints(c *gin.Context) {
 			CreatedAt   time.Time
 		}
 		if err := rows.Scan(&hint.ID, &hint.ChallengeID, &hint.Cost, &hint.Content, &hint.CreatedAt); err != nil {
-			continue
+			h.logger.Error("failed to scan hint", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
+			return
 		}
 		hints = append(hints, map[string]interface{}{
 			"id":           hint.ID,
@@ -1356,6 +1695,11 @@ func (h *AdminChallengeHandler) ListHints(c *gin.Context) {
 			"content":      hint.Content,
 			"created_at":   hint.CreatedAt,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing hints", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
+		return
 	}
 
 	c.JSON(http.StatusOK, hints)
@@ -1366,19 +1710,29 @@ func (h *AdminChallengeHandler) CreateHint(c *gin.Context) {
 	challengeID := c.Param("id")
 
 	var req struct {
-		Cost    int    `json:"cost" binding:"required"`
+		Cost    *int   `json:"cost" binding:"required"`
 		Content string `json:"content" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if *req.Cost < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cost must be non-negative"})
+		return
+	}
 
 	var hintID string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`INSERT INTO hints (challenge_id, cost, content) VALUES ($1, $2, $3) RETURNING id`,
-		challengeID, req.Cost, req.Content).Scan(&hintID)
+		`INSERT INTO hints (challenge_id, cost, content)
+		 SELECT id, $2, $3 FROM challenges WHERE id = $1 RETURNING id`,
+		challengeID, *req.Cost, req.Content).Scan(&hintID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+			return
+		}
+		h.logger.Error("failed to create hint", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create hint"})
 		return
 	}
@@ -1397,6 +1751,10 @@ func (h *AdminChallengeHandler) UpdateHint(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Cost < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "cost must be non-negative"})
 		return
 	}
 

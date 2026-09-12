@@ -28,6 +28,28 @@ func NewScoreboardService(cfg *config.Config, db *database.DB, logger *zap.Logge
 	return &ScoreboardService{config: cfg, db: db, logger: logger}
 }
 
+func (h *ScoreboardHandler) scoreboardAvailable(c *gin.Context) bool {
+	enabled := h.config.Platform.ScoreboardEnabled
+	err := h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT value = 'true'::jsonb
+		FROM platform_settings
+		WHERE key = 'scoreboard_enabled'
+	`).Scan(&enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = nil
+	}
+	if err != nil {
+		h.logger.Error("failed to read scoreboard setting", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read scoreboard availability"})
+		return false
+	}
+	if !enabled {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Scoreboard is disabled"})
+		return false
+	}
+	return true
+}
+
 // ScoreboardEntry represents an entry in the scoreboard
 type ScoreboardEntry struct {
 	Rank             int     `json:"rank"`
@@ -45,17 +67,26 @@ type ScoreboardEntry struct {
 
 // Get returns the scoreboard, paginated so the full field is served page by page.
 func (h *ScoreboardHandler) Get(c *gin.Context) {
-	if !h.config.Platform.ScoreboardEnabled {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Scoreboard is disabled"})
+	if !h.scoreboardAvailable(c) {
 		return
 	}
 
 	page := 1
-	if v, err := strconv.Atoi(c.Query("page")); err == nil && v > 0 {
+	if raw := c.Query("page"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 || v > 1_000_000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "page must be between 1 and 1000000"})
+			return
+		}
 		page = v
 	}
 	limit := 100
-	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v > 0 {
+	if raw := c.Query("limit"); raw != "" {
+		v, err := strconv.Atoi(raw)
+		if err != nil || v < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit must be a positive integer"})
+			return
+		}
 		limit = v
 	}
 	if limit > 500 {
@@ -67,13 +98,16 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		SELECT u.id, u.username, u.display_name, u.total_score,
 			COUNT(DISTINCT f.challenge_id) as challenges_solved,
 			COUNT(DISTINCT s.flag_id) as flags_solved,
-			MAX(s.solved_at) as last_solve
+			MAX(s.solved_at) as last_solve,
+			ROW_NUMBER() OVER (
+				ORDER BY u.total_score DESC, MAX(s.solved_at) ASC NULLS LAST, u.created_at ASC, u.id ASC
+			) AS rank
 		FROM users u
 		LEFT JOIN solves s ON u.id = s.user_id
 		LEFT JOIN flags f ON s.flag_id = f.id
 		WHERE u.role != 'admin' AND u.status = 'active'
 		GROUP BY u.id, u.username, u.display_name, u.total_score
-		ORDER BY u.total_score DESC, last_solve ASC NULLS LAST
+		ORDER BY rank
 		LIMIT $1 OFFSET $2
 	`
 
@@ -86,30 +120,37 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	defer rows.Close()
 
 	entries := []ScoreboardEntry{}
-	rank := offset + 1
 	for rows.Next() {
 		var entry ScoreboardEntry
 		var lastSolve *time.Time
 
 		if err := rows.Scan(&entry.UserID, &entry.Username, &entry.DisplayName, &entry.TotalScore,
-			&entry.ChallengesSolved, &entry.FlagsSolved, &lastSolve); err != nil {
-			h.logger.Warn("failed to scan scoreboard row", zap.Error(err))
-			continue
+			&entry.ChallengesSolved, &entry.FlagsSolved, &lastSolve, &entry.Rank); err != nil {
+			h.logger.Error("failed to scan scoreboard row", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch scoreboard"})
+			return
 		}
 
-		entry.Rank = rank
 		if lastSolve != nil {
 			formatted := lastSolve.Format(time.RFC3339)
 			entry.LastSolveAt = &formatted
 		}
 
 		entries = append(entries, entry)
-		rank++
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while reading scoreboard", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch scoreboard"})
+		return
 	}
 
 	var totalUsers int
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM users WHERE role != 'admin' AND status = 'active'`).Scan(&totalUsers)
+	if err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT COUNT(*) FROM users WHERE role != 'admin' AND status = 'active'`).Scan(&totalUsers); err != nil {
+		h.logger.Error("failed to count scoreboard users", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch scoreboard"})
+		return
+	}
 
 	h.attachTrends(c.Request.Context(), entries)
 
@@ -146,7 +187,12 @@ func (h *ScoreboardHandler) attachTrends(ctx context.Context, entries []Scoreboa
 				sparks[k] = append(sparks[k], cum[k])
 			}
 		}
+		if err := rows.Err(); err != nil {
+			h.logger.Warn("scoreboard spark rows failed", zap.Error(err))
+		}
 		rows.Close()
+	} else {
+		h.logger.Warn("scoreboard spark query failed", zap.Error(err))
 	}
 
 	// Rank delta: rank now (entry.Rank) vs rank as of the 20th-newest solve.
@@ -163,7 +209,12 @@ func (h *ScoreboardHandler) attachTrends(ctx context.Context, entries []Scoreboa
 					scoreThen[uid.String()] = s
 				}
 			}
+			if err := rows.Err(); err != nil {
+				h.logger.Warn("scoreboard historic score rows failed", zap.Error(err))
+			}
 			rows.Close()
+		} else {
+			h.logger.Warn("scoreboard historic score query failed", zap.Error(err))
 		}
 		type us struct {
 			id   string
@@ -178,7 +229,12 @@ func (h *ScoreboardHandler) attachTrends(ctx context.Context, entries []Scoreboa
 					all = append(all, us{id.String(), scoreThen[id.String()]})
 				}
 			}
+			if err := rows.Err(); err != nil {
+				h.logger.Warn("scoreboard historic user rows failed", zap.Error(err))
+			}
 			rows.Close()
+		} else {
+			h.logger.Warn("scoreboard historic user query failed", zap.Error(err))
 		}
 		sort.SliceStable(all, func(a, b int) bool { return all[a].then > all[b].then })
 		for i, u := range all {
@@ -207,8 +263,7 @@ type sbSeries struct {
 
 // History returns the top players' cumulative score over time for the race chart.
 func (h *ScoreboardHandler) History(c *gin.Context) {
-	if !h.config.Platform.ScoreboardEnabled {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Scoreboard is disabled"})
+	if !h.scoreboardAvailable(c) {
 		return
 	}
 
@@ -239,7 +294,9 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 		var solvedAt time.Time
 		var pts int
 		if err := rows.Scan(&id, &name, &solvedAt, &pts); err != nil {
-			continue
+			h.logger.Error("scoreboard history scan", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+			return
 		}
 		key := id.String()
 		s := byUser[key]
@@ -250,6 +307,11 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 		}
 		cum[key] += float64(pts)
 		s.Points = append(s.Points, sbPoint{X: solvedAt.Unix(), Y: cum[key]})
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("scoreboard history rows", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch history"})
+		return
 	}
 
 	series := make([]*sbSeries, 0, len(order))
@@ -270,13 +332,21 @@ type profileSolve struct {
 
 // Profile returns a player's solved challenges with times and categories.
 func (h *ScoreboardHandler) Profile(c *gin.Context) {
+	if !h.scoreboardAvailable(c) {
+		return
+	}
 	username := c.Param("username")
 
 	var userID uuid.UUID
-	var totalScore int
+	var totalScore, challengesSolved int
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, total_score FROM users WHERE username = $1 AND status = 'active'`, username).
-		Scan(&userID, &totalScore)
+		`SELECT u.id, u.total_score,
+			(SELECT COUNT(DISTINCT f.challenge_id)
+			 FROM solves s JOIN flags f ON f.id = s.flag_id
+			 WHERE s.user_id = u.id)
+		 FROM users u
+		 WHERE u.username = $1 AND u.status = 'active' AND u.role != 'admin'`, username).
+		Scan(&userID, &totalScore, &challengesSolved)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "player not found"})
 		return
@@ -308,17 +378,24 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 		var ps profileSolve
 		var solvedAt time.Time
 		if err := rows.Scan(&ps.Name, &ps.Slug, &ps.Category, &ps.CategoryColor, &ps.Points, &solvedAt); err != nil {
-			continue
+			h.logger.Error("profile solve scan", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
 		}
 		ps.SolvedAt = solvedAt.Unix()
 		solves = append(solves, ps)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("profile solve rows", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
 			"username":          username,
 			"total_score":       totalScore,
-			"challenges_solved": len(solves),
+			"challenges_solved": challengesSolved,
 		},
 		"solves": solves,
 	})
@@ -350,8 +427,7 @@ type matrixRowSB struct {
 // Matrix returns the teams x challenges grid: solve state, blood medals, and
 // recent rank movement. Columns are challenges grouped by category.
 func (h *ScoreboardHandler) Matrix(c *gin.Context) {
-	if !h.config.Platform.ScoreboardEnabled {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Scoreboard is disabled"})
+	if !h.scoreboardAvailable(c) {
 		return
 	}
 	ctx := c.Request.Context()
@@ -363,6 +439,7 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 		FROM challenges c
 		LEFT JOIN categories cat ON cat.id = c.category_id
 		WHERE c.status = 'published'
+		  AND (c.release_date IS NULL OR c.release_date <= NOW())
 		ORDER BY COALESCE(cat.sort_order, 999), cat.name NULLS LAST, c.base_points DESC, c.name`)
 	if err != nil {
 		h.logger.Error("matrix challenges", zap.Error(err))
@@ -375,10 +452,19 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 		var id uuid.UUID
 		var mc matrixChallenge
 		if err := chRows.Scan(&id, &mc.Slug, &mc.Name, &mc.Category, &mc.CategoryColor, &mc.Points); err != nil {
-			continue
+			chRows.Close()
+			h.logger.Error("matrix challenge scan", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
 		}
 		chIDs = append(chIDs, id.String())
 		challenges = append(challenges, mc)
+	}
+	if err := chRows.Err(); err != nil {
+		chRows.Close()
+		h.logger.Error("matrix challenge rows", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
 	}
 	chRows.Close()
 
@@ -400,9 +486,18 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 		var user, ch uuid.UUID
 		var rank int
 		if err := bloodRows.Scan(&user, &ch, &rank); err != nil {
-			continue
+			bloodRows.Close()
+			h.logger.Error("matrix blood scan", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
 		}
 		blood[user.String()+"|"+ch.String()] = rank
+	}
+	if err := bloodRows.Err(); err != nil {
+		bloodRows.Close()
+		h.logger.Error("matrix blood rows", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
 	}
 	bloodRows.Close()
 
@@ -428,7 +523,10 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 		var id uuid.UUID
 		var display *string
 		if err := userRows.Scan(&id, &u.username, &display, &u.total); err != nil {
-			continue
+			userRows.Close()
+			h.logger.Error("matrix user scan", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
 		}
 		u.id = id.String()
 		if display != nil {
@@ -437,6 +535,12 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 			u.name = u.username
 		}
 		users = append(users, u)
+	}
+	if err := userRows.Err(); err != nil {
+		userRows.Close()
+		h.logger.Error("matrix user rows", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
 	}
 	userRows.Close()
 

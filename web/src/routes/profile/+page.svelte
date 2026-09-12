@@ -6,9 +6,15 @@ import { api } from '$api';
 interface UserStats {
 	total_score: number;
 	total_solves: number;
+	total_challenges_solved: number;
 	rank: number;
-	by_difficulty: Record<string, { solved: number; total: number }>;
-	by_category: Record<string, { solved: number; total: number }>;
+	solves_by_difficulty: Record<string, number>;
+	solves_by_category: Record<string, number>;
+}
+
+interface Progress {
+	solved: number;
+	total: number;
 }
 
 interface Solve {
@@ -16,12 +22,14 @@ interface Solve {
 	challenge_slug: string;
 	flag_name: string;
 	points: number;
-	solved_at: string;
+	solved_at: number;
 }
 
 let profile: any = null;
 let stats: UserStats | null = null;
 let solves: Solve[] = [];
+let byDifficulty: Record<string, Progress> = {};
+let byCategory: Record<string, Progress> = {};
 let loading = true;
 let error = '';
 
@@ -38,16 +46,40 @@ onMount(async () => {
 });
 
 async function loadProfile() {
+	loading = true;
+	error = '';
 	try {
-		const [profileRes, statsRes, solvesRes] = await Promise.all([
+		const [profileRes, statsRes, solvesRes, challengesRes] = await Promise.all([
 			api.getProfile(),
 			api.getUserStats(),
-			api.getUserSolves()
+			api.getUserSolves(),
+			api.getChallenges()
 		]);
 
 		profile = profileRes;
 		stats = statsRes;
 		solves = solvesRes.solves || [];
+
+		const difficultyTotals: Record<string, number> = {};
+		const categoryTotals: Record<string, number> = {};
+		for (const challenge of challengesRes.challenges || []) {
+			const difficulty = challenge.difficulty || 'Unrated';
+			const category = challenge.category || 'Uncategorized';
+			difficultyTotals[difficulty] = (difficultyTotals[difficulty] || 0) + 1;
+			categoryTotals[category] = (categoryTotals[category] || 0) + 1;
+		}
+		byDifficulty = Object.fromEntries(
+			Object.entries(difficultyTotals).map(([name, total]) => [
+				name,
+				{ solved: statsRes.solves_by_difficulty?.[name] || 0, total }
+			])
+		);
+		byCategory = Object.fromEntries(
+			Object.entries(categoryTotals).map(([name, total]) => [
+				name,
+				{ solved: statsRes.solves_by_category?.[name] || 0, total }
+			])
+		);
 
 		editForm = {
 			display_name: profile.display_name || '',
@@ -66,7 +98,12 @@ async function saveProfile() {
 
 	try {
 		await api.updateProfile(editForm);
-		profile = { ...profile, ...editForm };
+		const saved = {
+			display_name: editForm.display_name.trim(),
+			bio: editForm.bio.trim()
+		};
+		profile = { ...profile, ...saved };
+		editForm = saved;
 		editing = false;
 	} catch (e) {
 		saveError = e instanceof Error ? e.message : 'Failed to save profile';
@@ -75,8 +112,8 @@ async function saveProfile() {
 	}
 }
 
-function formatDate(dateString: string): string {
-	const date = new Date(dateString);
+function formatDate(timestamp: number): string {
+	const date = new Date(timestamp * 1000);
 	return date.toLocaleDateString('en-US', { 
 		year: 'numeric',
 		month: 'short', 
@@ -104,6 +141,12 @@ function formatDate(dateString: string): string {
 			<div class="bg-down/10 border border-down/30 rounded-lg p-6 text-center">
 				<Icon icon="mdi:alert-circle" class="w-8 h-8 text-down mx-auto mb-3" />
 				<p class="text-down">{error}</p>
+				<button
+					on:click={loadProfile}
+					class="mt-4 px-4 py-2 rounded-md border border-down/30 text-sm text-stone-200 hover:bg-down/10 transition-colors"
+				>
+					Try again
+				</button>
 			</div>
 		</div>
 	{:else if profile}
@@ -120,6 +163,7 @@ function formatDate(dateString: string): string {
 									id="display_name"
 									type="text"
 									bind:value={editForm.display_name}
+									maxlength="100"
 									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-700 rounded-md text-stone-50 placeholder-stone-500 focus:outline-none focus:border-stone-500 transition"
 										placeholder="Your display name"
 									/>
@@ -130,6 +174,7 @@ function formatDate(dateString: string): string {
 									<textarea
 									id="bio"
 									bind:value={editForm.bio}
+									maxlength="2000"
 									rows="3"
 									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-700 rounded-md text-stone-50 placeholder-stone-500 focus:outline-none focus:border-stone-500 transition resize-none"
 										placeholder="Tell us about yourself..."
@@ -191,16 +236,16 @@ function formatDate(dateString: string): string {
 								<div class="mt-8 space-y-3">
 									<div class="text-center py-5 px-4 bg-stone-950/50 border border-stone-800 rounded-lg">
 										<div class="text-4xl font-light text-stone-50 mb-1.5 tracking-tight tabular-nums">{stats.total_score || 0}</div>
-										<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Total Points</div>
+										<div class="metadata-label text-stone-500">Total Points</div>
 									</div>
 									<div class="grid grid-cols-2 gap-3">
 										<div class="text-center py-4 px-3 bg-stone-950/50 border border-stone-800 rounded-lg">
 											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight tabular-nums">{stats.rank ? `#${stats.rank}` : '—'}</div>
-											<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Rank</div>
+											<div class="metadata-label text-stone-500">Rank</div>
 										</div>
 										<div class="text-center py-4 px-3 bg-stone-950/50 border border-stone-800 rounded-lg">
-											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight tabular-nums">{stats.total_solves || 0}</div>
-											<div class="text-xs text-stone-500 uppercase tracking-widest font-medium">Solved</div>
+											<div class="text-2xl font-light text-stone-50 mb-1 tracking-tight tabular-nums">{stats.total_challenges_solved || 0}</div>
+											<div class="metadata-label text-stone-500">Solved</div>
 										</div>
 									</div>
 								</div>
@@ -212,14 +257,14 @@ function formatDate(dateString: string): string {
 				<!-- Stats & Activity -->
 				<div class="lg:col-span-2 space-y-6">
 					<!-- Difficulty Progress -->
-					{#if stats?.by_difficulty}
+					{#if Object.keys(byDifficulty).length > 0}
 						<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-6">
 							<h2 class="text-lg leading-none font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
 								<Icon icon="mdi:chart-bar" class="w-[18px] h-[18px] shrink-0" />
 								<span>Progress by Difficulty</span>
 							</h2>
 							<div class="space-y-6">
-								{#each Object.entries(stats.by_difficulty) as [difficulty, data]}
+								{#each Object.entries(byDifficulty) as [difficulty, data]}
 									{@const percentage = data.total > 0 ? (data.solved / data.total) * 100 : 0}
 									<div>
 										<div class="flex items-center justify-between mb-3">
@@ -243,17 +288,17 @@ function formatDate(dateString: string): string {
 					{/if}
 
 					<!-- Category Progress -->
-					{#if stats?.by_category && Object.keys(stats.by_category).length > 0}
+					{#if Object.keys(byCategory).length > 0}
 						<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-6">
 							<h2 class="text-lg leading-none font-semibold text-stone-50 mb-6 flex items-center space-x-2 tracking-tight">
 								<Icon icon="mdi:shape" class="w-[18px] h-[18px] shrink-0" />
 								<span>Progress by Category</span>
 							</h2>
 							<div class="grid grid-cols-2 sm:grid-cols-3 gap-4">
-								{#each Object.entries(stats.by_category) as [category, data]}
+								{#each Object.entries(byCategory) as [category, data]}
 									{@const percentage = data.total > 0 ? (data.solved / data.total) * 100 : 0}
 									<div class="p-5 bg-stone-950/50 border border-stone-800 rounded-lg">
-										<div class="text-xs text-stone-400 uppercase tracking-wider mb-3 font-medium truncate">{category}</div>
+										<div class="metadata-label text-stone-400 mb-3 truncate">{category}</div>
 										<div class="text-2xl font-light text-stone-50 mb-3 tracking-tight">{data.solved}<span class="text-stone-600 text-lg">/{data.total}</span></div>
 										<div class="w-full bg-stone-900/50 rounded-full h-1.5 overflow-hidden">
 											<div class="h-full bg-stone-500 transition-all duration-700 ease-out" style="width: {percentage}%"></div>

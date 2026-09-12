@@ -30,13 +30,17 @@ func envOr(key, def string) string {
 
 func testDB(t *testing.T) *database.DB {
 	t.Helper()
+	databaseName := os.Getenv("ANVIL_TEST_DB_NAME")
+	if err := validateDestructiveTestDatabase(databaseName, os.Getenv("ANVIL_INTEGRATION_ALLOW_DESTRUCTIVE")); err != nil {
+		t.Fatal(err)
+	}
 	port, _ := strconv.Atoi(envOr("ANVIL_TEST_DB_PORT", "55432"))
 	dbCfg := config.DatabaseConfig{
 		Host:         envOr("ANVIL_TEST_DB_HOST", "127.0.0.1"),
 		Port:         port,
 		User:         envOr("ANVIL_TEST_DB_USER", "anvil"),
 		Password:     envOr("ANVIL_TEST_DB_PASSWORD", "test"),
-		Database:     envOr("ANVIL_TEST_DB_NAME", "anvil"),
+		Database:     databaseName,
 		SSLMode:      "disable",
 		MaxOpenConns: 10,
 		MaxIdleConns: 2,
@@ -53,6 +57,15 @@ func testDB(t *testing.T) *database.DB {
 	if err != nil {
 		t.Fatalf("connect after retries (is the test postgres up?): %v", err)
 	}
+	var connectedDatabase string
+	if err := db.Pool.QueryRow(context.Background(), `SELECT current_database()`).Scan(&connectedDatabase); err != nil {
+		db.Close()
+		t.Fatalf("verify integration database: %v", err)
+	}
+	if connectedDatabase != databaseName || !strings.HasSuffix(connectedDatabase, "_test") {
+		db.Close()
+		t.Fatalf("refusing to truncate connected database %q", connectedDatabase)
+	}
 	if err := db.Migrate(); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -64,6 +77,35 @@ func testDB(t *testing.T) *database.DB {
 	return db
 }
 
+func validateDestructiveTestDatabase(databaseName, allow string) error {
+	if allow != "1" {
+		return fmt.Errorf("refusing destructive integration test without ANVIL_INTEGRATION_ALLOW_DESTRUCTIVE=1")
+	}
+	if !strings.HasSuffix(databaseName, "_test") {
+		return fmt.Errorf("refusing destructive integration test against %q; ANVIL_TEST_DB_NAME must end in _test", databaseName)
+	}
+	return nil
+}
+
+func TestValidateDestructiveTestDatabase(t *testing.T) {
+	for _, tt := range []struct {
+		name, database, allow string
+		wantErr               bool
+	}{
+		{name: "explicit test database", database: "anvil_integration_test", allow: "1"},
+		{name: "missing opt in", database: "anvil_integration_test", wantErr: true},
+		{name: "production-shaped name", database: "anvil", allow: "1", wantErr: true},
+		{name: "missing name", allow: "1", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateDestructiveTestDatabase(tt.database, tt.allow)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func okChecker(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "ok.sh")
@@ -71,6 +113,40 @@ func okChecker(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func checkingChecker(t *testing.T) (string, string) {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "actions.log")
+	p := filepath.Join(t.TempDir(), "checking.sh")
+	body := fmt.Sprintf(`#!/bin/sh
+task=$(cat)
+printf '%%s\n' "$task" >> %s
+case "$task" in
+  *'"action":"check"'*) printf '{"status":"FLAG_NOT_FOUND","message":"missing old flag"}' ;;
+  *) printf '{"status":"OK"}' ;;
+esac
+`, logPath)
+	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p, logPath
+}
+
+func recordingChecker(t *testing.T, delay time.Duration) (string, string) {
+	t.Helper()
+	logPath := filepath.Join(t.TempDir(), "actions.log")
+	p := filepath.Join(t.TempDir(), "recording.sh")
+	body := fmt.Sprintf(`#!/bin/sh
+task=$(cat)
+printf '%%s\n' "$task" >> %q
+sleep %.3f
+printf '{"status":"OK"}'
+`, logPath, delay.Seconds())
+	if err := os.WriteFile(p, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p, logPath
 }
 
 func seedTeam(t *testing.T, db *database.DB, name string) uuid.UUID {
@@ -129,9 +205,9 @@ func TestIntegrationKoth(t *testing.T) {
 	seedHill(t, db, kothChecker(t, "alpha"))
 
 	ctrl := testController(db) // round = 2 ticks
-	ctrl.runTick(ctx, 1)
-	ctrl.runTick(ctx, 2)
-	ctrl.runTick(ctx, 3) // enters round 2 -> closes round 1
+	runTickOK(t, ctrl, ctx, 1)
+	runTickOK(t, ctrl, ctx, 2)
+	runTickOK(t, ctrl, ctx, 3) // enters round 2 -> closes round 1
 
 	if n := count(t, db, `SELECT COUNT(*) FROM game_koth_control WHERE controller_team_id IS NOT NULL`); n != 3 {
 		t.Fatalf("expected 3 control records for alpha, got %d", n)
@@ -153,6 +229,36 @@ func TestIntegrationKoth(t *testing.T) {
 	// koth = per-tick hold (5 x 3 ticks) + round-1 rank bonus (12) = 27
 	if s := getStanding(t, db, a); s.koth != 27 {
 		t.Errorf("alpha koth standing: got %v want 27", s.koth)
+	}
+}
+
+func TestIntegrationKothClosesRoundAfterLastHillIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	a := seedTeam(t, db, "alpha")
+	seedTeam(t, db, "bravo")
+	hill := seedHill(t, db, kothChecker(t, "alpha"))
+	ctrl := testController(db)
+	runTickOK(t, ctrl, ctx, 1)
+	runTickOK(t, ctrl, ctx, 2)
+	if _, err := db.Pool.Exec(ctx, `UPDATE game_koth_hills SET enabled = FALSE WHERE id = $1`, hill); err != nil {
+		t.Fatalf("disable hill: %v", err)
+	}
+	runTickOK(t, ctrl, ctx, 3)
+
+	if n := count(t, db, `SELECT COUNT(*) FROM game_koth_rounds WHERE round_number = 1 AND status = 'closed'`); n != 1 {
+		t.Fatalf("round 1 remained open after its final hill was disabled")
+	}
+	var bonus float64
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(points), 0) FROM game_score_events WHERE team_id = $1 AND stream = 'KOTH'`, a).
+		Scan(&bonus); err != nil {
+		t.Fatal(err)
+	}
+	if bonus != 12 {
+		t.Fatalf("alpha round-1 rank bonus: got %v want 12", bonus)
 	}
 }
 
@@ -190,6 +296,13 @@ func testController(db *database.DB) *Controller {
 	}, db, zap.NewNop())
 }
 
+func runTickOK(t *testing.T, ctrl *Controller, ctx context.Context, tick int) {
+	t.Helper()
+	if err := ctrl.runTick(ctx, tick); err != nil {
+		t.Fatalf("run tick %d: %v", tick, err)
+	}
+}
+
 func count(t *testing.T, db *database.DB, q string) int {
 	t.Helper()
 	var n int
@@ -210,7 +323,7 @@ func TestIntegrationADLoop(t *testing.T) {
 	seedService(t, db, okChecker(t))
 
 	ctrl := testController(db)
-	ctrl.runTick(ctx, 1)
+	runTickOK(t, ctrl, ctx, 1)
 
 	if n := count(t, db, `SELECT COUNT(*) FROM game_flags WHERE tick_number = 1`); n != 3 {
 		t.Fatalf("expected 3 flags planted, got %d", n)
@@ -242,7 +355,9 @@ func TestIntegrationADLoop(t *testing.T) {
 	}
 	assertOutcome(t, db, a, stale, SubmitExpired)
 
-	ctrl.recomputeStandings(ctx)
+	if err := ctrl.recomputeStandings(ctx); err != nil {
+		t.Fatalf("recompute standings: %v", err)
+	}
 
 	sa := getStanding(t, db, a)
 	sb := getStanding(t, db, b)
@@ -257,6 +372,190 @@ func TestIntegrationADLoop(t *testing.T) {
 	}
 	if sa.rank != 1 {
 		t.Errorf("alpha should be rank 1, got %d", sa.rank)
+	}
+}
+
+func TestIntegrationDispatchChecksPreviousFlagAndDoesNotRepeatClosedTick(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	seedTeam(t, db, "alpha")
+	seedTeam(t, db, "bravo")
+	checker, logPath := checkingChecker(t)
+	seedService(t, db, checker)
+
+	ctrl := testController(db)
+	if err := ctrl.runTick(ctx, 1); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	if err := ctrl.runTick(ctx, 2); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+
+	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE tick_number = 2 AND status = 'FLAG_NOT_FOUND'`); n != 2 {
+		t.Fatalf("expected retrieval failures for both teams on tick 2, got %d", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flags WHERE planted_at IS NOT NULL`); n != 4 {
+		t.Fatalf("expected two planted generations, got %d flags", n)
+	}
+
+	before, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read checker log: %v", err)
+	}
+	if checks := strings.Count(string(before), `"action":"check"`); checks != 2 {
+		t.Fatalf("expected two retrieval checks, got %d", checks)
+	}
+	if err := ctrl.runTick(ctx, 2); err != nil {
+		t.Fatalf("repeat closed tick: %v", err)
+	}
+	after, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read checker log after repeat: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("closed tick dispatched again: checker log grew from %d to %d bytes", len(before), len(after))
+	}
+}
+
+func TestIntegrationReservedFlagIsNotSubmittable(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	attacker := seedTeam(t, db, "alpha")
+	victim := seedTeam(t, db, "bravo")
+	service := seedService(t, db, okChecker(t))
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_ticks (tick_number, status) VALUES (1, 'running')`); err != nil {
+		t.Fatalf("seed tick: %v", err)
+	}
+	reserved := "H7CTF{RESERVED}"
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_flags
+		   (tick_number, team_id, service_id, store_index, flag, valid_from_tick, valid_until_tick, planted_at)
+		 VALUES (1, $1, $2, 0, $3, 1, 10, NULL)`, victim, service, reserved); err != nil {
+		t.Fatalf("seed reservation: %v", err)
+	}
+	if outcome, err := SubmitFlag(ctx, db, attacker, reserved); err != nil || outcome != SubmitInvalid {
+		t.Fatalf("reserved flag outcome = %q, err = %v; want invalid", outcome, err)
+	}
+}
+
+func TestIntegrationRunningTickReusesReservedFlag(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	team := seedTeam(t, db, "alpha")
+	checker, logPath := recordingChecker(t, 0)
+	service := seedService(t, db, checker)
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_ticks (tick_number, status) VALUES (1, 'running')`); err != nil {
+		t.Fatalf("seed tick: %v", err)
+	}
+	reserved := "H7CTF{STABLE_RESERVATION}"
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_flags
+		   (tick_number, team_id, service_id, store_index, flag, valid_from_tick, valid_until_tick, planted_at)
+		 VALUES (1, $1, $2, 0, $3, 1, 10, NULL)`, team, service, reserved); err != nil {
+		t.Fatalf("seed reservation: %v", err)
+	}
+
+	runTickOK(t, testController(db), ctx, 1)
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flags`); n != 1 {
+		t.Fatalf("running tick minted a replacement flag; got %d rows", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flags WHERE planted_at IS NOT NULL`); n != 1 {
+		t.Fatalf("reserved flag was not marked planted")
+	}
+	actions, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read checker log: %v", err)
+	}
+	if !strings.Contains(string(actions), reserved) {
+		t.Fatalf("checker did not receive reserved flag: %s", actions)
+	}
+}
+
+func TestIntegrationRunningTickSkipsCompletedJobs(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	completedTeam := seedTeam(t, db, "alpha")
+	unfinishedTeam := seedTeam(t, db, "bravo")
+	checker, logPath := recordingChecker(t, 0)
+	service := seedService(t, db, checker)
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_ticks (tick_number, status) VALUES (1, 'running')`); err != nil {
+		t.Fatalf("seed tick: %v", err)
+	}
+	completedFlag := "H7CTF{ALREADY_FINISHED}"
+	unfinishedFlag := "H7CTF{STILL_PENDING}"
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_flags
+		   (tick_number, team_id, service_id, store_index, flag, valid_from_tick, valid_until_tick, planted_at)
+		 VALUES
+		   (1, $1, $3, 0, $4, 1, 10, NOW()),
+		   (1, $2, $3, 0, $5, 1, 10, NULL)`,
+		completedTeam, unfinishedTeam, service, completedFlag, unfinishedFlag); err != nil {
+		t.Fatalf("seed flags: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_sla_checks (tick_number, team_id, service_id, status)
+		 VALUES (1, $1, $2, 'OK')`, completedTeam, service); err != nil {
+		t.Fatalf("seed completed SLA: %v", err)
+	}
+
+	runTickOK(t, testController(db), ctx, 1)
+	actions, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read checker log: %v", err)
+	}
+	if strings.Contains(string(actions), completedFlag) {
+		t.Fatalf("completed job was dispatched again: %s", actions)
+	}
+	if !strings.Contains(string(actions), unfinishedFlag) {
+		t.Fatalf("unfinished job was not resumed: %s", actions)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE tick_number = 1`); n != 2 {
+		t.Fatalf("resumed tick has %d SLA rows; want 2", n)
+	}
+}
+
+func TestIntegrationConcurrentControllersDispatchTickOnce(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	seedTeam(t, db, "alpha")
+	seedTeam(t, db, "bravo")
+	checker, logPath := recordingChecker(t, 400*time.Millisecond)
+	seedService(t, db, checker)
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, ctrl := range []*Controller{testController(db), testController(db)} {
+		go func(ctrl *Controller) {
+			<-start
+			errs <- ctrl.runTick(ctx, 1)
+		}(ctrl)
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent tick: %v", err)
+		}
+	}
+
+	actions, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read checker log: %v", err)
+	}
+	if got := strings.Count(strings.TrimSpace(string(actions)), "\n") + 1; got != 2 {
+		t.Fatalf("two controllers dispatched %d checker jobs; want exactly 2", got)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flags`); n != 2 {
+		t.Fatalf("two controllers persisted %d flags; want exactly 2", n)
 	}
 }
 
@@ -295,6 +594,12 @@ func TestIntegrationTeamForUser(t *testing.T) {
 	}
 	if _, ok, _ := TeamForUser(ctx, db, uuid.New()); ok {
 		t.Errorf("unknown user should not resolve to a team")
+	}
+	if _, err := db.Pool.Exec(ctx, `UPDATE game_teams SET status = 'disabled' WHERE id = $1`, team); err != nil {
+		t.Fatalf("disable team: %v", err)
+	}
+	if _, ok, err := TeamForUser(ctx, db, user); err != nil || ok {
+		t.Errorf("disabled team resolved for submission: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -397,7 +702,7 @@ func TestIntegrationRealService(t *testing.T) {
 	seedServiceOnPort(t, db, checkerPy, 9001)
 
 	ctrl := testController(db)
-	ctrl.runTick(ctx, 1)
+	runTickOK(t, ctrl, ctx, 1)
 
 	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE status = 'OK'`); n != 2 {
 		t.Fatalf("expected 2 OK sla checks from the real checker, got %d", n)
@@ -421,7 +726,9 @@ func TestIntegrationRealService(t *testing.T) {
 	if out, err := SubmitFlag(ctx, db, a, stolen); err != nil || out != SubmitAccepted {
 		t.Fatalf("submit stolen flag: got %s err=%v want accepted", out, err)
 	}
-	ctrl.recomputeStandings(ctx)
+	if err := ctrl.recomputeStandings(ctx); err != nil {
+		t.Fatalf("recompute standings: %v", err)
+	}
 	if s := getStanding(t, db, a); s.attack <= 0 {
 		t.Fatalf("alpha should have attack points after a real steal, got %v", s.attack)
 	}

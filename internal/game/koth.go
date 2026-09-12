@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -25,9 +24,7 @@ type hillChecker struct {
 
 func (h hillChecker) run(ctx context.Context, action string, t Target) ([]byte, error) {
 	task, _ := json.Marshal(checkerTask{Action: action, Host: t.Host, Port: t.Port})
-	cmd := exec.CommandContext(ctx, h.command)
-	cmd.Stdin = bytes.NewReader(task)
-	return cmd.Output()
+	return runCheckerCommand(ctx, h.command, task)
 }
 
 func (h hillChecker) controller(ctx context.Context, t Target) string {
@@ -73,27 +70,33 @@ func (c *Controller) roundForTick(tick int) int {
 
 // runKoth records who holds each hill this tick and, at a round boundary, closes
 // the previous round (rank bonus) and resets the hills.
-func (c *Controller) runKoth(ctx context.Context, tick int) {
+func (c *Controller) runKoth(ctx context.Context, tick int) error {
 	hills, err := c.enabledHills(ctx)
 	if err != nil {
-		c.logger.Error("koth: load hills", zap.Error(err))
-		return
-	}
-	if len(hills) == 0 {
-		return
+		return fmt.Errorf("load hills: %w", err)
 	}
 
 	round := c.roundForTick(tick)
-	c.ensureRound(ctx, round)
-
 	if tick > 1 && round != c.roundForTick(tick-1) {
-		c.closeRound(ctx, round-1)
+		if err := c.closeRound(ctx, round-1); err != nil {
+			return fmt.Errorf("close round %d: %w", round-1, err)
+		}
 		if c.cfg.Koth.ResetEnabled {
 			c.resetHills(ctx, hills)
 		}
 	}
+	if len(hills) == 0 {
+		return nil
+	}
 
-	c.pollHills(ctx, tick, round, hills)
+	if err := c.ensureRound(ctx, round); err != nil {
+		return fmt.Errorf("ensure round: %w", err)
+	}
+
+	if err := c.pollHills(ctx, tick, round, hills); err != nil {
+		return fmt.Errorf("poll hills: %w", err)
+	}
+	return nil
 }
 
 func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
@@ -120,17 +123,18 @@ func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
 	return out, rows.Err()
 }
 
-func (c *Controller) ensureRound(ctx context.Context, round int) {
+func (c *Controller) ensureRound(ctx context.Context, round int) error {
 	_, err := c.db.Pool.Exec(ctx,
 		`INSERT INTO game_koth_rounds (round_number, started_at, status)
 		 VALUES ($1, NOW(), 'running') ON CONFLICT (round_number) DO NOTHING`, round)
-	if err != nil {
-		c.logger.Warn("koth: ensure round", zap.Error(err))
-	}
+	return err
 }
 
-func (c *Controller) pollHills(ctx context.Context, tick, round int, hills []hill) {
-	tokens := c.teamTokens(ctx)
+func (c *Controller) pollHills(ctx context.Context, tick, round int, hills []hill) error {
+	tokens, err := c.teamTokens(ctx)
+	if err != nil {
+		return err
+	}
 	for _, h := range hills {
 		token := h.checker.controller(ctx, h.target)
 		var controller *uuid.UUID
@@ -141,54 +145,69 @@ func (c *Controller) pollHills(ctx context.Context, tick, round int, hills []hil
 		}
 		_, err := c.db.Pool.Exec(ctx,
 			`INSERT INTO game_koth_control (tick_number, round_number, hill_id, controller_team_id)
-			 VALUES ($1, $2, $3, $4) ON CONFLICT (tick_number, hill_id) DO NOTHING`,
+			 VALUES ($1, $2, $3, $4) ON CONFLICT (tick_number, hill_id) DO UPDATE SET
+			   round_number = EXCLUDED.round_number,
+			   controller_team_id = EXCLUDED.controller_team_id,
+			   checked_at = NOW()`,
 			tick, round, h.id, controller)
 		if err != nil {
-			c.logger.Warn("koth: record control", zap.Error(err))
+			return err
 		}
 	}
+	return nil
 }
 
 // closeRound is idempotent: it awards the rank bonus only the first time a
 // running round is closed.
-func (c *Controller) closeRound(ctx context.Context, round int) {
-	tag, err := c.db.Pool.Exec(ctx,
+func (c *Controller) closeRound(ctx context.Context, round int) error {
+	tx, err := c.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
 		`UPDATE game_koth_rounds SET status = 'closed', ends_at = NOW()
 		 WHERE round_number = $1 AND status = 'running'`, round)
 	if err != nil {
-		c.logger.Warn("koth: close round", zap.Error(err))
-		return
+		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return
+		return nil
 	}
 
-	rows, err := c.db.Pool.Query(ctx,
+	rows, err := tx.Query(ctx,
 		`SELECT controller_team_id, COUNT(*) FROM game_koth_control
 		 WHERE round_number = $1 AND controller_team_id IS NOT NULL
 		 GROUP BY controller_team_id`, round)
 	if err != nil {
-		c.logger.Warn("koth: round holds", zap.Error(err))
-		return
+		return err
 	}
 	var holds []teamHold
 	for rows.Next() {
 		var th teamHold
-		if rows.Scan(&th.Team, &th.Held) == nil {
-			holds = append(holds, th)
+		if err := rows.Scan(&th.Team, &th.Held); err != nil {
+			rows.Close()
+			return err
 		}
+		holds = append(holds, th)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
 	}
 	rows.Close()
 
 	for team, pts := range kothRankPoints(c.cfg.Scoring.KothRank, holds) {
-		_, err := c.db.Pool.Exec(ctx,
+		_, err := tx.Exec(ctx,
 			`INSERT INTO game_score_events (team_id, round_number, stream, points, source)
 			 VALUES ($1, $2, 'KOTH', $3, $4)`,
 			team, round, pts, fmt.Sprintf("koth:round:%d", round))
 		if err != nil {
-			c.logger.Warn("koth: award rank", zap.Error(err))
+			return err
 		}
 	}
+	return tx.Commit(ctx)
 }
 
 func (c *Controller) resetHills(ctx context.Context, hills []hill) {
@@ -199,21 +218,22 @@ func (c *Controller) resetHills(ctx context.Context, hills []hill) {
 	}
 }
 
-func (c *Controller) teamTokens(ctx context.Context) map[string]uuid.UUID {
+func (c *Controller) teamTokens(ctx context.Context) (map[string]uuid.UUID, error) {
 	out := make(map[string]uuid.UUID)
 	rows, err := c.db.Pool.Query(ctx,
-		`SELECT token, id FROM game_teams WHERE token IS NOT NULL AND status = 'active'`)
+		`SELECT token, id FROM game_teams
+		 WHERE token IS NOT NULL AND status = 'active' AND is_nop = FALSE`)
 	if err != nil {
-		c.logger.Warn("koth: load tokens", zap.Error(err))
-		return out
+		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var token string
 		var id uuid.UUID
-		if rows.Scan(&token, &id) == nil {
-			out[token] = id
+		if err := rows.Scan(&token, &id); err != nil {
+			return nil, err
 		}
+		out[token] = id
 	}
-	return out
+	return out, rows.Err()
 }

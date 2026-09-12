@@ -37,7 +37,7 @@ export default {
 			},
 			fontFamily: {
 				sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
-				mono: ['JetBrains Mono', 'SF Mono', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier', 'monospace']
+				mono: ['JetBrains Mono Variable', 'JetBrains Mono', 'SF Mono', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier', 'monospace']
 			}
 		}
 	},

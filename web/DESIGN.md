@@ -63,6 +63,12 @@ is used only when distinguishing many series, capped at ~10 lines.
 
 - **JetBrains Mono** for all data, numbers, ranks, timers, IDs, labels, headings — the
   engineered identity. A clean sans is acceptable for long prose (challenge writeups).
+- Compact count summaries pair a monospaced value with a small uppercase Inter label. This
+  is the deliberate exception for human-readable microcopy; keep it restrained and tracked.
+- Icon-adjacent compact text uses the shared `optical-label` half-pixel baseline correction.
+  Do not tune individual SVGs unless their artwork is demonstrably off-center in its view box.
+- Text inside 10–11px pills uses `badge-label` instead: its full-pixel correction centers the
+  smaller mono glyphs without moving or resizing the surrounding border.
 - `tabular-nums` on **every** numeric value (scores, ranks, times) so digits don't jitter
   on live update and columns align. Non-negotiable on the scoreboard.
 - Weight band **400 / 510 (medium) / 590 (semibold)**. Never 700+ — heavy reads as gamer.

@@ -5,6 +5,24 @@ import { API_BASE } from '$lib/config';
 
 export type ApiErrorDetails = Record<string, unknown>;
 
+export interface VpnConfigResponse {
+	has_config: boolean;
+	config_file?: string;
+	ip_address?: string;
+	public_key?: string;
+	server_public_key?: string;
+	endpoint?: string;
+	created_at?: number;
+}
+
+export interface VpnStatusResponse {
+	connected: boolean;
+	ip_address?: string;
+	last_handshake?: number;
+	bytes_sent?: number;
+	bytes_received?: number;
+}
+
 export class ApiError extends Error {
 	[key: string]: unknown;
 
@@ -131,10 +149,76 @@ class ApiClient {
 		} catch (error) {
 			// Network errors - don't clear auth
 			if (error instanceof TypeError && error.message.includes('fetch')) {
-				throw new Error('Network error. Please check your connection.');
+				throw new Error('Network error. Please check your connection.', { cause: error });
 			}
 			throw error;
 		}
+	}
+
+	private sendFormData(
+		endpoint: string,
+		formData: FormData,
+		token: string,
+		onProgress?: (progress: number) => void
+	): Promise<{ status: number; body: string }> {
+		return new Promise((resolve, reject) => {
+			const xhr = new XMLHttpRequest();
+
+			xhr.upload.addEventListener('progress', (event) => {
+				if (event.lengthComputable && onProgress) {
+					onProgress(Math.round((event.loaded / event.total) * 100));
+				}
+			});
+			xhr.addEventListener('load', () => resolve({ status: xhr.status, body: xhr.responseText }));
+			xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+			xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
+
+			xhr.open('POST', `${this.uploadUrl}/api/v1${endpoint}`);
+			xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+			xhr.send(formData);
+		});
+	}
+
+	private async uploadFormData<T>(
+		endpoint: string,
+		formData: FormData,
+		onProgress?: (progress: number) => void
+	): Promise<T> {
+		let token = this.getAuthToken();
+		if (!token) {
+			if (browser) window.location.href = '/login';
+			throw new Error('Authentication required');
+		}
+
+		let response = await this.sendFormData(endpoint, formData, token, onProgress);
+		if (response.status === 401 && browser) {
+			const refreshedToken = await auth.refreshAccessToken();
+			if (refreshedToken) {
+				token = refreshedToken;
+				response = await this.sendFormData(endpoint, formData, token, onProgress);
+			} else {
+				auth.clearAuth();
+				window.location.href = '/login';
+			}
+		}
+
+		let parsed: unknown = {};
+		if (response.body) {
+			try {
+				parsed = JSON.parse(response.body);
+			} catch {
+				parsed = {};
+			}
+		}
+
+		if (response.status < 200 || response.status >= 300) {
+			const details = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+				? parsed as ApiErrorDetails
+				: {};
+			throw new ApiError(response.status, details, 'Upload failed');
+		}
+
+		return parsed as T;
 	}
 
 	// Platform
@@ -216,6 +300,12 @@ class ApiClient {
 		});
 	}
 
+	async revertInstance(instanceId: string) {
+		return this.request<any>(`/instances/${instanceId}/revert`, {
+			method: 'POST'
+		});
+	}
+
 	async stopInstance(instanceId: string) {
 		return this.request<any>(`/instances/${instanceId}/stop`, {
 			method: 'POST'
@@ -230,23 +320,23 @@ class ApiClient {
 
 	// VPN
 	async getVPNConfig() {
-		return this.request<{ config: string; assigned_ip: string }>('/vpn/config');
+		return this.request<VpnConfigResponse>('/vpn/config');
 	}
 
 	async generateVPNConfig() {
-		return this.request<{ config: string; assigned_ip: string }>('/vpn/config', {
+		return this.request<VpnConfigResponse>('/vpn/config', {
 			method: 'POST'
 		});
 	}
 
 	async regenerateVPNConfig() {
-		return this.request<{ config_file: string; ip_address: string }>('/vpn/config/regenerate', {
+		return this.request<VpnConfigResponse>('/vpn/config/regenerate', {
 			method: 'POST'
 		});
 	}
 
 	async getVPNStatus() {
-		return this.request<any>('/vpn/status');
+		return this.request<VpnStatusResponse>('/vpn/status');
 	}
 
 	// User
@@ -369,14 +459,14 @@ class ApiClient {
 		return this.request<any>(`/admin/challenges/${challengeId}/flags`);
 	}
 
-	async createFlag(challengeId: string, data: { name: string; flag: string; points: number }) {
+	async createFlag(challengeId: string, data: { name: string; flag: string; points: number; order?: number; case_sensitive?: boolean; flag_type?: string; dynamic_flag_prefix?: string }) {
 		return this.request<any>(`/admin/challenges/${challengeId}/flags`, {
 			method: 'POST',
 			body: JSON.stringify(data)
 		});
 	}
 
-	async updateFlag(challengeId: string, flagId: string, data: { name: string; flag: string; points: number }) {
+	async updateFlag(challengeId: string, flagId: string, data: { name: string; flag?: string; points: number; order?: number; case_sensitive?: boolean; flag_type?: string; dynamic_flag_prefix?: string }) {
 		return this.request<any>(`/admin/challenges/${challengeId}/flags/${flagId}`, {
 			method: 'PUT',
 			body: JSON.stringify(data)
@@ -399,38 +489,7 @@ class ApiClient {
 		formData: FormData,
 		onProgress?: (progress: number) => void
 	): Promise<any> {
-		const token = this.getAuthToken();
-		// Use upload subdomain for large files (bypasses Cloudflare 100 MB limit)
-		const baseUrl = this.uploadUrl;
-
-		return new Promise((resolve, reject) => {
-			const xhr = new XMLHttpRequest();
-
-			xhr.upload.addEventListener('progress', (e) => {
-				if (e.lengthComputable && onProgress) {
-					onProgress(Math.round((e.loaded / e.total) * 100));
-				}
-			});
-
-			xhr.addEventListener('load', () => {
-				if (xhr.status >= 200 && xhr.status < 300) {
-					try { resolve(JSON.parse(xhr.responseText)); } catch { resolve({}); }
-				} else {
-					try {
-						const err = JSON.parse(xhr.responseText);
-						reject(new Error(err.error || 'Upload failed'));
-					} catch {
-						reject(new Error('Upload failed'));
-					}
-				}
-			});
-
-			xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
-
-			xhr.open('POST', `${baseUrl}/api/v1/admin/challenges/${challengeId}/attachments`);
-			if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-			xhr.send(formData);
-		});
+		return this.uploadFormData(`/admin/challenges/${challengeId}/attachments`, formData, onProgress);
 	}
 
 	async deleteAttachment(challengeId: string, attachmentId: string) {
@@ -452,46 +511,7 @@ class ApiClient {
 	}
 
 	async uploadVMTemplate(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {
-		const token = this.getAuthToken();
-		
-		return new Promise((resolve, reject) => {
-			const xhr = new XMLHttpRequest();
-			
-			xhr.upload.addEventListener('progress', (e) => {
-				if (e.lengthComputable && onProgress) {
-					const progress = Math.round((e.loaded / e.total) * 100);
-					onProgress(progress);
-				}
-			});
-			
-			xhr.addEventListener('load', () => {
-				if (xhr.status >= 200 && xhr.status < 300) {
-					try {
-						resolve(JSON.parse(xhr.responseText));
-					} catch {
-						resolve({});
-					}
-				} else {
-					try {
-						const error = JSON.parse(xhr.responseText);
-						reject(new Error(error.error || 'Upload failed'));
-					} catch {
-						reject(new Error('Upload failed'));
-					}
-				}
-			});
-			
-			xhr.addEventListener('error', () => {
-				reject(new Error('Network error during upload'));
-			});
-			
-			// Use upload domain to bypass Cloudflare 100MB limit
-			xhr.open('POST', `${this.uploadUrl}/api/v1/admin/vm-templates/upload`);
-			if (token) {
-				xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-			}
-			xhr.send(formData);
-		});
+		return this.uploadFormData('/admin/vm-templates/upload', formData, onProgress);
 	}
 
 	async deleteVMTemplate(templateId: string) {
@@ -587,48 +607,7 @@ class ApiClient {
 	}
 
 	async uploadOvaChallenge(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {
-		const token = this.getAuthToken();
-		
-		// Use the dedicated upload domain (bypasses Cloudflare 100MB limit)
-		const uploadBaseUrl = this.uploadUrl;
-		
-		return new Promise((resolve, reject) => {
-			const xhr = new XMLHttpRequest();
-			
-			xhr.upload.addEventListener('progress', (e) => {
-				if (e.lengthComputable && onProgress) {
-					const progress = Math.round((e.loaded / e.total) * 100);
-					onProgress(progress);
-				}
-			});
-			
-			xhr.addEventListener('load', () => {
-				if (xhr.status >= 200 && xhr.status < 300) {
-					try {
-						resolve(JSON.parse(xhr.responseText));
-					} catch {
-						resolve({});
-					}
-				} else {
-					try {
-						const error = JSON.parse(xhr.responseText);
-						reject(new Error(error.error || 'Upload failed'));
-					} catch {
-						reject(new Error('Upload failed'));
-					}
-				}
-			});
-			
-			xhr.addEventListener('error', () => {
-				reject(new Error('Network error during upload'));
-			});
-			
-			xhr.open('POST', `${uploadBaseUrl}/api/v1/admin/challenges/ova`);
-			if (token) {
-				xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-			}
-			xhr.send(formData);
-		});
+		return this.uploadFormData('/admin/challenges/ova', formData, onProgress);
 	}
 
 	async getInstanceFlags(params?: { challenge_id?: string; user_id?: string }) {

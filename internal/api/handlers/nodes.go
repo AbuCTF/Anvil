@@ -1,13 +1,19 @@
 package handlers
 
 import (
+	"errors"
+	"math"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -21,6 +27,20 @@ type NodeHandler struct {
 // NewNodeHandler creates a new node handler
 func NewNodeHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *NodeHandler {
 	return &NodeHandler{config: cfg, db: db, logger: logger}
+}
+
+func (h *NodeHandler) ready(c *gin.Context) bool {
+	if h == nil || h.db == nil || h.db.Pool == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "node service unavailable"})
+		return false
+	}
+	return true
+}
+
+func (h *NodeHandler) logError(message string, fields ...zap.Field) {
+	if h != nil && h.logger != nil {
+		h.logger.Error(message, fields...)
+	}
 }
 
 // NodeResponse represents a VM node in API responses
@@ -47,6 +67,10 @@ type NodeResponse struct {
 // ListNodes returns all VM nodes
 // GET /api/v1/admin/nodes
 func (h *NodeHandler) List(c *gin.Context) {
+	if !h.ready(c) {
+		return
+	}
+
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
 		SELECT id, name, hostname, ip_address, status, is_primary,
 		       total_vcpu, used_vcpu, total_memory_mb, used_memory_mb,
@@ -56,7 +80,7 @@ func (h *NodeHandler) List(c *gin.Context) {
 		ORDER BY is_primary DESC, name ASC
 	`)
 	if err != nil {
-		h.logger.Error("failed to list nodes", zap.Error(err))
+		h.logError("failed to list nodes", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch nodes"})
 		return
 	}
@@ -75,8 +99,9 @@ func (h *NodeHandler) List(c *gin.Context) {
 			&n.TotalDiskGB, &n.ActiveVMs, &n.MaxVMs, &lastHeartbeat,
 			&region, &provider, &createdAt,
 		); err != nil {
-			h.logger.Error("failed to scan node", zap.Error(err))
-			continue
+			h.logError("failed to scan node", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch nodes"})
+			return
 		}
 
 		if lastHeartbeat != nil {
@@ -88,6 +113,11 @@ func (h *NodeHandler) List(c *gin.Context) {
 		n.CreatedAt = createdAt.Unix()
 
 		nodes = append(nodes, n)
+	}
+	if err := rows.Err(); err != nil {
+		h.logError("failed while listing nodes", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch nodes"})
+		return
 	}
 
 	if nodes == nil {
@@ -103,14 +133,21 @@ func (h *NodeHandler) List(c *gin.Context) {
 // GetNode returns a specific node
 // GET /api/v1/admin/nodes/:id
 func (h *NodeHandler) Get(c *gin.Context) {
-	nodeID := c.Param("id")
+	if !h.ready(c) {
+		return
+	}
+	nodeID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid node ID"})
+		return
+	}
 
 	var n NodeResponse
 	var lastHeartbeat *time.Time
 	var createdAt time.Time
 	var region, provider *string
 
-	err := h.db.Pool.QueryRow(c.Request.Context(), `
+	err = h.db.Pool.QueryRow(c.Request.Context(), `
 		SELECT id, name, hostname, ip_address, status, is_primary,
 		       total_vcpu, used_vcpu, total_memory_mb, used_memory_mb,
 		       total_disk_gb, active_vms, max_vms, last_heartbeat,
@@ -122,8 +159,13 @@ func (h *NodeHandler) Get(c *gin.Context) {
 		&n.TotalDiskGB, &n.ActiveVMs, &n.MaxVMs, &lastHeartbeat,
 		&region, &provider, &createdAt,
 	)
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+		return
+	}
+	if err != nil {
+		h.logError("failed to fetch node", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch node"})
 		return
 	}
 
@@ -154,15 +196,28 @@ type CreateNodeRequest struct {
 	APIEndpoint   string `json:"api_endpoint"`
 }
 
-// Create adds a new VM node
-// POST /api/v1/admin/nodes
-func (h *NodeHandler) Create(c *gin.Context) {
-	var req CreateNodeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
+func validateCreateNodeRequest(req *CreateNodeRequest) error {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Hostname = strings.TrimSpace(req.Hostname)
+	req.IPAddress = strings.TrimSpace(req.IPAddress)
+	req.Region = strings.TrimSpace(req.Region)
+	req.Provider = strings.TrimSpace(req.Provider)
+	req.SSHUser = strings.TrimSpace(req.SSHUser)
+	req.APIEndpoint = strings.TrimSpace(req.APIEndpoint)
 
+	if req.Name == "" || req.Hostname == "" || req.IPAddress == "" {
+		return errors.New("name, hostname, and ip_address are required")
+	}
+	if len(req.Name) > 100 || len(req.Hostname) > 255 || len(req.IPAddress) > 45 ||
+		len(req.Region) > 50 || len(req.Provider) > 50 || len(req.SSHUser) > 50 || len(req.APIEndpoint) > 255 {
+		return errors.New("one or more node fields exceed their maximum length")
+	}
+	if strings.IndexFunc(req.Hostname, func(r rune) bool { return r <= ' ' || r == '/' || r == '\\' }) >= 0 {
+		return errors.New("hostname contains invalid characters")
+	}
+	if net.ParseIP(req.IPAddress) == nil {
+		return errors.New("ip_address must be a valid IPv4 or IPv6 address")
+	}
 	if req.MaxVMs == 0 {
 		req.MaxVMs = 10
 	}
@@ -173,13 +228,44 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		req.SSHUser = "anvil"
 	}
 	if req.TotalVCPU < 1 || req.TotalMemoryMB < 1 || req.TotalDiskGB < 1 || req.MaxVMs < 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "node capacities and max_vms must be positive"})
+		return errors.New("node capacities and max_vms must be positive")
+	}
+	if req.TotalVCPU > math.MaxInt32 || req.TotalMemoryMB > math.MaxInt32 ||
+		req.TotalDiskGB > math.MaxInt32 || req.MaxVMs > math.MaxInt32 {
+		return errors.New("node capacities and max_vms are too large")
+	}
+	if req.SSHPort < 1 || req.SSHPort > 65535 {
+		return errors.New("ssh_port must be between 1 and 65535")
+	}
+	if req.APIEndpoint != "" {
+		endpoint, err := url.ParseRequestURI(req.APIEndpoint)
+		if err != nil || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil {
+			return errors.New("api_endpoint must be an absolute HTTP or HTTPS URL without credentials")
+		}
+	}
+	return nil
+}
+
+// Create adds a new VM node
+// POST /api/v1/admin/nodes
+func (h *NodeHandler) Create(c *gin.Context) {
+	if !h.ready(c) {
+		return
+	}
+	var req CreateNodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if err := validateCreateNodeRequest(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	nodeID := uuid.New()
 
-	_, err := h.db.Pool.Exec(c.Request.Context(), `
+	result, err := h.db.Pool.Exec(c.Request.Context(), `
 		INSERT INTO vm_nodes (
 			id, name, hostname, ip_address, total_vcpu, total_memory_mb,
 			total_disk_gb, max_vms, region, provider, ssh_user, ssh_port,
@@ -188,7 +274,16 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	`, nodeID, req.Name, req.Hostname, req.IPAddress, req.TotalVCPU, req.TotalMemoryMB,
 		req.TotalDiskGB, req.MaxVMs, req.Region, req.Provider, req.SSHUser, req.SSHPort, req.APIEndpoint)
 	if err != nil {
-		h.logger.Error("failed to create node", zap.Error(err))
+		if postgresErrorCode(err) == "23505" {
+			c.JSON(http.StatusConflict, gin.H{"error": "a node with this name already exists"})
+			return
+		}
+		h.logError("failed to create node", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create node"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logError("node insert affected an unexpected number of rows", zap.Int64("rows_affected", result.RowsAffected()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create node"})
 		return
 	}
@@ -202,7 +297,14 @@ func (h *NodeHandler) Create(c *gin.Context) {
 // UpdateNode updates a node
 // PUT /api/v1/admin/nodes/:id
 func (h *NodeHandler) Update(c *gin.Context) {
-	nodeID := c.Param("id")
+	if !h.ready(c) {
+		return
+	}
+	nodeID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid node ID"})
+		return
+	}
 
 	var req struct {
 		Status        *string `json:"status"`
@@ -235,8 +337,45 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "node capacities and max_vms must be positive"})
 		return
 	}
+	if (req.MaxVMs != nil && *req.MaxVMs > math.MaxInt32) ||
+		(req.TotalVCPU != nil && *req.TotalVCPU > math.MaxInt32) ||
+		(req.TotalMemoryMB != nil && *req.TotalMemoryMB > math.MaxInt32) ||
+		(req.TotalDiskGB != nil && *req.TotalDiskGB > math.MaxInt32) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node capacities and max_vms are too large"})
+		return
+	}
 
-	result, err := h.db.Pool.Exec(c.Request.Context(), `
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		h.logError("failed to begin node update", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update node"})
+		return
+	}
+	defer func() { _ = tx.Rollback(c.Request.Context()) }()
+
+	var usedVCPU, usedMemoryMB, usedDiskGB, activeVMs int
+	err = tx.QueryRow(c.Request.Context(), `
+		SELECT used_vcpu, used_memory_mb, used_disk_gb, active_vms
+		FROM vm_nodes WHERE id = $1 FOR UPDATE
+	`, nodeID).Scan(&usedVCPU, &usedMemoryMB, &usedDiskGB, &activeVMs)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+		return
+	}
+	if err != nil {
+		h.logError("failed to lock node for update", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update node"})
+		return
+	}
+	if (req.MaxVMs != nil && *req.MaxVMs < activeVMs) ||
+		(req.TotalVCPU != nil && *req.TotalVCPU < usedVCPU) ||
+		(req.TotalMemoryMB != nil && *req.TotalMemoryMB < usedMemoryMB) ||
+		(req.TotalDiskGB != nil && *req.TotalDiskGB < usedDiskGB) {
+		c.JSON(http.StatusConflict, gin.H{"error": "node capacity cannot be reduced below current usage"})
+		return
+	}
+
+	result, err := tx.Exec(c.Request.Context(), `
 		UPDATE vm_nodes SET
 			status = COALESCE($1, status),
 			max_vms = COALESCE($2, max_vms),
@@ -247,12 +386,18 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		WHERE id = $6
 	`, req.Status, req.MaxVMs, req.TotalVCPU, req.TotalMemoryMB, req.TotalDiskGB, nodeID)
 	if err != nil {
-		h.logger.Error("failed to update node", zap.Error(err))
+		h.logError("failed to update node", zap.String("node_id", nodeID.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update node"})
 		return
 	}
-	if result.RowsAffected() == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+	if result.RowsAffected() != 1 {
+		h.logError("node update affected an unexpected number of rows", zap.String("node_id", nodeID.String()), zap.Int64("rows_affected", result.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update node"})
+		return
+	}
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		h.logError("failed to commit node update", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update node"})
 		return
 	}
 
@@ -262,26 +407,71 @@ func (h *NodeHandler) Update(c *gin.Context) {
 // DeleteNode removes a node
 // DELETE /api/v1/admin/nodes/:id
 func (h *NodeHandler) Delete(c *gin.Context) {
-	nodeID := c.Param("id")
+	if !h.ready(c) {
+		return
+	}
+	nodeID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid node ID"})
+		return
+	}
 
-	// Check if node has active VMs
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		h.logError("failed to begin node deletion", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete node"})
+		return
+	}
+	defer func() { _ = tx.Rollback(c.Request.Context()) }()
+
 	var activeVMs int
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM vm_instances WHERE node_id = $1 AND status IN ('running', 'starting')`,
-		nodeID).Scan(&activeVMs)
+	err = tx.QueryRow(c.Request.Context(),
+		`SELECT active_vms FROM vm_nodes WHERE id = $1 FOR UPDATE`, nodeID,
+	).Scan(&activeVMs)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+		return
+	}
+	if err != nil {
+		h.logError("failed to lock node for deletion", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete node"})
+		return
+	}
 
-	if activeVMs > 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":      "cannot delete node with active VMs",
-			"active_vms": activeVMs,
+	var referencedVMs int
+	if err := tx.QueryRow(c.Request.Context(),
+		`SELECT COUNT(*) FROM vm_instances WHERE node_id = $1`, nodeID,
+	).Scan(&referencedVMs); err != nil {
+		h.logError("failed to inspect node instances", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete node"})
+		return
+	}
+	if activeVMs > 0 || referencedVMs > 0 {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":          "cannot delete node with VM allocations",
+			"active_vms":     activeVMs,
+			"referenced_vms": referencedVMs,
 		})
 		return
 	}
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`DELETE FROM vm_nodes WHERE id = $1`, nodeID)
+	result, err := tx.Exec(c.Request.Context(), `DELETE FROM vm_nodes WHERE id = $1`, nodeID)
 	if err != nil {
-		h.logger.Error("failed to delete node", zap.Error(err))
+		if postgresErrorCode(err) == "23503" {
+			c.JSON(http.StatusConflict, gin.H{"error": "node is still referenced by infrastructure records"})
+			return
+		}
+		h.logError("failed to delete node", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete node"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logError("node deletion affected an unexpected number of rows", zap.String("node_id", nodeID.String()), zap.Int64("rows_affected", result.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete node"})
+		return
+	}
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		h.logError("failed to commit node deletion", zap.String("node_id", nodeID.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete node"})
 		return
 	}
@@ -292,6 +482,9 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 // Heartbeat updates a node's heartbeat timestamp
 // POST /api/v1/nodes/heartbeat
 func (h *NodeHandler) Heartbeat(c *gin.Context) {
+	if !h.ready(c) {
+		return
+	}
 	var req struct {
 		NodeID       string `json:"node_id" binding:"required"`
 		UsedVCPU     int    `json:"used_vcpu"`
@@ -302,8 +495,21 @@ func (h *NodeHandler) Heartbeat(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	nodeID, err := uuid.Parse(req.NodeID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid node ID"})
+		return
+	}
+	if req.UsedVCPU < 0 || req.UsedMemoryMB < 0 || req.ActiveVMs < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node usage values cannot be negative"})
+		return
+	}
+	if req.UsedVCPU > math.MaxInt32 || req.UsedMemoryMB > math.MaxInt32 || req.ActiveVMs > math.MaxInt32 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "node usage values are too large"})
+		return
+	}
 
-	_, err := h.db.Pool.Exec(c.Request.Context(), `
+	result, err := h.db.Pool.Exec(c.Request.Context(), `
 		UPDATE vm_nodes SET
 			used_vcpu = $1,
 			used_memory_mb = $2,
@@ -311,9 +517,18 @@ func (h *NodeHandler) Heartbeat(c *gin.Context) {
 			last_heartbeat = NOW(),
 			status = 'online'
 		WHERE id = $4
-	`, req.UsedVCPU, req.UsedMemoryMB, req.ActiveVMs, req.NodeID)
+	`, req.UsedVCPU, req.UsedMemoryMB, req.ActiveVMs, nodeID)
 	if err != nil {
-		h.logger.Error("failed to update heartbeat", zap.Error(err))
+		h.logError("failed to update heartbeat", zap.String("node_id", nodeID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update heartbeat"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "node not found"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logError("heartbeat affected an unexpected number of rows", zap.String("node_id", nodeID.String()), zap.Int64("rows_affected", result.RowsAffected()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update heartbeat"})
 		return
 	}
@@ -324,6 +539,9 @@ func (h *NodeHandler) Heartbeat(c *gin.Context) {
 // GetInfrastructureStats returns overall infrastructure statistics
 // GET /api/v1/admin/infrastructure/stats
 func (h *NodeHandler) GetInfrastructureStats(c *gin.Context) {
+	if !h.ready(c) {
+		return
+	}
 	var stats struct {
 		TotalNodes     int
 		OnlineNodes    int
@@ -337,22 +555,28 @@ func (h *NodeHandler) GetInfrastructureStats(c *gin.Context) {
 		PendingUploads int
 	}
 
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM vm_nodes`).Scan(&stats.TotalNodes)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM vm_nodes WHERE status = 'online'`).Scan(&stats.OnlineNodes)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COALESCE(SUM(total_vcpu), 0), COALESCE(SUM(used_vcpu), 0) FROM vm_nodes`).Scan(&stats.TotalVCPU, &stats.UsedVCPU)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COALESCE(SUM(total_memory_mb), 0) / 1024, COALESCE(SUM(used_memory_mb), 0) / 1024 FROM vm_nodes`).Scan(&stats.TotalMemoryGB, &stats.UsedMemoryGB)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM vm_instances`).Scan(&stats.TotalVMs)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM vm_instances WHERE status = 'running'`).Scan(&stats.RunningVMs)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM vm_templates WHERE is_active = true`).Scan(&stats.VMTemplates)
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM uploads WHERE status IN ('pending', 'uploading', 'processing')`).Scan(&stats.PendingUploads)
+	err := h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT
+			(SELECT COUNT(*) FROM vm_nodes),
+			(SELECT COUNT(*) FROM vm_nodes WHERE status = 'online'),
+			(SELECT COALESCE(SUM(total_vcpu), 0) FROM vm_nodes),
+			(SELECT COALESCE(SUM(used_vcpu), 0) FROM vm_nodes),
+			(SELECT COALESCE(SUM(total_memory_mb), 0) / 1024 FROM vm_nodes),
+			(SELECT COALESCE(SUM(used_memory_mb), 0) / 1024 FROM vm_nodes),
+			(SELECT COUNT(*) FROM instances i JOIN challenges c ON c.id = i.challenge_id WHERE c.resource_type = 'vm'),
+			(SELECT COUNT(*) FROM instances i JOIN challenges c ON c.id = i.challenge_id WHERE c.resource_type = 'vm' AND i.status = 'running'),
+			(SELECT COUNT(*) FROM vm_templates WHERE is_active = true),
+			(SELECT COUNT(*) FROM uploads WHERE status IN ('pending', 'uploading', 'processing'))
+	`).Scan(
+		&stats.TotalNodes, &stats.OnlineNodes, &stats.TotalVCPU, &stats.UsedVCPU,
+		&stats.TotalMemoryGB, &stats.UsedMemoryGB, &stats.TotalVMs, &stats.RunningVMs,
+		&stats.VMTemplates, &stats.PendingUploads,
+	)
+	if err != nil {
+		h.logError("failed to load infrastructure stats", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch infrastructure stats"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"nodes": gin.H{

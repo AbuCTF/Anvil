@@ -15,9 +15,9 @@
 		<div>
 			<div class="flex items-center gap-2 mb-1.5 text-xs leading-none">
 				<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.color};"></span>
-				<span class="text-stone-300 truncate" title={c.name}>{c.name}</span>
-				<span class="text-stone-600 tabular-nums">· {c.segments.length}</span>
-				<span class="ml-auto font-semibold tabular-nums text-stone-200">{c.total}</span>
+				<span class="optical-label text-stone-300 truncate" title={c.name}>{c.name}</span>
+				<span class="optical-label text-stone-600 tabular-nums">· {c.segments.length}</span>
+				<span class="optical-label ml-auto font-semibold tabular-nums text-stone-200">{c.total}</span>
 			</div>
 			<div
 				class="flex h-2 items-stretch gap-px overflow-hidden rounded-full"

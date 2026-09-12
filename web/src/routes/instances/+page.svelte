@@ -5,6 +5,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 
 	interface Instance {
 		id: string;
@@ -17,11 +18,15 @@
 		expires_at: number;
 		extensions_used: number;
 		max_extensions: number;
+		reset_count: number;
+		max_resets: number;
 	}
 
 	let instances: Instance[] = [];
 	let loading = true;
 	let error = '';
+	let actionError = '';
+	let copiedKey = '';
 	let actionLoading: Record<string, string> = {};
 
 	let refreshInterval: ReturnType<typeof setInterval>;
@@ -43,7 +48,9 @@
 			instances = response.instances || [];
 			error = '';
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load instances';
+			const message = e instanceof Error ? e.message : 'Failed to load instances';
+			if (instances.length === 0) error = message;
+			else actionError = `Unable to refresh instances: ${message}`;
 		} finally {
 			loading = false;
 		}
@@ -51,6 +58,7 @@
 
 	async function extendInstance(instanceId: string) {
 		actionLoading[instanceId] = 'extending';
+		actionError = '';
 		try {
 			const result = await api.extendInstance(instanceId);
 			const instance = instances.find(i => i.id === instanceId);
@@ -60,7 +68,7 @@
 				instances = [...instances];
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to extend instance';
+			actionError = e instanceof Error ? e.message : 'Failed to extend instance';
 		} finally {
 			delete actionLoading[instanceId];
 			actionLoading = { ...actionLoading };
@@ -69,28 +77,42 @@
 
 	async function stopInstance(instanceId: string) {
 		actionLoading[instanceId] = 'stopping';
+		actionError = '';
 		try {
 			await api.stopInstance(instanceId);
 			instances = instances.filter(i => i.id !== instanceId);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to stop instance';
+			actionError = e instanceof Error ? e.message : 'Failed to stop instance';
 		} finally {
 			delete actionLoading[instanceId];
 			actionLoading = { ...actionLoading };
 		}
 	}
 
-	async function revertInstance(instanceId: string, challengeSlug: string) {
+	async function revertInstance(instanceId: string) {
 		actionLoading[instanceId] = 'reverting';
+		actionError = '';
 		try {
-			await api.stopInstance(instanceId);
-			await api.createInstance(challengeSlug);
+			await api.revertInstance(instanceId);
 			await loadInstances();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to revert instance';
+			actionError = e instanceof Error ? e.message : 'Failed to revert instance';
+			await loadInstances();
 		} finally {
 			delete actionLoading[instanceId];
 			actionLoading = { ...actionLoading };
+		}
+	}
+
+	async function copyText(value: string) {
+		try {
+			await navigator.clipboard.writeText(value);
+			copiedKey = value;
+			setTimeout(() => {
+				if (copiedKey === value) copiedKey = '';
+			}, 2000);
+		} catch (e) {
+			actionError = e instanceof Error ? e.message : 'Failed to copy to clipboard';
 		}
 	}
 
@@ -160,6 +182,18 @@
 		</a>
 	</PageHeader>
 
+	{#if actionError && !loading}
+		<div class="mb-4 border border-down/30 bg-down/5 rounded-lg px-4 py-3 flex items-start justify-between gap-3" aria-live="polite">
+			<div class="flex items-start gap-2 min-w-0">
+				<Icon icon="mdi:alert-circle-outline" class="w-4 h-4 text-down shrink-0 mt-0.5" />
+				<p class="text-down text-sm">{actionError}</p>
+			</div>
+			<button on:click={() => actionError = ''} class="text-stone-500 hover:text-stone-200" aria-label="Dismiss error">
+				<Icon icon="mdi:close" class="w-4 h-4" />
+			</button>
+		</div>
+	{/if}
+
 	{#if loading}
 		<div class="flex items-center justify-center py-16">
 			<Icon icon="mdi:loading" class="w-6 h-6 text-stone-500 animate-spin" />
@@ -191,12 +225,15 @@
 			{#each instances as instance (instance.id)}
 				{@const expired = instance.expires_at <= Math.floor(Date.now() / 1000)}
 				{@const busy = !!actionLoading[instance.id]}
+				{@const resetCount = instance.reset_count ?? 0}
+				{@const maxResets = instance.max_resets ?? 3}
+				{@const resetLimitReached = resetCount >= maxResets}
 				<Card bodyClass="p-0">
 					<div slot="header" class="flex items-center gap-2.5 min-w-0 leading-none">
 						<span class="w-2 h-2 rounded-full shrink-0 {statusDot(instance.status)}"></span>
 						<a
 							href="/challenges/{instance.challenge_slug}"
-							class="text-stone-200 font-medium truncate hover:text-amber-400 transition-colors"
+							class="optical-label text-stone-200 font-medium truncate hover:text-amber-400 transition-colors"
 						>
 							{instance.challenge_name}
 						</a>
@@ -206,17 +243,18 @@
 					<div class="p-4 sm:p-5 space-y-4">
 						<!-- Target -->
 						<div class="flex items-center justify-between gap-3">
-							<span class="text-stone-500 text-xs uppercase tracking-wide shrink-0">Target</span>
+							<span class="metadata-label text-stone-500 shrink-0">Target</span>
 							<div class="flex items-center gap-1.5 min-w-0">
 								<code class="min-w-0 break-all px-2.5 py-1.5 bg-stone-950/60 text-stone-300 border border-stone-800 rounded-md font-mono text-sm tabular-nums">
 									{instance.ip_address}
 								</code>
 								<button
-									on:click={() => navigator.clipboard.writeText(instance.ip_address)}
+									on:click={() => copyText(instance.ip_address)}
 									class="p-1.5 text-stone-600 hover:text-stone-300 transition-colors shrink-0"
 									title="Copy"
+									aria-label="Copy target address"
 								>
-									<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
+									<Icon icon={copiedKey === instance.ip_address ? 'mdi:check' : 'mdi:content-copy'} class="w-3.5 h-3.5" />
 								</button>
 							</div>
 						</div>
@@ -224,7 +262,7 @@
 						<!-- Connect -->
 						{#if instance.ports && Object.keys(instance.ports).length > 0}
 							<div>
-								<span class="text-stone-500 text-xs uppercase tracking-wide block mb-2">Connect</span>
+								<span class="metadata-label text-stone-500 block mb-2">Connect</span>
 								<div class="space-y-1.5">
 									{#each Object.entries(instance.ports) as [portKey]}
 										<div class="flex items-center gap-1.5">
@@ -243,11 +281,12 @@
 												</code>
 											{/if}
 											<button
-												on:click={() => navigator.clipboard.writeText(getConnectionCmd(instance.ip_address, portKey))}
+												on:click={() => copyText(getConnectionCmd(instance.ip_address, portKey))}
 												class="p-1.5 text-stone-600 hover:text-stone-300 transition-colors shrink-0"
 												title="Copy"
+												aria-label="Copy connection command"
 											>
-												<Icon icon="mdi:content-copy" class="w-3.5 h-3.5" />
+												<Icon icon={copiedKey === getConnectionCmd(instance.ip_address, portKey) ? 'mdi:check' : 'mdi:content-copy'} class="w-3.5 h-3.5" />
 											</button>
 										</div>
 									{/each}
@@ -258,9 +297,9 @@
 						<!-- Stats -->
 						<div class="grid grid-cols-2 gap-3 pt-1">
 							<div class="p-3 bg-stone-950/50 border border-stone-800 rounded-md">
-								<div class="flex items-center gap-1.5 text-stone-500 text-xs leading-none uppercase tracking-wide mb-1.5">
-									<Icon icon="mdi:clock-outline" class="w-3 h-3 shrink-0" />
-									<span>Remaining</span>
+								<div class="flex items-center gap-1.5 text-stone-500 mb-1.5">
+									<OpticalIcon icon="mdi:clock-outline" size={12} box={12} />
+									<span class="optical-label metadata-label">Remaining</span>
 								</div>
 								<div class="font-mono tabular-nums text-lg {expired ? 'text-down' : 'text-amber-500/90'}">
 									{formatTimeRemaining(instance.expires_at)}
@@ -268,9 +307,9 @@
 							</div>
 
 							<div class="p-3 bg-stone-950/50 border border-stone-800 rounded-md">
-								<div class="flex items-center gap-1.5 text-stone-500 text-xs leading-none uppercase tracking-wide mb-1.5">
-									<Icon icon="mdi:refresh" class="w-3 h-3 shrink-0" />
-									<span>Extensions</span>
+								<div class="flex items-center gap-1.5 text-stone-500 mb-1.5">
+									<OpticalIcon icon="mdi:refresh" size={12} box={12} />
+									<span class="optical-label metadata-label">Extensions</span>
 								</div>
 								<div class="font-mono tabular-nums text-lg text-stone-100">
 									{instance.extensions_used} / {instance.max_extensions}
@@ -294,8 +333,10 @@
 							<span>Extend</span>
 						</button>
 						<button
-							on:click={() => revertInstance(instance.id, instance.challenge_slug)}
-							disabled={busy}
+							on:click={() => revertInstance(instance.id)}
+							disabled={busy || resetLimitReached}
+							title={resetLimitReached ? `Reset limit reached (${resetCount}/${maxResets})` : 'Revert instance'}
+							aria-label={resetLimitReached ? `Reset limit reached (${resetCount}/${maxResets})` : 'Revert instance'}
 							class="{btnBase} {btnNeutral}"
 						>
 							{#if actionLoading[instance.id] === 'reverting'}

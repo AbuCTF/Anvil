@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -75,21 +76,27 @@ type TeamResponse struct {
 	TeamName string `json:"team_name"`
 }
 
+const maxAuthRequestBytes = 16 << 10
+
 // Register handles user registration
 func (h *AuthHandler) Register(c *gin.Context) {
-	// Check registration mode
-	var regMode string
-	err := h.db.Pool.QueryRow(c.Request.Context(),
-		"SELECT value::text FROM platform_settings WHERE key = 'registration_mode'",
-	).Scan(&regMode)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	regMode, err := h.registrationMode(c.Request.Context())
 	if err != nil {
-		regMode = "\"open\"" // Default to open
+		h.logger.Error("Failed to load registration mode", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Registration is temporarily unavailable"})
+		return
 	}
-	regMode = strings.Trim(regMode, "\"")
 
 	if regMode == "disabled" {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": "Registration is currently disabled",
+		})
+		return
+	}
+	if regMode == "token" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Registration requires a team token",
 		})
 		return
 	}
@@ -100,6 +107,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			"error":   "Invalid request body",
 			"details": err.Error(),
 		})
+		return
+	}
+	if len([]byte(req.Password)) > 72 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password must be at most 72 bytes"})
 		return
 	}
 
@@ -186,8 +197,9 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	).Scan(&userID)
 
 	if err != nil {
-		if strings.Contains(err.Error(), "duplicate key") {
-			if strings.Contains(err.Error(), "username") {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			if strings.Contains(pgErr.ConstraintName, "username") {
 				c.JSON(http.StatusConflict, gin.H{
 					"error": "Username already taken",
 				})
@@ -265,13 +277,49 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	})
 }
 
+func (h *AuthHandler) registrationMode(ctx context.Context) (string, error) {
+	fallback := "open"
+	if h.config != nil && strings.TrimSpace(h.config.Platform.RegistrationMode) != "" {
+		fallback = strings.ToLower(strings.TrimSpace(h.config.Platform.RegistrationMode))
+	}
+
+	var mode string
+	err := h.db.Pool.QueryRow(ctx,
+		`SELECT value #>> '{}' FROM platform_settings WHERE key = 'registration_mode'`,
+	).Scan(&mode)
+	if errors.Is(err, pgx.ErrNoRows) {
+		mode = fallback
+	} else if err != nil {
+		return "", fmt.Errorf("query registration mode: %w", err)
+	}
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if !isRegistrationMode(mode) {
+		return "", fmt.Errorf("invalid registration mode %q", mode)
+	}
+	return mode, nil
+}
+
+func isRegistrationMode(mode string) bool {
+	switch mode {
+	case "open", "invite", "token", "disabled":
+		return true
+	default:
+		return false
+	}
+}
+
 // Login handles user login
 func (h *AuthHandler) Login(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Invalid request body",
 		})
+		return
+	}
+	if len([]byte(req.Password)) > 72 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
 
@@ -288,17 +336,15 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		req.Username,
 	).Scan(&userID, &username, &email, &passwordHash, &role, &status, &displayName, &totalScore)
 
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid credentials",
 		})
 		return
 	}
-
-	if status != "active" {
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": "Account is " + status,
-		})
+	if err != nil {
+		h.logger.Error("Failed to load account during login", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Login is temporarily unavailable"})
 		return
 	}
 
@@ -306,6 +352,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid credentials",
+		})
+		return
+	}
+	if status != "active" {
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Account is " + status,
 		})
 		return
 	}
@@ -320,7 +372,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	}
 
 	// Generate tokens
-	tokens, err := h.generateTokens(userID, username, role, "user")
+	tokens, err := h.generateTokens(c.Request.Context(), userID, username, role, "user")
 	if err != nil {
 		h.logger.Error("Failed to generate tokens", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -350,11 +402,16 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 // TokenAuth handles team token authentication
 func (h *AuthHandler) TokenAuth(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
 	var req TokenAuthRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Invalid request body",
 		})
+		return
+	}
+	if len(req.Token) > 255 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid team token"})
 		return
 	}
 
@@ -412,7 +469,12 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 	}
 
 	// Create session
-	sessionToken := generateSecureToken(32)
+	sessionToken, err := generateSecureToken(32)
+	if err != nil {
+		h.logger.Error("Failed to generate session token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session"})
+		return
+	}
 	sessionExpiry := time.Now().Add(24 * time.Hour)
 
 	var sessionID uuid.UUID
@@ -499,6 +561,7 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 
 // RefreshToken handles token refresh
 func (h *AuthHandler) RefreshToken(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
 	var req struct {
 		RefreshToken string `json:"refresh_token" binding:"required"`
 	}
@@ -506,6 +569,10 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Refresh token required",
 		})
+		return
+	}
+	if len(req.RefreshToken) > 512 {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid refresh token"})
 		return
 	}
 
@@ -536,10 +603,15 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		tokenHash,
 	).Scan(&userID, &expiresAt, &revoked)
 
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid refresh token",
 		})
+		return
+	}
+	if err != nil {
+		h.logger.Error("Failed to load refresh token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to refresh tokens"})
 		return
 	}
 
@@ -564,10 +636,15 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		userID,
 	).Scan(&username, &role, &status)
 
-	if err != nil {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "User not found",
 		})
+		return
+	}
+	if err != nil {
+		h.logger.Error("Failed to load user during token refresh", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to refresh tokens"})
 		return
 	}
 	if status != "active" {
@@ -647,8 +724,8 @@ type tokenPair struct {
 	refresh string
 }
 
-func (h *AuthHandler) generateTokens(userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
-	return h.generateTokensWithStore(context.Background(), h.db.Pool, userID, username, role, tokenType)
+func (h *AuthHandler) generateTokens(ctx context.Context, userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
+	return h.generateTokensWithStore(ctx, h.db.Pool, userID, username, role, tokenType)
 }
 
 type tokenStore interface {
@@ -676,7 +753,10 @@ func (h *AuthHandler) generateTokensWithStore(ctx context.Context, store tokenSt
 	}
 
 	// Generate refresh token
-	refreshToken := generateSecureToken(32)
+	refreshToken, err := generateSecureToken(32)
+	if err != nil {
+		return nil, fmt.Errorf("generate refresh token: %w", err)
+	}
 	refreshHash := hashToken(refreshToken)
 
 	// Store refresh token
@@ -706,10 +786,15 @@ func (h *AuthHandler) logAudit(c *gin.Context, userID uuid.UUID, action, entityT
 	}
 }
 
-func generateSecureToken(length int) string {
+func generateSecureToken(length int) (string, error) {
+	if length < 1 {
+		return "", errors.New("token length must be positive")
+	}
 	bytes := make([]byte, length)
-	rand.Read(bytes)
-	return hex.EncodeToString(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
 }
 
 func hashToken(token string) string {

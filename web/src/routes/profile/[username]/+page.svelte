@@ -11,6 +11,7 @@
 	import ProfileScoreChart from '$lib/components/ProfileScoreChart.svelte';
 	import CategoryBars from '$lib/components/CategoryBars.svelte';
 	import SolveTimeline from '$lib/components/SolveTimeline.svelte';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 
 	interface Solve {
 		name: string;
@@ -152,8 +153,8 @@
 		href="/scoreboard"
 		class="inline-flex items-center gap-1.5 text-sm text-stone-500 hover:text-stone-300 transition mb-6"
 	>
-		<Icon icon="mdi:arrow-left" class="w-3.5 h-3.5 shrink-0" />
-		<span class="leading-none">Scoreboard</span>
+		<OpticalIcon icon="mdi:arrow-left" size={14} box={14} />
+		<span class="optical-label leading-none">Scoreboard</span>
 	</a>
 
 	{#if loading}
@@ -185,7 +186,7 @@
 			<!-- Score over time -->
 			<div class="mb-6">
 				<Card title="Score over time">
-					<span slot="meta" class="text-stone-500 text-xs">since first solve</span>
+					<span slot="meta" class="metadata-label text-stone-500">since first solve</span>
 					<ProfileScoreChart points={scorePoints} />
 				</Card>
 			</div>
@@ -222,21 +223,21 @@
 							<div>
 								<div class="flex items-center gap-2 pb-2 mb-1 border-b border-stone-800 leading-none">
 									<span class="w-2 h-2 rounded-full shrink-0" style="background: {g.color};"></span>
-									<span class="text-sm font-medium text-stone-200 truncate">{g.name}</span>
-									<span class="text-stone-600 text-xs tabular-nums">· {g.items.length}</span>
-									<span class="ml-auto text-xs text-stone-500 tabular-nums">{g.total} pts</span>
+									<span class="optical-label text-sm font-medium text-stone-200 truncate">{g.name}</span>
+									<span class="optical-label text-stone-600 text-xs tabular-nums">· {g.items.length}</span>
+									<span class="optical-label ml-auto text-xs text-stone-500 tabular-nums">{g.total} pts</span>
 								</div>
-								<ul class="divide-y divide-stone-800/60">
-									{#each g.items as it}
-									<li class="flex items-center gap-2 py-1.5 text-sm leading-none">
-											<Icon icon="mdi:check" class="w-3.5 h-3.5 text-stone-600 shrink-0" />
+									<ul class="divide-y divide-stone-800/60">
+										{#each g.items as it}
+											<li class="flex items-center gap-2 py-1.5 text-sm leading-none">
+												<OpticalIcon icon="mdi:check" size={14} box={14} className="text-stone-600" />
 											<a
 												href="/challenges/{it.slug}"
-												class="text-stone-300 hover:text-stone-100 transition truncate">{it.name}</a
+												class="optical-label text-stone-300 hover:text-stone-100 transition truncate">{it.name}</a
 											>
 											<span class="ml-auto flex items-center gap-3 shrink-0 tabular-nums">
-												<span class="text-stone-600 text-xs">+{formatDur(it.rel)}</span>
-												<span class="text-stone-300 text-xs font-medium w-12 text-right">{it.points}</span>
+												<span class="optical-label text-stone-600 text-xs">+{formatDur(it.rel)}</span>
+												<span class="optical-label text-stone-300 text-xs font-medium w-12 text-right">{it.points}</span>
 											</span>
 										</li>
 									{/each}

@@ -199,6 +199,9 @@ func (s *Server) setupRouter() {
 				), instanceHandler.Create)
 				instances.GET("/:id", instanceHandler.Get)
 				instances.POST("/:id/extend", instanceHandler.Extend)
+				instances.POST("/:id/revert", middleware.RateLimitEndpoint(
+					s.config.RateLimit.InstanceStart,
+				), instanceHandler.Revert)
 				instances.POST("/:id/stop", instanceHandler.Stop)
 				instances.DELETE("/:id", instanceHandler.Delete)
 			}

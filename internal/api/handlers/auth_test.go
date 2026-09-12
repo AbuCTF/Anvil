@@ -17,3 +17,29 @@ func TestHashTokenIncludesSuffixBeyondFirst32Characters(t *testing.T) {
 		t.Fatal("hashToken() ignored token content after the first 32 characters")
 	}
 }
+
+func TestIsRegistrationMode(t *testing.T) {
+	for _, mode := range []string{"open", "invite", "token", "disabled"} {
+		if !isRegistrationMode(mode) {
+			t.Errorf("expected %q to be a valid registration mode", mode)
+		}
+	}
+	for _, mode := range []string{"", "enabled", "public", "OPEN"} {
+		if isRegistrationMode(mode) {
+			t.Errorf("expected %q to be rejected", mode)
+		}
+	}
+}
+
+func TestGenerateSecureToken(t *testing.T) {
+	token, err := generateSecureToken(32)
+	if err != nil {
+		t.Fatalf("generateSecureToken: %v", err)
+	}
+	if len(token) != 64 {
+		t.Fatalf("generated token length = %d, want 64 hex characters", len(token))
+	}
+	if _, err := generateSecureToken(0); err == nil {
+		t.Fatal("expected zero-length token request to fail")
+	}
+}

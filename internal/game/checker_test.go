@@ -2,6 +2,7 @@ package game
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -44,12 +45,21 @@ func TestExecCheckerNonZeroExit(t *testing.T) {
 }
 
 func TestExecCheckerTimeout(t *testing.T) {
-	script := writeChecker(t, "#!/bin/sh\nsleep 5\n")
+	marker := filepath.Join(t.TempDir(), "descendant-survived")
+	script := writeChecker(t, fmt.Sprintf("#!/bin/sh\n(sleep 0.4; touch %s) &\nwait\n", marker))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
+	started := time.Now()
 	res := execChecker{command: script}.Check(ctx, Target{}, "f")
 	if res.Status != models.SLADown {
 		t.Fatalf("expected DOWN on timeout, got %s", res.Status)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("checker timeout took %s; descendant likely retained the output pipe", elapsed)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("checker descendant survived cancellation: %v", err)
 	}
 }
 

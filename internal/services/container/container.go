@@ -6,18 +6,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
-	"github.com/docker/docker/api/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
 	"github.com/google/uuid"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
 )
@@ -31,6 +29,8 @@ type Service struct {
 	networkID string
 }
 
+const interContainerCommunicationOption = "com.docker.network.bridge.enable_icc"
+
 // NewService creates a new container service
 func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error) {
 	// Create Docker client
@@ -43,7 +43,7 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = cli.Ping(ctx)
+	_, err = cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Docker: %w", err)
 	}
@@ -68,7 +68,7 @@ func (s *Service) Status() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := s.client.Ping(ctx)
+	_, err := s.client.Ping(ctx, client.PingOptions{})
 	if err != nil {
 		return "disconnected"
 	}
@@ -78,31 +78,30 @@ func (s *Service) Status() string {
 // ensureNetwork creates the challenge network if it doesn't exist
 func (s *Service) ensureNetwork(ctx context.Context) error {
 	// Check if network exists
-	networks, err := s.client.NetworkList(ctx, types.NetworkListOptions{
-		Filters: filters.NewArgs(filters.Arg("name", s.config.NetworkName)),
+	networks, err := s.client.NetworkList(ctx, client.NetworkListOptions{
+		Filters: make(client.Filters).Add("name", s.config.NetworkName),
 	})
 	if err != nil {
 		return err
 	}
 
-	if len(networks) > 0 {
-		s.networkID = networks[0].ID
+	if len(networks.Items) > 0 {
+		s.networkID = networks.Items[0].ID
+		if networks.Items[0].Options[interContainerCommunicationOption] != "false" {
+			s.logger.Warn("Existing challenge network permits inter-container communication; recreate it to apply isolation",
+				zap.String("network", s.config.NetworkName),
+			)
+		}
 		s.logger.Info("Using existing network", zap.String("network", s.config.NetworkName))
 		return nil
 	}
 
 	// Create network
-	resp, err := s.client.NetworkCreate(ctx, s.config.NetworkName, types.NetworkCreate{
-		Driver: "bridge",
-		IPAM: &network.IPAM{
-			Config: []network.IPAMConfig{
-				{
-					Subnet: s.config.NetworkSubnet,
-				},
-			},
-		},
-		Labels: s.config.Labels,
-	})
+	createOptions, err := challengeNetworkCreateOptions(s.config)
+	if err != nil {
+		return err
+	}
+	resp, err := s.client.NetworkCreate(ctx, s.config.NetworkName, createOptions)
 	if err != nil {
 		return err
 	}
@@ -110,6 +109,27 @@ func (s *Service) ensureNetwork(ctx context.Context) error {
 	s.networkID = resp.ID
 	s.logger.Info("Created network", zap.String("network", s.config.NetworkName), zap.String("id", resp.ID))
 	return nil
+}
+
+func challengeNetworkCreateOptions(cfg config.ContainerConfig) (client.NetworkCreateOptions, error) {
+	subnet, err := netip.ParsePrefix(cfg.NetworkSubnet)
+	if err != nil {
+		return client.NetworkCreateOptions{}, fmt.Errorf("invalid container network subnet %q: %w", cfg.NetworkSubnet, err)
+	}
+	return client.NetworkCreateOptions{
+		Driver: "bridge",
+		IPAM: &network.IPAM{
+			Config: []network.IPAMConfig{
+				{
+					Subnet: subnet,
+				},
+			},
+		},
+		Options: map[string]string{
+			interContainerCommunicationOption: "false",
+		},
+		Labels: cfg.Labels,
+	}, nil
 }
 
 // CreateInstanceRequest contains the request to create a container instance
@@ -162,13 +182,16 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}
 
 	// Build exposed ports set
-	exposedPorts := make(nat.PortSet)
+	exposedPorts := make(network.PortSet)
 	for _, p := range req.ExposedPorts {
 		protocol := p.Protocol
 		if protocol == "" {
 			protocol = "tcp"
 		}
-		containerPort := nat.Port(fmt.Sprintf("%d/%s", p.Port, protocol))
+		containerPort, err := network.ParsePort(fmt.Sprintf("%d/%s", p.Port, protocol))
+		if err != nil {
+			return nil, fmt.Errorf("invalid exposed port: %w", err)
+		}
 		exposedPorts[containerPort] = struct{}{}
 	}
 
@@ -210,7 +233,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}
 	hostCfg := &container.HostConfig{
 		NetworkMode:  container.NetworkMode(s.config.NetworkName),
-		PortBindings: nat.PortMap{},
+		PortBindings: network.PortMap{},
 		Resources: container.Resources{
 			NanoCPUs: cpuLimit,
 			Memory:   memoryLimit,
@@ -222,7 +245,13 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}
 
 	// Create container directly on the challenge network
-	resp, err := s.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, platform, containerName)
+	createOptions := client.ContainerCreateOptions{
+		Config:     containerCfg,
+		HostConfig: hostCfg,
+		Platform:   platform,
+		Name:       containerName,
+	}
+	resp, err := s.client.ContainerCreate(ctx, createOptions)
 	if err != nil && platform != nil && strings.Contains(err.Error(), "does not provide the specified platform") {
 		// The local image does not have the requested platform variant (e.g. the
 		// image is amd64-only but arm64 was requested).  Retry without a platform
@@ -230,15 +259,16 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		// using QEMU/binfmt emulation when necessary.
 		s.logger.Warn("ContainerCreate with platform spec failed; retrying without platform constraint",
 			zap.String("image", image), zap.String("platform", req.Platform), zap.Error(err))
-		resp, err = s.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
+		createOptions.Platform = nil
+		resp, err = s.client.ContainerCreate(ctx, createOptions)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
 
 	// Start container
-	if err := s.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		s.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+	if _, err := s.client.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = s.client.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{Force: true})
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
 
@@ -246,33 +276,33 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	ipAddress := ""
 	for i := 0; i < 10; i++ {
 		time.Sleep(300 * time.Millisecond)
-		inspect, err := s.client.ContainerInspect(ctx, resp.ID)
+		inspectResult, err := s.client.ContainerInspect(ctx, resp.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			s.logger.Warn("Failed to inspect container", zap.Error(err))
 			break
 		}
+		inspect := inspectResult.Container
 		if inspect.NetworkSettings != nil {
 			// Log all networks on first attempt for debugging
 			if i == 0 {
 				netNames := make([]string, 0)
 				for k, v := range inspect.NetworkSettings.Networks {
-					netNames = append(netNames, fmt.Sprintf("%s=%s", k, v.IPAddress))
+					netNames = append(netNames, fmt.Sprintf("%s=%s", k, v.IPAddress.String()))
 				}
 				s.logger.Info("Container inspect networks",
 					zap.String("container", resp.ID[:12]),
 					zap.Strings("network_ips", netNames),
-					zap.String("global_ip", inspect.NetworkSettings.IPAddress),
 				)
 			}
 			// Try exact network name match
-			if net, ok := inspect.NetworkSettings.Networks[s.config.NetworkName]; ok && net.IPAddress != "" {
-				ipAddress = net.IPAddress
+			if net, ok := inspect.NetworkSettings.Networks[s.config.NetworkName]; ok && net.IPAddress.IsValid() {
+				ipAddress = net.IPAddress.String()
 				break
 			}
 			// Fallback: grab any available IP
 			for _, net := range inspect.NetworkSettings.Networks {
-				if net.IPAddress != "" {
-					ipAddress = net.IPAddress
+				if net.IPAddress.IsValid() {
+					ipAddress = net.IPAddress.String()
 					break
 				}
 			}
@@ -300,38 +330,41 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 // StopInstance stops and removes a container.
 func (s *Service) StopInstance(ctx context.Context, containerID string) error {
 	timeout := 10 // seconds
-	if err := s.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+	if _, err := s.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 		s.logger.Warn("ContainerStop returned error; force-removing anyway",
 			zap.String("container", containerID), zap.Error(err))
 	}
-	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true, RemoveVolumes: true})
+	_, err := s.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	return err
 }
 
 // StartInstance starts a stopped container
 func (s *Service) StartInstance(ctx context.Context, containerID string) error {
-	return s.client.ContainerStart(ctx, containerID, container.StartOptions{})
+	_, err := s.client.ContainerStart(ctx, containerID, client.ContainerStartOptions{})
+	return err
 }
 
 // RemoveInstance removes a container
 func (s *Service) RemoveInstance(ctx context.Context, containerID string) error {
-	return s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{
+	_, err := s.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{
 		Force:         true,
 		RemoveVolumes: true,
 	})
+	return err
 }
 
 // GetInstanceStatus gets the status of a container
 func (s *Service) GetInstanceStatus(ctx context.Context, containerID string) (string, error) {
-	inspect, err := s.client.ContainerInspect(ctx, containerID)
+	inspect, err := s.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", err
 	}
-	return inspect.State.Status, nil
+	return string(inspect.Container.State.Status), nil
 }
 
 // GetInstanceLogs gets the logs from a container
 func (s *Service) GetInstanceLogs(ctx context.Context, containerID string, tail int) (string, error) {
-	options := container.LogsOptions{
+	options := client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Tail:       fmt.Sprintf("%d", tail),
@@ -352,13 +385,12 @@ func (s *Service) GetInstanceLogs(ctx context.Context, containerID string, tail 
 }
 
 // ListInstances lists all Anvil-managed containers
-func (s *Service) ListInstances(ctx context.Context) ([]types.Container, error) {
-	return s.client.ContainerList(ctx, container.ListOptions{
-		All: true,
-		Filters: filters.NewArgs(
-			filters.Arg("label", "managed-by=anvil"),
-		),
+func (s *Service) ListInstances(ctx context.Context) ([]container.Summary, error) {
+	result, err := s.client.ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: make(client.Filters).Add("label", "managed-by=anvil"),
 	})
+	return result.Items, err
 }
 
 // Cleanup removes all expired or orphaned containers
@@ -395,7 +427,7 @@ func (s *Service) cleanupLoop() {
 func (s *Service) pullImage(ctx context.Context, image string, platform string) error {
 	// Check if image exists locally
 	imageExists := false
-	_, _, err := s.client.ImageInspectWithRaw(ctx, image)
+	_, err := s.client.ImageInspect(ctx, image)
 	if err == nil {
 		imageExists = true
 		// If a specific platform is requested, always re-pull to ensure correct arch
@@ -408,8 +440,9 @@ func (s *Service) pullImage(ctx context.Context, image string, platform string) 
 
 	// Try to load registry auth from Docker config
 	authStr := getRegistryAuth(image)
-	pullOpts := types.ImagePullOptions{
-		Platform: platform, // e.g. "linux/amd64" — empty string means native arch
+	pullOpts := client.ImagePullOptions{}
+	if parsed := parsePlatform(platform); parsed != nil {
+		pullOpts.Platforms = []ocispec.Platform{*parsed}
 	}
 	if authStr != "" {
 		pullOpts.RegistryAuth = authStr
@@ -430,7 +463,7 @@ func (s *Service) pullImage(ctx context.Context, image string, platform string) 
 			// the registry offers (the daemon will use QEMU/binfmt emulation if needed).
 			s.logger.Warn("Platform-specific image pull failed; retrying without platform constraint",
 				zap.String("image", image), zap.String("platform", platform), zap.Error(err))
-			fallbackOpts := types.ImagePullOptions{}
+			fallbackOpts := client.ImagePullOptions{}
 			if authStr != "" {
 				fallbackOpts.RegistryAuth = authStr
 			}
@@ -447,6 +480,21 @@ func (s *Service) pullImage(ctx context.Context, image string, platform string) 
 	// Wait for pull to complete
 	_, err = io.Copy(io.Discard, reader)
 	return err
+}
+
+func parsePlatform(value string) *ocispec.Platform {
+	if value == "" {
+		return nil
+	}
+	parts := strings.SplitN(value, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return nil
+	}
+	platform := &ocispec.Platform{OS: parts[0], Architecture: parts[1]}
+	if len(parts) == 3 {
+		platform.Variant = parts[2]
+	}
+	return platform
 }
 
 // getRegistryAuth reads auth from ~/.docker/config.json for the image's registry
@@ -541,28 +589,28 @@ func parseMemoryLimit(limit string) (int64, error) {
 
 // HealthCheck checks container health
 func (s *Service) HealthCheck(ctx context.Context, containerID string) (bool, error) {
-	inspect, err := s.client.ContainerInspect(ctx, containerID)
+	inspect, err := s.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return false, err
 	}
 
-	return inspect.State.Running, nil
+	return inspect.Container.State.Running, nil
 }
 
 // ExecInContainer executes a command in a container (for health checks)
 func (s *Service) ExecInContainer(ctx context.Context, containerID string, cmd []string) (string, error) {
-	execConfig := types.ExecConfig{
+	execConfig := client.ExecCreateOptions{
 		Cmd:          cmd,
 		AttachStdout: true,
 		AttachStderr: true,
 	}
 
-	execID, err := s.client.ContainerExecCreate(ctx, containerID, execConfig)
+	execID, err := s.client.ExecCreate(ctx, containerID, execConfig)
 	if err != nil {
 		return "", err
 	}
 
-	resp, err := s.client.ContainerExecAttach(ctx, execID.ID, types.ExecStartCheck{})
+	resp, err := s.client.ExecAttach(ctx, execID.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return "", err
 	}

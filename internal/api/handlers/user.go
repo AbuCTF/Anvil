@@ -1,13 +1,17 @@
 package handlers
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -27,7 +31,8 @@ func NewUserService(cfg *config.Config, db *database.DB, logger *zap.Logger) *Us
 type UserProfileResponse struct {
 	ID              string  `json:"id"`
 	Username        string  `json:"username"`
-	Email           string  `json:"email"`
+	Email           *string `json:"email,omitempty"`
+	DisplayName     *string `json:"display_name,omitempty"`
 	Role            string  `json:"role"`
 	TotalScore      int     `json:"total_score"`
 	Rank            int     `json:"rank"`
@@ -75,84 +80,152 @@ type SolveResponse struct {
 
 // GetProfile returns the current user's profile
 func (h *UserHandler) GetProfile(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	uid, ok := contextUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
-	// user_id is already a uuid.UUID from middleware
-	uid, ok := userID.(uuid.UUID)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid user id"})
-		return
-	}
-
-	// Get user data
 	var profile UserProfileResponse
 	var createdAt time.Time
-	var bio *string
 
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, username, email, role, total_score, bio, created_at
-		 FROM users WHERE id = $1`, uid).Scan(
-		&profile.ID, &profile.Username, &profile.Email, &profile.Role,
-		&profile.TotalScore, &bio, &createdAt,
+		`SELECT u.id,
+			u.username,
+			u.email,
+			u.display_name,
+			u.role,
+			COALESCE(u.total_score, 0),
+			u.bio,
+			u.created_at,
+			COALESCE((
+				SELECT ranked.position FROM (
+					SELECT candidate.id,
+						ROW_NUMBER() OVER (
+							ORDER BY COALESCE(candidate.total_score, 0) DESC,
+								(SELECT MAX(solved_at) FROM solves WHERE user_id = candidate.id) ASC NULLS LAST,
+								candidate.created_at ASC, candidate.id ASC
+						) AS position
+					FROM users candidate
+					WHERE candidate.role != 'admin' AND candidate.status = 'active'
+				) ranked WHERE ranked.id = u.id
+			), 0),
+			(SELECT COUNT(*) FROM solves s WHERE s.user_id = u.id),
+			(SELECT COUNT(DISTINCT f.challenge_id)
+			 FROM solves s
+			 JOIN flags f ON s.flag_id = f.id
+			 WHERE s.user_id = u.id)
+		 FROM users u
+		 WHERE u.id = $1`, uid).Scan(
+		&profile.ID,
+		&profile.Username,
+		&profile.Email,
+		&profile.DisplayName,
+		&profile.Role,
+		&profile.TotalScore,
+		&profile.Bio,
+		&createdAt,
+		&profile.Rank,
+		&profile.TotalSolves,
+		&profile.TotalChallenges,
 	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
 	if err != nil {
-		h.logger.Error("failed to get user", zap.Error(err))
+		h.logger.Error("failed to get user profile", zap.String("user_id", uid.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch profile"})
 		return
 	}
 
-	profile.Bio = bio
 	profile.JoinedAt = createdAt.Unix()
-
-	// Calculate rank
-	var rank int
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) + 1 FROM users WHERE total_score > $1 AND role != 'admin'`,
-		profile.TotalScore).Scan(&rank)
-	profile.Rank = rank
-
-	// Get solve counts
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM solves WHERE user_id = $1`, uid).Scan(&profile.TotalSolves)
-
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(DISTINCT f.challenge_id) FROM solves s
-		 JOIN flags f ON s.flag_id = f.id
-		 WHERE s.user_id = $1`, uid).Scan(&profile.TotalChallenges)
 
 	c.JSON(http.StatusOK, profile)
 }
 
 // UpdateProfileRequest represents the profile update request
 type UpdateProfileRequest struct {
-	Bio *string `json:"bio"`
+	DisplayName *string `json:"display_name"`
+	Bio         *string `json:"bio"`
+}
+
+const (
+	maxProfileRequestBytes = 16 << 10
+	maxDisplayNameRunes    = 100
+	maxBioRunes            = 2000
+)
+
+type normalizedProfileUpdate struct {
+	displayName    string
+	bio            string
+	setDisplayName bool
+	setBio         bool
+}
+
+func normalizeProfileUpdate(req UpdateProfileRequest) (normalizedProfileUpdate, error) {
+	update := normalizedProfileUpdate{
+		setDisplayName: req.DisplayName != nil,
+		setBio:         req.Bio != nil,
+	}
+	if !update.setDisplayName && !update.setBio {
+		return normalizedProfileUpdate{}, fmt.Errorf("at least one profile field is required")
+	}
+	if update.setDisplayName {
+		update.displayName = strings.TrimSpace(*req.DisplayName)
+		if utf8.RuneCountInString(update.displayName) > maxDisplayNameRunes {
+			return normalizedProfileUpdate{}, fmt.Errorf("display_name must be at most %d characters", maxDisplayNameRunes)
+		}
+	}
+	if update.setBio {
+		update.bio = strings.TrimSpace(*req.Bio)
+		if utf8.RuneCountInString(update.bio) > maxBioRunes {
+			return normalizedProfileUpdate{}, fmt.Errorf("bio must be at most %d characters", maxBioRunes)
+		}
+	}
+	return update, nil
 }
 
 // UpdateProfile updates the current user's profile
 func (h *UserHandler) UpdateProfile(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	uid, ok := contextUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	uid := userID.(uuid.UUID)
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxProfileRequestBytes)
 	var req UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	update, err := normalizeProfileUpdate(req)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Update profile
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE users SET bio = COALESCE($1, bio), updated_at = NOW() WHERE id = $2`,
-		req.Bio, uid)
+	result, err := h.db.Pool.Exec(c.Request.Context(), `
+		UPDATE users
+		SET display_name = CASE WHEN $1 THEN NULLIF($2::text, '') ELSE display_name END,
+			bio = CASE WHEN $3 THEN NULLIF($4::text, '') ELSE bio END,
+			updated_at = NOW()
+		WHERE id = $5
+	`, update.setDisplayName, update.displayName, update.setBio, update.bio, uid)
 	if err != nil {
-		h.logger.Error("failed to update profile", zap.Error(err))
+		h.logger.Error("failed to update profile", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update profile"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logger.Error("profile update affected an unexpected number of rows",
+			zap.String("user_id", uid.String()),
+			zap.Int64("rows_affected", result.RowsAffected()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update profile"})
 		return
 	}
@@ -162,64 +235,93 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 
 // GetStats returns user statistics
 func (h *UserHandler) GetStats(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	uid, ok := contextUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	uid := userID.(uuid.UUID)
 
 	var stats UserStatsResponse
 	stats.SolvesByDifficulty = make(map[string]int)
 	stats.SolvesByCategory = make(map[string]int)
 
-	// Basic stats
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT total_score FROM users WHERE id = $1`, uid).Scan(&stats.TotalScore)
-
-	// Rank
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) + 1 FROM users WHERE total_score > $1 AND role != 'admin'`,
-		stats.TotalScore).Scan(&stats.Rank)
-
-	// Total solves
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM solves WHERE user_id = $1`, uid).Scan(&stats.TotalSolves)
-
-	// Total challenges solved
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(DISTINCT f.challenge_id) FROM solves s
-		 JOIN flags f ON s.flag_id = f.id WHERE s.user_id = $1`, uid).Scan(&stats.TotalChallenges)
-
-	// Total attempts
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*) FROM flag_attempts WHERE user_id = $1`, uid).Scan(&stats.TotalAttempts)
-
-	// Hints unlocked
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*), COALESCE(SUM(points_deducted), 0) FROM hint_unlocks WHERE user_id = $1`,
-		uid).Scan(&stats.HintsUnlocked, &stats.PointsSpentOnHints)
+	err := h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT COALESCE(u.total_score, 0),
+			COALESCE((
+				SELECT ranked.position FROM (
+					SELECT candidate.id,
+						ROW_NUMBER() OVER (
+							ORDER BY COALESCE(candidate.total_score, 0) DESC,
+								(SELECT MAX(solved_at) FROM solves WHERE user_id = candidate.id) ASC NULLS LAST,
+								candidate.created_at ASC, candidate.id ASC
+						) AS position
+					FROM users candidate
+					WHERE candidate.role != 'admin' AND candidate.status = 'active'
+				) ranked WHERE ranked.id = u.id
+			), 0),
+			(SELECT COUNT(*) FROM solves s WHERE s.user_id = u.id),
+			(SELECT COUNT(DISTINCT f.challenge_id)
+			 FROM solves s
+			 JOIN flags f ON s.flag_id = f.id
+			 WHERE s.user_id = u.id),
+			(SELECT COUNT(*) FROM flag_attempts a WHERE a.user_id = u.id),
+			(SELECT COUNT(*) FROM hint_unlocks hu WHERE hu.user_id = u.id),
+			(SELECT COALESCE(SUM(hu.points_deducted), 0) FROM hint_unlocks hu WHERE hu.user_id = u.id)
+		FROM users u
+		WHERE u.id = $1
+	`, uid).Scan(
+		&stats.TotalScore,
+		&stats.Rank,
+		&stats.TotalSolves,
+		&stats.TotalChallenges,
+		&stats.TotalAttempts,
+		&stats.HintsUnlocked,
+		&stats.PointsSpentOnHints,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to load user stats", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
+	}
 
 	// Solves by difficulty
-	rows, _ := h.db.Pool.Query(c.Request.Context(),
+	rows, err := h.db.Pool.Query(c.Request.Context(),
 		`SELECT c.difficulty, COUNT(DISTINCT c.id)
 		 FROM solves s
 		 JOIN flags f ON s.flag_id = f.id
 		 JOIN challenges c ON f.challenge_id = c.id
 		 WHERE s.user_id = $1
 		 GROUP BY c.difficulty`, uid)
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var diff string
-			var count int
-			rows.Scan(&diff, &count)
-			stats.SolvesByDifficulty[diff] = count
-		}
+	if err != nil {
+		h.logger.Error("failed to load solves by difficulty", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
 	}
+	for rows.Next() {
+		var difficulty string
+		var count int
+		if err := rows.Scan(&difficulty, &count); err != nil {
+			rows.Close()
+			h.logger.Error("failed to scan solves by difficulty", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+			return
+		}
+		stats.SolvesByDifficulty[difficulty] = count
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		h.logger.Error("failed while reading solves by difficulty", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
+	}
+	rows.Close()
 
 	// Solves by category
-	rows, _ = h.db.Pool.Query(c.Request.Context(),
+	rows, err = h.db.Pool.Query(c.Request.Context(),
 		`SELECT COALESCE(cat.name, 'Uncategorized'), COUNT(DISTINCT c.id)
 		 FROM solves s
 		 JOIN flags f ON s.flag_id = f.id
@@ -227,15 +329,29 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 		 LEFT JOIN categories cat ON c.category_id = cat.id
 		 WHERE s.user_id = $1
 		 GROUP BY cat.name`, uid)
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var cat string
-			var count int
-			rows.Scan(&cat, &count)
-			stats.SolvesByCategory[cat] = count
-		}
+	if err != nil {
+		h.logger.Error("failed to load solves by category", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
 	}
+	for rows.Next() {
+		var category string
+		var count int
+		if err := rows.Scan(&category, &count); err != nil {
+			rows.Close()
+			h.logger.Error("failed to scan solves by category", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+			return
+		}
+		stats.SolvesByCategory[category] = count
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		h.logger.Error("failed while reading solves by category", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
+	}
+	rows.Close()
 
 	// Recent activity
 	activityQuery := `
@@ -247,20 +363,34 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 		ORDER BY s.solved_at DESC
 		LIMIT 10
 	`
-	rows, _ = h.db.Pool.Query(c.Request.Context(), activityQuery, uid)
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var activity ActivityItem
-			var flagName string
-			var timestamp time.Time
-			rows.Scan(&activity.Type, &activity.ChallengeID, &activity.ChallengeName,
-				&flagName, &activity.Points, &timestamp)
-			activity.FlagName = &flagName
-			activity.Timestamp = timestamp.Unix()
-			stats.RecentActivity = append(stats.RecentActivity, activity)
-		}
+	rows, err = h.db.Pool.Query(c.Request.Context(), activityQuery, uid)
+	if err != nil {
+		h.logger.Error("failed to load recent user activity", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
 	}
+	for rows.Next() {
+		var activity ActivityItem
+		var flagName string
+		var timestamp time.Time
+		if err := rows.Scan(&activity.Type, &activity.ChallengeID, &activity.ChallengeName,
+			&flagName, &activity.Points, &timestamp); err != nil {
+			rows.Close()
+			h.logger.Error("failed to scan recent user activity", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+			return
+		}
+		activity.FlagName = &flagName
+		activity.Timestamp = timestamp.Unix()
+		stats.RecentActivity = append(stats.RecentActivity, activity)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		h.logger.Error("failed while reading recent user activity", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
+	}
+	rows.Close()
 
 	if stats.RecentActivity == nil {
 		stats.RecentActivity = []ActivityItem{}
@@ -271,12 +401,23 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 
 // GetSolves returns the user's solve history
 func (h *UserHandler) GetSolves(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
+	uid, ok := contextUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	uid := userID.(uuid.UUID)
+
+	var userExists bool
+	if err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, uid).Scan(&userExists); err != nil {
+		h.logger.Error("failed to check user before loading solves", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch solves"})
+		return
+	}
+	if !userExists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
 
 	query := `
 		SELECT s.id, c.id, c.name, c.slug, f.id, f.name, s.points_awarded, s.solved_at
@@ -301,10 +442,17 @@ func (h *UserHandler) GetSolves(c *gin.Context) {
 		var solvedAt time.Time
 		if err := rows.Scan(&s.ID, &s.ChallengeID, &s.ChallengeName, &s.ChallengeSlug,
 			&s.FlagID, &s.FlagName, &s.Points, &solvedAt); err != nil {
-			continue
+			h.logger.Error("failed to scan user solve", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch solves"})
+			return
 		}
 		s.SolvedAt = solvedAt.Unix()
 		solves = append(solves, s)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while reading user solves", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch solves"})
+		return
 	}
 
 	if solves == nil {

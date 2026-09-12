@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,6 +28,44 @@ type VPNService struct {
 // NewVPNService creates a new VPN service handler
 func NewVPNService(cfg *config.Config, db *database.DB, vpnSvc *vpn.Service, logger *zap.Logger) *VPNService {
 	return &VPNService{config: cfg, db: db, vpnSvc: vpnSvc, logger: logger}
+}
+
+const vpnCleanupTimeout = 5 * time.Second
+
+func vpnUserID(c *gin.Context) (uuid.UUID, bool) {
+	uid, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+	}
+	return uid, ok
+}
+
+func rollbackVPNTransaction(tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.Background(), vpnCleanupTimeout)
+	defer cancel()
+	_ = tx.Rollback(ctx)
+}
+
+func commitVPNTransaction(tx pgx.Tx) error {
+	ctx, cancel := context.WithTimeout(context.Background(), vpnCleanupTimeout)
+	defer cancel()
+	return tx.Commit(ctx)
+}
+
+func (h *VPNHandler) managesWireGuardPeers() bool {
+	return strings.EqualFold(strings.TrimSpace(h.config.Environment), "production")
+}
+
+func (h *VPNHandler) removePeerForCleanup(publicKey string) {
+	ctx, cancel := context.WithTimeout(context.Background(), vpnCleanupTimeout)
+	defer cancel()
+	_ = h.vpnSvc.RemovePeer(ctx, publicKey)
+}
+
+func (h *VPNHandler) addPeerForCleanup(publicKey, ipAddress string) {
+	ctx, cancel := context.WithTimeout(context.Background(), vpnCleanupTimeout)
+	defer cancel()
+	_ = h.vpnSvc.AddPeer(ctx, publicKey, ipAddress)
 }
 
 // VPNConfigResponse represents the VPN configuration response
@@ -56,12 +95,10 @@ func (h *VPNHandler) GetConfig(c *gin.Context) {
 		return
 	}
 
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+	uid, ok := vpnUserID(c)
+	if !ok {
 		return
 	}
-	uid := userID.(uuid.UUID)
 
 	// Check if user has a VPN config
 	var vpnConfig struct {
@@ -114,12 +151,10 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		return
 	}
 
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+	uid, ok := vpnUserID(c)
+	if !ok {
 		return
 	}
-	uid := userID.(uuid.UUID)
 
 	// Check if user already has a config
 	var existingIP string
@@ -129,7 +164,7 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":      "VPN config already exists",
 			"ip_address": existingIP,
-			"hint":       "Use DELETE /api/v1/vpn/config to regenerate",
+			"hint":       "Use POST /api/v1/vpn/config/regenerate to regenerate",
 		})
 		return
 	}
@@ -154,29 +189,73 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to allocate IP address"})
 		return
 	}
+	releaseIPAddress := true
+	defer func() {
+		if releaseIPAddress {
+			h.vpnSvc.ReleaseIP(ipAddress)
+		}
+	}()
+
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		h.logger.Error("failed to begin VPN config creation", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
+		return
+	}
+	defer rollbackVPNTransaction(tx)
 
 	// Store VPN config
 	configID := uuid.New()
-	_, err = h.db.Pool.Exec(c.Request.Context(),
-		`INSERT INTO vpn_configs (id, user_id, assigned_ip, public_key, private_key, created_at)
-		 VALUES ($1, $2, $3, $4, $5, NOW())`,
-		configID, uid, ipAddress, publicKey, privateKey)
+	createdAt := time.Now().UTC()
+	result, err := tx.Exec(c.Request.Context(),
+		`INSERT INTO vpn_configs (id, user_id, assigned_ip, public_key, private_key, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+		configID, uid, ipAddress, publicKey, privateKey, createdAt)
 	if err != nil {
 		h.logger.Error("failed to store VPN config", zap.Error(err))
+		if postgresErrorCode(err) == "23505" {
+			c.JSON(http.StatusConflict, gin.H{"error": "VPN config already exists or the allocated IP is unavailable"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logger.Error("VPN config insert affected an unexpected number of rows",
+			zap.String("user_id", uid.String()),
+			zap.Int64("rows_affected", result.RowsAffected()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
 		return
 	}
 
-	// Add peer to WireGuard server (if in production)
-	if h.config.Environment == "production" {
+	// The database row remains uncommitted until the production peer exists.
+	// Treat AddPeer's outcome as uncertain on error and remove the generated key
+	// during cleanup so a failed request cannot leave an orphaned peer.
+	peerMayExist := false
+	if h.managesWireGuardPeers() {
+		peerMayExist = true
 		if err := h.vpnSvc.AddPeer(c.Request.Context(), publicKey, ipAddress); err != nil {
-			h.logger.Warn("failed to add peer to WireGuard", zap.Error(err))
+			h.removePeerForCleanup(publicKey)
+			peerMayExist = false
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to activate VPN config"})
+			return
 		}
 	}
 
+	if err := commitVPNTransaction(tx); err != nil {
+		h.logger.Error("failed to commit VPN config", zap.String("user_id", uid.String()), zap.Error(err))
+		if peerMayExist {
+			h.removePeerForCleanup(publicKey)
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
+		return
+	}
+	peerMayExist = false
+	releaseIPAddress = false
+
 	// Generate config file
 	configFile := h.generateWireGuardConfig(privateKey, ipAddress)
-	createdAt := time.Now().Unix()
+	createdAtUnix := createdAt.Unix()
 
 	c.JSON(http.StatusCreated, VPNConfigResponse{
 		HasConfig:       true,
@@ -184,7 +263,7 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		PublicKey:       &publicKey,
 		ServerPublicKey: h.config.VPN.PublicKey,
 		Endpoint:        h.config.VPN.PublicEndpoint,
-		CreatedAt:       &createdAt,
+		CreatedAt:       &createdAtUnix,
 		ConfigFile:      &configFile,
 	})
 }
@@ -196,12 +275,10 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 		return
 	}
 
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+	uid, ok := vpnUserID(c)
+	if !ok {
 		return
 	}
-	uid := userID.(uuid.UUID)
 
 	// Get user's VPN config with status from database
 	// Status is updated by wg-status-sync.sh script running on host
@@ -244,47 +321,44 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 	})
 }
 
-// RegenerateConfig deletes the old config and generates a new one
+// RegenerateConfig atomically replaces the old config with a new one.
 func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	if !h.config.VPN.Enabled {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "VPN is disabled"})
 		return
 	}
 
-	userID, exists := c.Get("user_id")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+	uid, ok := vpnUserID(c)
+	if !ok {
 		return
 	}
-	uid := userID.(uuid.UUID)
 
-	// Get old public key and IP to remove from WireGuard and release IP
-	var oldPublicKey, oldIPAddress string
-	_ = h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT public_key, assigned_ip FROM vpn_configs WHERE user_id = $1`, uid).Scan(&oldPublicKey, &oldIPAddress)
-
-	// Release old IP from pool
-	if oldIPAddress != "" {
-		h.vpnSvc.ReleaseIP(oldIPAddress)
-	}
-
-	// Remove old peer from WireGuard
-	if oldPublicKey != "" && h.config.Environment == "production" {
-		if err := h.vpnSvc.RemovePeer(c.Request.Context(), oldPublicKey); err != nil {
-			h.logger.Warn("failed to remove old peer from WireGuard", zap.Error(err))
-		}
-	}
-
-	// Delete old config
-	_, err := h.db.Pool.Exec(c.Request.Context(),
-		`DELETE FROM vpn_configs WHERE user_id = $1`, uid)
+	tx, err := h.db.Pool.Begin(c.Request.Context())
 	if err != nil {
-		h.logger.Error("failed to delete old VPN config", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete old config"})
+		h.logger.Error("failed to begin VPN config regeneration", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to regenerate VPN config"})
+		return
+	}
+	defer rollbackVPNTransaction(tx)
+
+	// Lock the current config so concurrent lifecycle requests cannot replace the
+	// same row while its WireGuard peer is being transitioned.
+	var oldPublicKey, oldIPAddress string
+	err = tx.QueryRow(c.Request.Context(),
+		`SELECT public_key, assigned_ip FROM vpn_configs WHERE user_id = $1 FOR UPDATE`, uid).
+		Scan(&oldPublicKey, &oldIPAddress)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "VPN config not found"})
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to load VPN config for regeneration", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to regenerate VPN config"})
 		return
 	}
 
-	// Generate new key pair
+	// Prepare the replacement without releasing the old allocation. That keeps
+	// the current config usable if any later step fails.
 	privateKey, publicKey, err := h.vpnSvc.GenerateKeyPair()
 	if err != nil {
 		h.logger.Error("failed to generate key pair", zap.Error(err))
@@ -299,29 +373,85 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to allocate IP address"})
 		return
 	}
+	newIPAddressAllocated := true
+	defer func() {
+		if newIPAddressAllocated {
+			h.vpnSvc.ReleaseIP(ipAddress)
+		}
+	}()
 
-	// Store new VPN config
-	configID := uuid.New()
-	_, err = h.db.Pool.Exec(c.Request.Context(),
-		`INSERT INTO vpn_configs (id, user_id, assigned_ip, public_key, private_key, created_at)
-		 VALUES ($1, $2, $3, $4, $5, NOW())`,
-		configID, uid, ipAddress, publicKey, privateKey)
+	createdAt := time.Now().UTC()
+	result, err := tx.Exec(c.Request.Context(), `
+		UPDATE vpn_configs
+		SET assigned_ip = $2,
+			public_key = $3,
+			private_key = $4,
+			is_active = TRUE,
+			last_handshake = NULL,
+			bytes_sent = 0,
+			bytes_received = 0,
+			created_at = $5,
+			updated_at = $5
+		WHERE user_id = $1
+	`, uid, ipAddress, publicKey, privateKey, createdAt)
 	if err != nil {
-		h.logger.Error("failed to store VPN config", zap.Error(err))
+		h.logger.Error("failed to replace VPN config", zap.String("user_id", uid.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
 		return
 	}
+	if result.RowsAffected() != 1 {
+		h.logger.Error("VPN config disappeared during regeneration",
+			zap.String("user_id", uid.String()),
+			zap.Int64("rows_affected", result.RowsAffected()))
+		c.JSON(http.StatusConflict, gin.H{"error": "VPN config changed during regeneration"})
+		return
+	}
 
-	// Add new peer to WireGuard server
-	if h.config.Environment == "production" {
+	// Add the replacement before removing the old peer. On any failure, the
+	// transaction rolls back and cleanup restores the old server-side state.
+	newPeerMayExist := false
+	oldPeerMayNeedRestore := false
+	peerTransitionComplete := false
+	if h.managesWireGuardPeers() {
+		defer func() {
+			if peerTransitionComplete {
+				return
+			}
+			if newPeerMayExist {
+				h.removePeerForCleanup(publicKey)
+			}
+			if oldPeerMayNeedRestore {
+				h.addPeerForCleanup(oldPublicKey, oldIPAddress)
+			}
+		}()
+
+		newPeerMayExist = true
 		if err := h.vpnSvc.AddPeer(c.Request.Context(), publicKey, ipAddress); err != nil {
-			h.logger.Warn("failed to add peer to WireGuard", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to activate replacement VPN config"})
+			return
+		}
+
+		oldPeerMayNeedRestore = true
+		if err := h.vpnSvc.RemovePeer(c.Request.Context(), oldPublicKey); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to retire previous VPN config"})
+			return
 		}
 	}
 
+	if err := commitVPNTransaction(tx); err != nil {
+		h.logger.Error("failed to commit regenerated VPN config", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
+		return
+	}
+	peerTransitionComplete = true
+	newPeerMayExist = false
+	oldPeerMayNeedRestore = false
+	newIPAddressAllocated = false
+	h.vpnSvc.ReleaseIP(oldIPAddress)
+
 	// Generate config file
 	configFile := h.generateWireGuardConfig(privateKey, ipAddress)
-	createdAt := time.Now().Unix()
+	createdAtUnix := createdAt.Unix()
 
 	c.JSON(http.StatusOK, VPNConfigResponse{
 		HasConfig:       true,
@@ -329,7 +459,7 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 		PublicKey:       &publicKey,
 		ServerPublicKey: h.config.VPN.PublicKey,
 		Endpoint:        h.config.VPN.PublicEndpoint,
-		CreatedAt:       &createdAt,
+		CreatedAt:       &createdAtUnix,
 		ConfigFile:      &configFile,
 	})
 }

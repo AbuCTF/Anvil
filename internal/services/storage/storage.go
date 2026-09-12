@@ -63,48 +63,61 @@ type CompletedPart struct {
 
 // UploadMetadata contains information about an upload
 type UploadMetadata struct {
-	ID           string          `json:"id"`
-	Key          string          `json:"key"`
-	Filename     string          `json:"filename"`
-	ContentType  string          `json:"content_type"`
-	TotalSize    int64           `json:"total_size"`
-	ChunkSize    int64           `json:"chunk_size"`
-	TotalChunks  int             `json:"total_chunks"`
+	ID            string          `json:"id"`
+	Key           string          `json:"key"`
+	Filename      string          `json:"filename"`
+	ContentType   string          `json:"content_type"`
+	TotalSize     int64           `json:"total_size"`
+	ChunkSize     int64           `json:"chunk_size"`
+	TotalChunks   int             `json:"total_chunks"`
 	UploadedParts []CompletedPart `json:"uploaded_parts"`
-	Status       string          `json:"status"` // pending, uploading, processing, completed, failed
-	Checksum     string          `json:"checksum"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
-	ExpiresAt    time.Time       `json:"expires_at"`
+	Status        string          `json:"status"` // pending, uploading, processing, completed, failed
+	Checksum      string          `json:"checksum"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+	ExpiresAt     time.Time       `json:"expires_at"`
 }
 
 // LocalStorage implements StorageBackend for local filesystem
 type LocalStorage struct {
-	basePath     string
-	tempPath     string
-	logger       *zap.Logger
-	mu           sync.RWMutex
+	basePath      string
+	tempPath      string
+	logger        *zap.Logger
+	mu            sync.RWMutex
 	activeUploads map[string]*localUploadState
 }
 
 type localUploadState struct {
-	key         string
-	tempDir     string
-	parts       map[int]*CompletedPart
-	mu          sync.Mutex
-	createdAt   time.Time
+	key       string
+	tempDir   string
+	parts     map[int]*CompletedPart
+	mu        sync.Mutex
+	createdAt time.Time
 }
 
 // NewLocalStorage creates a new local filesystem storage backend
 func NewLocalStorage(basePath string, logger *zap.Logger) (*LocalStorage, error) {
+	absBasePath, err := filepath.Abs(basePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve storage directory: %w", err)
+	}
+
+	if err := os.MkdirAll(absBasePath, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create storage directory %s: %w", absBasePath, err)
+	}
+	resolvedBasePath, err := filepath.EvalSymlinks(absBasePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve storage directory %s: %w", absBasePath, err)
+	}
+
 	// Ensure base directories exist
 	dirs := []string{
-		basePath,
-		filepath.Join(basePath, "challenges"),
-		filepath.Join(basePath, "challenge-attachments"),
-		filepath.Join(basePath, "vms"),
-		filepath.Join(basePath, "docker"),
-		filepath.Join(basePath, "temp"),
+		resolvedBasePath,
+		filepath.Join(resolvedBasePath, "challenges"),
+		filepath.Join(resolvedBasePath, "challenge-attachments"),
+		filepath.Join(resolvedBasePath, "vms"),
+		filepath.Join(resolvedBasePath, "docker"),
+		filepath.Join(resolvedBasePath, "temp"),
 	}
 
 	for _, dir := range dirs {
@@ -114,8 +127,8 @@ func NewLocalStorage(basePath string, logger *zap.Logger) (*LocalStorage, error)
 	}
 
 	return &LocalStorage{
-		basePath:      basePath,
-		tempPath:      filepath.Join(basePath, "temp"),
+		basePath:      resolvedBasePath,
+		tempPath:      filepath.Join(resolvedBasePath, "temp"),
 		logger:        logger,
 		activeUploads: make(map[string]*localUploadState),
 	}, nil
@@ -126,7 +139,28 @@ func (l *LocalStorage) fullPath(key string) (string, error) {
 	if cleanKey == "." || filepath.IsAbs(cleanKey) || cleanKey == ".." || strings.HasPrefix(cleanKey, ".."+string(os.PathSeparator)) {
 		return "", fmt.Errorf("storage key escapes base directory")
 	}
-	return filepath.Join(l.basePath, cleanKey), nil
+
+	fullPath := filepath.Join(l.basePath, cleanKey)
+	currentPath := l.basePath
+	components := strings.Split(cleanKey, string(os.PathSeparator))
+	for index, component := range components {
+		currentPath = filepath.Join(currentPath, component)
+		info, err := os.Lstat(currentPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				break
+			}
+			return "", fmt.Errorf("inspect storage path: %w", err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("storage path contains symlink: %s", currentPath)
+		}
+		if index < len(components)-1 && !info.IsDir() {
+			return "", fmt.Errorf("storage path component is not a directory: %s", currentPath)
+		}
+	}
+
+	return fullPath, nil
 }
 
 // Upload implements StorageBackend.Upload
@@ -253,6 +287,10 @@ func (l *LocalStorage) GetSize(ctx context.Context, key string) (int64, error) {
 
 // InitMultipartUpload implements StorageBackend.InitMultipartUpload
 func (l *LocalStorage) InitMultipartUpload(ctx context.Context, key string) (string, error) {
+	if _, err := l.fullPath(key); err != nil {
+		return "", fmt.Errorf("invalid storage key: %w", err)
+	}
+
 	uploadID := generateUploadID()
 
 	// Create temp directory for this upload
@@ -286,6 +324,9 @@ func (l *LocalStorage) UploadPart(ctx context.Context, key, uploadID string, par
 
 	if !exists {
 		return "", fmt.Errorf("upload not found: %s", uploadID)
+	}
+	if key != state.key {
+		return "", fmt.Errorf("storage key does not match upload")
 	}
 
 	// Create part file
@@ -339,6 +380,9 @@ func (l *LocalStorage) CompleteMultipartUpload(ctx context.Context, key, uploadI
 
 	if !exists {
 		return fmt.Errorf("upload not found: %s", uploadID)
+	}
+	if key != state.key {
+		return fmt.Errorf("storage key does not match upload")
 	}
 
 	fullPath, err := l.fullPath(key)

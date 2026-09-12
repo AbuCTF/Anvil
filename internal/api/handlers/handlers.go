@@ -2,9 +2,14 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +21,8 @@ import (
 	"github.com/anvil-lab/anvil/internal/services/vpn"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 )
 
@@ -165,7 +172,8 @@ func (h *CategoryHandler) List(c *gin.Context) {
 		var sortOrder int
 		if err := rows.Scan(&id, &name, &catSlug, &description, &color, &sortOrder); err != nil {
 			h.logger.Error("failed to scan category row", zap.Error(err))
-			continue
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch categories"})
+			return
 		}
 		categories = append(categories, gin.H{
 			"id":          id,
@@ -175,6 +183,11 @@ func (h *CategoryHandler) List(c *gin.Context) {
 			"color":       color,
 			"sort_order":  sortOrder,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing categories", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch categories"})
+		return
 	}
 
 	if categories == nil {
@@ -207,6 +220,10 @@ func (h *CategoryHandler) Create(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("failed to create category", zap.Error(err))
+		if postgresErrorCode(err) == "23505" {
+			c.JSON(http.StatusConflict, gin.H{"error": "category name or slug already exists"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create category"})
 		return
 	}
@@ -249,13 +266,21 @@ func (h *CategoryHandler) Update(c *gin.Context) {
 		return
 	}
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
+	result, err := h.db.Pool.Exec(c.Request.Context(),
 		`UPDATE categories SET name=$1, description=$2, color=$3 WHERE id=$4`,
 		req.Name, req.Description, req.Color, id,
 	)
 	if err != nil {
 		h.logger.Error("failed to update category", zap.Error(err))
+		if postgresErrorCode(err) == "23505" {
+			c.JSON(http.StatusConflict, gin.H{"error": "category name already exists"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update category"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
 		return
 	}
 
@@ -263,15 +288,35 @@ func (h *CategoryHandler) Update(c *gin.Context) {
 }
 func (h *CategoryHandler) Delete(c *gin.Context) {
 	id := c.Param("id")
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin category deletion", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete category"})
+		return
+	}
+	defer tx.Rollback(ctx)
 
-	// Null out category_id on challenges that reference this category
-	_, _ = h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE challenges SET category_id = NULL WHERE category_id = $1`, id)
+	if _, err := tx.Exec(ctx,
+		`UPDATE challenges SET category_id = NULL WHERE category_id = $1`, id); err != nil {
+		h.logger.Error("failed to detach category challenges", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete category"})
+		return
+	}
 
-	_, err := h.db.Pool.Exec(c.Request.Context(),
+	result, err := tx.Exec(ctx,
 		`DELETE FROM categories WHERE id = $1`, id)
 	if err != nil {
 		h.logger.Error("failed to delete category", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete category"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "category not found"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit category deletion", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete category"})
 		return
 	}
@@ -295,10 +340,12 @@ func NewAdminInstanceHandler(cfg *config.Config, db *database.DB, containerSvc i
 func (h *AdminInstanceHandler) List(c *gin.Context) {
 	query := `
 		SELECT i.id, i.user_id, i.challenge_id, i.status, i.container_id, i.ip_address,
-		       i.created_at, i.expires_at, u.username, c.name as challenge_name,
-		       c.resource_type
+		       i.created_at, i.expires_at, COALESCE(u.username, tt.team_name, 'Team session'), c.name as challenge_name,
+		       i.resource_type
 		FROM instances i
-		JOIN users u ON i.user_id = u.id
+		LEFT JOIN users u ON i.user_id = u.id
+		LEFT JOIN sessions s ON i.session_id = s.id
+		LEFT JOIN team_tokens tt ON s.token_id = tt.id
 		JOIN challenges c ON i.challenge_id = c.id
 		ORDER BY i.created_at DESC
 		LIMIT 100
@@ -314,9 +361,11 @@ func (h *AdminInstanceHandler) List(c *gin.Context) {
 
 	var instances []gin.H
 	for rows.Next() {
-		var id, userID, challengeID, status, username, challengeName, resourceType string
+		var id, challengeID, status, username, challengeName, resourceType string
+		var userID *string
 		var containerID, ipAddress *string
-		var createdAt, expiresAt time.Time
+		var createdAt time.Time
+		var expiresAt *time.Time
 
 		if err := rows.Scan(&id, &userID, &challengeID, &status, &containerID, &ipAddress,
 			&createdAt, &expiresAt, &username, &challengeName, &resourceType); err != nil {
@@ -333,7 +382,11 @@ func (h *AdminInstanceHandler) List(c *gin.Context) {
 			"resource_type":  resourceType,
 			"status":         status,
 			"created_at":     createdAt.Unix(),
-			"expires_at":     expiresAt.Unix(),
+		}
+		if expiresAt != nil {
+			inst["expires_at"] = expiresAt.Unix()
+		} else {
+			inst["expires_at"] = nil
 		}
 
 		if containerID != nil {
@@ -344,6 +397,11 @@ func (h *AdminInstanceHandler) List(c *gin.Context) {
 		}
 
 		instances = append(instances, inst)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch instances"})
+		return
 	}
 
 	if instances == nil {
@@ -363,87 +421,169 @@ func (h *AdminInstanceHandler) Stats(c *gin.Context) {
 		ActiveVMs         int
 	}
 
-	h.db.Pool.QueryRow(c.Request.Context(), `
+	if err := h.db.Pool.QueryRow(c.Request.Context(), `
 		SELECT COUNT(*) FROM instances WHERE status = 'running'
-	`).Scan(&stats.TotalInstances)
+	`).Scan(&stats.TotalInstances); err != nil {
+		h.logger.Error("failed to count running instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load instance stats"})
+		return
+	}
 
-	h.db.Pool.QueryRow(c.Request.Context(), `
+	if err := h.db.Pool.QueryRow(c.Request.Context(), `
 		SELECT COUNT(*) FROM instances i
 		JOIN challenges c ON i.challenge_id = c.id
-		WHERE i.status = 'running' AND c.resource_type = 'vm'
-	`).Scan(&stats.RunningVMs)
+		WHERE i.status = 'running' AND i.resource_type = 'vm'
+	`).Scan(&stats.RunningVMs); err != nil {
+		h.logger.Error("failed to count running VMs", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load instance stats"})
+		return
+	}
 
-	h.db.Pool.QueryRow(c.Request.Context(), `
+	if err := h.db.Pool.QueryRow(c.Request.Context(), `
 		SELECT COUNT(*) FROM instances i
 		JOIN challenges c ON i.challenge_id = c.id
-		WHERE i.status = 'running' AND c.resource_type = 'docker'
-	`).Scan(&stats.RunningContainers)
+		WHERE i.status = 'running' AND i.resource_type = 'docker'
+	`).Scan(&stats.RunningContainers); err != nil {
+		h.logger.Error("failed to count running containers", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load instance stats"})
+		return
+	}
 
-	h.db.Pool.QueryRow(c.Request.Context(), `
-		SELECT COALESCE(used_vcpu, 0), COALESCE(used_memory_mb, 0), COALESCE(active_vms, 0)
-		FROM vm_nodes WHERE name = 'core'
-	`).Scan(&stats.UsedVCPU, &stats.UsedMemoryMB, &stats.ActiveVMs)
+	if err := h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT COALESCE(SUM(used_vcpu), 0), COALESCE(SUM(used_memory_mb), 0), COALESCE(SUM(active_vms), 0)
+		FROM vm_nodes
+	`).Scan(&stats.UsedVCPU, &stats.UsedMemoryMB, &stats.ActiveVMs); err != nil {
+		h.logger.Error("failed to load VM node usage", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load instance stats"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"stats": stats})
 }
 
 func (h *AdminInstanceHandler) ForceStop(c *gin.Context) {
-	instanceID := c.Param("id")
-
-	var containerID *string
-	var resourceType string
-	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT i.container_id, c.resource_type FROM instances i
-		 JOIN challenges c ON i.challenge_id = c.id WHERE i.id = $1`,
-		instanceID).Scan(&containerID, &resourceType)
+	parsedID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid instance ID"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	var inst struct {
+		RuntimeID        *string
+		ResourceType     string
+		VMNodeID         *uuid.UUID
+		ReservedVCPU     int
+		ReservedMemoryMB int
+	}
+	err = h.db.Pool.QueryRow(ctx, `
+		SELECT container_id, resource_type, vm_node_id,
+		       COALESCE(reserved_vcpu, 0), COALESCE(reserved_memory_mb, 0)
+		FROM instances WHERE id = $1`, parsedID).Scan(
+		&inst.RuntimeID, &inst.ResourceType, &inst.VMNodeID,
+		&inst.ReservedVCPU, &inst.ReservedMemoryMB,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
 		return
 	}
-
-	// Stop the resource
-	if containerID != nil && *containerID != "" {
-		if resourceType == "vm" && h.vmSvc != nil {
-			if vmSvc, ok := h.vmSvc.(interface {
-				DestroyInstanceByName(context.Context, string) error
-			}); ok {
-				if err := vmSvc.DestroyInstanceByName(c.Request.Context(), *containerID); err != nil {
-					h.logger.Error("failed to destroy VM", zap.Error(err))
-					// Continue anyway - VM might already be destroyed
-				}
-			}
-		} else if containerSvc, ok := h.containerSvc.(interface {
-			StopInstance(context.Context, string) error
-		}); ok {
-			if err := containerSvc.StopInstance(c.Request.Context(), *containerID); err != nil {
-				h.logger.Error("failed to stop container", zap.Error(err))
-				// Continue anyway
-			}
-		}
-	}
-
-	// Delete from database
-	_, err = h.db.Pool.Exec(c.Request.Context(), `DELETE FROM instances WHERE id = $1`, instanceID)
 	if err != nil {
-		h.logger.Error("failed to delete instance from database", zap.Error(err), zap.String("instance_id", instanceID))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete instance from database"})
+		h.logger.Error("failed to load instance for admin stop", zap.Error(err), zap.String("instance_id", parsedID.String()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load instance"})
 		return
 	}
 
-	h.logger.Info("instance deleted", zap.String("instance_id", instanceID), zap.String("resource_type", resourceType))
+	runtimeID := ""
+	if inst.RuntimeID != nil {
+		runtimeID = *inst.RuntimeID
+	}
+	if inst.ResourceType == "vm" && runtimeID == "" && inst.VMNodeID != nil {
+		runtimeID = parsedID.String()
+	}
+	if err := h.stopInstanceRuntime(ctx, runtimeID, inst.ResourceType, inst.VMNodeID); err != nil {
+		h.logger.Error("failed to stop instance runtime", zap.Error(err), zap.String("instance_id", parsedID.String()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop instance runtime"})
+		return
+	}
 
-	// Update node counters if VM
-	if resourceType == "vm" {
-		h.db.Pool.Exec(c.Request.Context(),
-			`UPDATE vm_nodes SET 
-			 used_vcpu = GREATEST(0, used_vcpu - 1),
-			 used_memory_mb = GREATEST(0, used_memory_mb - 1024),
-			 active_vms = GREATEST(0, active_vms - 1),
-			 updated_at = NOW()
-			 WHERE name = 'core'`)
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop instance"})
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	result, err := tx.Exec(ctx, `DELETE FROM instances WHERE id = $1`, parsedID)
+	if err != nil || result.RowsAffected() != 1 {
+		h.logger.Error("failed to delete stopped instance", zap.Error(err), zap.Int64("rows_affected", result.RowsAffected()), zap.String("instance_id", parsedID.String()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop instance"})
+		return
+	}
+	if inst.ResourceType == "vm" {
+		if err := releaseVMNodeCapacity(ctx, tx, inst.VMNodeID, inst.ReservedVCPU, inst.ReservedMemoryMB); err != nil {
+			h.logger.Error("failed to release VM capacity", zap.Error(err), zap.String("instance_id", parsedID.String()))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to release instance capacity"})
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stop instance"})
+		return
+	}
+	if uid, ok := contextUserID(c); ok {
+		if err := logAdminAction(h.db, c, uid.String(), "instance_force_stopped", "instance", parsedID.String(), nil); err != nil {
+			h.logger.Warn("failed to audit forced instance stop", zap.Error(err))
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "instance stopped"})
+}
+
+func (h *AdminInstanceHandler) stopInstanceRuntime(
+	ctx context.Context,
+	runtimeID string,
+	resourceType string,
+	nodeID *uuid.UUID,
+) error {
+	if runtimeID == "" {
+		return nil
+	}
+	switch resourceType {
+	case "vm":
+		if h.vmSvc == nil {
+			return errors.New("VM service unavailable")
+		}
+		if nodeID != nil {
+			node, err := loadAssignedVMNode(ctx, h.db.Pool, *nodeID)
+			if err != nil {
+				return fmt.Errorf("load assigned VM node: %w", err)
+			}
+			service, ok := h.vmSvc.(interface {
+				DestroyInstanceByNameOnNode(context.Context, string, *vm.NodeInfo) error
+			})
+			if !ok {
+				return errors.New("VM service does not support assigned-node cleanup")
+			}
+			return service.DestroyInstanceByNameOnNode(ctx, runtimeID, node)
+		}
+		service, ok := h.vmSvc.(interface {
+			DestroyInstanceByName(context.Context, string) error
+		})
+		if !ok {
+			return errors.New("VM service unavailable")
+		}
+		return service.DestroyInstanceByName(ctx, runtimeID)
+	case "docker":
+		service, ok := h.containerSvc.(interface {
+			StopInstance(context.Context, string) error
+		})
+		if !ok {
+			return errors.New("container service unavailable")
+		}
+		return service.StopInstance(ctx, runtimeID)
+	default:
+		return fmt.Errorf("unsupported resource type %q", resourceType)
+	}
 }
 
 func (h *AdminInstanceHandler) ForceDelete(c *gin.Context) {
@@ -453,14 +593,17 @@ func (h *AdminInstanceHandler) ForceDelete(c *gin.Context) {
 func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// Find expired container instances that still need Docker cleanup.
+	// Failed VM creation can leave a durable reservation when remote cleanup was
+	// uncertain, so retry those alongside normally expired instances.
 	rows, err := h.db.Pool.Query(ctx, `
-		SELECT i.id, i.container_id, c.resource_type
+		SELECT i.id, i.container_id, i.resource_type, i.vm_node_id,
+		       COALESCE(i.reserved_vcpu, 0), COALESCE(i.reserved_memory_mb, 0)
 		FROM instances i
-		JOIN challenges c ON i.challenge_id = c.id
-		WHERE i.expires_at < NOW()
-		  AND i.status IN ('running', 'pending', 'creating')
-		  AND i.container_id IS NOT NULL AND i.container_id <> ''
+		WHERE (i.expires_at < NOW() AND i.status IN ('running', 'pending', 'creating'))
+		   OR (i.status = 'failed' AND i.vm_node_id IS NOT NULL
+		       AND i.updated_at < NOW() - INTERVAL '1 minute')
+		ORDER BY i.updated_at
+		LIMIT 100
 	`)
 	if err != nil {
 		h.logger.Error("failed to query expired instances for cleanup", zap.Error(err))
@@ -469,61 +612,90 @@ func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 	}
 
 	type expiredInst struct {
-		ID           string
-		ContainerID  string
-		ResourceType string
+		ID               uuid.UUID
+		RuntimeID        *string
+		ResourceType     string
+		VMNodeID         *uuid.UUID
+		ReservedVCPU     int
+		ReservedMemoryMB int
 	}
-	var toStop []expiredInst
+	toStop := make([]expiredInst, 0)
 	for rows.Next() {
 		var inst expiredInst
-		if scanErr := rows.Scan(&inst.ID, &inst.ContainerID, &inst.ResourceType); scanErr == nil {
-			toStop = append(toStop, inst)
+		if scanErr := rows.Scan(
+			&inst.ID, &inst.RuntimeID, &inst.ResourceType, &inst.VMNodeID,
+			&inst.ReservedVCPU, &inst.ReservedMemoryMB,
+		); scanErr != nil {
+			rows.Close()
+			h.logger.Error("failed to scan expired instance", zap.Error(scanErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query expired instances"})
+			return
 		}
+		toStop = append(toStop, inst)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		h.logger.Error("failed while reading expired instances", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query expired instances"})
+		return
 	}
 	rows.Close()
 
-	// Stop the actual containers/VMs before marking as expired in DB.
-	var stoppedCount int64
+	var stoppedCount, expiredCount, failedCount int64
 	for _, inst := range toStop {
-		if inst.ResourceType == "vm" {
-			if vmSvc, ok := h.vmSvc.(interface {
-				DestroyInstanceByName(context.Context, string) error
-			}); ok {
-				if err := vmSvc.DestroyInstanceByName(ctx, inst.ContainerID); err != nil {
-					h.logger.Warn("cleanup: failed to destroy VM", zap.Error(err), zap.String("vm_name", inst.ContainerID))
-				} else {
-					stoppedCount++
-				}
-			}
-		} else if containerSvc, ok := h.containerSvc.(interface {
-			StopInstance(context.Context, string) error
-		}); ok {
-			if err := containerSvc.StopInstance(ctx, inst.ContainerID); err != nil {
-				h.logger.Warn("cleanup: failed to stop container", zap.Error(err), zap.String("container_id", inst.ContainerID))
-			} else {
-				stoppedCount++
-			}
+		runtimeID := ""
+		if inst.RuntimeID != nil {
+			runtimeID = *inst.RuntimeID
 		}
-	}
+		if inst.ResourceType == "vm" && runtimeID == "" && inst.VMNodeID != nil {
+			runtimeID = inst.ID.String()
+		}
+		if err := h.stopInstanceRuntime(ctx, runtimeID, inst.ResourceType, inst.VMNodeID); err != nil {
+			h.logger.Warn("cleanup: failed to stop runtime", zap.Error(err), zap.String("instance_id", inst.ID.String()))
+			failedCount++
+			continue
+		}
+		if runtimeID != "" {
+			stoppedCount++
+		}
 
-	// Mark all expired instances
-	result, err := h.db.Pool.Exec(ctx, `
-		UPDATE instances
-		SET status = 'expired', updated_at = NOW()
-		WHERE expires_at < NOW() AND status IN ('running', 'pending', 'creating')
-	`)
-	if err != nil {
-		h.logger.Error("failed to mark expired instances", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark expired instances"})
-		return
+		tx, err := h.db.Pool.Begin(ctx)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark expired instances"})
+			return
+		}
+		result, err := tx.Exec(ctx, `
+			UPDATE instances
+			SET status = 'expired', vm_node_id = NULL, reserved_vcpu = NULL,
+			    reserved_memory_mb = NULL, updated_at = NOW()
+			WHERE id = $1 AND (
+				(expires_at < NOW() AND status IN ('running', 'pending', 'creating'))
+				OR (status = 'failed' AND vm_node_id IS NOT NULL)
+			)`, inst.ID)
+		if err == nil && result.RowsAffected() != 1 {
+			err = fmt.Errorf("expiry update affected %d rows", result.RowsAffected())
+		}
+		if err == nil && inst.ResourceType == "vm" {
+			err = releaseVMNodeCapacity(ctx, tx, inst.VMNodeID, inst.ReservedVCPU, inst.ReservedMemoryMB)
+		}
+		if err == nil {
+			err = tx.Commit(ctx)
+		} else {
+			_ = tx.Rollback(ctx)
+		}
+		if err != nil {
+			h.logger.Error("cleanup: failed to expire instance", zap.Error(err), zap.String("instance_id", inst.ID.String()))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to mark expired instances"})
+			return
+		}
+		expiredCount++
 	}
-
-	expiredCount := result.RowsAffected()
 
 	// Delete old failed/stopped/expired instances
-	result, err = h.db.Pool.Exec(ctx, `
+	result, err := h.db.Pool.Exec(ctx, `
 		DELETE FROM instances
 		WHERE status IN ('failed', 'stopped', 'expired')
+		  AND vm_node_id IS NULL
 		  AND created_at < NOW() - INTERVAL '1 hour'
 	`)
 	if err != nil {
@@ -538,6 +710,7 @@ func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 		"message":           "cleanup completed",
 		"resources_stopped": stoppedCount,
 		"marked_expired":    expiredCount,
+		"cleanup_failed":    failedCount,
 		"deleted":           deletedCount,
 	})
 }
@@ -554,22 +727,241 @@ func NewTokenHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *T
 }
 
 func (h *TokenHandler) ListTeamTokens(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"tokens": []interface{}{}})
+	rows, err := h.db.Pool.Query(c.Request.Context(), `
+		SELECT id, team_name, RIGHT(token, 4), COALESCE(max_uses, 1),
+		       COALESCE(current_uses, 0), expires_at, created_by, created_at
+		FROM team_tokens ORDER BY created_at DESC
+	`)
+	if err != nil {
+		h.logger.Error("failed to list team tokens", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list team tokens"})
+		return
+	}
+	defer rows.Close()
+
+	tokens := make([]gin.H, 0)
+	for rows.Next() {
+		var id, teamName, suffix string
+		var maxUses, currentUses int
+		var expiresAt *time.Time
+		var createdBy *uuid.UUID
+		var createdAt time.Time
+		if err := rows.Scan(&id, &teamName, &suffix, &maxUses, &currentUses, &expiresAt, &createdBy, &createdAt); err != nil {
+			h.logger.Error("failed to scan team token", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list team tokens"})
+			return
+		}
+		tokens = append(tokens, tokenSummary(id, teamName, suffix, maxUses, currentUses, expiresAt, createdBy, createdAt))
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing team tokens", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list team tokens"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tokens": tokens})
 }
 func (h *TokenHandler) CreateTeamToken(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	var req struct {
+		TeamName string     `json:"team_name" binding:"required"`
+		MaxUses  int        `json:"max_uses"`
+		Expires  *time.Time `json:"expires_at"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.TeamName = strings.TrimSpace(req.TeamName)
+	if req.TeamName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "team_name is required"})
+		return
+	}
+	if len(req.TeamName) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "team_name must be at most 100 characters"})
+		return
+	}
+	if req.MaxUses == 0 {
+		req.MaxUses = 1
+	}
+	if err := validateTokenLifetime(req.MaxUses, req.Expires); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	uid, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	token, err := generateOpaqueToken("anvil_team_")
+	if err != nil {
+		h.logger.Error("failed to generate team token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create team token"})
+		return
+	}
+	id := uuid.New()
+	var createdAt time.Time
+	err = h.db.Pool.QueryRow(c.Request.Context(), `
+		INSERT INTO team_tokens (id, token, team_name, max_uses, current_uses, expires_at, created_by)
+		VALUES ($1, $2, $3, $4, 0, $5, $6) RETURNING created_at
+	`, id, token, req.TeamName, req.MaxUses, req.Expires, uid).Scan(&createdAt)
+	if err != nil {
+		h.logger.Error("failed to create team token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create team token"})
+		return
+	}
+	if err := logAdminAction(h.db, c, uid.String(), "team_token_created", "team_token", id.String(), map[string]interface{}{
+		"team_name": req.TeamName, "max_uses": req.MaxUses, "expires_at": req.Expires,
+	}); err != nil {
+		h.logger.Warn("failed to audit team token creation", zap.Error(err))
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": id, "token": token, "team_name": req.TeamName, "max_uses": req.MaxUses, "expires_at": req.Expires, "created_at": createdAt})
 }
 func (h *TokenHandler) DeleteTeamToken(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	h.deleteToken(c, "team_tokens", "team token")
 }
 func (h *TokenHandler) ListInviteCodes(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{"codes": []interface{}{}})
+	rows, err := h.db.Pool.Query(c.Request.Context(), `
+		SELECT id, RIGHT(code, 4), COALESCE(max_uses, 1), COALESCE(current_uses, 0),
+		       expires_at, created_by, created_at
+		FROM invite_codes ORDER BY created_at DESC
+	`)
+	if err != nil {
+		h.logger.Error("failed to list invite codes", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list invite codes"})
+		return
+	}
+	defer rows.Close()
+
+	codes := make([]gin.H, 0)
+	for rows.Next() {
+		var id, suffix string
+		var maxUses, currentUses int
+		var expiresAt *time.Time
+		var createdBy *uuid.UUID
+		var createdAt time.Time
+		if err := rows.Scan(&id, &suffix, &maxUses, &currentUses, &expiresAt, &createdBy, &createdAt); err != nil {
+			h.logger.Error("failed to scan invite code", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list invite codes"})
+			return
+		}
+		summary := tokenSummary(id, "", suffix, maxUses, currentUses, expiresAt, createdBy, createdAt)
+		summary["code_suffix"] = suffix
+		delete(summary, "token_suffix")
+		codes = append(codes, summary)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing invite codes", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list invite codes"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"codes": codes})
 }
 func (h *TokenHandler) CreateInviteCode(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	var req struct {
+		MaxUses int        `json:"max_uses"`
+		Expires *time.Time `json:"expires_at"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.MaxUses == 0 {
+		req.MaxUses = 1
+	}
+	if err := validateTokenLifetime(req.MaxUses, req.Expires); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	uid, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	code, err := generateOpaqueToken("anvil_inv_")
+	if err != nil {
+		h.logger.Error("failed to generate invite code", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create invite code"})
+		return
+	}
+	id := uuid.New()
+	var createdAt time.Time
+	err = h.db.Pool.QueryRow(c.Request.Context(), `
+		INSERT INTO invite_codes (id, code, max_uses, current_uses, expires_at, created_by)
+		VALUES ($1, $2, $3, 0, $4, $5) RETURNING created_at
+	`, id, code, req.MaxUses, req.Expires, uid).Scan(&createdAt)
+	if err != nil {
+		h.logger.Error("failed to create invite code", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create invite code"})
+		return
+	}
+	if err := logAdminAction(h.db, c, uid.String(), "invite_code_created", "invite_code", id.String(), map[string]interface{}{
+		"max_uses": req.MaxUses, "expires_at": req.Expires,
+	}); err != nil {
+		h.logger.Warn("failed to audit invite code creation", zap.Error(err))
+	}
+	c.JSON(http.StatusCreated, gin.H{"id": id, "code": code, "max_uses": req.MaxUses, "expires_at": req.Expires, "created_at": createdAt})
 }
 func (h *TokenHandler) DeleteInviteCode(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "Not implemented"})
+	h.deleteToken(c, "invite_codes", "invite code")
+}
+
+func (h *TokenHandler) deleteToken(c *gin.Context, table, label string) {
+	query := "DELETE FROM " + table + " WHERE id = $1"
+	result, err := h.db.Pool.Exec(c.Request.Context(), query, c.Param("id"))
+	if err != nil {
+		h.logger.Error("failed to delete "+label, zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete " + label})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": label + " not found"})
+		return
+	}
+	if uid, ok := contextUserID(c); ok {
+		action := strings.ReplaceAll(label, " ", "_") + "_deleted"
+		if err := logAdminAction(h.db, c, uid.String(), action, strings.ReplaceAll(label, " ", "_"), c.Param("id"), nil); err != nil {
+			h.logger.Warn("failed to audit "+label+" deletion", zap.Error(err))
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"message": label + " deleted"})
+}
+
+func generateOpaqueToken(prefix string) (string, error) {
+	bytes := make([]byte, 24)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return prefix + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func validateTokenLifetime(maxUses int, expiresAt *time.Time) error {
+	if maxUses < 1 {
+		return errors.New("max_uses must be positive")
+	}
+	if expiresAt != nil && !expiresAt.After(time.Now()) {
+		return errors.New("expires_at must be in the future")
+	}
+	return nil
+}
+
+func contextUserID(c *gin.Context) (uuid.UUID, bool) {
+	value, exists := c.Get("user_id")
+	if !exists {
+		return uuid.Nil, false
+	}
+	uid, ok := value.(uuid.UUID)
+	return uid, ok && uid != uuid.Nil
+}
+
+func tokenSummary(id, teamName, suffix string, maxUses, currentUses int, expiresAt *time.Time, createdBy *uuid.UUID, createdAt time.Time) gin.H {
+	result := gin.H{
+		"id": id, "token_suffix": suffix, "max_uses": maxUses, "current_uses": currentUses,
+		"expires_at": expiresAt, "created_by": createdBy, "created_at": createdAt,
+		"active": currentUses < maxUses && (expiresAt == nil || expiresAt.After(time.Now())),
+	}
+	if teamName != "" {
+		result["team_name"] = teamName
+	}
+	return result
 }
 
 // SettingsHandler for platform settings
@@ -600,27 +992,48 @@ func (h *SettingsHandler) List(c *gin.Context) {
 		var key string
 		var rawValue json.RawMessage
 		if err := rows.Scan(&key, &rawValue); err != nil {
-			h.logger.Warn("Failed to scan setting", zap.Error(err))
-			continue
+			h.logger.Error("Failed to scan setting", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load settings"})
+			return
 		}
 		var value interface{}
 		if err := json.Unmarshal(rawValue, &value); err != nil {
-			h.logger.Warn("Failed to decode setting", zap.String("key", key), zap.Error(err))
-			continue
+			h.logger.Error("Failed to decode setting", zap.String("key", key), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load settings"})
+			return
 		}
 		settings[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("Failed while loading settings", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load settings"})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"settings": settings})
 }
 
 func (h *SettingsHandler) Update(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
 	var req struct {
 		Settings map[string]interface{} `json:"settings"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+	if len(req.Settings) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No settings provided"})
+		return
+	}
+	if len(req.Settings) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Too many settings provided"})
+		return
+	}
+	uid, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
@@ -634,22 +1047,44 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 
 	// Upsert each setting
 	for key, value := range req.Settings {
+		if strings.TrimSpace(key) == "" || len(key) > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid setting key"})
+			return
+		}
+		if err := validatePlatformSetting(key, value); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		valueJSON, err := json.Marshal(value)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid setting value: " + key})
 			return
 		}
 
-		_, err = tx.Exec(c.Request.Context(), `
-			INSERT INTO platform_settings (key, value, updated_at)
-			VALUES ($1, $2::jsonb, NOW())
-			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
-		`, key, string(valueJSON))
-		if err != nil {
-			h.logger.Error("Failed to update setting", zap.String("key", key), zap.Error(err))
+		result, updateErr := tx.Exec(c.Request.Context(), `
+			UPDATE platform_settings
+			SET value = $2::jsonb, updated_at = NOW(), updated_by = $3
+			WHERE key = $1
+		`, key, string(valueJSON), uid)
+		if updateErr != nil {
+			h.logger.Error("Failed to update setting", zap.String("key", key), zap.Error(updateErr))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update setting: " + key})
 			return
 		}
+		if result.RowsAffected() != 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Unknown setting: " + key})
+			return
+		}
+	}
+
+	metadata, _ := json.Marshal(map[string]interface{}{"settings_count": len(req.Settings)})
+	if _, err := tx.Exec(c.Request.Context(), `
+		INSERT INTO audit_log (user_id, action, entity_type, new_values, ip_address, user_agent)
+		VALUES ($1, 'settings_updated', 'platform_settings', $2::jsonb, $3, $4)
+	`, uid, string(metadata), c.ClientIP(), c.Request.UserAgent()); err != nil {
+		h.logger.Error("Failed to audit settings update", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update settings"})
+		return
 	}
 
 	if err := tx.Commit(c.Request.Context()); err != nil {
@@ -657,20 +1092,44 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// Log the action
-	userID, exists := c.Get("user_id")
-	uid, ok := userID.(uuid.UUID)
-	if !exists || !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func validatePlatformSetting(key string, value interface{}) error {
+	intRange := func(minimum, maximum int) error {
+		number, ok := value.(float64)
+		if !ok || math.Trunc(number) != number || number < float64(minimum) || number > float64(maximum) {
+			return fmt.Errorf("Invalid value for %s: expected an integer from %d to %d", key, minimum, maximum)
+		}
+		return nil
 	}
-	if err := logAdminAction(h.db, c, uid.String(), "settings_updated", "platform_settings", "", map[string]interface{}{
-		"settings_count": len(req.Settings),
-	}); err != nil {
-		h.logger.Warn("Failed to log settings audit action", zap.Error(err))
+	boolValue := func() error {
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("Invalid value for %s: expected true or false", key)
+		}
+		return nil
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	switch key {
+	case "instance.max_per_user":
+		return intRange(1, 100)
+	case "instance.max_extensions":
+		return intRange(0, 10)
+	case "instance.extension_minutes":
+		return intRange(1, 24*60)
+	case "vm_default_timeout_easy", "vm_default_timeout_medium", "vm_default_timeout_hard", "vm_default_timeout_insane":
+		return intRange(30, 480)
+	case "cooldown.easy_minutes", "cooldown.medium_minutes", "cooldown.hard_minutes", "cooldown.insane_minutes":
+		return intRange(0, 120)
+	case "platform.require_vpn", "scoreboard_enabled":
+		return boolValue()
+	case "registration_mode":
+		mode, ok := value.(string)
+		if !ok || !isRegistrationMode(strings.ToLower(strings.TrimSpace(mode))) {
+			return errors.New("Invalid value for registration_mode")
+		}
+	}
+	return nil
 }
 
 // AuditHandler for audit logs
@@ -683,7 +1142,100 @@ func NewAuditHandler(db *database.DB, logger *zap.Logger) *AuditHandler {
 	return &AuditHandler{db: db, logger: logger}
 }
 
-func (h *AuditHandler) List(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"entries": []interface{}{}}) }
+func (h *AuditHandler) List(c *gin.Context) {
+	limit, offset, err := parsePage(c.Query("limit"), c.Query("offset"), 100, 200)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var userID *uuid.UUID
+	if raw := c.Query("user_id"); raw != "" {
+		parsed, err := uuid.Parse(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+			return
+		}
+		userID = &parsed
+	}
+
+	rows, err := h.db.Pool.Query(c.Request.Context(), `
+		SELECT a.id, a.user_id, COALESCE(u.username, ''), a.action,
+		       COALESCE(a.entity_type, ''), COALESCE(a.entity_id::text, ''),
+		       COALESCE(a.old_values, 'null'::jsonb), COALESCE(a.new_values, 'null'::jsonb),
+		       COALESCE(a.ip_address::text, ''), COALESCE(a.user_agent, ''), a.created_at
+		FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+		WHERE ($1 = '' OR a.action = $1) AND ($2::uuid IS NULL OR a.user_id = $2)
+		ORDER BY a.created_at DESC LIMIT $3 OFFSET $4
+	`, c.Query("action"), userID, limit, offset)
+	if err != nil {
+		h.logger.Error("failed to list audit entries", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list audit entries"})
+		return
+	}
+	defer rows.Close()
+
+	entries := make([]gin.H, 0)
+	for rows.Next() {
+		var id, username, action, entityType, entityID, ipAddress, userAgent string
+		var actorID *uuid.UUID
+		var oldRaw, newRaw json.RawMessage
+		var createdAt time.Time
+		if err := rows.Scan(&id, &actorID, &username, &action, &entityType, &entityID,
+			&oldRaw, &newRaw, &ipAddress, &userAgent, &createdAt); err != nil {
+			h.logger.Error("failed to scan audit entry", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list audit entries"})
+			return
+		}
+		var oldValues, newValues interface{}
+		if err := json.Unmarshal(oldRaw, &oldValues); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode audit entry"})
+			return
+		}
+		if err := json.Unmarshal(newRaw, &newValues); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode audit entry"})
+			return
+		}
+		entries = append(entries, gin.H{
+			"id": id, "user_id": actorID, "username": username, "action": action,
+			"entity_type": entityType, "entity_id": entityID, "old_values": oldValues,
+			"new_values": newValues, "ip_address": ipAddress, "user_agent": userAgent,
+			"created_at": createdAt,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing audit entries", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list audit entries"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"entries": entries, "limit": limit, "offset": offset})
+}
+
+func parsePage(rawLimit, rawOffset string, defaultLimit, maxLimit int) (int, int, error) {
+	limit := defaultLimit
+	offset := 0
+	var err error
+	if rawLimit != "" {
+		limit, err = strconv.Atoi(rawLimit)
+		if err != nil || limit < 1 || limit > maxLimit {
+			return 0, 0, fmt.Errorf("limit must be between 1 and %d", maxLimit)
+		}
+	}
+	if rawOffset != "" {
+		offset, err = strconv.Atoi(rawOffset)
+		if err != nil || offset < 0 {
+			return 0, 0, errors.New("offset must be non-negative")
+		}
+	}
+	return limit, offset, nil
+}
+
+func postgresErrorCode(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
+}
 
 // StatsHandler for platform statistics
 type StatsHandler struct {

@@ -103,7 +103,7 @@ func (h *GameHandler) standingsData(ctx context.Context) ([]gameStanding, error)
 	rows, err := h.db.Pool.Query(ctx,
 		`SELECT t.id, t.name, s.attack, s.defense, s.sla, s.koth, s.total, s.rank
 		 FROM game_standings s JOIN game_teams t ON t.id = s.team_id
-		 WHERE t.is_nop = false
+		 WHERE t.is_nop = false AND t.status = 'active'
 		 ORDER BY s.rank ASC NULLS LAST`)
 	if err != nil {
 		return nil, err
@@ -115,12 +115,12 @@ func (h *GameHandler) standingsData(ctx context.Context) ([]gameStanding, error)
 		var e gameStanding
 		var id uuid.UUID
 		if err := rows.Scan(&id, &e.Team, &e.Attack, &e.Defense, &e.SLA, &e.Koth, &e.Total, &e.Rank); err != nil {
-			continue
+			return nil, err
 		}
 		e.TeamID = id.String()
 		standings = append(standings, e)
 	}
-	return standings, nil
+	return standings, rows.Err()
 }
 
 // Scoreboard returns the combined AD + KotH standings.
@@ -164,12 +164,12 @@ func (h *GameHandler) hillsData(ctx context.Context) ([]gameHill, error) {
 		var e gameHill
 		var id uuid.UUID
 		if err := rows.Scan(&id, &e.Name, &e.Controller); err != nil {
-			continue
+			return nil, err
 		}
 		e.HillID = id.String()
 		hills = append(hills, e)
 	}
-	return hills, nil
+	return hills, rows.Err()
 }
 
 // Hills returns each hill's current controller for the control-map.
@@ -186,20 +186,27 @@ func (h *GameHandler) Hills(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"hills": hills})
 }
 
-func (h *GameHandler) tickRound(ctx context.Context) (int, int) {
+func (h *GameHandler) tickRound(ctx context.Context) (int, int, error) {
 	var tick, round int
-	h.db.Pool.QueryRow(ctx, `SELECT COALESCE(MAX(tick_number), 0) FROM game_ticks`).Scan(&tick)
-	h.db.Pool.QueryRow(ctx, `SELECT COALESCE(MAX(round_number), 0) FROM game_koth_rounds`).Scan(&round)
-	return tick, round
+	if err := h.db.Pool.QueryRow(ctx, `SELECT COALESCE(MAX(tick_number), 0) FROM game_ticks`).Scan(&tick); err != nil {
+		return 0, 0, err
+	}
+	if err := h.db.Pool.QueryRow(ctx, `SELECT COALESCE(MAX(round_number), 0) FROM game_koth_rounds`).Scan(&round); err != nil {
+		return 0, 0, err
+	}
+	return tick, round, nil
 }
 
-func (h *GameHandler) statusPayload(ctx context.Context) gin.H {
-	tick, round := h.tickRound(ctx)
+func (h *GameHandler) statusPayload(ctx context.Context) (gin.H, error) {
+	tick, round, err := h.tickRound(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return gin.H{
 		"tick":                  tick,
 		"round":                 round,
 		"tick_interval_seconds": int(h.config.Game.TickInterval.Seconds()),
-	}
+	}, nil
 }
 
 // Status returns the current tick and KotH round.
@@ -207,7 +214,13 @@ func (h *GameHandler) Status(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	c.JSON(http.StatusOK, h.statusPayload(c.Request.Context()))
+	payload, err := h.statusPayload(c.Request.Context())
+	if err != nil {
+		h.logger.Error("status query", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
 type historyPoint struct {
@@ -225,7 +238,7 @@ func (h *GameHandler) historyData(ctx context.Context) ([]*historySeries, error)
 	rows, err := h.db.Pool.Query(ctx,
 		`SELECT t.id, t.name, s.tick_number, s.total
 		 FROM game_score_snapshots s JOIN game_teams t ON t.id = s.team_id
-		 WHERE t.is_nop = false
+		 WHERE t.is_nop = false AND t.status = 'active'
 		 ORDER BY t.name, s.tick_number`)
 	if err != nil {
 		return nil, err
@@ -240,7 +253,7 @@ func (h *GameHandler) historyData(ctx context.Context) ([]*historySeries, error)
 		var tick int
 		var total float64
 		if err := rows.Scan(&id, &name, &tick, &total); err != nil {
-			continue
+			return nil, err
 		}
 		key := id.String()
 		s := byTeam[key]
@@ -255,6 +268,9 @@ func (h *GameHandler) historyData(ctx context.Context) ([]*historySeries, error)
 	series := make([]*historySeries, 0, len(order))
 	for _, k := range order {
 		series = append(series, byTeam[k])
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return series, nil
 }
@@ -303,10 +319,15 @@ func (h *GameHandler) matrixData(ctx context.Context) ([]matrixService, []matrix
 		var s matrixService
 		var id uuid.UUID
 		if err := svcRows.Scan(&id, &s.Name, &s.Category, &s.Tier); err != nil {
-			continue
+			svcRows.Close()
+			return nil, nil, err
 		}
 		s.ServiceID = id.String()
 		services = append(services, s)
+	}
+	if err := svcRows.Err(); err != nil {
+		svcRows.Close()
+		return nil, nil, err
 	}
 	svcRows.Close()
 
@@ -321,16 +342,21 @@ func (h *GameHandler) matrixData(ctx context.Context) ([]matrixService, []matrix
 		var team, svc uuid.UUID
 		var cell matrixCell
 		if err := slaRows.Scan(&team, &svc, &cell.Status, &cell.LatencyMs); err != nil {
-			continue
+			slaRows.Close()
+			return nil, nil, err
 		}
 		latest[team.String()+"|"+svc.String()] = cell
+	}
+	if err := slaRows.Err(); err != nil {
+		slaRows.Close()
+		return nil, nil, err
 	}
 	slaRows.Close()
 
 	teamRows, err := h.db.Pool.Query(ctx,
 		`SELECT t.id, t.name, s.rank FROM game_teams t
 		 JOIN game_standings s ON s.team_id = t.id
-		 WHERE t.is_nop = false ORDER BY s.rank ASC NULLS LAST`)
+		 WHERE t.is_nop = false AND t.status = 'active' ORDER BY s.rank ASC NULLS LAST`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -341,7 +367,7 @@ func (h *GameHandler) matrixData(ctx context.Context) ([]matrixService, []matrix
 		var r matrixRow
 		var id uuid.UUID
 		if err := teamRows.Scan(&id, &r.Team, &r.Rank); err != nil {
-			continue
+			return nil, nil, err
 		}
 		r.TeamID = id.String()
 		r.Cells = make([]matrixCell, len(services))
@@ -354,7 +380,7 @@ func (h *GameHandler) matrixData(ctx context.Context) ([]matrixService, []matrix
 		}
 		rows = append(rows, r)
 	}
-	return services, rows, nil
+	return services, rows, teamRows.Err()
 }
 
 // Services returns the teams x services SLA matrix, rows ordered by rank.
@@ -397,12 +423,12 @@ func (h *GameHandler) eventsData(ctx context.Context) ([]gameEvent, error) {
 		var e gameEvent
 		var at time.Time
 		if err := rows.Scan(&e.Tick, &e.Attacker, &e.Victim, &e.Service, &at); err != nil {
-			continue
+			return nil, err
 		}
 		e.At = at.Unix()
 		events = append(events, e)
 	}
-	return events, nil
+	return events, rows.Err()
 }
 
 // Events returns the most recent flag captures for the live event feed.
@@ -457,9 +483,15 @@ func (h *GameHandler) State(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
+	status, err := h.statusPayload(ctx)
+	if err != nil {
+		h.logger.Error("state status", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":    h.statusPayload(ctx),
+		"status":    status,
 		"hills":     hills,
 		"standings": standings,
 		"services":  services,

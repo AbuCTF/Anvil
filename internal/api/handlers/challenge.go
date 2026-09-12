@@ -4,8 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -93,14 +95,8 @@ type HintResponse struct {
 func (h *ChallengeHandler) List(c *gin.Context) {
 	// Get user ID if authenticated
 	var userID *uuid.UUID
-	if id, exists := c.Get("user_id"); exists {
-		if uid, ok := id.(uuid.UUID); ok {
-			userID = &uid
-		} else if uidStr, ok := id.(string); ok {
-			if uid, err := uuid.Parse(uidStr); err == nil {
-				userID = &uid
-			}
-		}
+	if uid, ok := contextUserID(c); ok {
+		userID = &uid
 	}
 
 	// Query published challenges
@@ -108,14 +104,20 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		SELECT 
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
-			c.resource_type, cat.id as category_id, cat.name as category_name
+			c.resource_type, cat.id as category_id, cat.name as category_name,
+			COALESCE((
+				SELECT COUNT(*) FROM solves s
+				JOIN flags f ON s.flag_id = f.id
+				WHERE s.user_id = $1 AND f.challenge_id = c.id
+			), 0) AS user_solves
 		FROM challenges c
 		LEFT JOIN categories cat ON c.category_id = cat.id
 		WHERE c.status = 'published'
+		  AND (c.release_date IS NULL OR c.release_date <= NOW())
 		ORDER BY c.created_at DESC
 	`
 
-	rows, err := h.db.Pool.Query(c.Request.Context(), query)
+	rows, err := h.db.Pool.Query(c.Request.Context(), query, userID)
 	if err != nil {
 		h.logger.Error("failed to list challenges", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
@@ -131,29 +133,24 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		if err := rows.Scan(
 			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 			&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
-			&ch.ResourceType, &categoryID, &categoryName,
+			&ch.ResourceType, &categoryID, &categoryName, &ch.UserSolves,
 		); err != nil {
 			h.logger.Error("failed to scan challenge", zap.Error(err))
-			continue
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
+			return
 		}
 
 		ch.CategoryID = categoryID
 		ch.Category = categoryName
 
-		// Check if user has solved any flags
-		if userID != nil {
-			var solveCount int
-			solveQuery := `
-				SELECT COUNT(*) FROM solves s
-				JOIN flags f ON s.flag_id = f.id
-				WHERE s.user_id = $1 AND f.challenge_id = $2
-			`
-			h.db.Pool.QueryRow(c.Request.Context(), solveQuery, userID, ch.ID).Scan(&solveCount)
-			ch.UserSolves = solveCount
-			ch.IsSolved = solveCount >= ch.TotalFlags && ch.TotalFlags > 0
-		}
+		ch.IsSolved = ch.UserSolves >= ch.TotalFlags && ch.TotalFlags > 0
 
 		challenges = append(challenges, ch)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while reading challenges", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
+		return
 	}
 
 	if challenges == nil {
@@ -173,25 +170,21 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	// Get user ID if authenticated
 	var userID *uuid.UUID
 	var userRole string
-	if id, exists := c.Get("user_id"); exists {
-		if uid, ok := id.(uuid.UUID); ok {
-			userID = &uid
-		} else if uidStr, ok := id.(string); ok {
-			if uid, err := uuid.Parse(uidStr); err == nil {
-				userID = &uid
-			}
-		}
+	if uid, ok := contextUserID(c); ok {
+		userID = &uid
 	}
 	if role, exists := c.Get("role"); exists {
-		userRole = role.(string)
+		if typedRole, ok := role.(string); ok {
+			userRole = typedRole
+		}
 	}
 
 	// Query challenge - allow admins to see all challenges, others only published
 	var statusCondition string
-	if userRole == "admin" {
+	if userID != nil && userRole == "admin" {
 		statusCondition = "(c.status = 'published' OR c.status = 'draft')"
 	} else {
-		statusCondition = "c.status = 'published'"
+		statusCondition = "c.status = 'published' AND (c.release_date IS NULL OR c.release_date <= NOW())"
 	}
 
 	query := `
@@ -217,7 +210,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		&categoryID, &categoryName,
 	)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
 	} else if err != nil {
@@ -229,89 +222,110 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	ch.CategoryID = categoryID
 	ch.Category = categoryName
 
-	// Parse exposed ports
+	ch.ExposedPorts = []models.ExposedPort{}
 	if len(exposedPortsJSON) > 0 {
-		ch.ExposedPorts = []models.ExposedPort{}
-		// JSON unmarshal would be done here
+		if err := json.Unmarshal(exposedPortsJSON, &ch.ExposedPorts); err != nil {
+			h.logger.Error("failed to decode challenge exposed ports", zap.String("challenge_id", ch.ID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+			return
+		}
+		if ch.ExposedPorts == nil {
+			ch.ExposedPorts = []models.ExposedPort{}
+		}
 	}
 
 	// Get flags
 	flagsQuery := `
-		SELECT id, name, points, sort_order,
-			(SELECT COUNT(*) FROM solves WHERE flag_id = flags.id) as total_solves
-		FROM flags
-		WHERE challenge_id = $1
-		ORDER BY sort_order
+		SELECT f.id, f.name, f.points, f.sort_order,
+			(SELECT COUNT(*) FROM solves WHERE flag_id = f.id) AS total_solves,
+			s.solved_at
+		FROM flags f
+		LEFT JOIN solves s ON s.flag_id = f.id AND s.user_id = $2
+		WHERE f.challenge_id = $1
+		ORDER BY f.sort_order
 	`
-	flagRows, err := h.db.Pool.Query(c.Request.Context(), flagsQuery, ch.ID)
-	if err == nil {
-		defer flagRows.Close()
-		for flagRows.Next() {
-			var f FlagResponse
-			if err := flagRows.Scan(&f.ID, &f.Name, &f.Points, &f.Order, &f.TotalSolves); err != nil {
-				continue
-			}
-
-			// Check if user solved this flag
-			if userID != nil {
-				var solvedAt *time.Time
-				solveQuery := `SELECT solved_at FROM solves WHERE user_id = $1 AND flag_id = $2`
-				if err := h.db.Pool.QueryRow(c.Request.Context(), solveQuery, userID, f.ID).Scan(&solvedAt); err == nil && solvedAt != nil {
-					f.IsSolved = true
-					ts := solvedAt.Unix()
-					f.SolvedAt = &ts
-				}
-			}
-			ch.Flags = append(ch.Flags, f)
+	flagRows, err := h.db.Pool.Query(c.Request.Context(), flagsQuery, ch.ID, userID)
+	if err != nil {
+		h.logger.Error("failed to query challenge flags", zap.String("challenge_id", ch.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+		return
+	}
+	defer flagRows.Close()
+	for flagRows.Next() {
+		var f FlagResponse
+		var solvedAt *time.Time
+		if err := flagRows.Scan(&f.ID, &f.Name, &f.Points, &f.Order, &f.TotalSolves, &solvedAt); err != nil {
+			h.logger.Error("failed to scan challenge flag", zap.String("challenge_id", ch.ID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+			return
 		}
+
+		if solvedAt != nil {
+			f.IsSolved = true
+			ts := solvedAt.Unix()
+			f.SolvedAt = &ts
+			ch.UserSolves++
+		}
+		ch.Flags = append(ch.Flags, f)
+	}
+	if err := flagRows.Err(); err != nil {
+		h.logger.Error("failed while reading challenge flags", zap.String("challenge_id", ch.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+		return
 	}
 
 	// Get hints
 	hintsQuery := `
-		SELECT id, content, cost, sort_order
-		FROM hints
-		WHERE challenge_id = $1
-		ORDER BY sort_order
+		SELECT h.id, h.content, h.cost, h.sort_order, hu.id IS NOT NULL
+		FROM hints h
+		LEFT JOIN hint_unlocks hu ON hu.hint_id = h.id AND hu.user_id = $2
+		WHERE h.challenge_id = $1
+		ORDER BY h.sort_order
 	`
-	hintRows, err := h.db.Pool.Query(c.Request.Context(), hintsQuery, ch.ID)
-	if err == nil {
-		defer hintRows.Close()
-		for hintRows.Next() {
-			var hint HintResponse
-			var content string
-			if err := hintRows.Scan(&hint.ID, &content, &hint.Cost, &hint.Order); err != nil {
-				continue
-			}
-
-			// Check if user unlocked this hint
-			if userID != nil {
-				var unlocked bool
-				unlockQuery := `SELECT EXISTS(SELECT 1 FROM hint_unlocks WHERE user_id = $1 AND hint_id = $2)`
-				h.db.Pool.QueryRow(c.Request.Context(), unlockQuery, userID, hint.ID).Scan(&unlocked)
-				hint.IsUnlocked = unlocked
-				if unlocked {
-					hint.Content = &content
-				}
-			}
-			ch.Hints = append(ch.Hints, hint)
+	hintRows, err := h.db.Pool.Query(c.Request.Context(), hintsQuery, ch.ID, userID)
+	if err != nil {
+		h.logger.Error("failed to query challenge hints", zap.String("challenge_id", ch.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+		return
+	}
+	defer hintRows.Close()
+	for hintRows.Next() {
+		var hint HintResponse
+		var content string
+		if err := hintRows.Scan(&hint.ID, &content, &hint.Cost, &hint.Order, &hint.IsUnlocked); err != nil {
+			h.logger.Error("failed to scan challenge hint", zap.String("challenge_id", ch.ID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+			return
 		}
+
+		if hint.IsUnlocked {
+			hint.Content = &content
+		}
+		ch.Hints = append(ch.Hints, hint)
+	}
+	if err := hintRows.Err(); err != nil {
+		h.logger.Error("failed while reading challenge hints", zap.String("challenge_id", ch.ID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+		return
 	}
 
-	// Check overall solve status
-	if userID != nil {
-		var solveCount int
-		h.db.Pool.QueryRow(c.Request.Context(),
-			`SELECT COUNT(*) FROM solves s JOIN flags f ON s.flag_id = f.id WHERE s.user_id = $1 AND f.challenge_id = $2`,
-			userID, ch.ID).Scan(&solveCount)
-		ch.UserSolves = solveCount
-		ch.IsSolved = solveCount >= ch.TotalFlags && ch.TotalFlags > 0
-	}
+	ch.IsSolved = ch.UserSolves >= ch.TotalFlags && ch.TotalFlags > 0
 
 	// Attach file attachments
 	if h.attachmentHdlr != nil {
-		if attachments, err := h.attachmentHdlr.ListPublic(c, ch.ID); err == nil {
-			ch.Attachments = attachments
+		attachments, err := h.attachmentHdlr.ListPublic(c, ch.ID)
+		if err != nil {
+			h.logger.Error("failed to query challenge attachments", zap.String("challenge_id", ch.ID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+			return
 		}
+		ch.Attachments = attachments
+	}
+	if ch.Flags == nil {
+		ch.Flags = []FlagResponse{}
+	}
+	if ch.Hints == nil {
+		ch.Hints = []HintResponse{}
 	}
 	if ch.Attachments == nil {
 		ch.Attachments = []AttachmentResponse{}
@@ -325,19 +339,24 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 	slug := c.Param("slug")
 
 	// Get user ID
-	userID, exists := c.Get("user_id")
-	if !exists {
+	uid, ok := contextUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	uid := userID.(uuid.UUID)
 
 	// Get challenge ID
 	var challengeID string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id FROM challenges WHERE slug = $1 AND status = 'published'`, slug).Scan(&challengeID)
-	if err != nil {
+		`SELECT id FROM challenges
+		 WHERE slug = $1 AND status = 'published'
+		   AND (release_date IS NULL OR release_date <= NOW())`, slug).Scan(&challengeID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	} else if err != nil {
+		h.logger.Error("failed to query challenge flags", zap.String("slug", slug), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
 		return
 	}
 
@@ -365,7 +384,9 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 		var f FlagResponse
 		var solvedAt *time.Time
 		if err := rows.Scan(&f.ID, &f.Name, &f.Points, &f.Order, &f.TotalSolves, &solvedAt); err != nil {
-			continue
+			h.logger.Error("failed to scan challenge flag", zap.String("challenge_id", challengeID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
+			return
 		}
 		if solvedAt != nil {
 			f.IsSolved = true
@@ -373,6 +394,11 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 			f.SolvedAt = &ts
 		}
 		flags = append(flags, f)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while reading challenge flags", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
+		return
 	}
 
 	if flags == nil {
@@ -387,30 +413,46 @@ type SubmitFlagRequest struct {
 	Flag string `json:"flag" binding:"required"`
 }
 
+const maxSubmittedFlagLength = 4096
+
 // SubmitFlag handles flag submission
 func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	slug := c.Param("slug")
 
 	// Get user ID
-	userID, exists := c.Get("user_id")
-	if !exists {
+	uid, ok := contextUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	uid := userID.(uuid.UUID)
 
 	var req SubmitFlagRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "flag is required"})
 		return
 	}
+	submittedFlag := strings.TrimSpace(req.Flag)
+	if submittedFlag == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "flag is required"})
+		return
+	}
+	if len(submittedFlag) > maxSubmittedFlagLength {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "flag is too long"})
+		return
+	}
 
 	// Get challenge
 	var challengeID string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id FROM challenges WHERE slug = $1 AND status = 'published'`, slug).Scan(&challengeID)
-	if err != nil {
+		`SELECT id FROM challenges
+		 WHERE slug = $1 AND status = 'published'
+		   AND (release_date IS NULL OR release_date <= NOW())`, slug).Scan(&challengeID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	} else if err != nil {
+		h.logger.Error("failed to query challenge for flag submission", zap.String("slug", slug), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
 		return
 	}
 
@@ -423,15 +465,18 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		flagLockoutDuration  = 10 * time.Minute
 	)
 	var lockedUntil *time.Time
-	var wrongAttempts int
-	var firstAttemptAt time.Time
 	lockRow := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT wrong_attempts, first_attempt_at, locked_until
+		`SELECT locked_until
 		 FROM flag_attempt_lockouts
 		 WHERE user_id = $1 AND challenge_id = $2`,
 		uid, challengeID,
 	)
-	lockErr := lockRow.Scan(&wrongAttempts, &firstAttemptAt, &lockedUntil)
+	lockErr := lockRow.Scan(&lockedUntil)
+	if lockErr != nil && !errors.Is(lockErr, pgx.ErrNoRows) {
+		h.logger.Error("failed to check flag submission lockout", zap.String("challenge_id", challengeID), zap.Error(lockErr))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+		return
+	}
 	if lockErr == nil && lockedUntil != nil && time.Now().Before(*lockedUntil) {
 		retryAfter := int(time.Until(*lockedUntil).Seconds()) + 1
 		c.Header("Retry-After", fmt.Sprintf("%d", retryAfter))
@@ -442,20 +487,6 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		})
 		return
 	}
-	// Reset window if the last tracking window has expired
-	if lockErr == nil && time.Since(firstAttemptAt) > flagLockoutWindow {
-		if _, delErr := h.db.Pool.Exec(c.Request.Context(),
-			`DELETE FROM flag_attempt_lockouts WHERE user_id = $1 AND challenge_id = $2`,
-			uid, challengeID,
-		); delErr != nil {
-			h.logger.Warn("failed to reset lockout tracking", zap.Error(delErr))
-		}
-		wrongAttempts = 0
-	}
-
-	// Normalize flag (trim whitespace)
-	submittedFlag := strings.TrimSpace(req.Flag)
-
 	// ── Static flag check ────────────────────────────────────────────────────
 	// Query static flags and compare by hashing the submitted value.
 	query := `
@@ -489,7 +520,10 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			CaseSensitive bool
 		}
 		if err := rows.Scan(&f.ID, &f.FlagHash, &f.Name, &f.Points, &f.CaseSensitive); err != nil {
-			continue
+			rows.Close()
+			h.logger.Error("failed to scan static flag", zap.String("challenge_id", challengeID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+			return
 		}
 
 		var submittedHash string
@@ -505,6 +539,12 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			break
 		}
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		h.logger.Error("failed while reading static flags", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+		return
+	}
 	rows.Close()
 
 	// ── Regex flag check ─────────────────────────────────────────────────────
@@ -513,60 +553,86 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// users trigger a silent flag-share event.
 	if !found {
 		regexRows, regexErr := h.db.Pool.Query(c.Request.Context(),
-			`SELECT f.id, f.flag_hash, f.name, f.points
+			`SELECT f.id, f.flag_hash, f.name, f.points, f.case_sensitive
 			   FROM flags f
 			  WHERE f.challenge_id = $1 AND f.flag_type = 'regex'`,
 			challengeID)
-		if regexErr == nil {
-			for regexRows.Next() {
-				var fID, pattern, fName string
-				var fPoints int
-				if err := regexRows.Scan(&fID, &pattern, &fName, &fPoints); err != nil {
-					continue
-				}
-				re, err := regexp.Compile(pattern)
-				if err != nil {
-					h.logger.Warn("invalid regex flag pattern", zap.String("flag_id", fID), zap.Error(err))
-					continue
-				}
-				if re.MatchString(submittedFlag) {
-					matchedFlag.ID = fID
-					matchedFlag.Name = fName
-					matchedFlag.Points = fPoints
-					found = true
-
-					// Flag share detection: same exact value previously submitted by another user
-					var priorUserID string
-					shareErr := h.db.Pool.QueryRow(c.Request.Context(),
-						`SELECT user_id FROM flag_attempts
-						  WHERE submitted_flag = $1 AND challenge_id = $2
-						    AND is_correct = true AND user_id != $3
-						  LIMIT 1`,
-						submittedFlag, challengeID, uid,
-					).Scan(&priorUserID)
-					if shareErr == nil {
-						_, logErr := h.db.Pool.Exec(c.Request.Context(),
-							`INSERT INTO flag_share_events
-								(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
-								 submitter_user_id, flag_value, submitter_ip, created_at)
-							 VALUES
-								(uuid_generate_v4(), $1, $2, $3, NULL, $4, $5, $6, NOW())`,
-							challengeID, fID, priorUserID, uid, submittedFlag, c.ClientIP())
-						if logErr != nil {
-							h.logger.Warn("failed to log regex flag share event", zap.Error(logErr))
-						} else {
-							h.logger.Warn("FLAG SHARE DETECTED (regex)",
-								zap.String("submitter", uid.String()),
-								zap.String("prior_user", priorUserID),
-								zap.String("challenge_id", challengeID),
-								zap.String("flag_value", submittedFlag),
-							)
-						}
-					}
-					break
-				}
+		if regexErr != nil {
+			h.logger.Error("failed to query regex flags", zap.String("challenge_id", challengeID), zap.Error(regexErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+			return
+		}
+		for regexRows.Next() {
+			var fID, pattern, fName string
+			var fPoints int
+			var caseSensitive bool
+			if err := regexRows.Scan(&fID, &pattern, &fName, &fPoints, &caseSensitive); err != nil {
+				regexRows.Close()
+				h.logger.Error("failed to scan regex flag", zap.String("challenge_id", challengeID), zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+				return
 			}
+			if !caseSensitive {
+				pattern = "(?i:" + pattern + ")"
+			}
+			re, err := regexp.Compile(pattern)
+			if err != nil {
+				regexRows.Close()
+				h.logger.Error("invalid regex flag pattern", zap.String("flag_id", fID), zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+				return
+			}
+			if re.MatchString(submittedFlag) {
+				matchedFlag.ID = fID
+				matchedFlag.Name = fName
+				matchedFlag.Points = fPoints
+				found = true
+				break
+			}
+		}
+		if err := regexRows.Err(); err != nil {
 			regexRows.Close()
+			h.logger.Error("failed while reading regex flags", zap.String("challenge_id", challengeID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+			return
+		}
+		regexRows.Close()
+
+		if found {
+			// Flag share detection: same exact value previously submitted by another user.
+			var priorUserID string
+			shareErr := h.db.Pool.QueryRow(c.Request.Context(),
+				`SELECT user_id FROM flag_attempts
+				 WHERE submitted_flag = $1 AND challenge_id = $2 AND flag_id = $4
+				   AND is_correct = true AND user_id != $3
+				 LIMIT 1`,
+				submittedFlag, challengeID, uid, matchedFlag.ID,
+			).Scan(&priorUserID)
+			switch {
+			case shareErr == nil:
+				if _, err := h.db.Pool.Exec(c.Request.Context(),
+					`INSERT INTO flag_share_events
+						(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
+						 submitter_user_id, flag_value, submitter_ip, created_at)
+					 VALUES
+						(uuid_generate_v4(), $1, $2, $3, NULL, $4, $5, $6, NOW())`,
+					challengeID, matchedFlag.ID, priorUserID, uid, submittedFlag, c.ClientIP(),
+				); err != nil {
+					h.logger.Error("failed to log regex flag share event", zap.Error(err))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+					return
+				}
+				h.logger.Warn("FLAG SHARE DETECTED (regex)",
+					zap.String("submitter", uid.String()),
+					zap.String("prior_user", priorUserID),
+					zap.String("challenge_id", challengeID),
+				)
+			case errors.Is(shareErr, pgx.ErrNoRows):
+			default:
+				h.logger.Error("failed to check regex flag sharing", zap.String("challenge_id", challengeID), zap.Error(shareErr))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+				return
+			}
 		}
 	}
 
@@ -593,7 +659,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			matchedFlag.Name = dynFlagName
 			matchedFlag.Points = dynPoints
 			found = true
-		} else {
+		} else if errors.Is(err, pgx.ErrNoRows) {
 			// Check whether this exact flag value was generated for someone ELSE
 			var ownerUserID, ownerInstanceID, sharedFlagID, sharedFlagName string
 			var sharedPoints int
@@ -623,66 +689,105 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 					challengeID, sharedFlagID, ownerUserID, ownerInstanceID,
 					uid, submittedFlag, c.ClientIP())
 				if logErr != nil {
-					h.logger.Warn("failed to log flag share event", zap.Error(logErr))
+					h.logger.Error("failed to log flag share event", zap.Error(logErr))
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+					return
 				} else {
 					h.logger.Warn("FLAG SHARE DETECTED",
 						zap.String("submitter", uid.String()),
 						zap.String("owner", ownerUserID),
 						zap.String("challenge_id", challengeID),
-						zap.String("flag_value", submittedFlag),
 					)
 				}
+			} else if !errors.Is(shareErr, pgx.ErrNoRows) {
+				h.logger.Error("failed to check dynamic flag sharing", zap.String("challenge_id", challengeID), zap.Error(shareErr))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+				return
 			}
+		} else {
+			h.logger.Error("failed to query dynamic flag", zap.String("challenge_id", challengeID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+			return
 		}
 	}
-
-	// Record attempt
-	attemptID := uuid.New()
-	_, err = h.db.Pool.Exec(c.Request.Context(),
-		`INSERT INTO flag_attempts (id, user_id, challenge_id, submitted_flag, is_correct, created_at)
-		 VALUES ($1, $2, $3, $4, $5, NOW())`,
-		attemptID, uid, challengeID, submittedFlag, found)
-	if err != nil {
-		h.logger.Warn("failed to record attempt", zap.Error(err))
-	}
-
-	// Update attempt count
-	h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE challenges SET total_attempts = total_attempts + 1 WHERE id = $1`, challengeID)
-
-	if !found {
-		// ── Update brute-force lockout tracking ───────────────────────────────
-		newCount := wrongAttempts + 1
-		var newLockedUntil interface{}
-		if newCount >= flagLockoutThreshold {
-			t := time.Now().Add(flagLockoutDuration)
-			newLockedUntil = t
-		}
-		if _, upsertErr := h.db.Pool.Exec(c.Request.Context(),
-			`INSERT INTO flag_attempt_lockouts (user_id, challenge_id, wrong_attempts, first_attempt_at, locked_until, updated_at)
-			 VALUES ($1, $2, $3, NOW(), $4, NOW())
-			 ON CONFLICT (user_id, challenge_id) DO UPDATE
-			 SET wrong_attempts = EXCLUDED.wrong_attempts,
-			     locked_until   = COALESCE($4, flag_attempt_lockouts.locked_until),
-			     updated_at     = NOW()`,
-			uid, challengeID, newCount, newLockedUntil,
-		); upsertErr != nil {
-			h.logger.Warn("failed to update lockout tracking", zap.Error(upsertErr))
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"correct": false,
-			"message": "Incorrect flag. Try again!",
-		})
+	if found && matchedFlag.Points < 0 {
+		h.logger.Error("matched flag has negative points", zap.String("flag_id", matchedFlag.ID), zap.Int("points", matchedFlag.Points))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
 		return
 	}
 
-	// Correct submission: clear any lockout entry
-	if _, delErr := h.db.Pool.Exec(c.Request.Context(),
-		`DELETE FROM flag_attempt_lockouts WHERE user_id = $1 AND challenge_id = $2`,
-		uid, challengeID,
-	); delErr != nil {
-		h.logger.Warn("failed to clear lockout on correct submission", zap.Error(delErr))
+	// Record the attempt and increment the challenge counter in one statement so
+	// neither half can be persisted without the other.
+	attemptID := uuid.New()
+	var matchedFlagID any
+	if found {
+		matchedFlagID = matchedFlag.ID
+	}
+	attemptResult, err := h.db.Pool.Exec(c.Request.Context(),
+		`WITH recorded_attempt AS (
+			INSERT INTO flag_attempts
+				(id, user_id, challenge_id, flag_id, submitted_flag, is_correct, ip_address, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+			RETURNING 1
+		)
+		UPDATE challenges
+		SET total_attempts = total_attempts + 1
+		WHERE id = $3 AND EXISTS (SELECT 1 FROM recorded_attempt)`,
+		attemptID, uid, challengeID, matchedFlagID, submittedFlag, found, c.ClientIP())
+	if err != nil {
+		h.logger.Error("failed to record flag attempt", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+		return
+	}
+	if attemptResult.RowsAffected() != 1 {
+		h.logger.Error("flag attempt recording affected an unexpected number of challenges", zap.Int64("rows_affected", attemptResult.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+		return
+	}
+
+	if !found {
+		// ── Update brute-force lockout tracking ───────────────────────────────
+		var newCount int
+		if upsertErr := h.db.Pool.QueryRow(c.Request.Context(),
+			`INSERT INTO flag_attempt_lockouts (user_id, challenge_id, wrong_attempts, first_attempt_at, locked_until, updated_at)
+			 VALUES ($1, $2, 1, NOW(), NULL, NOW())
+			 ON CONFLICT (user_id, challenge_id) DO UPDATE
+			 SET wrong_attempts = CASE
+			       WHEN flag_attempt_lockouts.first_attempt_at < NOW() - ($3 * INTERVAL '1 second')
+			         OR flag_attempt_lockouts.locked_until <= NOW() THEN 1
+			       ELSE flag_attempt_lockouts.wrong_attempts + 1
+			     END,
+			     first_attempt_at = CASE
+			       WHEN flag_attempt_lockouts.first_attempt_at < NOW() - ($3 * INTERVAL '1 second')
+			         OR flag_attempt_lockouts.locked_until <= NOW() THEN NOW()
+			       ELSE flag_attempt_lockouts.first_attempt_at
+			     END,
+			     locked_until = CASE
+			       WHEN flag_attempt_lockouts.first_attempt_at < NOW() - ($3 * INTERVAL '1 second')
+			         OR flag_attempt_lockouts.locked_until <= NOW() THEN NULL
+			       WHEN flag_attempt_lockouts.wrong_attempts + 1 >= $4
+			         THEN NOW() + ($5 * INTERVAL '1 second')
+			       ELSE NULL
+			     END,
+			     updated_at = NOW()
+			 RETURNING wrong_attempts`,
+			uid, challengeID, int(flagLockoutWindow.Seconds()), flagLockoutThreshold, int(flagLockoutDuration.Seconds()),
+		).Scan(&newCount); upsertErr != nil {
+			h.logger.Error("failed to update lockout tracking", zap.Error(upsertErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+			return
+		}
+
+		attemptsRemaining := flagLockoutThreshold - newCount
+		if attemptsRemaining < 0 {
+			attemptsRemaining = 0
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"correct":            false,
+			"message":            "Incorrect flag. Try again!",
+			"attempts_remaining": attemptsRemaining,
+		})
+		return
 	}
 
 	ctx := c.Request.Context()
@@ -701,6 +806,13 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		`SELECT 1 FROM challenges WHERE id = $1 FOR UPDATE`, challengeID,
 	).Scan(&challengeLock); err != nil {
 		h.logger.Error("failed to lock challenge for solve", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM flag_attempt_lockouts WHERE user_id = $1 AND challenge_id = $2`, uid, challengeID,
+	); err != nil {
+		h.logger.Error("failed to clear flag lockout", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 		return
 	}
@@ -733,10 +845,24 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// Check if row was actually inserted (RowsAffected=0 means conflict/already existed)
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
+		var solvedFlags int
+		if err := tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM solves s
+			 JOIN flags f ON s.flag_id = f.id
+			 WHERE s.user_id = $1 AND f.challenge_id = $2`, uid, challengeID,
+		).Scan(&solvedFlags); err != nil {
+			h.logger.Error("failed to count flags for duplicate solve", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+			return
+		}
 		if err := tx.Commit(ctx); err != nil {
 			h.logger.Error("failed to commit duplicate solve transaction", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 			return
+		}
+		fullySolved := totalFlags > 0 && solvedFlags >= totalFlags
+		if fullySolved {
+			go h.cleanupSolvedInstance(challengeID, uid)
 		}
 		c.JSON(http.StatusOK, gin.H{
 			"correct":        true,
@@ -744,6 +870,9 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			"message":        "Correct! But you've already solved this flag.",
 			"flag_name":      matchedFlag.Name,
 			"points":         0,
+			"fully_solved":   fullySolved,
+			"solved_flags":   solvedFlags,
+			"total_flags":    totalFlags,
 		})
 		return
 	}
@@ -766,7 +895,10 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	flagResult, err := tx.Exec(ctx,
 		`UPDATE flags SET total_solves = (
 			SELECT COUNT(*) FROM solves WHERE flag_id = $1
-		), updated_at = NOW() WHERE id = $1`, matchedFlag.ID)
+		), first_blood_user_id = COALESCE(first_blood_user_id, $2),
+		   first_blood_at = COALESCE(first_blood_at, NOW()),
+		   updated_at = NOW()
+		 WHERE id = $1`, matchedFlag.ID, uid)
 	if err != nil {
 		h.logger.Error("failed to update flag solve count", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
@@ -780,10 +912,15 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 
 	challengeResult, err := tx.Exec(ctx,
 		`UPDATE challenges SET total_solves = (
-			SELECT COUNT(DISTINCT user_id) FROM solves s
-			JOIN flags f ON s.flag_id = f.id
-			WHERE f.challenge_id = $1
-		) WHERE id = $1`, challengeID)
+			SELECT COUNT(*) FROM (
+				SELECT s.user_id
+				FROM solves s
+				JOIN flags f ON s.flag_id = f.id
+				WHERE f.challenge_id = $1
+				GROUP BY s.user_id
+				HAVING COUNT(DISTINCT s.flag_id) = $2
+			) fully_solved_users
+		) WHERE id = $1`, challengeID, totalFlags)
 	if err != nil {
 		h.logger.Error("failed to update challenge solve count", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
@@ -839,17 +976,25 @@ func (h *ChallengeHandler) cleanupSolvedInstance(challengeID string, userID uuid
 
 	// Find the user's active instance for this challenge
 	var instanceID, containerID, resourceType string
+	var vmNodeID *uuid.UUID
+	var reservedVCPU, reservedMemoryMB int
 	err := h.db.Pool.QueryRow(ctx,
-		`SELECT i.id, COALESCE(i.container_id, ''), c.resource_type
+		`SELECT i.id, COALESCE(i.container_id, ''), i.resource_type,
+		        i.vm_node_id, COALESCE(i.reserved_vcpu, 0), COALESCE(i.reserved_memory_mb, 0)
 		 FROM instances i
-		 JOIN challenges c ON i.challenge_id = c.id
 		 WHERE i.user_id = $1 AND i.challenge_id = $2
 		   AND i.status NOT IN ('stopped', 'failed', 'expired')
 		   AND i.expires_at > NOW()
 		 ORDER BY i.created_at DESC LIMIT 1`,
-		userID, challengeID).Scan(&instanceID, &containerID, &resourceType)
+		userID, challengeID).Scan(
+		&instanceID, &containerID, &resourceType,
+		&vmNodeID, &reservedVCPU, &reservedMemoryMB,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return
+	}
 	if err != nil {
-		// No active instance found — nothing to clean up
+		h.logger.Error("auto-stop: failed to query active instance", zap.Error(err), zap.String("challenge_id", challengeID), zap.String("user_id", userID.String()))
 		return
 	}
 
@@ -859,44 +1004,82 @@ func (h *ChallengeHandler) cleanupSolvedInstance(challengeID string, userID uuid
 		zap.String("challenge_id", challengeID),
 		zap.String("resource_type", resourceType))
 
-	// Stop the container or VM
-	if containerID != "" {
-		if resourceType == "vm" && h.vmSvc != nil {
-			if err := h.vmSvc.DestroyInstanceByName(ctx, containerID); err != nil {
-				h.logger.Error("auto-stop: failed to destroy VM",
-					zap.Error(err), zap.String("vm_name", containerID))
-			}
-		} else if h.containerSvc != nil {
-			if err := h.containerSvc.StopInstance(ctx, containerID); err != nil {
-				h.logger.Error("auto-stop: failed to stop container",
-					zap.Error(err), zap.String("container_id", containerID))
-			}
-		}
+	if containerID == "" {
+		h.logger.Warn("auto-stop: active instance has no runtime identifier", zap.String("instance_id", instanceID))
+		return
 	}
-
-	// Delete the instance record from the database
-	_, err = h.db.Pool.Exec(ctx, `DELETE FROM instances WHERE id = $1`, instanceID)
-	if err != nil {
-		h.logger.Error("auto-stop: failed to delete instance", zap.Error(err),
-			zap.String("instance_id", instanceID))
+	switch resourceType {
+	case "vm":
+		if h.vmSvc == nil {
+			h.logger.Error("auto-stop: VM service unavailable", zap.String("instance_id", instanceID))
+			return
+		}
+		var destroyErr error
+		if vmNodeID != nil {
+			node, nodeErr := loadAssignedVMNode(ctx, h.db.Pool, *vmNodeID)
+			if nodeErr != nil {
+				h.logger.Error("auto-stop: failed to load assigned VM node", zap.Error(nodeErr), zap.String("instance_id", instanceID))
+				return
+			}
+			destroyErr = h.vmSvc.DestroyInstanceByNameOnNode(ctx, containerID, node)
+		} else {
+			destroyErr = h.vmSvc.DestroyInstanceByName(ctx, containerID)
+		}
+		if destroyErr != nil {
+			h.logger.Error("auto-stop: failed to destroy VM", zap.Error(destroyErr), zap.String("vm_name", containerID))
+			return
+		}
+	case "docker":
+		if h.containerSvc == nil {
+			h.logger.Error("auto-stop: container service unavailable", zap.String("instance_id", instanceID))
+			return
+		}
+		if err := h.containerSvc.StopInstance(ctx, containerID); err != nil {
+			h.logger.Error("auto-stop: failed to stop container", zap.Error(err), zap.String("container_id", containerID))
+			return
+		}
+	default:
+		h.logger.Error("auto-stop: unsupported resource type", zap.String("resource_type", resourceType), zap.String("instance_id", instanceID))
 		return
 	}
 
-	// Decrement VM node counters if applicable
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("auto-stop: failed to begin cleanup transaction", zap.Error(err), zap.String("instance_id", instanceID))
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	result, err := tx.Exec(ctx,
+		`DELETE FROM instances WHERE id = $1 AND user_id = $2 AND challenge_id = $3`,
+		instanceID, userID, challengeID)
+	if err != nil {
+		h.logger.Error("auto-stop: failed to delete instance", zap.Error(err), zap.String("instance_id", instanceID))
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logger.Error("auto-stop: instance deletion affected an unexpected number of rows", zap.Int64("rows_affected", result.RowsAffected()), zap.String("instance_id", instanceID))
+		return
+	}
+
 	if resourceType == "vm" {
-		h.db.Pool.Exec(ctx,
-			`UPDATE vm_nodes SET
-			 used_vcpu = GREATEST(0, used_vcpu - 1),
-			 used_memory_mb = GREATEST(0, used_memory_mb - 1024),
-			 active_vms = GREATEST(0, active_vms - 1),
-			 updated_at = NOW()
-			 WHERE name = 'core'`)
+		if err := releaseVMNodeCapacity(ctx, tx, vmNodeID, reservedVCPU, reservedMemoryMB); err != nil {
+			h.logger.Error("auto-stop: failed to release VM node capacity", zap.Error(err), zap.String("instance_id", instanceID))
+			return
+		}
 	}
 
 	// Clear cooldown so the user doesn't get penalized for an auto-stop
-	h.db.Pool.Exec(ctx,
+	if _, err := tx.Exec(ctx,
 		`DELETE FROM user_cooldowns WHERE user_id = $1 AND challenge_id = $2`,
-		userID, challengeID)
+		userID, challengeID); err != nil {
+		h.logger.Error("auto-stop: failed to clear challenge cooldown", zap.Error(err), zap.String("instance_id", instanceID))
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("auto-stop: failed to commit cleanup", zap.Error(err), zap.String("instance_id", instanceID))
+		return
+	}
 
 	h.logger.Info("auto-stop: instance cleaned up successfully",
 		zap.String("instance_id", instanceID),
@@ -909,33 +1092,34 @@ func (h *ChallengeHandler) GetHints(c *gin.Context) {
 
 	// Get user ID if authenticated
 	var userID *uuid.UUID
-	if id, exists := c.Get("user_id"); exists {
-		if uid, ok := id.(uuid.UUID); ok {
-			userID = &uid
-		} else if uidStr, ok := id.(string); ok {
-			if uid, err := uuid.Parse(uidStr); err == nil {
-				userID = &uid
-			}
-		}
+	if uid, ok := contextUserID(c); ok {
+		userID = &uid
 	}
 
 	// Get challenge ID
 	var challengeID string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id FROM challenges WHERE slug = $1 AND status = 'published'`, slug).Scan(&challengeID)
-	if err != nil {
+		`SELECT id FROM challenges
+		 WHERE slug = $1 AND status = 'published'
+		   AND (release_date IS NULL OR release_date <= NOW())`, slug).Scan(&challengeID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	} else if err != nil {
+		h.logger.Error("failed to query challenge for hints", zap.String("slug", slug), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
 		return
 	}
 
 	// Get hints
 	query := `
-		SELECT id, content, cost, sort_order
-		FROM hints
-		WHERE challenge_id = $1
-		ORDER BY sort_order
+		SELECT h.id, h.content, h.cost, h.sort_order, hu.id IS NOT NULL
+		FROM hints h
+		LEFT JOIN hint_unlocks hu ON hu.hint_id = h.id AND hu.user_id = $2
+		WHERE h.challenge_id = $1
+		ORDER BY h.sort_order
 	`
-	rows, err := h.db.Pool.Query(c.Request.Context(), query, challengeID)
+	rows, err := h.db.Pool.Query(c.Request.Context(), query, challengeID, userID)
 	if err != nil {
 		h.logger.Error("failed to get hints", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
@@ -947,22 +1131,21 @@ func (h *ChallengeHandler) GetHints(c *gin.Context) {
 	for rows.Next() {
 		var hint HintResponse
 		var content string
-		if err := rows.Scan(&hint.ID, &content, &hint.Cost, &hint.Order); err != nil {
-			continue
+		if err := rows.Scan(&hint.ID, &content, &hint.Cost, &hint.Order, &hint.IsUnlocked); err != nil {
+			h.logger.Error("failed to scan challenge hint", zap.String("challenge_id", challengeID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
+			return
 		}
 
-		// Check if unlocked
-		if userID != nil {
-			var unlocked bool
-			h.db.Pool.QueryRow(c.Request.Context(),
-				`SELECT EXISTS(SELECT 1 FROM hint_unlocks WHERE user_id = $1 AND hint_id = $2)`,
-				userID, hint.ID).Scan(&unlocked)
-			hint.IsUnlocked = unlocked
-			if unlocked {
-				hint.Content = &content
-			}
+		if hint.IsUnlocked {
+			hint.Content = &content
 		}
 		hints = append(hints, hint)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while reading challenge hints", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
+		return
 	}
 
 	if hints == nil {
@@ -978,56 +1161,100 @@ func (h *ChallengeHandler) UnlockHint(c *gin.Context) {
 	hintID := c.Param("hint_id")
 
 	// Get user ID
-	userID, exists := c.Get("user_id")
-	if !exists {
+	uid, ok := contextUserID(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
-	uid := userID.(uuid.UUID)
 	hid, err := uuid.Parse(hintID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid hint ID"})
 		return
 	}
 
-	// Verify challenge and hint exist
+	// Verify the published challenge exists before opening the unlock transaction.
 	var challengeID string
 	err = h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id FROM challenges WHERE slug = $1 AND status = 'published'`, slug).Scan(&challengeID)
-	if err != nil {
+		`SELECT id FROM challenges
+		 WHERE slug = $1 AND status = 'published'
+		   AND (release_date IS NULL OR release_date <= NOW())`, slug).Scan(&challengeID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
-	}
-
-	// Get hint info
-	var hintCost int
-	var hintContent string
-	err = h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT cost, content FROM hints WHERE id = $1 AND challenge_id = $2`,
-		hid, challengeID).Scan(&hintCost, &hintContent)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "hint not found"})
+	} else if err != nil {
+		h.logger.Error("failed to query challenge for hint unlock", zap.String("slug", slug), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
 		return
 	}
 
-	// Check if already unlocked
-	var alreadyUnlocked bool
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT EXISTS(SELECT 1 FROM hint_unlocks WHERE user_id = $1 AND hint_id = $2)`,
-		uid, hid).Scan(&alreadyUnlocked)
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin hint unlock transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+		return
+	}
+	defer tx.Rollback(ctx)
 
+	var hintCost int
+	var hintContent string
+	err = tx.QueryRow(ctx,
+		`SELECT h.cost, h.content
+		 FROM hints h
+		 JOIN challenges c ON c.id = h.challenge_id
+		 WHERE h.id = $1 AND h.challenge_id = $2
+		   AND c.status = 'published'
+		   AND (c.release_date IS NULL OR c.release_date <= NOW())
+		 FOR SHARE OF h, c`,
+		hid, challengeID).Scan(&hintCost, &hintContent)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "hint not found"})
+		return
+	} else if err != nil {
+		h.logger.Error("failed to query hint for unlock", zap.String("hint_id", hid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+		return
+	}
+	if hintCost < 0 {
+		h.logger.Error("hint has an invalid negative cost", zap.String("hint_id", hid.String()), zap.Int("cost", hintCost))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+		return
+	}
+
+	// Serialize all hint purchases for this user so concurrent requests cannot
+	// spend the same score or charge twice for one hint.
+	var userScore int
+	err = tx.QueryRow(ctx, `SELECT total_score FROM users WHERE id = $1 FOR UPDATE`, uid).Scan(&userScore)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	} else if err != nil {
+		h.logger.Error("failed to lock user for hint unlock", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+		return
+	}
+
+	var alreadyUnlocked bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM hint_unlocks WHERE user_id = $1 AND hint_id = $2)`,
+		uid, hid,
+	).Scan(&alreadyUnlocked); err != nil {
+		h.logger.Error("failed to check hint unlock", zap.String("hint_id", hid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+		return
+	}
 	if alreadyUnlocked {
+		if err := tx.Commit(ctx); err != nil {
+			h.logger.Error("failed to finish existing hint unlock", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"content":          hintContent,
 			"already_unlocked": true,
 		})
 		return
 	}
-
-	// Get user's score
-	var userScore int
-	h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT total_score FROM users WHERE id = $1`, uid).Scan(&userScore)
 
 	if userScore < hintCost {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -1038,36 +1265,39 @@ func (h *ChallengeHandler) UnlockHint(c *gin.Context) {
 		return
 	}
 
-	// Deduct points and record unlock
-	tx, err := h.db.Pool.Begin(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "transaction failed"})
-		return
-	}
-	defer tx.Rollback(c.Request.Context())
-
-	// Deduct points
-	_, err = tx.Exec(c.Request.Context(),
+	result, err := tx.Exec(ctx,
 		`UPDATE users SET total_score = total_score - $1, updated_at = NOW() WHERE id = $2`,
 		hintCost, uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to deduct points"})
+		h.logger.Error("failed to deduct hint points", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
 		return
 	}
-
-	// Record unlock
-	unlockID := uuid.New()
-	_, err = tx.Exec(c.Request.Context(),
-		`INSERT INTO hint_unlocks (id, user_id, hint_id, points_deducted, unlocked_at)
-		 VALUES ($1, $2, $3, $4, NOW())`,
-		unlockID, uid, hid, hintCost)
-	if err != nil {
+	if result.RowsAffected() != 1 {
+		h.logger.Error("hint point deduction affected an unexpected number of users", zap.Int64("rows_affected", result.RowsAffected()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
 		return
 	}
 
-	if err := tx.Commit(c.Request.Context()); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to commit"})
+	unlockID := uuid.New()
+	result, err = tx.Exec(ctx,
+		`INSERT INTO hint_unlocks (id, user_id, hint_id, points_deducted, unlocked_at)
+		 VALUES ($1, $2, $3, $4, NOW())`,
+		unlockID, uid, hid, hintCost)
+	if err != nil {
+		h.logger.Error("failed to record hint unlock", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		h.logger.Error("hint unlock affected an unexpected number of rows", zap.Int64("rows_affected", result.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit hint unlock", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
 		return
 	}
 

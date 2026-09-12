@@ -179,7 +179,33 @@ func (s *Service) AllocateIP() (string, error) {
 func (s *Service) ReleaseIP(ip string) {
 	s.ipMu.Lock()
 	defer s.ipMu.Unlock()
+
+	releasedIP := net.ParseIP(ip)
+	if releasedIP == nil || !s.ipNetwork.Contains(releasedIP) {
+		return
+	}
+	ones, bits := s.ipNetwork.Mask.Size()
+	if bits == 32 && ones >= 0 {
+		releasedIP = releasedIP.To4()
+	} else {
+		releasedIP = releasedIP.To16()
+	}
+	if releasedIP == nil {
+		return
+	}
+
 	delete(s.usedIPs, ip)
+	// Move the cursor back to a released address so failed lifecycle requests do
+	// not permanently consume address-pool capacity.
+	nextIP := s.nextIP
+	if bits == 32 {
+		nextIP = nextIP.To4()
+	} else {
+		nextIP = nextIP.To16()
+	}
+	if nextIP == nil || !s.ipNetwork.Contains(nextIP) || bytes.Compare(releasedIP, nextIP) < 0 {
+		s.nextIP = append(net.IP(nil), releasedIP...)
+	}
 }
 
 // GenerateClientConfig generates a WireGuard client configuration
@@ -237,7 +263,7 @@ AllowedIPs = %s/32
 // AddPeer adds a peer to the WireGuard server
 func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) error {
 	s.logger.Info("Adding VPN peer",
-		zap.String("public_key", publicKey[:8]+"..."),
+		zap.String("public_key", abbreviatedPublicKey(publicKey)),
 		zap.String("assigned_ip", assignedIP),
 	)
 
@@ -250,18 +276,18 @@ func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) err
 		s.logger.Error("failed to add peer",
 			zap.Error(err),
 			zap.String("output", string(output)),
-			zap.String("public_key", publicKey[:8]+"..."))
+			zap.String("public_key", abbreviatedPublicKey(publicKey)))
 		return fmt.Errorf("failed to add peer: %w, output: %s", err, string(output))
 	}
 
-	s.logger.Info("Successfully added VPN peer", zap.String("public_key", publicKey[:8]+"..."))
+	s.logger.Info("Successfully added VPN peer", zap.String("public_key", abbreviatedPublicKey(publicKey)))
 	return nil
 }
 
 // RemovePeer removes a peer from the WireGuard server
 func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 	s.logger.Info("Removing VPN peer",
-		zap.String("public_key", publicKey[:8]+"..."),
+		zap.String("public_key", abbreviatedPublicKey(publicKey)),
 	)
 
 	// Use nsenter to run wg in the host's network namespace (requires pid:host in docker-compose)
@@ -273,12 +299,19 @@ func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 		s.logger.Error("failed to remove peer",
 			zap.Error(err),
 			zap.String("output", string(output)),
-			zap.String("public_key", publicKey[:8]+"..."))
+			zap.String("public_key", abbreviatedPublicKey(publicKey)))
 		return fmt.Errorf("failed to remove peer: %w, output: %s", err, string(output))
 	}
 
-	s.logger.Info("Successfully removed VPN peer", zap.String("public_key", publicKey[:8]+"..."))
+	s.logger.Info("Successfully removed VPN peer", zap.String("public_key", abbreviatedPublicKey(publicKey)))
 	return nil
+}
+
+func abbreviatedPublicKey(publicKey string) string {
+	if len(publicKey) <= 8 {
+		return publicKey
+	}
+	return publicKey[:8] + "..."
 }
 
 // GetPeerStatus gets the status of a VPN peer

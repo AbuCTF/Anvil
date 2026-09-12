@@ -23,7 +23,10 @@ const (
 func TeamForUser(ctx context.Context, db *database.DB, userID uuid.UUID) (uuid.UUID, bool, error) {
 	var teamID uuid.UUID
 	err := db.Pool.QueryRow(ctx,
-		`SELECT team_id FROM game_team_members WHERE user_id = $1 LIMIT 1`, userID).Scan(&teamID)
+		`SELECT tm.team_id FROM game_team_members tm
+		 JOIN game_teams t ON t.id = tm.team_id
+		 WHERE tm.user_id = $1 AND t.status = 'active' AND t.is_nop = FALSE
+		 ORDER BY tm.created_at, tm.team_id LIMIT 1`, userID).Scan(&teamID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.UUID{}, false, nil
 	}
@@ -44,7 +47,8 @@ func SubmitFlag(ctx context.Context, db *database.DB, attacker uuid.UUID, flag s
 		validUntil int
 	)
 	err := db.Pool.QueryRow(ctx,
-		`SELECT id, team_id, service_id, valid_until_tick FROM game_flags WHERE flag = $1`, flag).
+		`SELECT id, team_id, service_id, valid_until_tick
+		 FROM game_flags WHERE flag = $1 AND planted_at IS NOT NULL`, flag).
 		Scan(&flagID, &owner, &service, &validUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SubmitInvalid, nil

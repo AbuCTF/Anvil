@@ -5,12 +5,15 @@
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
 	import { categoryColor, difficultyClass } from '$lib/rank';
+	import { API_BASE } from '$lib/config';
 	import Card from '$lib/components/Card.svelte';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 
 	let challenge: any = null;
 	let instance: any = null;
 	let loading = true;
 	let error = '';
+	let actionError = '';
 	let cooldownInfo: { until: number; remaining: number } | null = null;
 
 	// Flag submission
@@ -21,6 +24,9 @@
 	// Instance management
 	let creatingInstance = false;
 	let instanceAction = '';
+	let instanceError = '';
+	let instanceLoadFailed = false;
+	let instanceLoadedForToken = '';
 	let timerInterval: ReturnType<typeof setInterval>;
 	let timeRemaining = '';
 
@@ -54,6 +60,7 @@
 		const file = attachmentFileInput.files[0];
 		attachmentUploading = true;
 		attachmentUploadProgress = 0;
+		actionError = '';
 		try {
 			const fd = new FormData();
 			fd.append('file', file);
@@ -65,7 +72,7 @@
 			attachmentFileSelected = false;
 			if (attachmentFileInput) attachmentFileInput.value = '';
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Upload failed';
+			actionError = e instanceof Error ? e.message : 'Upload failed';
 		} finally {
 			attachmentUploading = false;
 		}
@@ -74,11 +81,12 @@
 	async function deleteAttachment(attachmentId: string) {
 		if (!challenge?.id) return;
 		if (!confirm('Delete this attachment?')) return;
+		actionError = '';
 		try {
 			await api.deleteAttachment(challenge.id, attachmentId);
 			await loadChallenge();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to delete attachment';
+			actionError = e instanceof Error ? e.message : 'Failed to delete attachment';
 		}
 	}
 
@@ -97,6 +105,14 @@
 	}
 
 	$: isAdmin = $auth.isAuthenticated && $auth.user?.role === 'admin';
+	$: if ($auth.isAuthenticated && $auth.accessToken && instanceLoadedForToken !== $auth.accessToken) {
+		instanceLoadedForToken = $auth.accessToken;
+		loadUserInstance();
+	}
+	$: if (!$auth.isAuthenticated && !$auth.isLoading) {
+		instanceLoadedForToken = '';
+		instance = null;
+	}
 
 	// Colored difficulty pill — shared with the challenge tiles. See DESIGN.md.
 	$: diffClass = difficultyClass(challenge?.difficulty);
@@ -128,9 +144,6 @@
 
 	onMount(async () => {
 		await loadChallenge();
-		if ($auth.isAuthenticated) {
-			await loadUserInstance();
-		}
 
 		// Update timer every second
 		timerInterval = setInterval(() => {
@@ -182,11 +195,14 @@
 			instance = response.instances?.find((i: any) =>
 				i.challenge_slug === slug && i.status === 'running'
 			);
+			instanceError = '';
+			instanceLoadFailed = false;
 			if (instance) {
 				timeRemaining = formatTimeRemaining(instance.expires_at);
 			}
 		} catch (e) {
-			console.error('Failed to load instances', e);
+			instanceError = e instanceof Error ? e.message : 'Failed to load instance status';
+			instanceLoadFailed = true;
 		}
 	}
 
@@ -217,7 +233,7 @@
 	async function startInstance() {
 		if (!slug) return;
 		creatingInstance = true;
-		error = '';
+		instanceError = '';
 		try {
 			const result = await api.createInstance(slug);
 			instance = result.instance;
@@ -232,7 +248,7 @@
 					remaining: e.remaining_seconds
 				};
 			}
-			error = e instanceof Error ? e.message : 'Failed to start instance';
+			instanceError = e instanceof Error ? e.message : 'Failed to start instance';
 		} finally {
 			creatingInstance = false;
 		}
@@ -241,12 +257,13 @@
 	async function extendInstance() {
 		if (!instance) return;
 		instanceAction = 'extending';
+		instanceError = '';
 		try {
 			const result = await api.extendInstance(instance.id);
 			instance = { ...instance, expires_at: result.new_expires_at, extensions_used: result.extensions_used };
 			timeRemaining = formatTimeRemaining(result.new_expires_at);
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to extend';
+			instanceError = e instanceof Error ? e.message : 'Failed to extend';
 		} finally {
 			instanceAction = '';
 		}
@@ -255,6 +272,7 @@
 	async function stopInstance() {
 		if (!instance || !confirm('Stop this instance? You will have a cooldown period before starting again.')) return;
 		instanceAction = 'stopping';
+		instanceError = '';
 		try {
 			const result = await api.stopInstance(instance.id);
 			instance = null;
@@ -266,7 +284,7 @@
 				};
 			}
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to stop';
+			instanceError = e instanceof Error ? e.message : 'Failed to stop';
 		} finally {
 			instanceAction = '';
 		}
@@ -361,12 +379,16 @@
 	}
 
 	let copiedKey = '';
-	function copyToClipboard(text: string, key = text) {
-		navigator.clipboard.writeText(text);
-		copiedKey = key;
-		setTimeout(() => {
-			if (copiedKey === key) copiedKey = '';
-		}, 1500);
+	async function copyToClipboard(text: string, key = text) {
+		try {
+			await navigator.clipboard.writeText(text);
+			copiedKey = key;
+			setTimeout(() => {
+				if (copiedKey === key) copiedKey = '';
+			}, 1500);
+		} catch (e) {
+			instanceError = e instanceof Error ? e.message : 'Failed to copy to clipboard';
+		}
 	}
 
 	function instanceProgress(inst: any): number {
@@ -447,7 +469,7 @@
 					const body = [m[2], ...quote.slice(1)].filter((l) => l.trim() !== '');
 					const inner = body.map(inlineMd).join('<br>');
 					blocks.push(
-						`<div class="rounded-lg border px-4 py-3 ${st.cls}"><div class="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider mb-1">${calloutIcons[st.icon]}${st.label}</div><div class="text-sm text-stone-300 leading-relaxed">${inner}</div></div>`
+						`<div class="rounded-lg border px-4 py-3 ${st.cls}"><div class="metadata-label flex items-center gap-1.5 mb-1">${calloutIcons[st.icon]}${st.label}</div><div class="text-sm text-stone-300 leading-relaxed">${inner}</div></div>`
 					);
 				} else {
 					const inner = quote.map(inlineMd).join('<br>');
@@ -474,8 +496,9 @@
 		try {
 			await api.updateFlag(challenge.id, flag.id, {
 				name: flag.name,
-				flag: flag.newFlag || flag.flag,
-				points: flag.points
+				flag: flag.newFlag || undefined,
+				points: flag.points,
+				order: flag.order
 			});
 			await loadChallenge();
 		} catch (e) {
@@ -536,17 +559,26 @@
 		<!-- Success Toast -->
 		{#if showEditSuccess}
 			<div class="fixed top-4 right-4 z-50 bg-up/10 border border-up/20 text-up px-4 py-2 rounded-lg text-sm leading-none flex items-center gap-2">
-				<Icon icon="mdi:check" class="w-3.5 h-3.5 shrink-0" />
-				Saved
+				<OpticalIcon icon="mdi:check" size={14} box={14} />
+				<span class="optical-label">Saved</span>
 			</div>
 		{/if}
 
 		<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 			<!-- Back Link -->
-		<a href="/challenges" class="inline-flex items-center gap-1.5 text-stone-500 hover:text-stone-300 text-sm leading-none mb-8 transition-colors">
-			<Icon icon="mdi:arrow-left" class="w-3.5 h-3.5 shrink-0" />
-				Challenges
+			<a href="/challenges" class="inline-flex items-center gap-1.5 text-stone-500 hover:text-stone-300 text-sm leading-none mb-8 transition-colors">
+				<OpticalIcon icon="mdi:arrow-left" size={14} box={14} />
+				<span class="optical-label">Challenges</span>
 			</a>
+
+			{#if actionError}
+				<div class="mb-6 flex items-start justify-between gap-3 rounded-lg border border-down/20 bg-down/10 px-4 py-3 text-sm text-down" aria-live="polite">
+					<span>{actionError}</span>
+					<button type="button" on:click={() => actionError = ''} class="shrink-0 text-stone-500 hover:text-stone-200" aria-label="Dismiss error">
+						<Icon icon="mdi:close" class="w-4 h-4" />
+					</button>
+				</div>
+			{/if}
 
 			<div class="detail-in grid grid-cols-1 lg:grid-cols-3 gap-8">
 				<!-- Main Content -->
@@ -564,7 +596,7 @@
 								<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">{challenge.name}</h1>
 							{/if}
 
-						<div class="flex flex-wrap items-center gap-2.5 mt-3 leading-none">
+							<div class="flex flex-wrap items-center gap-2.5 mt-3 leading-none">
 								{#if isEditing && editForm}
 									<select bind:value={editForm.difficulty} class="text-xs px-2 py-1 rounded bg-stone-900 border border-stone-700 text-stone-300 focus:outline-none">
 										<option value="easy">Easy</option>
@@ -574,32 +606,32 @@
 									</select>
 								{:else}
 									<span class="text-[0.68rem] font-medium px-2 py-0.5 rounded-full border capitalize {diffClass}">
-										{challenge.difficulty}
+										<span class="badge-label">{challenge.difficulty}</span>
 									</span>
 								{/if}
 
 								<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
-									<Icon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} class="w-3 h-3 shrink-0" />
-									{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}
+									<OpticalIcon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} size={12} box={12} />
+									<span class="optical-label">{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}</span>
 								</span>
 
 								{#if challenge.category}
 									<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
 										<span class="w-2 h-2 rounded-full shrink-0" style="background:{categoryColor(challenge.category)}"></span>
-										{challenge.category}
+										<span class="optical-label">{challenge.category}</span>
 									</span>
 								{/if}
 
 								{#if challenge.status === 'draft'}
 									<span class="text-[0.68rem] font-medium px-2 py-0.5 rounded-full bg-warn/10 border border-warn/20 text-warn">
-										Draft
+										<span class="badge-label">Draft</span>
 									</span>
 								{/if}
 
 								{#if challenge.is_solved}
 									<span class="text-[0.68rem] leading-none font-medium px-2 py-0.5 rounded-full bg-up/10 border border-up/20 text-up flex items-center gap-1">
-										<Icon icon="mdi:check" class="w-3 h-3 shrink-0" />
-										Solved
+										<OpticalIcon icon="mdi:check" size={12} box={12} />
+										<span class="badge-label">Solved</span>
 									</span>
 								{/if}
 							</div>
@@ -612,10 +644,10 @@
 									bind:value={editForm.base_points}
 									class="w-16 text-xl font-semibold bg-transparent border-b border-stone-700 text-stone-100 text-right focus:outline-none focus:border-stone-500 tabular-nums"
 								/>
-								<p class="text-[0.68rem] text-stone-500 mt-1 uppercase tracking-wide">points</p>
+								<p class="metadata-label text-stone-500 mt-1">Points</p>
 							{:else}
 								<p class="text-2xl font-semibold text-amber-500 tabular-nums">{challenge.base_points}</p>
-								<p class="text-[0.68rem] text-stone-500 uppercase tracking-wide">points</p>
+								<p class="metadata-label text-stone-500">Points</p>
 							{/if}
 						</div>
 					</div>
@@ -665,6 +697,7 @@
 							></textarea>
 						{:else if challenge.description}
 							<div class="font-sans text-sm text-stone-300 leading-relaxed space-y-3">
+								<!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes source text before adding its fixed markup -->
 								{@html renderMarkdown(challenge.description)}
 							</div>
 						{:else}
@@ -780,9 +813,9 @@
 											</div>
 											<div class="flex items-center gap-3">
 												{#if typeof flag.total_solves === 'number'}
-												<span class="text-xs leading-none text-stone-500 inline-flex items-center gap-1 tabular-nums">
-													<Icon icon="mdi:account-group" class="w-3 h-3 shrink-0" />
-														{flag.total_solves}
+													<span class="text-xs leading-none text-stone-500 inline-flex items-center gap-1 tabular-nums">
+														<OpticalIcon icon="mdi:account-group" size={12} box={12} />
+														<span class="optical-label">{flag.total_solves}</span>
 													</span>
 												{/if}
 												<span class="text-xs {flag.is_solved ? 'text-up/70' : 'text-stone-500'} tabular-nums">{flag.points} pts</span>
@@ -831,7 +864,7 @@
 										</div>
 										<div class="flex items-center gap-2 shrink-0">
 											<a
-												href="/api/v1/challenges/{challenge.slug}/attachments/{attachment.id}/download"
+											href={`${API_BASE}/api/v1/challenges/${challenge.slug}/attachments/${attachment.id}/download`}
 												download={attachment.filename}
 											class="text-xs leading-none px-2.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 rounded-md transition-colors flex items-center gap-1"
 											>
@@ -854,7 +887,7 @@
 								<!-- Admin upload form -->
 								{#if isEditing && isAdmin}
 									<div class="py-3 px-4 bg-stone-950 border border-dashed border-stone-700 rounded-lg space-y-3">
-										<p class="text-xs text-stone-500 font-medium uppercase tracking-wide">Upload file</p>
+										<p class="metadata-label text-stone-500">Upload file</p>
 										<input
 											type="file"
 											bind:this={attachmentFileInput}
@@ -894,16 +927,28 @@
 					<!-- Instance Panel -->
 					{#if $auth.isAuthenticated}
 						<Card title="Instance">
+							{#if instanceError}
+								<div class="mb-4 flex items-start justify-between gap-3 rounded-md border border-down/20 bg-down/10 px-3 py-2 text-xs text-down" aria-live="polite">
+									<span>{instanceError}</span>
+									{#if instanceLoadFailed}
+										<button type="button" on:click={loadUserInstance} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
+									{:else}
+										<button type="button" on:click={() => instanceError = ''} class="shrink-0 text-stone-500 hover:text-stone-200" aria-label="Dismiss instance error">
+											<Icon icon="mdi:close" class="w-3.5 h-3.5" />
+										</button>
+									{/if}
+								</div>
+							{/if}
 							{#if instance}
 								<div class="space-y-4">
 									<!-- Status -->
 									<div>
 										<div class="flex items-center justify-between mb-2">
-										<div class="flex items-center gap-2 leading-none">
+											<div class="flex items-center gap-2 leading-none">
 												<span class="w-2 h-2 bg-up rounded-full animate-pulse"></span>
-												<span class="text-up text-sm font-medium">Running</span>
+												<span class="optical-label text-up text-sm font-medium">Running</span>
 											</div>
-											<span class="text-[0.65rem] uppercase tracking-wider text-stone-600">session</span>
+											<span class="metadata-label text-stone-600">Session</span>
 										</div>
 										<div class="h-1.5 bg-stone-950 border border-stone-800 rounded-full overflow-hidden">
 											<div
@@ -915,28 +960,30 @@
 
 									<!-- Connection Details -->
 									<div>
-										<p class="text-[0.65rem] font-medium text-stone-500 uppercase tracking-wider mb-2">Connect</p>
+										<p class="metadata-label text-stone-500 mb-2">Connect</p>
 										{#if instance.ports && Object.keys(instance.ports).length > 0}
 											<div class="space-y-2">
-												{#each Object.entries(instance.ports) as [portKey, _]}
+												{#each Object.entries(instance.ports) as [portKey]}
 													{@const [port, svc] = portKey.split('/')}
 													{@const isHttp = svc === 'http' || svc === 'https'}
-											{@const connStr = isHttp ? `${svc}://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`}
+													{@const connStr = isHttp ? `${svc}://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`}
 													<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
 														<div class="flex items-center gap-2 px-3 py-1.5 border-b border-stone-800/60 bg-stone-900/40">
-															<Icon
+															<OpticalIcon
 																icon={isHttp ? 'mdi:web' : 'mdi:console'}
-																class="w-3.5 h-3.5 {isHttp ? 'text-info' : 'text-stone-400'}"
+																size={13.5}
+																box={14}
+																className={isHttp ? 'text-info' : 'text-stone-400'}
 															/>
-															<span class="text-[0.65rem] font-medium {isHttp ? 'text-info' : 'text-stone-400'} uppercase tracking-wider">
-														{isHttp ? svc.toUpperCase() : 'TCP'}
+															<span class="optical-label metadata-label {isHttp ? 'text-info' : 'text-stone-400'}">
+																{isHttp ? svc.toUpperCase() : 'TCP'}
 															</span>
 															<span class="text-xs text-stone-600 ml-auto tabular-nums">:{port}</span>
 														</div>
 														<div class="flex items-center justify-between px-3 py-2">
 															{#if isHttp}
-													<a href={connStr} target="_blank" rel="noopener" class="text-xs text-info hover:text-info/80 font-mono truncate flex-1 min-w-0">
-														{connStr}
+																<a href={connStr} target="_blank" rel="noopener" class="text-xs text-info hover:text-info/80 font-mono truncate flex-1 min-w-0">
+																	{connStr}
 																</a>
 															{:else}
 																<code class="text-xs text-stone-300 font-mono">{connStr}</code>
@@ -965,33 +1012,33 @@
 									<!-- Time & Extensions -->
 									<div class="grid grid-cols-2 gap-3">
 										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
-											<p class="text-[0.65rem] text-stone-500 mb-1 uppercase tracking-wide">Time left</p>
+											<p class="metadata-label text-stone-500 mb-1">Time left</p>
 											<p class="text-base font-mono font-medium tabular-nums {getTimeColorClass(instance.expires_at)}">{timeRemaining}</p>
 											{#if getSecondsRemaining(instance.expires_at) < 300}
 												<p class="text-xs text-down mt-1">Expiring soon</p>
 											{/if}
 										</div>
 										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
-											<p class="text-[0.65rem] text-stone-500 mb-1 uppercase tracking-wide">Extensions</p>
+											<p class="metadata-label text-stone-500 mb-1">Extensions</p>
 											<p class="text-base font-medium text-stone-200 tabular-nums">{instance.extensions_used || 0}<span class="text-stone-600 font-normal text-sm"> / {instance.max_extensions || 3}</span></p>
 										</div>
 									</div>
 
 									<!-- Actions -->
 									<div class="flex gap-2">
-								<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs leading-none py-2 bg-stone-900 text-stone-300 rounded-md border border-stone-800 hover:bg-stone-800/60 hover:border-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
+										<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs leading-none py-2 bg-stone-900 text-stone-300 rounded-md border border-stone-800 hover:bg-stone-800/60 hover:border-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
 											{#if instanceAction === 'extending'}
-										<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
+												<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
 											{:else}
-										<Icon icon="mdi:clock-plus-outline" class="w-3 h-3 shrink-0" />
+												<Icon icon="mdi:clock-plus-outline" class="w-3 h-3 shrink-0" />
 											{/if}
 											{instanceAction === 'extending' ? 'Extending…' : 'Extend'}
 										</button>
-								<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs leading-none py-2 bg-down/10 text-down rounded-md border border-down/30 hover:bg-down/20 transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5">
+										<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs leading-none py-2 bg-down/10 text-down rounded-md border border-down/30 hover:bg-down/20 transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5">
 											{#if instanceAction === 'stopping'}
-										<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
+												<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
 											{:else}
-										<Icon icon="mdi:stop-circle-outline" class="w-3 h-3 shrink-0" />
+												<Icon icon="mdi:stop-circle-outline" class="w-3 h-3 shrink-0" />
 											{/if}
 											{instanceAction === 'stopping' ? 'Stopping…' : 'Stop'}
 										</button>
@@ -1010,15 +1057,12 @@
 							{:else}
 								<div class="text-center py-4">
 									<p class="text-stone-500 text-sm mb-4">No active instance</p>
-									{#if error}
-										<div class="mb-4 py-2 px-3 rounded-md text-sm bg-down/10 border border-down/20 text-down">{error}</div>
-									{/if}
-								<button on:click={startInstance} disabled={creatingInstance} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm leading-none font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
+									<button on:click={startInstance} disabled={creatingInstance || instanceLoadFailed} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm leading-none font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 flex items-center justify-center gap-2">
 										{#if creatingInstance}
-										<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
+											<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 											Starting…
 										{:else}
-										<Icon icon="mdi:play" class="w-3.5 h-3.5 shrink-0" />
+											<Icon icon="mdi:play" class="w-3.5 h-3.5 shrink-0" />
 											Start Instance
 										{/if}
 									</button>
@@ -1072,16 +1116,16 @@
 								<ol class="space-y-2">
 									{#each solvers as s (s.rank)}
 										{@const rk = podiumRank[s.rank] ?? { cls: 'text-stone-300 bg-stone-800/30 border-stone-800', label: `${s.rank}` }}
-									<li class="flex items-center justify-between py-2 px-3 rounded-lg border {rk.cls}">
-										<div class="flex items-center gap-2.5 min-w-0 leading-none">
-											<span class="w-6 shrink-0 inline-flex items-center justify-center">
-												{#if s.rank === 1}
-													<Icon icon="mdi:water" class="w-3.5 h-3.5 shrink-0" />
-												{:else}
-													<span class="text-[0.65rem] font-medium uppercase tracking-wide tabular-nums">{rk.label}</span>
-												{/if}
-											</span>
-												<span class="text-sm truncate {s.rank === 1 ? 'font-medium' : 'text-stone-200'}">{s.name}</span>
+										<li class="flex items-center justify-between py-2 px-3 rounded-lg border {rk.cls}">
+											<div class="flex items-center gap-2.5 min-w-0 leading-none">
+												<span class="w-6 shrink-0 inline-flex items-center justify-center">
+													{#if s.rank === 1}
+														<OpticalIcon icon="mdi:water" size={14} box={14} />
+													{:else}
+														<span class="optical-label text-[0.65rem] font-medium uppercase tracking-wide tabular-nums">{rk.label}</span>
+													{/if}
+												</span>
+												<span class="optical-label text-sm truncate {s.rank === 1 ? 'font-medium' : 'text-stone-200'}">{s.name}</span>
 											</div>
 											{#if formatSolvedAt(s.at)}
 												<span class="text-[0.68rem] text-stone-500 tabular-nums shrink-0 ml-2">{formatSolvedAt(s.at)}</span>
@@ -1090,19 +1134,19 @@
 									{/each}
 								</ol>
 								<div class="flex items-center justify-between pt-1 text-sm border-t border-stone-800/60">
-									<span class="text-stone-500">Total solves</span>
+									<span class="metadata-label text-stone-500">Total solves</span>
 									<span class="text-stone-200 tabular-nums font-medium">{challenge.total_solves}</span>
 								</div>
 							{:else if challenge.total_solves === 0}
 								<div class="flex items-center gap-2 py-2 px-3 rounded-lg bg-blood/10 border border-blood/20 text-blood text-xs leading-none">
-									<Icon icon="mdi:water" class="w-3 h-3 shrink-0" />
-									<span>Unsolved — first blood available</span>
+									<OpticalIcon icon="mdi:water" size={12} box={12} />
+									<span class="optical-label">Unsolved — first blood available</span>
 								</div>
 							{:else}
 								<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-stone-950 border border-stone-800">
-									<span class="text-stone-500 text-sm leading-none flex items-center gap-1.5">
-										<Icon icon="mdi:account-group" class="w-3.5 h-3.5 shrink-0" />
-										Solves
+									<span class="text-stone-500 leading-none flex items-center gap-1.5">
+										<OpticalIcon icon="mdi:account-group" size={13.5} box={14} />
+										<span class="optical-label metadata-label">Solves</span>
 									</span>
 									<span class="text-lg font-semibold text-stone-100 tabular-nums">{challenge.total_solves}</span>
 								</div>
@@ -1113,26 +1157,26 @@
 					<!-- Details -->
 					<Card title="Details">
 						<div class="space-y-2.5 text-sm">
-							<div class="flex justify-between">
-								<span class="text-stone-500">Flags</span>
+							<div class="flex items-center justify-between">
+								<span class="metadata-label text-stone-500">Flags</span>
 								<span class="text-stone-300 tabular-nums">{challenge.total_flags}</span>
 							</div>
-							<div class="flex justify-between">
-								<span class="text-stone-500">Type</span>
+							<div class="flex items-center justify-between">
+								<span class="metadata-label text-stone-500">Type</span>
 								<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'}</span>
 							</div>
 							{#if challenge.category}
-								<div class="flex justify-between">
-									<span class="text-stone-500">Category</span>
-								<span class="text-stone-300 inline-flex items-center gap-1.5 leading-none">
+								<div class="flex items-center justify-between">
+									<span class="metadata-label text-stone-500">Category</span>
+									<span class="text-stone-300 inline-flex items-center gap-1.5 leading-none">
 										<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{categoryColor(challenge.category)}"></span>
-										{challenge.category}
+										<span class="optical-label">{challenge.category}</span>
 									</span>
 								</div>
 							{/if}
 							{#if challenge.author_name}
-								<div class="flex justify-between">
-									<span class="text-stone-500">Author</span>
+								<div class="flex items-center justify-between">
+									<span class="metadata-label text-stone-500">Author</span>
 									<span class="text-stone-300">{challenge.author_name}</span>
 								</div>
 							{/if}
@@ -1174,7 +1218,7 @@
 			</div>
 			<form on:submit|preventDefault={createNewFlag} class="p-4 space-y-4">
 				<div>
-					<label for="new-flag-name" class="block text-xs text-stone-500 mb-1.5 uppercase tracking-wide">Name</label>
+					<label for="new-flag-name" class="metadata-label block text-stone-500 mb-1.5">Name</label>
 					<input
 						id="new-flag-name"
 						type="text"
@@ -1185,7 +1229,7 @@
 					/>
 				</div>
 				<div>
-					<label for="new-flag-value" class="block text-xs text-stone-500 mb-1.5 uppercase tracking-wide">Flag Value</label>
+					<label for="new-flag-value" class="metadata-label block text-stone-500 mb-1.5">Flag Value</label>
 					<input
 						id="new-flag-value"
 						type="text"
@@ -1196,7 +1240,7 @@
 					/>
 				</div>
 				<div>
-					<label for="new-flag-points" class="block text-xs text-stone-500 mb-1.5 uppercase tracking-wide">Points</label>
+					<label for="new-flag-points" class="metadata-label block text-stone-500 mb-1.5">Points</label>
 					<input
 						id="new-flag-points"
 						type="number"
