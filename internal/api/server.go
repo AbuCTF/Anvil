@@ -101,7 +101,7 @@ func (s *Server) setupRouter() {
 		public := v1.Group("")
 		{
 			// Platform info
-			public.GET("/info", handlers.NewPlatformHandler(s.config, s.db).GetInfo)
+			public.GET("/info", handlers.NewPlatformHandler(s.config, s.db, s.logger).GetInfo)
 
 			// Auth routes
 			auth := public.Group("/auth")

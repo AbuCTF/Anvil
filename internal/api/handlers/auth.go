@@ -69,6 +69,7 @@ type UserResponse struct {
 	DisplayName *string   `json:"display_name,omitempty"`
 	Role        string    `json:"role"`
 	TotalScore  int       `json:"total_score"`
+	Rank        int       `json:"rank"`
 }
 
 type TeamResponse struct {
@@ -261,6 +262,10 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	// Log audit
 	h.logAudit(c, userID, "user.registered", "user", userID)
+	rank, err := currentUserRank(c.Request.Context(), h.db, userID)
+	if err != nil {
+		h.logger.Warn("Failed to load rank after registration", zap.String("user_id", userID.String()), zap.Error(err))
+	}
 
 	c.JSON(http.StatusCreated, AuthResponse{
 		AccessToken:  tokens.access,
@@ -273,6 +278,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			Email:      req.Email,
 			Role:       "user",
 			TotalScore: 0,
+			Rank:       rank,
 		},
 	})
 }
@@ -383,6 +389,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	// Log audit
 	h.logAudit(c, userID, "user.login", "user", userID)
+	rank, err := currentUserRank(c.Request.Context(), h.db, userID)
+	if err != nil {
+		h.logger.Warn("Failed to load rank during login", zap.String("user_id", userID.String()), zap.Error(err))
+	}
 
 	c.JSON(http.StatusOK, AuthResponse{
 		AccessToken:  tokens.access,
@@ -396,6 +406,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			DisplayName: displayName,
 			Role:        role,
 			TotalScore:  totalScore,
+			Rank:        rank,
 		},
 	})
 }

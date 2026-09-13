@@ -7,7 +7,7 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
-	import { formatLocalDateLong, formatLocalDateTimeWithZone, instantTitle } from '$lib/time';
+	import { formatLocalDateLong, formatLocalDateTimeWithZone, instantTitle, viewerTimeZone } from '$lib/time';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -65,6 +65,8 @@
 	let savingSettings = false;
 	let settingsChanged = false;
 	let settingsError = '';
+	let eventWindowError = '';
+	let browserTimeZone = 'local time';
 
 	// Challenge creation
 	let categories: any[] = [];
@@ -274,6 +276,7 @@
 	}
 
 	onMount(async () => {
+		browserTimeZone = viewerTimeZone();
 		await loadDashboard();
 	});
 
@@ -361,7 +364,7 @@
 	}
 
 	async function savePlatformSettings() {
-		if (settingsError) return;
+		if (settingsError || eventWindowError) return;
 		savingSettings = true;
 		try {
 			await api.updatePlatformSettings(platformSettings);
@@ -392,6 +395,33 @@
 		const target = e.target as HTMLSelectElement;
 		updateSetting(key, target.value === 'true');
 	}
+
+	function datetimeLocalValue(value: unknown): string {
+		if (typeof value !== 'string' || !value) return '';
+		const date = new Date(value);
+		if (!Number.isFinite(date.getTime())) return '';
+		const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+		return local.toISOString().slice(0, 16);
+	}
+
+	function handleEventTimeInput(e: Event, key: 'event.start_at' | 'event.end_at') {
+		const value = (e.target as HTMLInputElement).value;
+		updateSetting(key, value ? new Date(value).toISOString() : '');
+	}
+
+	function validateEventWindow(startValue: unknown, endValue: unknown): string {
+		const start = typeof startValue === 'string' ? startValue : '';
+		const end = typeof endValue === 'string' ? endValue : '';
+		if (!start && !end) return '';
+		if (!start || !end) return 'Set both times, or clear both to hide the event clock.';
+		const startAt = Date.parse(start);
+		const endAt = Date.parse(end);
+		if (!Number.isFinite(startAt) || !Number.isFinite(endAt)) return 'Enter a valid event window.';
+		if (endAt <= startAt) return 'The event must end after it starts.';
+		return '';
+	}
+
+	$: eventWindowError = validateEventWindow(platformSettings['event.start_at'], platformSettings['event.end_at']);
 
 	function numberSetting(key: string, fallback: number, min: number, max: number): number {
 		const value = Number(platformSettings[key]);
@@ -1386,7 +1416,7 @@
 					<!-- Save Button -->
 					{#if settingsChanged}
 						<div class="flex justify-end">
-							<button on:click={savePlatformSettings} disabled={savingSettings} class={btnPrimary}>
+							<button on:click={savePlatformSettings} disabled={savingSettings || !!eventWindowError} class={btnPrimary}>
 								{#if savingSettings}
 									<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 								{:else}
@@ -1540,7 +1570,7 @@
 							<label class="block">
 								<span class={labelCls}>Require VPN for Instances</span>
 								<select
-									value={platformSettings['platform.require_vpn'] ?? 'true'}
+									value={String(platformSettings['platform.require_vpn'] ?? true)}
 									on:change={(e) => handleSelectChange(e, 'platform.require_vpn')}
 									class="w-full {fieldCls}"
 								>
@@ -1558,7 +1588,7 @@
 								<OpticalIcon icon="mdi:cog-outline" size={14} box={14} className="text-stone-500" />
 								<span class="optical-label">Platform Settings</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">General platform configuration</p>
+							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Access controls and the public event clock</p>
 						</div>
 						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 							<label class="block">
@@ -1576,7 +1606,7 @@
 							<label class="block">
 								<span class={labelCls}>Scoreboard</span>
 								<select
-									value={platformSettings.scoreboard_enabled ?? 'true'}
+									value={String(platformSettings.scoreboard_enabled ?? true)}
 									on:change={(e) => handleSelectChange(e, 'scoreboard_enabled')}
 									class="w-full {fieldCls}"
 								>
@@ -1584,6 +1614,49 @@
 									<option value="false">Hidden</option>
 								</select>
 							</label>
+							<div class="md:col-span-2 mt-1 border-t border-stone-800/70 pt-4">
+								<div class="mb-3 flex items-start justify-between gap-3">
+									<div>
+										<h3 class="text-sm font-medium text-stone-300">CTF window</h3>
+										<p class="mt-1 text-xs text-stone-500">Shown in {browserTimeZone}; saved as timezone-safe UTC instants.</p>
+									</div>
+									{#if platformSettings['event.start_at'] || platformSettings['event.end_at']}
+										<button
+											type="button"
+											on:click={() => {
+												updateSetting('event.start_at', '');
+												updateSetting('event.end_at', '');
+											}}
+											class="shrink-0 text-xs text-stone-500 transition-colors hover:text-stone-300"
+										>Clear</button>
+									{/if}
+								</div>
+								<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+									<label class="block">
+										<span class={labelCls}>Starts</span>
+										<input
+											type="datetime-local"
+											step="60"
+											value={datetimeLocalValue(platformSettings['event.start_at'])}
+											on:input={(e) => handleEventTimeInput(e, 'event.start_at')}
+											class="w-full {fieldCls} tabular-nums"
+										/>
+									</label>
+									<label class="block">
+										<span class={labelCls}>Ends</span>
+										<input
+											type="datetime-local"
+											step="60"
+											value={datetimeLocalValue(platformSettings['event.end_at'])}
+											on:input={(e) => handleEventTimeInput(e, 'event.end_at')}
+											class="w-full {fieldCls} tabular-nums"
+										/>
+									</label>
+								</div>
+								{#if eventWindowError}
+									<p class="mt-2 text-xs text-down" aria-live="polite">{eventWindowError}</p>
+								{/if}
+							</div>
 						</div>
 					</Card>
 				</div>

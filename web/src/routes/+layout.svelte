@@ -7,6 +7,8 @@
 	import { auth } from '$stores/auth';
 	import Icon from '@iconify/svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
+	import EventClock from '$lib/components/EventClock.svelte';
+	import RankBadge from '$lib/components/RankBadge.svelte';
 
 	let mobileMenuOpen = false;
 	let userMenuOpen = false;
@@ -74,30 +76,33 @@
 				</a>
 
 				<!-- Desktop Navigation - Centered -->
-				<div class="hidden md:flex items-center justify-center flex-1 px-8">
+				<div class="hidden md:flex items-center justify-center flex-1 px-3 lg:px-5 xl:px-8">
 					<div class="flex items-center bg-stone-900/50 rounded-full p-1 border border-stone-800/50">
 						{#each navigation as item}
 							<a
 								href={item.href}
-								class="flex items-center gap-1.5 px-4 py-1.5 text-sm leading-none font-medium rounded-full transition-all duration-200
+								aria-label={item.name}
+								title={item.name}
+								class="flex items-center gap-1.5 px-2.5 py-1.5 text-sm leading-none font-medium rounded-full transition-all duration-200 xl:px-4
 								{$page.url.pathname.startsWith(item.href)
 									? 'bg-stone-800 text-stone-50'
 									: 'text-stone-400 hover:text-stone-50'}"
 							>
 								<OpticalIcon icon={item.icon} {...iconMetric(item.icon)} box={16} />
-								<span class="optical-label leading-[14px]">{item.name}</span>
+								<span class="optical-label hidden leading-[14px] xl:inline">{item.name}</span>
 							</a>
 						{/each}
 					</div>
 				</div>
 
-				<!-- User Menu -->
-				<div class="hidden md:flex items-center gap-3 shrink-0">
+				<!-- Event and account utilities -->
+				<div class="ml-auto flex shrink-0 items-center gap-1 md:ml-0 lg:gap-2 xl:gap-3">
+					<EventClock className="mr-1 shrink-0 md:mr-0" />
 					<button
 						on:click={toggleTheme}
 						aria-label="Toggle theme"
 						title="Toggle theme"
-						class="p-2 text-stone-400 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40"
+						class="hidden p-2 text-stone-400 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40 md:block"
 					>
 						<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
 					</button>
@@ -105,20 +110,21 @@
 						{#if $auth.user?.role === 'admin'}
 							<a
 								href="/admin"
-								class="flex items-center gap-1.5 px-3 py-1.5 text-sm leading-none font-medium text-amber-500 hover:text-amber-400 transition-colors"
+								class="hidden items-center gap-1.5 px-3 py-1.5 text-sm leading-none font-medium text-amber-500 hover:text-amber-400 transition-colors md:flex"
 							>
 								<OpticalIcon icon="mdi:shield-crown" {...iconMetric('mdi:shield-crown')} box={16} />
 								<span class="optical-label leading-[14px]">Admin</span>
 							</a>
 						{/if}
-						<div class="relative">
+						<div class="relative hidden md:block">
 							<button
 								on:click={() => userMenuOpen = !userMenuOpen}
 								aria-haspopup="menu"
 								aria-expanded={userMenuOpen}
 								class="flex items-center gap-1.5 px-3 py-1.5 text-sm leading-none text-stone-300 hover:text-stone-100 transition-colors rounded-md hover:bg-stone-800/40"
 							>
-								<span class="optical-label font-medium leading-[14px]">{$auth.user?.username}</span>
+								<RankBadge rank={$auth.user?.rank ?? 0} />
+								<span class="optical-label max-w-28 truncate font-medium leading-[14px] xl:max-w-40">{$auth.user?.username}</span>
 								<OpticalIcon
 									icon="mdi:chevron-down"
 									{...iconMetric('mdi:chevron-down')}
@@ -158,32 +164,31 @@
 					{:else}
 						<a
 							href="/login"
-							class="px-3 py-2 text-sm font-medium text-stone-400 hover:text-stone-100 transition-colors"
+							class="hidden px-3 py-2 text-sm font-medium text-stone-400 hover:text-stone-100 transition-colors md:block"
 						>
 							Login
 						</a>
 						<a
 							href="/register"
-							class="px-5 py-2 bg-amber-500 text-sm font-semibold text-amber-950 hover:bg-amber-400 transition-colors rounded-full"
+							class="hidden px-5 py-2 bg-amber-500 text-sm font-semibold text-amber-950 hover:bg-amber-400 transition-colors rounded-full md:block"
 						>
 							Register
 						</a>
 					{/if}
-				</div>
-
-				<!-- Mobile menu button -->
-				<div class="md:hidden flex items-center gap-1">
-					<button on:click={toggleTheme} aria-label="Toggle theme" class="p-2 text-stone-400 hover:text-stone-100">
-						<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
-					</button>
-					<button
-						on:click={() => (mobileMenuOpen = !mobileMenuOpen)}
-						aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}
-						aria-expanded={mobileMenuOpen}
-						class="p-2 text-stone-400 hover:text-stone-100"
-					>
-						<Icon icon={mobileMenuOpen ? 'mdi:close' : 'mdi:menu'} class="w-5 h-5" />
-					</button>
+					<!-- Mobile menu button -->
+					<div class="md:hidden flex items-center gap-1">
+						<button on:click={toggleTheme} aria-label="Toggle theme" class="p-2 text-stone-400 hover:text-stone-100">
+							<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
+						</button>
+						<button
+							on:click={() => (mobileMenuOpen = !mobileMenuOpen)}
+							aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}
+							aria-expanded={mobileMenuOpen}
+							class="p-2 text-stone-400 hover:text-stone-100"
+						>
+							<Icon icon={mobileMenuOpen ? 'mdi:close' : 'mdi:menu'} class="w-5 h-5" />
+						</button>
+					</div>
 				</div>
 			</div>
 		</div>
@@ -208,6 +213,13 @@
 
 					{#if $auth.isAuthenticated}
 						<div class="border-t border-stone-800 pt-3 mt-3">
+							<div class="flex items-center justify-between gap-3 px-3 pb-2.5">
+								<div class="min-w-0">
+									<p class="truncate text-sm font-medium text-stone-200">{$auth.user?.username}</p>
+									<p class="truncate text-xs text-stone-600">{$auth.user?.email || 'Signed in'}</p>
+								</div>
+								<RankBadge rank={$auth.user?.rank ?? 0} />
+							</div>
 							{#each userMenu as item}
 								<a
 									href={item.href}

@@ -1,6 +1,9 @@
 package handlers
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestValidatePlatformSetting(t *testing.T) {
 	tests := []struct {
@@ -18,6 +21,10 @@ func TestValidatePlatformSetting(t *testing.T) {
 		{name: "scoreboard string", key: "scoreboard_enabled", value: "true", wantErr: true},
 		{name: "registration mode", key: "registration_mode", value: "invite"},
 		{name: "bad registration mode", key: "registration_mode", value: "yes", wantErr: true},
+		{name: "event timestamp", key: "event.start_at", value: "2026-09-13T12:30:00+05:30"},
+		{name: "empty event timestamp", key: "event.end_at", value: ""},
+		{name: "event timestamp wrong type", key: "event.start_at", value: float64(42), wantErr: true},
+		{name: "invalid event timestamp", key: "event.end_at", value: "tomorrow", wantErr: true},
 		{name: "legacy setting remains writable", key: "platform_name", value: "Anvil"},
 	}
 
@@ -26,6 +33,58 @@ func TestValidatePlatformSetting(t *testing.T) {
 			err := validatePlatformSetting(tt.key, tt.value)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("validatePlatformSetting(%q, %#v) error = %v, wantErr %v", tt.key, tt.value, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseEventWindow(t *testing.T) {
+	if startAt, endAt, err := parseEventWindow("", ""); err != nil || startAt != nil || endAt != nil {
+		t.Fatalf("empty event window = (%v, %v, %v), want nil values", startAt, endAt, err)
+	}
+
+	startAt, endAt, err := parseEventWindow("2026-09-13T10:00:00+05:30", "2026-09-13T12:00:00+05:30")
+	if err != nil {
+		t.Fatalf("parseEventWindow() error = %v", err)
+	}
+	if startAt.Location() != time.UTC || endAt.Location() != time.UTC {
+		t.Fatalf("event window was not normalized to UTC: %v, %v", startAt, endAt)
+	}
+
+	for _, test := range []struct {
+		name  string
+		start string
+		end   string
+	}{
+		{name: "missing end", start: "2026-09-13T10:00:00Z"},
+		{name: "invalid start", start: "invalid", end: "2026-09-13T12:00:00Z"},
+		{name: "equal times", start: "2026-09-13T12:00:00Z", end: "2026-09-13T12:00:00Z"},
+		{name: "reversed times", start: "2026-09-13T13:00:00Z", end: "2026-09-13T12:00:00Z"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, _, err := parseEventWindow(test.start, test.end); err == nil {
+				t.Fatal("parseEventWindow() error = nil")
+			}
+		})
+	}
+}
+
+func TestEventPhase(t *testing.T) {
+	startAt := time.Date(2026, time.September, 13, 10, 0, 0, 0, time.UTC)
+	endAt := startAt.Add(24 * time.Hour)
+	for _, test := range []struct {
+		name string
+		now  time.Time
+		want string
+	}{
+		{name: "scheduled", now: startAt.Add(-time.Second), want: "scheduled"},
+		{name: "starts inclusively", now: startAt, want: "live"},
+		{name: "live", now: startAt.Add(time.Hour), want: "live"},
+		{name: "ends exclusively", now: endAt, want: "ended"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := eventPhase(test.now, startAt, endAt); got != test.want {
+				t.Fatalf("eventPhase() = %q, want %q", got, test.want)
 			}
 		})
 	}

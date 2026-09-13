@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,9 +12,29 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
+
+func currentUserRank(ctx context.Context, db *database.DB, userID uuid.UUID) (int, error) {
+	var rank int
+	err := db.Pool.QueryRow(ctx, `
+		SELECT COALESCE((
+			SELECT ranked.position FROM (
+				SELECT candidate.id,
+					ROW_NUMBER() OVER (
+						ORDER BY COALESCE(candidate.total_score, 0) DESC,
+							(SELECT MAX(solved_at) FROM solves WHERE user_id = candidate.id) ASC NULLS LAST,
+							candidate.created_at ASC, candidate.id ASC
+					) AS position
+				FROM users candidate
+				WHERE candidate.role != 'admin' AND candidate.status = 'active'
+			) ranked WHERE ranked.id = $1
+		), 0)
+	`, userID).Scan(&rank)
+	return rank, err
+}
 
 // UserService handles user operations
 type UserService struct {

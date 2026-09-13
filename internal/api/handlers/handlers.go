@@ -40,20 +40,11 @@ import (
 type PlatformHandler struct {
 	config *config.Config
 	db     *database.DB
+	logger *zap.Logger
 }
 
-func NewPlatformHandler(cfg *config.Config, db *database.DB) *PlatformHandler {
-	return &PlatformHandler{config: cfg, db: db}
-}
-
-func (h *PlatformHandler) GetInfo(c *gin.Context) {
-	c.JSON(http.StatusOK, gin.H{
-		"name":               h.config.Platform.Name,
-		"description":        h.config.Platform.Description,
-		"registration_mode":  h.config.Platform.RegistrationMode,
-		"scoring_enabled":    h.config.Platform.ScoringEnabled,
-		"scoreboard_enabled": h.config.Platform.ScoreboardEnabled,
-	})
+func NewPlatformHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *PlatformHandler {
+	return &PlatformHandler{config: cfg, db: db, logger: logger}
 }
 
 // ChallengeHandler - methods implemented in challenge.go
@@ -1064,16 +1055,6 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
-
-	// Start transaction
-	tx, err := h.db.Pool.Begin(c.Request.Context())
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
-		return
-	}
-	defer tx.Rollback(c.Request.Context())
-
-	// Upsert each setting
 	for key, value := range req.Settings {
 		if strings.TrimSpace(key) == "" || len(key) > 100 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid setting key"})
@@ -1083,6 +1064,27 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+	}
+
+	// Start transaction
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	if err := validateEventSettingsUpdate(c.Request.Context(), tx, req.Settings); err != nil {
+		if errors.Is(err, errEventSettingsUnavailable) {
+			h.logger.Error("Failed to validate event schedule", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to validate event schedule"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Upsert each setting
+	for key, value := range req.Settings {
 		valueJSON, err := json.Marshal(value)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid setting value: " + key})
@@ -1156,6 +1158,67 @@ func validatePlatformSetting(key string, value interface{}) error {
 		if !ok || !isRegistrationMode(strings.ToLower(strings.TrimSpace(mode))) {
 			return errors.New("Invalid value for registration_mode")
 		}
+	case "event.start_at", "event.end_at":
+		text, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("Invalid value for %s: expected an RFC3339 timestamp", key)
+		}
+		text = strings.TrimSpace(text)
+		if text == "" {
+			return nil
+		}
+		if _, err := time.Parse(time.RFC3339, text); err != nil {
+			return fmt.Errorf("Invalid value for %s: expected an RFC3339 timestamp", key)
+		}
+	}
+	return nil
+}
+
+var errEventSettingsUnavailable = errors.New("event schedule settings unavailable")
+
+func validateEventSettingsUpdate(ctx context.Context, tx pgx.Tx, settings map[string]interface{}) error {
+	_, changesStart := settings["event.start_at"]
+	_, changesEnd := settings["event.end_at"]
+	if !changesStart && !changesEnd {
+		return nil
+	}
+
+	rows, err := tx.Query(ctx, `
+		SELECT key, value #>> '{}'
+		FROM platform_settings
+		WHERE key IN ('event.start_at', 'event.end_at')
+		FOR UPDATE
+	`)
+	if err != nil {
+		return fmt.Errorf("%w: query settings: %v", errEventSettingsUnavailable, err)
+	}
+	defer rows.Close()
+
+	current := make(map[string]string, 2)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return fmt.Errorf("%w: scan settings: %v", errEventSettingsUnavailable, err)
+		}
+		current[key] = value
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%w: iterate settings: %v", errEventSettingsUnavailable, err)
+	}
+	if len(current) != 2 {
+		return errEventSettingsUnavailable
+	}
+
+	startRaw, endRaw := current["event.start_at"], current["event.end_at"]
+	if changesStart {
+		startRaw = strings.TrimSpace(settings["event.start_at"].(string))
+	}
+	if changesEnd {
+		endRaw = strings.TrimSpace(settings["event.end_at"].(string))
+	}
+	_, _, err = parseEventWindow(startRaw, endRaw)
+	if err != nil {
+		return fmt.Errorf("Invalid event schedule: %w", err)
 	}
 	return nil
 }

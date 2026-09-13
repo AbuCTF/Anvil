@@ -6,8 +6,10 @@ interface User {
 	id: string;
 	username: string;
 	email?: string;
+	display_name?: string;
 	role: string;
-	totalScore: number;
+	total_score: number;
+	rank: number;
 }
 
 interface AuthState {
@@ -212,8 +214,8 @@ function createAuthStore() {
 			}
 		},
 
-		// Check auth - with debouncing to prevent excessive API calls
-		checkAuth: async () => {
+		// Check auth - debounced by default; score-changing actions can force a refresh.
+		checkAuth: async (force = false) => {
 			if (!browser) return;
 
 			const currentState = get({ subscribe });
@@ -224,7 +226,7 @@ function createAuthStore() {
 			if (currentState.isLoading) return;
 
 			// Skip if recently checked (within interval)
-			if (currentState.lastChecked && (now - currentState.lastChecked) < AUTH_CHECK_INTERVAL) {
+			if (!force && currentState.lastChecked && (now - currentState.lastChecked) < AUTH_CHECK_INTERVAL) {
 				return;
 			}
 

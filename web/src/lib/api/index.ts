@@ -23,6 +23,22 @@ export interface VpnStatusResponse {
 	bytes_received?: number;
 }
 
+export type EventPhase = 'scheduled' | 'live' | 'ended';
+
+export interface PlatformInfoResponse {
+	name: string;
+	description: string;
+	registration_mode: string;
+	scoring_enabled: boolean;
+	scoreboard_enabled: boolean;
+	server_time: string;
+	event?: {
+		start_at: string;
+		end_at: string;
+		phase: EventPhase;
+	};
+}
+
 export class ApiError extends Error {
 	[key: string]: unknown;
 
@@ -223,7 +239,7 @@ class ApiClient {
 
 	// Platform
 	async getPlatformInfo() {
-		return this.request<{ name: string; description: string }>('/info', {}, false);
+		return this.request<PlatformInfoResponse>('/info', { cache: 'no-store' }, false);
 	}
 
 	// Auth

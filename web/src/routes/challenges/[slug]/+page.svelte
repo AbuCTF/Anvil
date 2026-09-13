@@ -216,7 +216,7 @@
 			submitResult = { correct: result.correct, message: result.message };
 			if (result.correct) {
 				flagInput = '';
-				await loadChallenge();
+				await Promise.all([loadChallenge(), auth.checkAuth(true)]);
 			}
 		} catch (e: unknown) {
 			// Handle brute-force lockout (429)
