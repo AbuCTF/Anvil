@@ -4,7 +4,7 @@ services:
     container_name: anvil-postgres
     environment:
       POSTGRES_USER: anvil
-      POSTGRES_PASSWORD: ${ANVIL_DATABASE_PASSWORD:-anvil}
+      POSTGRES_PASSWORD: ${ANVIL_DATABASE_PASSWORD:?ANVIL_DATABASE_PASSWORD is required}
       POSTGRES_DB: anvil
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -48,25 +48,25 @@ services:
       - ANVIL_DATABASE_HOST=postgres
       - ANVIL_DATABASE_PORT=5432
       - ANVIL_DATABASE_USER=anvil
-      - ANVIL_DATABASE_PASSWORD=${ANVIL_DATABASE_PASSWORD:-anvil}
+      - ANVIL_DATABASE_PASSWORD=${ANVIL_DATABASE_PASSWORD:?ANVIL_DATABASE_PASSWORD is required}
       - ANVIL_DATABASE_DATABASE=anvil
       - ANVIL_REDIS_HOST=redis
       - ANVIL_REDIS_PORT=6379
       - ANVIL_SERVER_PORT=8080
-      - ANVIL_JWT_SECRET=${ANVIL_JWT_SECRET:-change-me}
-      - ANVIL_VPN_ENABLED=${ANVIL_VPN_ENABLED:-true}
+      - ANVIL_JWT_SECRET=${ANVIL_JWT_SECRET:?ANVIL_JWT_SECRET is required}
+      - ANVIL_VPN_ENABLED=${ANVIL_VPN_ENABLED:-false}
       - ANVIL_VPN_INTERFACE=${ANVIL_VPN_INTERFACE:-wg0}
       - ANVIL_VPN_LISTEN_PORT=${ANVIL_VPN_LISTEN_PORT:-51820}
-      - ANVIL_VPN_PUBLIC_ENDPOINT=${ANVIL_VPN_PUBLIC_ENDPOINT}
-      - ANVIL_VPN_PRIVATE_KEY=${ANVIL_VPN_PRIVATE_KEY}
-      - ANVIL_VPN_PUBLIC_KEY=${ANVIL_VPN_PUBLIC_KEY}
+      - ANVIL_VPN_PUBLIC_ENDPOINT=${ANVIL_VPN_PUBLIC_ENDPOINT:-}
+      - ANVIL_VPN_PRIVATE_KEY=${ANVIL_VPN_PRIVATE_KEY:-}
+      - ANVIL_VPN_PUBLIC_KEY=${ANVIL_VPN_PUBLIC_KEY:-}
       - ANVIL_VPN_ADDRESS_RANGE=${ANVIL_VPN_ADDRESS_RANGE:-10.10.0.0/16}
     ports:
       - "127.0.0.1:8080:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /root/.ssh:/root/.ssh:ro
-      - /home/ubuntu/.docker/config.json:/root/.docker/config.json:ro
+      - ${HOME}/.ssh:/root/.ssh:ro
+      - ${HOME}/.docker/config.json:/root/.docker/config.json:ro
       - ./data/storage:/var/lib/anvil/storage
       - /var/lib/anvil:/var/lib/anvil
     depends_on:
@@ -84,7 +84,7 @@ services:
       dockerfile: ../deployments/docker/Dockerfile.web
       target: production
       args:
-        PUBLIC_API_URL: https://play.abu.rocks
+        PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL is required}
     container_name: anvil-web
     environment:
       - NODE_ENV=production

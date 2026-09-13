@@ -1,14 +1,6 @@
-![logo](/web/static/logo.png)
+![Anvil](web/static/logo.png)
 
 Self-hosted B2R/AD-CTF platform with VM & container support.
-
-`Latest Release`
-- v0.1.0 [`in dev`]
-  - Docker container challenges
-  - Full VM support (OVA/VMDK/QCOW2)
-  - WireGuard VPN integration
-  - Multi-flag challenges
-  - Dynamic scoring
 
 #### **Configure**
 
@@ -65,10 +57,9 @@ sudo systemctl enable --now wg-quick@wg0
 #### **VPN Sync**
 
 ```bash
-chmod +x scripts/wg-status-sync.sh
-sed -i 's/\r$//' scripts/wg-status-sync.sh
-sudo cp scripts/wg-status-sync.service /etc/systemd/system/
-sudo cp scripts/wg-status-sync.timer /etc/systemd/system/
+sudo install -D -m 0755 scripts/wg-status-sync.sh /usr/local/libexec/anvil/wg-status-sync
+sudo install -m 0644 scripts/wg-status-sync.service /etc/systemd/system/
+sudo install -m 0644 scripts/wg-status-sync.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now wg-status-sync.timer
 ```
@@ -95,7 +86,7 @@ curl https://your-domain.com/api/health
 ```bash
 docker exec -it anvil-postgres psql -U anvil -d anvil -c \
   "INSERT INTO users (username, email, password_hash, role, status) \
-   VALUES ('admin', 'admin@example.com', crypt('password', gen_salt('bf', 10)), 'admin', 'active');"
+   VALUES ('admin', 'admin@example.com', crypt('REPLACE_WITH_A_STRONG_PASSWORD', gen_salt('bf', 10)), 'admin', 'active');"
 ```
 
 #### **OCI notes**
@@ -138,7 +129,7 @@ Off by default — Anvil is a B2R/Jeopardy platform until `game.enabled` is set.
 
 Scoring is `attack + defense + sla + koth`, all additive — dropping the KotH layer degrades to plain Attack-Defense. Attack divides a flag's value by how many teams stole it; defense is a sublinear penalty for flags lost; SLA scales by `√teams`.
 
-Checkers are external executables the engine runs over a JSON protocol (task on stdin, verdict on stdout). See `services/example-notes` for a service + checker template.
+Checkers are external executables the engine runs over a JSON protocol (task on stdin, verdict on stdout).
 
 #### **Stack**
 

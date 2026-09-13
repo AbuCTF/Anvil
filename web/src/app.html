@@ -11,18 +11,14 @@
 			try {
 				if (localStorage.getItem('theme') === 'light')
 					document.documentElement.setAttribute('data-theme', 'light');
-			} catch (e) {}
+			} catch {}
 		</script>
-		
-		<!-- Preconnect to API for faster requests -->
-		<link rel="preconnect" href="https://play.abu.rocks" crossorigin />
-		<link rel="dns-prefetch" href="https://play.abu.rocks" />
-		
+
 		<!-- Optimize for mobile -->
 		<meta name="mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="theme-color" content="#000000" />
-		
+
 		%sveltekit.head%
 	</head>
 	<body data-sveltekit-preload-data="hover">

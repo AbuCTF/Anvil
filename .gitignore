@@ -5,6 +5,7 @@
 *.so
 *.dylib
 anvil
+/server
 
 # Test binary
 *.test
@@ -39,6 +40,10 @@ vendor/
 web/node_modules/
 web/.svelte-kit/
 web/build/
+web/vite.config.ts.timestamp-*.mjs
+
+# Runtime data
+/data/
 
 # Logs
 *.log

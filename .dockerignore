@@ -1,7 +1,6 @@
 .git
 .env
 .env.*
-CODEX_HANDOFF.md
 data/
 server
 web/.svelte-kit/
