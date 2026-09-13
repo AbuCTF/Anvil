@@ -85,14 +85,14 @@ func (s *Server) setupRouter() {
 	r.Use(middleware.RequestID())
 	r.Use(middleware.SecurityHeaders())
 
+	// Health probes must remain independent from user traffic limits.
+	r.GET("/health", s.healthCheck)
+	r.GET("/api/health", s.healthCheck)
+
 	// Rate limiting (if enabled)
 	if s.config.RateLimit.Enabled {
 		r.Use(middleware.RateLimiter(s.config.RateLimit))
 	}
-
-	// Health check (no auth)
-	r.GET("/health", s.healthCheck)
-	r.GET("/api/health", s.healthCheck)
 
 	// API v1
 	v1 := r.Group("/api/v1")
@@ -425,21 +425,27 @@ func (s *Server) healthCheck(c *gin.Context) {
 	// Check database connection
 	ctx := c.Request.Context()
 	err := s.db.Pool.Ping(ctx)
+	containerStatus := s.containerSvc.Status()
+	vpnStatus := s.vpnSvc.Status()
 
 	status := "healthy"
+	httpStatus := http.StatusOK
 	dbStatus := "connected"
-	if err != nil {
+	if err != nil || containerStatus != "connected" {
 		status = "degraded"
+		httpStatus = http.StatusServiceUnavailable
+	}
+	if err != nil {
 		dbStatus = "disconnected"
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	c.JSON(httpStatus, gin.H{
 		"status":    status,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"services": gin.H{
 			"database":  dbStatus,
-			"container": s.containerSvc.Status(),
-			"vpn":       s.vpnSvc.Status(),
+			"container": containerStatus,
+			"vpn":       vpnStatus,
 		},
 	})
 }

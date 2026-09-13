@@ -6,14 +6,13 @@ import { env } from '$env/dynamic/public';
 const PUBLIC_API_URL = env.PUBLIC_API_URL;
 
 // API URL configuration
-// Uses PUBLIC_API_URL from .env or docker build args
+// Uses PUBLIC_API_URL from the runtime environment when provided.
 // Set PUBLIC_API_URL in:
 //   - .env file for local dev
-//   - Docker build args for production
-//   - Environment variable at build time
+//   - the web container environment in production
 
 function getApiUrl(): string {
-	// SvelteKit static public env (set at build time)
+	// SvelteKit dynamic public env (set at runtime)
 	if (PUBLIC_API_URL && PUBLIC_API_URL !== '' && PUBLIC_API_URL !== 'undefined') {
 		return PUBLIC_API_URL;
 	}

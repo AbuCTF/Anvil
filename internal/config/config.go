@@ -13,13 +13,13 @@ type Config struct {
 	Environment string          `mapstructure:"environment"`
 	Server      ServerConfig    `mapstructure:"server"`
 	Database    DatabaseConfig  `mapstructure:"database"`
-	Redis       RedisConfig     `mapstructure:"redis"`
 	JWT         JWTConfig       `mapstructure:"jwt"`
 	Container   ContainerConfig `mapstructure:"container"`
 	VPN         VPNConfig       `mapstructure:"vpn"`
 	Platform    PlatformConfig  `mapstructure:"platform"`
 	RateLimit   RateLimitConfig `mapstructure:"rate_limit"`
 	Game        GameConfig      `mapstructure:"game"`
+	Storage     StorageConfig   `mapstructure:"storage"`
 }
 
 const defaultJWTSecret = "change-me-in-production-please"
@@ -63,15 +63,8 @@ func (d DatabaseConfig) DSN() string {
 	)
 }
 
-type RedisConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	Password string `mapstructure:"password"`
-	DB       int    `mapstructure:"db"`
-}
-
-func (r RedisConfig) Addr() string {
-	return fmt.Sprintf("%s:%d", r.Host, r.Port)
+type StorageConfig struct {
+	Path string `mapstructure:"path"`
 }
 
 type JWTConfig struct {
@@ -82,14 +75,12 @@ type JWTConfig struct {
 }
 
 type ContainerConfig struct {
-	Runtime             string            `mapstructure:"runtime"` // docker or podman
-	NetworkName         string            `mapstructure:"network_name"`
-	NetworkSubnet       string            `mapstructure:"network_subnet"`
-	DefaultTimeout      time.Duration     `mapstructure:"default_timeout"`
-	MaxPerUser          int               `mapstructure:"max_per_user"`
-	CleanupInterval     time.Duration     `mapstructure:"cleanup_interval"`
-	HealthCheckInterval time.Duration     `mapstructure:"health_check_interval"`
-	Labels              map[string]string `mapstructure:"labels"`
+	NetworkName     string            `mapstructure:"network_name"`
+	NetworkSubnet   string            `mapstructure:"network_subnet"`
+	DefaultTimeout  time.Duration     `mapstructure:"default_timeout"`
+	MaxPerUser      int               `mapstructure:"max_per_user"`
+	CleanupInterval time.Duration     `mapstructure:"cleanup_interval"`
+	Labels          map[string]string `mapstructure:"labels"`
 }
 
 type VPNConfig struct {
@@ -110,21 +101,11 @@ type PlatformConfig struct {
 	Name        string `mapstructure:"name"`
 	Description string `mapstructure:"description"`
 
-	RegistrationMode   string `mapstructure:"registration_mode"` // open, invite, token, disabled
-	RequireEmailVerify bool   `mapstructure:"require_email_verify"`
+	RegistrationMode string `mapstructure:"registration_mode"` // open, invite, token, disabled
 
-	ScoringEnabled    bool   `mapstructure:"scoring_enabled"`
-	ScoreboardEnabled bool   `mapstructure:"scoreboard_enabled"`
-	ScoreboardPublic  bool   `mapstructure:"scoreboard_public"`
-	ScoringMode       string `mapstructure:"scoring_mode"` // static, dynamic, time_decay
-
-	FlagSubmissionEnabled bool `mapstructure:"flag_submission_enabled"`
-	HintsEnabled          bool `mapstructure:"hints_enabled"`
-	WriteupSubmission     bool `mapstructure:"writeup_submission"`
-
-	DefaultInstanceTimeout time.Duration `mapstructure:"default_instance_timeout"`
-	MaxInstanceExtensions  int           `mapstructure:"max_instance_extensions"`
-	ExtensionDuration      time.Duration `mapstructure:"extension_duration"`
+	ScoringEnabled    bool `mapstructure:"scoring_enabled"`
+	ScoreboardEnabled bool `mapstructure:"scoreboard_enabled"`
+	ScoreboardPublic  bool `mapstructure:"scoreboard_public"`
 }
 
 type RateLimitConfig struct {
@@ -195,6 +176,11 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("error binding environment variable for %s: %w", key, err)
 		}
 	}
+	// ANVIL_ENV is the established deployment variable; ANVIL_ENVIRONMENT is
+	// retained as the direct mapstructure spelling.
+	if err := v.BindEnv("environment", "ANVIL_ENVIRONMENT", "ANVIL_ENV"); err != nil {
+		return nil, fmt.Errorf("error binding environment variable for environment: %w", err)
+	}
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -215,9 +201,9 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.host", "0.0.0.0")
-	v.SetDefault("server.read_timeout", "15s")
-	v.SetDefault("server.write_timeout", "15s")
-	v.SetDefault("server.shutdown_timeout", "30s")
+	v.SetDefault("server.read_timeout", "30m")
+	v.SetDefault("server.write_timeout", "30m")
+	v.SetDefault("server.shutdown_timeout", "25s")
 	v.SetDefault("server.trusted_proxies", []string{})
 
 	v.SetDefault("database.host", "localhost")
@@ -229,23 +215,18 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.max_open_conns", 25)
 	v.SetDefault("database.max_idle_conns", 5)
 
-	v.SetDefault("redis.host", "localhost")
-	v.SetDefault("redis.port", 6379)
-	v.SetDefault("redis.password", "")
-	v.SetDefault("redis.db", 0)
+	v.SetDefault("storage.path", "./data/storage")
 
 	v.SetDefault("jwt.secret", defaultJWTSecret)
 	v.SetDefault("jwt.access_expiry", "15m")
 	v.SetDefault("jwt.refresh_expiry", "168h")
 	v.SetDefault("jwt.issuer", "anvil")
 
-	v.SetDefault("container.runtime", "docker")
 	v.SetDefault("container.network_name", "anvil-challenges")
 	v.SetDefault("container.network_subnet", "172.20.0.0/16")
 	v.SetDefault("container.default_timeout", "2h")
 	v.SetDefault("container.max_per_user", 2)
 	v.SetDefault("container.cleanup_interval", "5m")
-	v.SetDefault("container.health_check_interval", "30s")
 	v.SetDefault("container.labels", map[string]string{})
 
 	v.SetDefault("vpn.enabled", true)
@@ -263,17 +244,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("platform.name", "Anvil")
 	v.SetDefault("platform.description", "Forge your skills")
 	v.SetDefault("platform.registration_mode", "open")
-	v.SetDefault("platform.require_email_verify", false)
 	v.SetDefault("platform.scoring_enabled", true)
 	v.SetDefault("platform.scoreboard_enabled", true)
 	v.SetDefault("platform.scoreboard_public", true)
-	v.SetDefault("platform.scoring_mode", "static")
-	v.SetDefault("platform.flag_submission_enabled", true)
-	v.SetDefault("platform.hints_enabled", true)
-	v.SetDefault("platform.writeup_submission", false)
-	v.SetDefault("platform.default_instance_timeout", "2h")
-	v.SetDefault("platform.max_instance_extensions", 3)
-	v.SetDefault("platform.extension_duration", "30m")
 
 	v.SetDefault("rate_limit.enabled", true)
 	v.SetDefault("rate_limit.requests_per_minute", 60)

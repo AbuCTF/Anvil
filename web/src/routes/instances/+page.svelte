@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -31,29 +31,60 @@
 	let actionLoading: Record<string, string> = {};
 
 	let refreshInterval: ReturnType<typeof setInterval>;
+	let instancesRequest: AbortController | null = null;
+	let instancesRequestID = 0;
+	let disposed = false;
+	const REQUEST_TIMEOUT_MS = 10000;
 
-	onMount(async () => {
-		await loadInstances();
-		refreshInterval = setInterval(loadInstances, 30000);
+	onMount(() => {
+		disposed = false;
+		document.addEventListener('visibilitychange', refreshVisibleInstances);
+		loadInstances().then(() => {
+			if (!disposed) refreshInterval = setInterval(refreshVisibleInstances, 30000);
+		});
+		return () => {
+			disposed = true;
+			instancesRequest?.abort();
+			if (refreshInterval) clearInterval(refreshInterval);
+			document.removeEventListener('visibilitychange', refreshVisibleInstances);
+		};
 	});
 
-	onDestroy(() => {
-		if (refreshInterval) {
-			clearInterval(refreshInterval);
+	function refreshVisibleInstances() {
+		if (document.visibilityState === 'visible') loadInstances();
+	}
+
+	async function loadInstances(force = false) {
+		if (instancesRequest) {
+			if (!force) return;
+			instancesRequest.abort();
 		}
-	});
-
-	async function loadInstances() {
+		const controller = new AbortController();
+		const requestID = ++instancesRequestID;
+		instancesRequest = controller;
+		let timedOut = false;
+		const requestTimeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, REQUEST_TIMEOUT_MS);
 		try {
-			const response = await api.getInstances();
+			const response = await api.getInstances({ signal: controller.signal });
+			if (disposed || requestID !== instancesRequestID) return;
 			instances = response.instances || [];
 			error = '';
 		} catch (e) {
-			const message = e instanceof Error ? e.message : 'Failed to load instances';
+			if (disposed || requestID !== instancesRequestID || (controller.signal.aborted && !timedOut)) return;
+			const message = timedOut
+				? 'Instance refresh timed out'
+				: e instanceof Error
+					? e.message
+					: 'Failed to load instances';
 			if (instances.length === 0) error = message;
 			else actionError = `Unable to refresh instances: ${message}`;
 		} finally {
-			loading = false;
+			clearTimeout(requestTimeout);
+			if (instancesRequest === controller) instancesRequest = null;
+			if (!disposed && requestID === instancesRequestID) loading = false;
 		}
 	}
 
@@ -95,10 +126,10 @@
 		actionError = '';
 		try {
 			await api.revertInstance(instanceId);
-			await loadInstances();
+			await loadInstances(true);
 		} catch (e) {
 			actionError = e instanceof Error ? e.message : 'Failed to revert instance';
-			await loadInstances();
+			await loadInstances(true);
 		} finally {
 			delete actionLoading[instanceId];
 			actionLoading = { ...actionLoading };
@@ -205,7 +236,7 @@
 			<Icon icon="mdi:alert-circle-outline" class="w-8 h-8 text-down mx-auto mb-3" />
 			<p class="text-down text-sm mb-4">{error}</p>
 			<button
-				on:click={() => { error = ''; loading = true; loadInstances(); }}
+				on:click={() => { error = ''; loading = true; loadInstances(true); }}
 				class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm leading-none font-medium transition-colors"
 			>
 				<Icon icon="mdi:refresh" class="w-3.5 h-3.5 shrink-0" />

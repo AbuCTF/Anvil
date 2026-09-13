@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import type { VpnStatusResponse } from '$api';
@@ -18,47 +18,116 @@
 	let statusError = '';
 	let copied = false;
 	let statusInterval: ReturnType<typeof setInterval>;
+	let statusRequestInFlight = false;
+	let statusRequest: AbortController | null = null;
+	let dataRequest: AbortController | null = null;
+	let ready = false;
+	let disposed = false;
 	let showRegenerateConfirm = false;
+	const REQUEST_TIMEOUT_MS = 10000;
 
-	onMount(async () => {
-		if (await loadVPNData()) startStatusPolling();
+	onMount(() => {
+		disposed = false;
+		document.addEventListener('visibilitychange', handleVisibilityChange);
+		loadVPNData().then((ready) => {
+			if (!disposed && ready) startStatusPolling();
+		});
+		return () => {
+			disposed = true;
+			dataRequest?.abort();
+			statusRequest?.abort();
+			if (statusInterval) clearInterval(statusInterval);
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
+		};
 	});
+
+	async function refreshStatus() {
+		if (statusRequestInFlight || !ready || disposed || document.visibilityState !== 'visible') return;
+		statusRequestInFlight = true;
+		const controller = new AbortController();
+		statusRequest = controller;
+		let timedOut = false;
+		const requestTimeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, REQUEST_TIMEOUT_MS);
+		try {
+			const status = await api.getVPNStatus({ signal: controller.signal });
+			if (disposed || statusRequest !== controller) return;
+			vpnStatus = status;
+			statusError = '';
+		} catch (e) {
+			if (disposed || statusRequest !== controller || (controller.signal.aborted && !timedOut)) return;
+			statusError = timedOut
+				? 'VPN status request timed out'
+				: e instanceof Error
+					? e.message
+					: 'Unable to refresh VPN status';
+		} finally {
+			clearTimeout(requestTimeout);
+			if (statusRequest === controller) {
+				statusRequest = null;
+				statusRequestInFlight = false;
+			}
+		}
+	}
 
 	function startStatusPolling() {
 		if (statusInterval) clearInterval(statusInterval);
-		statusInterval = setInterval(async () => {
-			try {
-				vpnStatus = await api.getVPNStatus();
-				statusError = '';
-			} catch (e) {
-				statusError = e instanceof Error ? e.message : 'Unable to refresh VPN status';
-			}
-		}, 3000);
+		if (ready && document.visibilityState === 'visible') statusInterval = setInterval(refreshStatus, 5000);
 	}
 
-	onDestroy(() => {
-		if (statusInterval) clearInterval(statusInterval);
-	});
+	function handleVisibilityChange() {
+		if (document.visibilityState === 'visible' && ready) {
+			refreshStatus();
+			startStatusPolling();
+		} else if (statusInterval) {
+			clearInterval(statusInterval);
+			statusRequest?.abort();
+		}
+	}
 
 	async function loadVPNData(): Promise<boolean> {
+		ready = false;
+		if (statusInterval) clearInterval(statusInterval);
+		statusRequest?.abort();
+		dataRequest?.abort();
+		const controller = new AbortController();
+		dataRequest = controller;
+		let timedOut = false;
+		const requestTimeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, REQUEST_TIMEOUT_MS);
 		try {
 			const [configRes, statusRes] = await Promise.all([
-				api.getVPNConfig(),
-				api.getVPNStatus()
+				api.getVPNConfig({ signal: controller.signal }),
+				api.getVPNStatus({ signal: controller.signal })
 			]);
+			if (disposed || dataRequest !== controller) return false;
 
 			vpnConfig = configRes.config_file ?? null;
 			vpnStatus = statusRes || null;
 			error = '';
 			statusError = '';
 			loadFailed = false;
+			ready = true;
 			return true;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load VPN data';
+			const wasCancelled = controller.signal.aborted && !timedOut;
+			controller.abort();
+			if (disposed || dataRequest !== controller || wasCancelled) return false;
+			error = timedOut
+				? 'VPN request timed out'
+				: e instanceof Error
+					? e.message
+					: 'Failed to load VPN data';
 			loadFailed = true;
 			return false;
 		} finally {
-			loading = false;
+			clearTimeout(requestTimeout);
+			if (dataRequest === controller) dataRequest = null;
+			if (!disposed) loading = false;
 		}
 	}
 
@@ -76,7 +145,7 @@
 			if (response.config_file) {
 				vpnConfig = response.config_file;
 			}
-			await loadVPNData();
+			if (await loadVPNData()) startStatusPolling();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to generate VPN config';
 		} finally {
@@ -94,7 +163,7 @@
 				vpnConfig = response.config_file;
 			}
 			showRegenerateConfirm = false;
-			await loadVPNData();
+			if (await loadVPNData()) startStatusPolling();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to regenerate VPN config';
 		} finally {

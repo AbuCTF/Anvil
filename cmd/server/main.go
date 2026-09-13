@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -71,7 +72,7 @@ func main() {
 	}
 
 	// Initialize storage service
-	storageSvc, err := storage.NewLocalStorage("./data/storage", logger)
+	storageSvc, err := storage.NewLocalStorage(cfg.Storage.Path, logger)
 	if err != nil {
 		sugar.Fatalf("Failed to initialize storage service: %v", err)
 	}
@@ -371,11 +372,12 @@ func main() {
 
 	// Create HTTP server with extended timeouts for large file uploads
 	httpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:      server.Router(),
-		ReadTimeout:  30 * time.Minute, // Extended for OVA uploads
-		WriteTimeout: 30 * time.Minute, // Extended for large responses
-		IdleTimeout:  120 * time.Second,
+		Addr:              net.JoinHostPort(cfg.Server.Host, fmt.Sprintf("%d", cfg.Server.Port)),
+		Handler:           server.Router(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       cfg.Server.ReadTimeout,
+		WriteTimeout:      cfg.Server.WriteTimeout,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Start server in goroutine
@@ -395,7 +397,7 @@ func main() {
 
 	gameCancel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
 	// Cleanup running containers

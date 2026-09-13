@@ -45,6 +45,23 @@ func TestLoadWithoutConfigUsesValidDurations(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsDeploymentEnvironmentAlias(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("ANVIL_ENV", "production")
+	t.Setenv("ANVIL_JWT_SECRET", "short")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned an error: %v", err)
+	}
+	if cfg.Environment != "production" {
+		t.Fatalf("environment = %q, want production", cfg.Environment)
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted a weak secret with ANVIL_ENV=production")
+	}
+}
+
 func TestLoadEnvironmentOverridesConfigFile(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -70,6 +87,7 @@ jwt:
 	t.Setenv("ANVIL_DATABASE_HOST", "127.0.0.1")
 	t.Setenv("ANVIL_DATABASE_PORT", "55432")
 	t.Setenv("ANVIL_JWT_SECRET", "from-environment")
+	t.Setenv("ANVIL_STORAGE_PATH", "/srv/anvil/storage")
 
 	cfg, err := Load()
 	if err != nil {
@@ -86,5 +104,8 @@ jwt:
 	}
 	if cfg.JWT.Secret != "from-environment" {
 		t.Errorf("JWT secret = %q, want from-environment", cfg.JWT.Secret)
+	}
+	if cfg.Storage.Path != "/srv/anvil/storage" {
+		t.Errorf("storage path = %q, want /srv/anvil/storage", cfg.Storage.Path)
 	}
 }

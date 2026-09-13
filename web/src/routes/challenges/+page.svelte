@@ -37,17 +37,19 @@
 
 	// Icons only — the accent color always comes from the muted categoryColor palette.
 	const categoryIcons: Record<string, { icon: string; size: number }> = {
-		'Web Exploitation': { icon: 'mdi:web', size: 13.75 },
-		'Binary Exploitation': { icon: 'mdi:memory', size: 15.25 },
-		'Reverse Engineering': { icon: 'mdi:cog-outline', size: 13.75 },
-		Cryptography: { icon: 'mdi:key-variant', size: 13.75 },
-		Forensics: { icon: 'mdi:fingerprint', size: 13.75 },
-		OSINT: { icon: 'mdi:earth', size: 13.75 },
-		Misc: { icon: 'mdi:shape-outline', size: 13.75 }
+		b2r: { icon: 'mdi:server-security', size: 13.75 },
+		web3: { icon: 'mdi:ethereum', size: 15.5 },
+		'web exploitation': { icon: 'mdi:web', size: 13.75 },
+		'binary exploitation': { icon: 'mdi:memory', size: 15.25 },
+		'reverse engineering': { icon: 'mdi:cog-outline', size: 13.75 },
+		cryptography: { icon: 'mdi:key-variant', size: 13.75 },
+		forensics: { icon: 'mdi:fingerprint', size: 13.75 },
+		osint: { icon: 'mdi:earth', size: 13.75 },
+		misc: { icon: 'mdi:shape-outline', size: 13.75 }
 	};
 
 	function catIcon(name: string) {
-		return categoryIcons[name] ?? { icon: 'mdi:flag-outline', size: 15.25 };
+		return categoryIcons[name.trim().toLowerCase()] ?? { icon: 'mdi:flag-outline', size: 15.25 };
 	}
 
 	$: categories = [...new Set(challenges.map((c) => c.category).filter(Boolean))].sort() as string[];

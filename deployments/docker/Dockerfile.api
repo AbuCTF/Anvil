@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Anvil API Dockerfile
 FROM golang:1.26-alpine AS builder
 
@@ -8,16 +9,18 @@ WORKDIR /app
 
 # Copy go mod files
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 # Copy source code
 COPY . .
 
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o anvil ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o anvil ./cmd/server
 
 # Final stage
-FROM alpine:3.19
+FROM alpine:3.24
 
 # wireguard-tools for wg peer management via nsenter
 # openssh-client for remote VM node operations
@@ -34,5 +37,8 @@ COPY --from=builder /app/config/config.yaml ./config/
 RUN mkdir -p /var/lib/anvil/images/uploads /var/lib/anvil/images/templates
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8080/health | grep -q '"status":"healthy"' || exit 1
 
 ENTRYPOINT ["./anvil"]

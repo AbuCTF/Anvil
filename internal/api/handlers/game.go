@@ -2,7 +2,13 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/api/middleware"
@@ -11,6 +17,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/game"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -18,10 +25,68 @@ type GameHandler struct {
 	config *config.Config
 	db     *database.DB
 	logger *zap.Logger
+
+	stateMu    sync.Mutex
+	stateCache gameStateCacheEntry
+	flightMu   sync.Mutex
+	flight     *gameStateFlight
+	stateLoad  func(context.Context) ([]byte, string, error)
 }
+
+type gameStateCacheEntry struct {
+	body      []byte
+	etag      string
+	expiresAt time.Time
+}
+
+type gameStateFlight struct {
+	done chan struct{}
+	err  error
+}
+
+type gameStateQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+const (
+	arenaLiveCacheTTL     = 5 * time.Second
+	arenaIdleCacheTTL     = 15 * time.Second
+	arenaStaleTTL         = 15 * time.Second
+	arenaQueryTimeout     = 5 * time.Second
+	arenaHistoryTickLimit = 500
+)
 
 func NewGameHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *GameHandler {
 	return &GameHandler{config: cfg, db: db, logger: logger}
+}
+
+func writeGameState(c *gin.Context, body []byte, etag string, ttl time.Duration, cacheStatus string) {
+	seconds := max(0, int((ttl+time.Second-1)/time.Second))
+	c.Header("Cache-Control", "public, max-age="+strconv.Itoa(seconds)+", stale-if-error=10")
+	c.Header("ETag", etag)
+	c.Header("X-Anvil-Cache", cacheStatus)
+	if c.GetHeader("If-None-Match") == etag {
+		c.Status(http.StatusNotModified)
+		return
+	}
+	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+}
+
+func writeStaleGameState(c *gin.Context, entry gameStateCacheEntry) {
+	c.Header("Cache-Control", "no-store")
+	c.Header("ETag", entry.etag)
+	c.Header("X-Anvil-Cache", "STALE")
+	c.Data(http.StatusOK, "application/json; charset=utf-8", entry.body)
+}
+
+func encodeGameState(payload gin.H) ([]byte, string, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, "", err
+	}
+	sum := sha256.Sum256(body)
+	return body, fmt.Sprintf(`"%x"`, sum), nil
 }
 
 type submitFlagRequest struct {
@@ -99,12 +164,12 @@ type gameStanding struct {
 	Total   float64 `json:"total"`
 }
 
-func (h *GameHandler) standingsData(ctx context.Context) ([]gameStanding, error) {
-	rows, err := h.db.Pool.Query(ctx,
+func (h *GameHandler) standingsData(ctx context.Context, query gameStateQuerier) ([]gameStanding, error) {
+	rows, err := query.Query(ctx,
 		`SELECT t.id, t.name, s.attack, s.defense, s.sla, s.koth, s.total, s.rank
 		 FROM game_standings s JOIN game_teams t ON t.id = s.team_id
 		 WHERE t.is_nop = false AND t.status = 'active'
-		 ORDER BY s.rank ASC NULLS LAST`)
+		 ORDER BY s.rank ASC NULLS LAST, t.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +193,7 @@ func (h *GameHandler) Scoreboard(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	standings, err := h.standingsData(c.Request.Context())
+	standings, err := h.standingsData(c.Request.Context(), h.db.Pool)
 	if err != nil {
 		h.logger.Error("scoreboard query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -143,8 +208,8 @@ type gameHill struct {
 	Controller *string `json:"controller,omitempty"`
 }
 
-func (h *GameHandler) hillsData(ctx context.Context) ([]gameHill, error) {
-	rows, err := h.db.Pool.Query(ctx,
+func (h *GameHandler) hillsData(ctx context.Context, query gameStateQuerier) ([]gameHill, error) {
+	rows, err := query.Query(ctx,
 		`SELECT h.id, h.name, t.name
 		 FROM game_koth_hills h
 		 LEFT JOIN LATERAL (
@@ -153,7 +218,7 @@ func (h *GameHandler) hillsData(ctx context.Context) ([]gameHill, error) {
 		 ) kc ON true
 		 LEFT JOIN game_teams t ON t.id = kc.controller_team_id
 		 WHERE h.enabled = true
-		 ORDER BY h.sort_order, h.name`)
+		 ORDER BY h.sort_order, h.name, h.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +242,7 @@ func (h *GameHandler) Hills(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	hills, err := h.hillsData(c.Request.Context())
+	hills, err := h.hillsData(c.Request.Context(), h.db.Pool)
 	if err != nil {
 		h.logger.Error("hills query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -186,19 +251,19 @@ func (h *GameHandler) Hills(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"hills": hills})
 }
 
-func (h *GameHandler) tickRound(ctx context.Context) (int, int, error) {
+func (h *GameHandler) tickRound(ctx context.Context, query gameStateQuerier) (int, int, error) {
 	var tick, round int
-	if err := h.db.Pool.QueryRow(ctx, `SELECT COALESCE(MAX(tick_number), 0) FROM game_ticks`).Scan(&tick); err != nil {
+	if err := query.QueryRow(ctx, `SELECT COALESCE(MAX(tick_number), 0) FROM game_ticks`).Scan(&tick); err != nil {
 		return 0, 0, err
 	}
-	if err := h.db.Pool.QueryRow(ctx, `SELECT COALESCE(MAX(round_number), 0) FROM game_koth_rounds`).Scan(&round); err != nil {
+	if err := query.QueryRow(ctx, `SELECT COALESCE(MAX(round_number), 0) FROM game_koth_rounds`).Scan(&round); err != nil {
 		return 0, 0, err
 	}
 	return tick, round, nil
 }
 
-func (h *GameHandler) statusPayload(ctx context.Context) (gin.H, error) {
-	tick, round, err := h.tickRound(ctx)
+func (h *GameHandler) statusPayload(ctx context.Context, query gameStateQuerier) (gin.H, error) {
+	tick, round, err := h.tickRound(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +279,7 @@ func (h *GameHandler) Status(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	payload, err := h.statusPayload(c.Request.Context())
+	payload, err := h.statusPayload(c.Request.Context(), h.db.Pool)
 	if err != nil {
 		h.logger.Error("status query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -234,12 +299,13 @@ type historySeries struct {
 	Points []historyPoint `json:"points"`
 }
 
-func (h *GameHandler) historyData(ctx context.Context) ([]*historySeries, error) {
-	rows, err := h.db.Pool.Query(ctx,
+func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier) ([]*historySeries, error) {
+	rows, err := query.Query(ctx,
 		`SELECT t.id, t.name, s.tick_number, s.total
 		 FROM game_score_snapshots s JOIN game_teams t ON t.id = s.team_id
 		 WHERE t.is_nop = false AND t.status = 'active'
-		 ORDER BY t.name, s.tick_number`)
+		   AND s.tick_number > (SELECT COALESCE(MAX(tick_number), 0) - $1 FROM game_score_snapshots)
+		 ORDER BY t.name, t.id, s.tick_number`, arenaHistoryTickLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +346,7 @@ func (h *GameHandler) History(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	series, err := h.historyData(c.Request.Context())
+	series, err := h.historyData(c.Request.Context(), h.db.Pool)
 	if err != nil {
 		h.logger.Error("history query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -308,9 +374,9 @@ type matrixRow struct {
 	Cells  []matrixCell `json:"cells"`
 }
 
-func (h *GameHandler) matrixData(ctx context.Context) ([]matrixService, []matrixRow, error) {
-	svcRows, err := h.db.Pool.Query(ctx,
-		`SELECT id, name, category, tier FROM game_services WHERE enabled = true ORDER BY sort_order, name`)
+func (h *GameHandler) matrixData(ctx context.Context, query gameStateQuerier) ([]matrixService, []matrixRow, error) {
+	svcRows, err := query.Query(ctx,
+		`SELECT id, name, category, tier FROM game_services WHERE enabled = true ORDER BY sort_order, name, id`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -331,7 +397,7 @@ func (h *GameHandler) matrixData(ctx context.Context) ([]matrixService, []matrix
 	}
 	svcRows.Close()
 
-	slaRows, err := h.db.Pool.Query(ctx,
+	slaRows, err := query.Query(ctx,
 		`SELECT DISTINCT ON (team_id, service_id) team_id, service_id, status, latency_ms
 		 FROM game_sla_checks ORDER BY team_id, service_id, tick_number DESC`)
 	if err != nil {
@@ -353,10 +419,10 @@ func (h *GameHandler) matrixData(ctx context.Context) ([]matrixService, []matrix
 	}
 	slaRows.Close()
 
-	teamRows, err := h.db.Pool.Query(ctx,
+	teamRows, err := query.Query(ctx,
 		`SELECT t.id, t.name, s.rank FROM game_teams t
 		 JOIN game_standings s ON s.team_id = t.id
-		 WHERE t.is_nop = false AND t.status = 'active' ORDER BY s.rank ASC NULLS LAST`)
+		 WHERE t.is_nop = false AND t.status = 'active' ORDER BY s.rank ASC NULLS LAST, t.id`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -388,7 +454,7 @@ func (h *GameHandler) Services(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	services, rows, err := h.matrixData(c.Request.Context())
+	services, rows, err := h.matrixData(c.Request.Context(), h.db.Pool)
 	if err != nil {
 		h.logger.Error("matrix query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -398,6 +464,7 @@ func (h *GameHandler) Services(c *gin.Context) {
 }
 
 type gameEvent struct {
+	ID       string `json:"id"`
 	Tick     int    `json:"tick"`
 	Attacker string `json:"attacker"`
 	Victim   string `json:"victim"`
@@ -405,14 +472,14 @@ type gameEvent struct {
 	At       int64  `json:"at"`
 }
 
-func (h *GameHandler) eventsData(ctx context.Context) ([]gameEvent, error) {
-	rows, err := h.db.Pool.Query(ctx,
-		`SELECT cp.tick_number, a.name, v.name, s.name, cp.submitted_at
+func (h *GameHandler) eventsData(ctx context.Context, query gameStateQuerier) ([]gameEvent, error) {
+	rows, err := query.Query(ctx,
+		`SELECT cp.id, cp.tick_number, a.name, v.name, s.name, cp.submitted_at
 		 FROM game_captures cp
 		 JOIN game_teams a ON a.id = cp.attacker_team_id
 		 JOIN game_teams v ON v.id = cp.victim_team_id
 		 JOIN game_services s ON s.id = cp.service_id
-		 ORDER BY cp.submitted_at DESC LIMIT 40`)
+		 ORDER BY cp.submitted_at DESC, cp.id DESC LIMIT 40`)
 	if err != nil {
 		return nil, err
 	}
@@ -421,10 +488,12 @@ func (h *GameHandler) eventsData(ctx context.Context) ([]gameEvent, error) {
 	events := []gameEvent{}
 	for rows.Next() {
 		var e gameEvent
+		var id uuid.UUID
 		var at time.Time
-		if err := rows.Scan(&e.Tick, &e.Attacker, &e.Victim, &e.Service, &at); err != nil {
+		if err := rows.Scan(&id, &e.Tick, &e.Attacker, &e.Victim, &e.Service, &at); err != nil {
 			return nil, err
 		}
+		e.ID = id.String()
 		e.At = at.Unix()
 		events = append(events, e)
 	}
@@ -436,7 +505,7 @@ func (h *GameHandler) Events(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	events, err := h.eventsData(c.Request.Context())
+	events, err := h.eventsData(c.Request.Context(), h.db.Pool)
 	if err != nil {
 		h.logger.Error("events query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -445,52 +514,131 @@ func (h *GameHandler) Events(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"events": events})
 }
 
-// State returns the whole arena snapshot in one response, so each viewer polls
-// a single endpoint instead of fanning out across six.
-func (h *GameHandler) State(c *gin.Context) {
-	if h.off(c) {
-		return
+func (h *GameHandler) cachedState(now time.Time, allowExpired bool) (gameStateCacheEntry, bool) {
+	h.stateMu.Lock()
+	entry := h.stateCache
+	h.stateMu.Unlock()
+	if len(entry.body) == 0 || (!allowExpired && !now.Before(entry.expiresAt)) ||
+		(allowExpired && !now.Before(entry.expiresAt.Add(arenaStaleTTL))) {
+		return gameStateCacheEntry{}, false
 	}
-	ctx := c.Request.Context()
+	return entry, true
+}
 
-	standings, err := h.standingsData(ctx)
-	if err != nil {
-		h.logger.Error("state standings", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+func (h *GameHandler) serveStaleState(c *gin.Context) bool {
+	entry, ok := h.cachedState(time.Now(), true)
+	if !ok {
+		return false
+	}
+	writeStaleGameState(c, entry)
+	return true
+}
+
+func respondGameStateError(c *gin.Context, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		c.JSON(http.StatusGatewayTimeout, gin.H{"error": "arena state request timed out"})
 		return
 	}
-	hills, err := h.hillsData(ctx)
-	if err != nil {
-		h.logger.Error("state hills", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
+	c.JSON(http.StatusServiceUnavailable, gin.H{"error": "failed to load arena state"})
+}
+
+func (h *GameHandler) serveCachedState(c *gin.Context) bool {
+	now := time.Now()
+	entry, ok := h.cachedState(now, false)
+	if !ok {
+		return false
 	}
-	history, err := h.historyData(ctx)
-	if err != nil {
-		h.logger.Error("state history", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
+	writeGameState(c, entry.body, entry.etag, entry.expiresAt.Sub(now), "HIT")
+	return true
+}
+
+// beginStateFill makes one request refresh the snapshot while concurrent
+// viewers wait on a context-aware channel instead of a response-wide mutex.
+func (h *GameHandler) beginStateFill(c *gin.Context) bool {
+	for {
+		h.flightMu.Lock()
+		if h.flight == nil {
+			h.flight = &gameStateFlight{done: make(chan struct{})}
+			h.flightMu.Unlock()
+			return true
+		}
+		flight := h.flight
+		done := flight.done
+		h.flightMu.Unlock()
+
+		select {
+		case <-done:
+			if h.serveCachedState(c) {
+				return false
+			}
+			if h.serveStaleState(c) {
+				return false
+			}
+			if flight.err != nil {
+				respondGameStateError(c, flight.err)
+				return false
+			}
+		case <-c.Request.Context().Done():
+			c.JSON(http.StatusGatewayTimeout, gin.H{"error": "arena state request timed out"})
+			return false
+		}
 	}
-	services, rows, err := h.matrixData(ctx)
-	if err != nil {
-		h.logger.Error("state matrix", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
+}
+
+func (h *GameHandler) finishStateFill(err error) {
+	h.flightMu.Lock()
+	flight := h.flight
+	if flight != nil {
+		flight.err = err
+		close(flight.done)
 	}
-	events, err := h.eventsData(ctx)
-	if err != nil {
-		h.logger.Error("state events", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
+	h.flight = nil
+	h.flightMu.Unlock()
+}
+
+func (h *GameHandler) loadLiveState(ctx context.Context) ([]byte, string, error) {
+	if h.stateLoad != nil {
+		return h.stateLoad(ctx)
 	}
-	status, err := h.statusPayload(ctx)
+	tx, err := h.db.Pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
 	if err != nil {
-		h.logger.Error("state status", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
+		return nil, "", fmt.Errorf("begin snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	standings, err := h.standingsData(ctx, tx)
+	if err != nil {
+		return nil, "", fmt.Errorf("standings: %w", err)
+	}
+	hills, err := h.hillsData(ctx, tx)
+	if err != nil {
+		return nil, "", fmt.Errorf("hills: %w", err)
+	}
+	history, err := h.historyData(ctx, tx)
+	if err != nil {
+		return nil, "", fmt.Errorf("history: %w", err)
+	}
+	services, rows, err := h.matrixData(ctx, tx)
+	if err != nil {
+		return nil, "", fmt.Errorf("matrix: %w", err)
+	}
+	events, err := h.eventsData(ctx, tx)
+	if err != nil {
+		return nil, "", fmt.Errorf("events: %w", err)
+	}
+	status, err := h.statusPayload(ctx, tx)
+	if err != nil {
+		return nil, "", fmt.Errorf("status: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, "", fmt.Errorf("commit snapshot: %w", err)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	return encodeGameState(gin.H{
+		"active":    true,
 		"status":    status,
 		"hills":     hills,
 		"standings": standings,
@@ -499,4 +647,59 @@ func (h *GameHandler) State(c *gin.Context) {
 		"events":    events,
 		"history":   history,
 	})
+}
+
+// State returns the whole arena snapshot in one response, so each viewer polls
+// a single endpoint instead of fanning out across six.
+func (h *GameHandler) State(c *gin.Context) {
+	if !h.config.Game.Enabled {
+		body, etag, err := encodeGameState(gin.H{
+			"active":    false,
+			"status":    gin.H{"tick": 0, "round": 0, "tick_interval_seconds": int(h.config.Game.TickInterval.Seconds())},
+			"hills":     []gameHill{},
+			"standings": []gameStanding{},
+			"services":  []matrixService{},
+			"rows":      []matrixRow{},
+			"events":    []gameEvent{},
+			"history":   []*historySeries{},
+		})
+		if err != nil {
+			h.logger.Error("encode inactive game state", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+		writeGameState(c, body, etag, arenaIdleCacheTTL, "IDLE")
+		return
+	}
+	if h.serveCachedState(c) || !h.beginStateFill(c) {
+		return
+	}
+	fillOpen := true
+	defer func() {
+		if fillOpen {
+			h.finishStateFill(errors.New("arena state fill interrupted"))
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), arenaQueryTimeout)
+	defer cancel()
+	body, etag, err := h.loadLiveState(ctx)
+	if err != nil {
+		h.logger.Error("load arena state", zap.Error(err))
+		h.finishStateFill(err)
+		fillOpen = false
+		if h.serveStaleState(c) {
+			return
+		}
+		respondGameStateError(c, err)
+		return
+	}
+
+	entry := gameStateCacheEntry{body: body, etag: etag, expiresAt: time.Now().Add(arenaLiveCacheTTL)}
+	h.stateMu.Lock()
+	h.stateCache = entry
+	h.stateMu.Unlock()
+	h.finishStateFill(nil)
+	fillOpen = false
+	writeGameState(c, body, etag, arenaLiveCacheTTL, "MISS")
 }

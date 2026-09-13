@@ -11,7 +11,8 @@ import (
 )
 
 // RateLimiter implements a simple in-memory rate limiter
-// For production, use Redis-based rate limiting
+// The API currently runs as a single stateful control-plane process, so a
+// process-local limiter avoids an external dependency on the request path.
 type rateLimiter struct {
 	visitors map[string]*visitor
 	mu       sync.RWMutex

@@ -39,6 +39,7 @@ const (
 	VMStatePMSuspended  VMState = "pmsuspended"
 	VMStateProvisioning VMState = "provisioning"
 	VMStateError        VMState = "error"
+	legacyOverlayDir            = "/var/lib/anvil/storage/vms/overlays"
 )
 
 // ImageFormat represents supported disk image formats
@@ -326,7 +327,7 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 	err = s.defineAndStartVMOnNode(ctx, domainXML, vmName, node)
 	if err != nil {
 		// Cleanup overlay on failure
-		s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f %s", overlayPath))
+		s.runSSHCommand(ctx, node, "rm -f -- "+shellQuote(overlayPath))
 		return nil, fmt.Errorf("failed to start VM: %w", err)
 	}
 
@@ -449,12 +450,12 @@ func (s *Service) createOverlayOnNode(ctx context.Context, basePath string, inst
 		return "", fmt.Errorf("failed to sync base image to node: %w", err)
 	}
 
-	overlayDir := "/var/lib/anvil/storage/vms/overlays"
+	overlayDir := filepath.Join(s.config.InstanceStorePath, "overlays")
 	overlayPath := fmt.Sprintf("%s/%s.qcow2", overlayDir, instanceID)
 
 	// Ensure overlay directory exists and create the overlay
 	cmd := fmt.Sprintf("mkdir -p %s && qemu-img create -f qcow2 -F qcow2 -b %s %s",
-		overlayDir, basePath, overlayPath)
+		shellQuote(overlayDir), shellQuote(basePath), shellQuote(overlayPath))
 
 	output, err := s.runSSHCommand(ctx, node, cmd)
 	if err != nil {
@@ -639,6 +640,19 @@ func (s *Service) runSSHCommand(ctx context.Context, node *NodeInfo, command str
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
 	output, err := cmd.Output() // Use Output() instead of CombinedOutput() to only get stdout
 	return string(output), err
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func overlayCleanupPaths(instanceStorePath, instanceID string) []string {
+	paths := []string{filepath.Join(instanceStorePath, "overlays", instanceID+".qcow2")}
+	legacyPath := filepath.Join(legacyOverlayDir, instanceID+".qcow2")
+	if legacyPath != paths[0] {
+		paths = append(paths, legacyPath)
+	}
+	return paths
 }
 
 // queryVMIP queries the actual IP address of a VM after boot
@@ -1131,8 +1145,12 @@ func (s *Service) DestroyInstanceByNameOnNode(ctx context.Context, vmNameOrID st
 		return fmt.Errorf("undefine VM on node: %w", err)
 	}
 	if parseErr == nil {
-		overlayPath := filepath.Join("/var/lib/anvil/storage/vms/overlays", instanceID.String()+".qcow2")
-		if _, err := s.runSSHCommand(ctx, node, fmt.Sprintf("rm -f -- %s", overlayPath)); err != nil {
+		overlayPaths := overlayCleanupPaths(s.config.InstanceStorePath, instanceID.String())
+		quotedPaths := make([]string, len(overlayPaths))
+		for i, path := range overlayPaths {
+			quotedPaths[i] = shellQuote(path)
+		}
+		if _, err := s.runSSHCommand(ctx, node, "rm -f -- "+strings.Join(quotedPaths, " ")); err != nil {
 			return fmt.Errorf("remove VM overlay on node: %w", err)
 		}
 	}

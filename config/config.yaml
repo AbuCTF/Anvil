@@ -7,9 +7,9 @@ environment: production
 server:
   port: 8080
   host: "0.0.0.0"
-  read_timeout: 30s
-  write_timeout: 30s
-  shutdown_timeout: 30s
+  read_timeout: 30m
+  write_timeout: 30m
+  shutdown_timeout: 25s
   trusted_proxies:
     - "172.16.0.0/12"
     - "127.0.0.1"
@@ -24,11 +24,8 @@ database:
   max_open_conns: 50
   max_idle_conns: 25
 
-redis:
-  host: redis
-  port: 6379
-  password: ""
-  db: 0
+storage:
+  path: "./data/storage"
 
 jwt:
   secret: ""            # set via ANVIL_JWT_SECRET in .env
@@ -37,13 +34,11 @@ jwt:
   issuer: anvil
 
 container:
-  runtime: docker
   network_name: anvil-challenges
   network_subnet: "172.20.0.0/16"
   default_timeout: 2h
   max_per_user: 2
   cleanup_interval: 5m
-  health_check_interval: 30s
   labels:
     managed-by: anvil
 
@@ -63,17 +58,9 @@ vpn:
 platform:
   name: "Anvil"
   registration_mode: open     # open, invite, token, disabled
-  require_email_verify: false
   scoring_enabled: true
   scoreboard_enabled: true
   scoreboard_public: true
-  scoring_mode: dynamic       # static, dynamic, time_decay
-  flag_submission_enabled: true
-  hints_enabled: true
-  writeup_submission: false
-  default_instance_timeout: 2h
-  max_instance_extensions: 3
-  extension_duration: 30m
 
 rate_limit:
   enabled: true

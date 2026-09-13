@@ -55,7 +55,6 @@ Thumbs.db
 
 # Docker volumes (local dev)
 postgres_data/
-redis_data/
 
 # Terraform
 *.tfstate

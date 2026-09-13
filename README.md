@@ -13,7 +13,7 @@ Self-hosted B2R/AD-CTF platform with VM & container support.
 In `docker-compose.yml`:
 - Web build target: `production`
 - `PUBLIC_API_URL`: `https://your-domain.com`
-- Bind postgres/redis/api/web to `127.0.0.1`
+- Bind postgres/api/web to `127.0.0.1`
 - API container: `privileged: true`, `pid: "host"` (nsenter for VPN peer management)
 
 #### **WireGuard**
@@ -103,7 +103,7 @@ sudo netfilter-persistent save
 ```
 User → WireGuard VPN (10.10.x.x) → Host
                                       ├── Nginx → API (8080) + Web (3000)
-                                      ├── PostgreSQL + Redis
+                                      ├── PostgreSQL
                                       └── anvil-challenges (172.20.0.0/16)
                                            ├── container-1 (172.20.x.x)
                                            ├── container-2 (172.20.x.x)
@@ -138,7 +138,6 @@ Checkers are external executables the engine runs over a JSON protocol (task on 
 | API | Go, Gin, PGX |
 | Frontend | SvelteKit, Tailwind |
 | Database | PostgreSQL 16 |
-| Cache | Redis 7 |
 | VPN | WireGuard |
 | Containers | Docker |
 | VMs | libvirt/QEMU |

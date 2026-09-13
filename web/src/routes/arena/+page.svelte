@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import { API_BASE } from '$lib/config';
 	import LineChart from '$lib/components/LineChart.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { teamColor as seriesColor } from '$lib/rank';
@@ -50,6 +51,7 @@
 		cells: MatrixCell[];
 	}
 	interface GameEvent {
+		id: string;
 		tick: number;
 		attacker: string;
 		victim: string;
@@ -57,6 +59,7 @@
 		at: number;
 	}
 	interface ArenaState {
+		active: boolean;
 		status: GameStatus;
 		hills: Hill[];
 		standings: Standing[];
@@ -67,12 +70,8 @@
 	}
 
 	const POLL_MS = 5000;
-	const PREVIEW_TEAMS = [
-		{ id: 'preview-forge', name: 'Forge' },
-		{ id: 'preview-null', name: 'Null Sector' },
-		{ id: 'preview-vector', name: 'Vector 7' },
-		{ id: 'preview-heap', name: 'Heap Union' }
-	];
+	const IDLE_POLL_MS = 30000;
+	const REQUEST_TIMEOUT_MS = 10000;
 
 	let standings: Standing[] = [];
 	let hills: Hill[] = [];
@@ -85,58 +84,21 @@
 
 	let loading = true;
 	let error = '';
-	let previewMode = false;
+	let refreshError = '';
+	let active = false;
 
 	let initialized = false;
+	let hasLiveBaseline = false;
 	let prevControllers: Record<string, string | null> = {};
 	let flash = new Set<string>();
 	let seenEvents = new Set<string>();
 	let flashEvents = new Set<string>();
+	let flashTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 	let inFlight = false;
-	let timer: ReturnType<typeof setInterval>;
-
-	function previewState(): ArenaState {
-		const at = Math.floor(Date.now() / 1000);
-		return {
-			status: { tick: 184, round: 7, tick_interval_seconds: 120 },
-			hills: [
-				{ hill_id: 'preview-hill-root', name: 'Root Access', controller: 'Forge' },
-				{ hill_id: 'preview-hill-relay', name: 'Relay Station', controller: 'Null Sector' },
-				{ hill_id: 'preview-hill-vault', name: 'The Vault', controller: null }
-			],
-			standings: [
-				{ rank: 1, team_id: PREVIEW_TEAMS[0].id, team: PREVIEW_TEAMS[0].name, attack: 2840, defense: 720, sla: 1260, koth: 680, total: 5500 },
-				{ rank: 2, team_id: PREVIEW_TEAMS[1].id, team: PREVIEW_TEAMS[1].name, attack: 2520, defense: 810, sla: 1320, koth: 540, total: 5190 },
-				{ rank: 3, team_id: PREVIEW_TEAMS[2].id, team: PREVIEW_TEAMS[2].name, attack: 2730, defense: 420, sla: 1180, koth: 390, total: 4720 },
-				{ rank: 4, team_id: PREVIEW_TEAMS[3].id, team: PREVIEW_TEAMS[3].name, attack: 1980, defense: 650, sla: 1270, koth: 260, total: 4160 }
-			],
-			services: [
-				{ service_id: 'preview-notes', name: 'Notes', category: 'web', tier: 'core' },
-				{ service_id: 'preview-cache', name: 'Cache', category: 'pwn', tier: 'core' },
-				{ service_id: 'preview-signer', name: 'Signer', category: 'crypto', tier: 'core' },
-				{ service_id: 'preview-agent', name: 'Agent', category: 'rev', tier: 'core' }
-			],
-			rows: [
-				{ team_id: PREVIEW_TEAMS[0].id, team: PREVIEW_TEAMS[0].name, rank: 1, cells: [{ status: 'OK', latency_ms: 42 }, { status: 'OK', latency_ms: 28 }, { status: 'OK', latency_ms: 51 }, { status: 'RECOVERING', latency_ms: 210 }] },
-				{ team_id: PREVIEW_TEAMS[1].id, team: PREVIEW_TEAMS[1].name, rank: 2, cells: [{ status: 'OK', latency_ms: 61 }, { status: 'FAULTY', latency_ms: 340 }, { status: 'OK', latency_ms: 47 }, { status: 'OK', latency_ms: 39 }] },
-				{ team_id: PREVIEW_TEAMS[2].id, team: PREVIEW_TEAMS[2].name, rank: 3, cells: [{ status: 'DOWN' }, { status: 'OK', latency_ms: 33 }, { status: 'FLAG_NOT_FOUND' }, { status: 'OK', latency_ms: 55 }] },
-				{ team_id: PREVIEW_TEAMS[3].id, team: PREVIEW_TEAMS[3].name, rank: 4, cells: [{ status: 'OK', latency_ms: 72 }, { status: 'OK', latency_ms: 49 }, { status: 'OK', latency_ms: 58 }, { status: 'OK', latency_ms: 64 }] }
-			],
-			events: [
-				{ tick: 184, attacker: 'Forge', victim: 'Vector 7', service: 'Cache', at: at - 18 },
-				{ tick: 184, attacker: 'Null Sector', victim: 'Heap Union', service: 'Notes', at: at - 39 },
-				{ tick: 183, attacker: 'Vector 7', victim: 'Forge', service: 'Signer', at: at - 148 },
-				{ tick: 183, attacker: 'Forge', victim: 'Null Sector', service: 'Agent', at: at - 173 }
-			],
-			history: [
-				{ team_id: PREVIEW_TEAMS[0].id, team: PREVIEW_TEAMS[0].name, points: [{ x: 177, y: 4300 }, { x: 178, y: 4470 }, { x: 179, y: 4610 }, { x: 180, y: 4830 }, { x: 181, y: 5010 }, { x: 182, y: 5180 }, { x: 183, y: 5310 }, { x: 184, y: 5500 }] },
-				{ team_id: PREVIEW_TEAMS[1].id, team: PREVIEW_TEAMS[1].name, points: [{ x: 177, y: 4180 }, { x: 178, y: 4380 }, { x: 179, y: 4540 }, { x: 180, y: 4690 }, { x: 181, y: 4810 }, { x: 182, y: 4930 }, { x: 183, y: 5070 }, { x: 184, y: 5190 }] },
-				{ team_id: PREVIEW_TEAMS[2].id, team: PREVIEW_TEAMS[2].name, points: [{ x: 177, y: 3820 }, { x: 178, y: 4010 }, { x: 179, y: 4190 }, { x: 180, y: 4310 }, { x: 181, y: 4460 }, { x: 182, y: 4590 }, { x: 183, y: 4660 }, { x: 184, y: 4720 }] },
-				{ team_id: PREVIEW_TEAMS[3].id, team: PREVIEW_TEAMS[3].name, points: [{ x: 177, y: 3410 }, { x: 178, y: 3520 }, { x: 179, y: 3680 }, { x: 180, y: 3770 }, { x: 181, y: 3890 }, { x: 182, y: 3980 }, { x: 183, y: 4070 }, { x: 184, y: 4160 }] }
-			]
-		};
-	}
+	let timer: ReturnType<typeof setTimeout>;
+	let requestController: AbortController | null = null;
+	let disposed = false;
 
 	// Muted status colors — only a genuine problem is meant to draw the eye.
 	const SLA: Record<string, { color: string; label: string }> = {
@@ -160,32 +122,76 @@
 	async function load() {
 		if (inFlight) return;
 		inFlight = true;
+		const controller = new AbortController();
+		requestController = controller;
+		let timedOut = false;
+		const requestTimeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, REQUEST_TIMEOUT_MS);
 		try {
-			const res = await fetch(`${API_BASE}/api/v1/arena/state`, { headers: { 'Content-Type': 'application/json' } });
+			const res = await fetch(`${API_BASE}/api/v1/arena/state`, {
+				signal: controller.signal
+			});
 			if (res.status === 404) {
-				if (!previewMode) applyState(previewState(), true);
+				applyInactiveState();
 				return;
 			}
 			if (!res.ok) {
-				if (!initialized) error = `HTTP ${res.status}`;
+				const message = `Arena state unavailable (HTTP ${res.status})`;
+				if (initialized && active) refreshError = message;
+				else error = message;
 				return;
 			}
+			const cacheStatus = res.headers.get('X-Anvil-Cache');
 			const s = (await res.json()) as ArenaState & { error?: string };
-			if (s.error) {
-				if (!previewMode) applyState(previewState(), true);
+			if (s.error || s.active === false) {
+				applyInactiveState();
 				return;
 			}
-			applyState(s, false);
+			applyState(s);
+			if (cacheStatus === 'STALE') refreshError = 'Live arena updates are delayed';
 		} catch (e) {
-			if (!initialized) error = e instanceof Error ? e.message : 'Failed to load game state';
+			if (disposed || (controller.signal.aborted && !timedOut)) return;
+			const message = timedOut
+				? 'Arena state request timed out'
+				: e instanceof Error
+					? e.message
+					: 'Failed to load game state';
+			if (initialized && active) refreshError = message;
+			else error = message;
 		} finally {
+			clearTimeout(requestTimeout);
+			if (requestController === controller) requestController = null;
 			loading = false;
 			inFlight = false;
 		}
 	}
 
-	function applyState(s: ArenaState, preview: boolean) {
+	function applyInactiveState() {
+		active = false;
+		status = null;
+		standings = [];
+		hills = [];
+		matrixServices = [];
+		matrixRows = [];
+		events = [];
+		raceSeries = [];
+		prevControllers = {};
+		seenEvents = new Set();
+		flash = new Set();
+		flashEvents = new Set();
+		for (const flashTimer of flashTimers.values()) clearTimeout(flashTimer);
+		flashTimers.clear();
+		hasLiveBaseline = false;
+		initialized = true;
+		error = '';
+		refreshError = '';
+	}
+
+	function applyState(s: ArenaState) {
 		now = Date.now();
+		active = true;
 		status = s.status ?? status;
 		applyHills(s.hills ?? []);
 		standings = s.standings ?? [];
@@ -197,53 +203,92 @@
 			color: seriesColor(h.team_id),
 			points: h.points
 		}));
-		previewMode = preview;
+		hasLiveBaseline = true;
 		initialized = true;
 		error = '';
+		refreshError = '';
 	}
 
 	function applyHills(next: Hill[]) {
 		const changed = new Set<string>();
+		const nextControllers: Record<string, string | null> = {};
 		for (const h of next) {
 			const controller = h.controller ?? null;
-			if (initialized && prevControllers[h.hill_id] !== controller) changed.add(h.hill_id);
-			prevControllers[h.hill_id] = controller;
+			if (hasLiveBaseline && prevControllers[h.hill_id] !== controller) changed.add(h.hill_id);
+			nextControllers[h.hill_id] = controller;
 		}
+		prevControllers = nextControllers;
 		hills = next;
 		if (changed.size) {
 			flash = new Set([...flash, ...changed]);
 			for (const id of changed) {
-				setTimeout(() => {
+				const timerKey = `hill:${id}`;
+				const previousTimer = flashTimers.get(timerKey);
+				if (previousTimer) clearTimeout(previousTimer);
+				const flashTimer = setTimeout(() => {
 					flash.delete(id);
 					flash = new Set(flash);
+					flashTimers.delete(timerKey);
 				}, 2400);
+				flashTimers.set(timerKey, flashTimer);
 			}
 		}
 	}
 
 	function eventKey(e: GameEvent) {
-		return `${e.tick}:${e.attacker}:${e.victim}:${e.service}`;
+		return e.id;
 	}
 	function applyEvents(next: GameEvent[]) {
-		if (initialized) {
+		if (hasLiveBaseline) {
 			const fresh = next.filter((e) => !seenEvents.has(eventKey(e))).map(eventKey);
 			if (fresh.length) {
 				flashEvents = new Set([...flashEvents, ...fresh]);
-				for (const k of fresh)
-					setTimeout(() => {
+				for (const k of fresh) {
+					const timerKey = `event:${k}`;
+					const previousTimer = flashTimers.get(timerKey);
+					if (previousTimer) clearTimeout(previousTimer);
+					const flashTimer = setTimeout(() => {
 						flashEvents.delete(k);
 						flashEvents = new Set(flashEvents);
+						flashTimers.delete(timerKey);
 					}, 2400);
+					flashTimers.set(timerKey, flashTimer);
+				}
 			}
 		}
-		for (const e of next) seenEvents.add(eventKey(e));
+		seenEvents = new Set(next.map(eventKey));
 		events = next;
 	}
 
 	onMount(() => {
-		load();
-		timer = setInterval(load, POLL_MS);
-		return () => clearInterval(timer);
+		disposed = false;
+		let generation = 0;
+		const poll = async (pollGeneration: number) => {
+			const joinedInFlight = inFlight;
+			await load();
+			if (!disposed && pollGeneration === generation && document.visibilityState === 'visible') {
+				const delay = joinedInFlight ? 250 : active ? POLL_MS : IDLE_POLL_MS;
+				timer = setTimeout(() => poll(pollGeneration), delay);
+			}
+		};
+		const onVisibilityChange = () => {
+			generation++;
+			clearTimeout(timer);
+			requestController?.abort();
+			if (document.visibilityState === 'visible') poll(generation);
+		};
+
+		poll(++generation);
+		document.addEventListener('visibilitychange', onVisibilityChange);
+		return () => {
+			disposed = true;
+			generation++;
+			clearTimeout(timer);
+			requestController?.abort();
+			for (const flashTimer of flashTimers.values()) clearTimeout(flashTimer);
+			flashTimers.clear();
+			document.removeEventListener('visibilitychange', onVisibilityChange);
+		};
 	});
 
 	function teamColor(key: string | null | undefined) {
@@ -278,17 +323,12 @@
 		<div class="bg-stone-900/50 border border-stone-800 rounded-lg p-6 text-center">
 			<Icon icon="mdi:alert-circle-outline" class="w-10 h-10 text-stone-500 mx-auto mb-3" />
 			<p class="text-stone-400">{error}</p>
-			<p class="text-stone-600 text-sm mt-1">Retrying every {POLL_MS / 1000}s…</p>
+			<p class="text-stone-600 text-sm mt-1">Retrying every {IDLE_POLL_MS / 1000}s…</p>
 		</div>
 	{:else}
-		<PageHeader title="Arena" subtitle={previewMode ? '' : 'Attack · Defense · King of the Hill'} compact={previewMode}>
+		<PageHeader title="Arena" compact>
 			<div slot="actions" class="flex items-center gap-2 text-sm leading-none">
-				{#if previewMode}
-					<div class="flex items-center gap-1.5 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5 text-stone-300 text-xs">
-						<OpticalIcon icon="mdi:eye-outline" size={14} box={14} />
-						<span class="optical-label">Preview data</span>
-					</div>
-				{:else}
+				{#if active}
 					<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
 						<span class="optical-label metadata-label text-stone-500">Tick</span>
 						<span class="optical-label text-stone-100 font-semibold tabular-nums">{status?.tick ?? '—'}</span>
@@ -297,19 +337,21 @@
 						<span class="optical-label metadata-label text-stone-500">Round</span>
 						<span class="optical-label text-stone-100 font-semibold tabular-nums">{status?.round ?? '—'}</span>
 					</div>
-					<span class="hidden sm:inline-flex items-center gap-1.5 text-stone-600 text-xs leading-none pl-1">
-						<span class="w-1.5 h-1.5 rounded-full bg-amber-500/70 animate-pulse"></span><span class="optical-label">live</span>
+					<span
+						class="hidden sm:inline-flex items-center gap-1.5 text-xs leading-none pl-1 {refreshError ? 'text-warn' : 'text-stone-600'}"
+						title={refreshError || 'Live arena feed'}
+					>
+						<span class="w-1.5 h-1.5 rounded-full {refreshError ? 'bg-warn' : 'bg-amber-500/70 animate-pulse'}"></span><span class="optical-label">{refreshError ? 'delayed' : 'live'}</span>
 					</span>
 				{/if}
 			</div>
 		</PageHeader>
 
-		{#if previewMode}
-			<div class="mb-6 flex items-center gap-2 border-y border-stone-800/70 py-2 text-xs text-stone-500">
-				<OpticalIcon icon="mdi:information-outline" size={14} box={14} />
-				<span class="optical-label">The live game engine is off. These sample teams and scores are only here for layout review.</span>
+		{#if !active}
+			<div class="rounded-lg border border-stone-800 bg-stone-900/40 py-5">
+				<EmptyState icon="mdi:sword-cross" text="No live arena round is running." />
 			</div>
-		{/if}
+		{:else}
 
 		<!-- King of the Hill -->
 		{#if hills.length}
@@ -515,6 +557,7 @@
 				</table>
 			</div>
 		</div>
+		{/if}
 	{/if}
 </div>
 

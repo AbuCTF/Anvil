@@ -283,8 +283,8 @@ class ApiClient {
 	}
 
 	// Instances
-	async getInstances() {
-		return this.request<{ instances: any[] }>('/instances');
+	async getInstances(options: RequestInit = {}) {
+		return this.request<{ instances: any[] }>('/instances', options);
 	}
 
 	async createInstance(challengeSlug: string) {
@@ -319,8 +319,8 @@ class ApiClient {
 	}
 
 	// VPN
-	async getVPNConfig() {
-		return this.request<VpnConfigResponse>('/vpn/config');
+	async getVPNConfig(options: RequestInit = {}) {
+		return this.request<VpnConfigResponse>('/vpn/config', options);
 	}
 
 	async generateVPNConfig() {
@@ -335,8 +335,8 @@ class ApiClient {
 		});
 	}
 
-	async getVPNStatus() {
-		return this.request<VpnStatusResponse>('/vpn/status');
+	async getVPNStatus(options: RequestInit = {}) {
+		return this.request<VpnStatusResponse>('/vpn/status', options);
 	}
 
 	// User
