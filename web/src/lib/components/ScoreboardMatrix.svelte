@@ -89,13 +89,10 @@
     Math.max(256, viewportWidth > 0 ? viewportWidth * 0.24 : 256),
   );
   $: challengeColumnWidth = visibleChallenges.length
-    ? Math.min(
-        112,
-        Math.max(
-          44,
-          (Math.max(viewportWidth, playerColumnWidth) - playerColumnWidth) /
-            visibleChallenges.length,
-        ),
+    ? Math.max(
+        44,
+        (Math.max(viewportWidth, playerColumnWidth) - playerColumnWidth) /
+          visibleChallenges.length,
       )
     : 44;
   $: matrixWidth =

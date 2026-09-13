@@ -182,9 +182,9 @@
 							</a>
 							<a
 								href="/register"
-								class="rounded-full bg-amber-500 px-5 py-2 text-sm font-semibold text-amber-950 transition-colors hover:bg-amber-400"
+								class="inline-flex h-8 items-center rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-3.5 text-xs font-medium leading-none text-amber-500 transition-colors hover:border-amber-500/40 hover:bg-amber-500/[0.12] hover:text-amber-400"
 							>
-								Register
+								<span class="optical-label">Register</span>
 							</a>
 						{/if}
 					</div>
