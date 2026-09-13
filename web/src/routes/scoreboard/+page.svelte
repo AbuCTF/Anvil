@@ -2,6 +2,7 @@
   import Icon from "@iconify/svelte";
   import { onMount } from "svelte";
   import { API_BASE } from "$lib/config";
+  import { auth } from "$stores/auth";
   import { formatDur } from "$lib/chart/time";
   import { formatLocalDateTime, instantTitle } from "$lib/time";
   import LineChart from "$lib/components/LineChart.svelte";
@@ -155,6 +156,8 @@
       }
 
       entries = nextEntries;
+      const viewer = nextEntries.find((entry) => entry.user_id === $auth.user?.id);
+      if (viewer) auth.updateRank(viewer.rank);
       totalUsers = nextTotalUsers;
       matchingUsers = nextMatchingUsers;
       scoreETag = nextETag;
@@ -399,7 +402,7 @@
   <title>Scoreboard - Anvil</title>
 </svelte:head>
 
-<div class="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
   <PageHeader title="Scoreboard" subtitle="{totalUsers} participants">
     <div
       slot="actions"
@@ -610,25 +613,25 @@
         <span slot="meta" class="metadata-label text-stone-500"
           >{matchingUsers.toLocaleString()} players</span
         >
-        <div class="overflow-x-auto">
-          <table class="w-full min-w-[680px] text-sm">
+        <div class="mx-auto max-w-[1200px] overflow-x-auto">
+          <table class="w-full min-w-[900px] table-fixed text-sm">
             <thead>
               <tr
                 class="metadata-label border-b border-stone-800 text-stone-500"
               >
-                <th class="w-16 px-4 py-2.5 text-left">Rank</th>
-                <th class="px-4 py-2.5 text-left">Player</th>
+                <th class="w-28 px-4 py-2.5 text-left">Rank</th>
+                <th class="w-72 px-4 py-2.5 text-left">Player</th>
                 <th class="hidden w-28 px-4 py-2.5 text-left sm:table-cell"
                   >Trend</th
                 >
-                <th class="hidden px-4 py-2.5 text-right md:table-cell"
+                <th class="hidden w-24 px-4 py-2.5 text-right md:table-cell"
                   >Solves</th
                 >
-                <th class="px-4 py-2.5 text-right">Score</th>
-                <th class="hidden px-4 py-2.5 text-right xl:table-cell"
+                <th class="w-28 px-4 py-2.5 text-right">Score</th>
+                <th class="hidden w-44 px-4 py-2.5 text-right xl:table-cell"
                   >Last solve</th
                 >
-                <th class="w-10 px-3 py-2.5"></th>
+                <th class="w-12 px-3 py-2.5"></th>
               </tr>
             </thead>
             <tbody>

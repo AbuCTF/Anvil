@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import OpticalIcon from "$lib/components/OpticalIcon.svelte";
   import { categoryColor, rankAccent, teamColor } from "$lib/rank";
 
@@ -34,6 +35,18 @@
 
   const ROWS_PER_PAGE = 50;
   let matrixPage = 1;
+  let scrollViewport: HTMLDivElement;
+  let viewportWidth = 0;
+
+  onMount(() => {
+    const updateViewportWidth = () => {
+      viewportWidth = scrollViewport.clientWidth;
+    };
+    const observer = new ResizeObserver(updateViewportWidth);
+    updateViewportWidth();
+    observer.observe(scrollViewport);
+    return () => observer.disconnect();
+  });
 
   $: indexedChallenges = challenges.map((challenge, index) => ({
     ...challenge,
@@ -71,6 +84,22 @@
   })();
   $: totalPages = Math.max(1, Math.ceil(visibleRows.length / ROWS_PER_PAGE));
   $: safePage = Math.min(matrixPage, totalPages);
+  $: playerColumnWidth = Math.min(
+    352,
+    Math.max(256, viewportWidth > 0 ? viewportWidth * 0.24 : 256),
+  );
+  $: challengeColumnWidth = visibleChallenges.length
+    ? Math.min(
+        112,
+        Math.max(
+          44,
+          (Math.max(viewportWidth, playerColumnWidth) - playerColumnWidth) /
+            visibleChallenges.length,
+        ),
+      )
+    : 44;
+  $: matrixWidth =
+    playerColumnWidth + challengeColumnWidth * visibleChallenges.length;
   $: pageRows = visibleRows.slice(
     (safePage - 1) * ROWS_PER_PAGE,
     safePage * ROWS_PER_PAGE,
@@ -120,14 +149,27 @@
     No challenges in this category.
   </div>
 {:else}
-  <div class="overflow-x-auto lg:max-h-[70vh] lg:overflow-auto">
-    <table class="w-max min-w-full border-separate border-spacing-0 text-sm">
+  <div
+    bind:this={scrollViewport}
+    class="matrix-scrollbar overflow-x-auto lg:max-h-[70vh] lg:overflow-auto"
+    style={`--matrix-player-width: ${playerColumnWidth}px; --matrix-challenge-width: ${challengeColumnWidth}px;`}
+  >
+    <table
+      class="table-fixed border-separate border-spacing-0 text-sm"
+      style={`width: ${matrixWidth}px;`}
+    >
+      <colgroup>
+        <col class="matrix-player-column" />
+        {#each visibleChallenges as challenge (challenge.slug)}
+          <col class="matrix-challenge-column" data-challenge={challenge.slug} />
+        {/each}
+      </colgroup>
       <thead>
         <tr>
           <th
             rowspan="2"
             scope="col"
-            class="metadata-label sticky left-0 top-0 z-40 min-w-[230px] border-b border-r border-stone-800 bg-stone-900 px-4 py-2.5 text-left text-stone-500"
+            class="matrix-player-column metadata-label sticky left-0 top-0 z-40 border-b border-r border-stone-800 bg-stone-900 px-4 py-2.5 text-left text-stone-500"
           >
             Player
           </th>
@@ -146,7 +188,7 @@
           {#each visibleChallenges as challenge}
             <th
               scope="col"
-              class="sticky top-9 z-30 h-12 w-11 min-w-11 border-b border-r border-stone-800/70 bg-stone-900 px-1 text-center font-normal"
+              class="matrix-challenge-column sticky top-9 z-30 h-12 border-b border-r border-stone-800/70 bg-stone-900 px-1 text-center font-normal"
               title="{challenge.name} · {challenge.points} pts"
             >
               <a
@@ -165,7 +207,7 @@
           <tr class="group">
             <th
               scope="row"
-              class="sticky left-0 z-20 border-b border-r border-stone-800/70 bg-stone-950 px-4 py-2.5 text-left font-normal group-hover:bg-stone-900"
+              class="matrix-player-column sticky left-0 z-20 border-b border-r border-stone-800/70 bg-stone-950 px-4 py-2.5 text-left font-normal group-hover:bg-stone-900"
             >
               <div class="flex items-center gap-2.5 leading-none">
                 <span
@@ -180,6 +222,7 @@
                 <a
                   href="/profile/{row.username}"
                   class="min-w-0 flex-1 truncate text-stone-200 hover:text-amber-400"
+                  title={row.name}
                   >{row.name}</a
                 >
                 <span class="shrink-0 text-xs tabular-nums text-stone-500"
@@ -204,7 +247,7 @@
             {#each visibleChallenges as challenge}
               {@const cell = row.cells[challenge.index] ?? { s: 0, b: 0 }}
               <td
-                class="h-11 w-11 min-w-11 border-b border-r border-stone-800/60 bg-stone-950/40 p-1 text-center group-hover:bg-stone-900/50"
+                class="matrix-challenge-column h-11 border-b border-r border-stone-800/60 bg-stone-950/40 p-1 text-center group-hover:bg-stone-900/50"
               >
                 <span
                   class="mx-auto flex h-7 w-7 items-center justify-center rounded-full border leading-none {cell.b >
@@ -300,3 +343,50 @@
     {/each}
   </div>
 {/if}
+
+<style>
+  .matrix-player-column {
+    width: var(--matrix-player-width);
+    min-width: var(--matrix-player-width);
+    max-width: var(--matrix-player-width);
+  }
+
+  .matrix-challenge-column {
+    width: var(--matrix-challenge-width);
+    min-width: var(--matrix-challenge-width);
+  }
+
+  .matrix-scrollbar {
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    scrollbar-color: rgb(var(--st-700)) rgb(var(--st-900) / 0.35);
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .matrix-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .matrix-scrollbar::-webkit-scrollbar-track {
+    background: rgb(var(--st-900) / 0.35);
+  }
+
+  .matrix-scrollbar::-webkit-scrollbar-thumb {
+    min-width: 32px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: rgb(var(--st-700));
+    background-clip: padding-box;
+  }
+
+  .matrix-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgb(var(--st-600));
+    background-clip: padding-box;
+  }
+
+  .matrix-scrollbar::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+</style>

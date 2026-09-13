@@ -755,7 +755,7 @@
 <svelte:window on:keydown={handleKeydown} />
 
 <div class="min-h-screen bg-stone-950">
-	<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+	<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
 		<PageHeader title="Admin" subtitle="Platform management">
 			<div slot="actions">
 				{#if activeTab === 'challenges'}

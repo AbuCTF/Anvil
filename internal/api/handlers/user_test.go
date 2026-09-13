@@ -63,6 +63,7 @@ func TestUserHandlersRejectInvalidUserContext(t *testing.T) {
 		handle func(*gin.Context)
 	}{
 		{name: "get profile", handle: handler.GetProfile},
+		{name: "get rank", handle: handler.GetRank},
 		{name: "update profile", handle: handler.UpdateProfile},
 		{name: "get stats", handle: handler.GetStats},
 		{name: "get solves", handle: handler.GetSolves},
@@ -83,5 +84,11 @@ func TestUserHandlersRejectInvalidUserContext(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestUserRankETag(t *testing.T) {
+	if got := userRankETag(1234); got != `"rank-1234"` {
+		t.Fatalf("userRankETag(1234) = %q", got)
 	}
 }

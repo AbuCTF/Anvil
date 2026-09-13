@@ -35,6 +35,7 @@ export interface PlatformInfoResponse {
 	event?: {
 		start_at: string;
 		end_at: string;
+		visible_until: string;
 		phase: EventPhase;
 	};
 }

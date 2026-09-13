@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +12,25 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
+
+func TestCORSAllowsRankRevalidationHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(http.MethodOptions, "/api/v1/user/me/rank", nil)
+
+	CORS()(ctx)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, want %d", response.Code, http.StatusNoContent)
+	}
+	if allowed := response.Header().Get("Access-Control-Allow-Headers"); !strings.Contains(allowed, "If-None-Match") {
+		t.Fatalf("conditional request header is not allowed: %q", allowed)
+	}
+	if exposed := response.Header().Get("Access-Control-Expose-Headers"); !strings.Contains(exposed, "ETag") {
+		t.Fatalf("ETag response header is not exposed: %q", exposed)
+	}
+}
 
 func TestParseAccessTokenAcceptsSupportedTokenTypes(t *testing.T) {
 	cfg := testJWTConfig()

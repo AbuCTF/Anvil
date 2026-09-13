@@ -13,10 +13,13 @@ import (
 )
 
 type publicEventInfo struct {
-	StartAt time.Time `json:"start_at"`
-	EndAt   time.Time `json:"end_at"`
-	Phase   string    `json:"phase"`
+	StartAt      time.Time `json:"start_at"`
+	EndAt        time.Time `json:"end_at"`
+	VisibleUntil time.Time `json:"visible_until"`
+	Phase        string    `json:"phase"`
 }
+
+const eventClockGracePeriod = 48 * time.Hour
 
 type platformInfoResponse struct {
 	Name              string           `json:"name"`
@@ -42,11 +45,12 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	startAt, endAt, err := h.eventWindow(c.Request.Context())
 	if err != nil {
 		h.logger.Warn("failed to load public event window", zap.Error(err))
-	} else if startAt != nil && endAt != nil {
+	} else if startAt != nil && endAt != nil && eventClockVisible(now, *endAt) {
 		response.Event = &publicEventInfo{
-			StartAt: *startAt,
-			EndAt:   *endAt,
-			Phase:   eventPhase(now, *startAt, *endAt),
+			StartAt:      *startAt,
+			EndAt:        *endAt,
+			VisibleUntil: endAt.Add(eventClockGracePeriod),
+			Phase:        eventPhase(now, *startAt, *endAt),
 		}
 	}
 
@@ -103,4 +107,8 @@ func eventPhase(now, startAt, endAt time.Time) string {
 	default:
 		return "ended"
 	}
+}
+
+func eventClockVisible(now, endAt time.Time) bool {
+	return now.Before(endAt.Add(eventClockGracePeriod))
 }

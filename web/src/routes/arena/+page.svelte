@@ -314,7 +314,7 @@
 	<title>Arena - Anvil</title>
 </svelte:head>
 
-<div class="max-w-[1500px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-6">
 	{#if loading}
 		<div class="flex items-center justify-center py-24">
 			<Icon icon="mdi:loading" class="w-9 h-9 text-amber-500/80 animate-spin" />
@@ -348,9 +348,7 @@
 		</PageHeader>
 
 		{#if !active}
-			<div class="rounded-lg border border-stone-800 bg-stone-900/40 py-5">
-				<EmptyState icon="mdi:sword-cross" text="No live arena round is running." />
-			</div>
+			<EmptyState icon="mdi:sword-cross" text="No live arena round is running." />
 		{:else}
 
 		<!-- King of the Hill -->

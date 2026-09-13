@@ -21,6 +21,7 @@ interface AuthState {
 }
 
 const AUTH_CHECK_INTERVAL = 60000; // Re-check auth every 60 seconds max
+const RANK_CHECK_INTERVAL = 60000; // Revalidate at most once per visible minute
 const MAX_RETRIES = 2;
 const RETRY_DELAY = 1000;
 
@@ -35,7 +36,28 @@ function createAuthStore() {
 
 	const { subscribe, set, update } = writable<AuthState>(initialState);
 	let refreshPromise: Promise<string | null> | null = null;
+	let rankRefreshPromise: Promise<void> | null = null;
+	let rankETag = '';
+	let lastRankChecked = 0;
+	let rankGeneration = 0;
 	let authGeneration = 0;
+
+	const resetRankRevalidation = (checkedAt = 0) => {
+		rankGeneration++;
+		rankRefreshPromise = null;
+		rankETag = '';
+		lastRankChecked = checkedAt;
+	};
+
+	const storeRank = (rank: number) => {
+		if (!Number.isInteger(rank) || rank < 0) return;
+		update((state) => {
+			if (!state.user || state.user.rank === rank) return state;
+			const user = { ...state.user, rank };
+			if (browser) localStorage.setItem('user', JSON.stringify(user));
+			return { ...state, user };
+		});
+	};
 
 	// Helper to delay execution
 	const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -100,6 +122,7 @@ function createAuthStore() {
 		login: (accessToken: string, user: User, refreshToken?: string) => {
 			authGeneration++;
 			refreshPromise = null;
+			resetRankRevalidation(Date.now());
 			if (browser) {
 				localStorage.setItem('accessToken', accessToken);
 				localStorage.setItem('user', JSON.stringify(user));
@@ -121,6 +144,7 @@ function createAuthStore() {
 		logout: (redirect = true) => {
 			authGeneration++;
 			refreshPromise = null;
+			resetRankRevalidation();
 			if (browser) {
 				localStorage.removeItem('accessToken');
 				localStorage.removeItem('refreshToken');
@@ -158,6 +182,7 @@ function createAuthStore() {
 				if (response.ok) {
 					const user = await response.json();
 					if (generation !== authGeneration) return;
+					resetRankRevalidation(Date.now());
 					localStorage.setItem('user', JSON.stringify(user));
 					set({
 						isAuthenticated: true,
@@ -178,6 +203,7 @@ function createAuthStore() {
 						if (retryResponse.ok) {
 							const user = await retryResponse.json();
 							if (generation !== authGeneration) return;
+							resetRankRevalidation(Date.now());
 							localStorage.setItem('user', JSON.stringify(user));
 							set({
 								isAuthenticated: true,
@@ -256,6 +282,7 @@ function createAuthStore() {
 				if (response.ok) {
 					const user = await response.json();
 					if (generation !== authGeneration) return;
+					resetRankRevalidation(Date.now());
 					set({
 						isAuthenticated: true,
 						user,
@@ -275,6 +302,7 @@ function createAuthStore() {
 						if (retryResponse.ok) {
 							const user = await retryResponse.json();
 							if (generation !== authGeneration) return;
+							resetRankRevalidation(Date.now());
 							localStorage.setItem('user', JSON.stringify(user));
 							set({
 								isAuthenticated: true,
@@ -304,6 +332,72 @@ function createAuthStore() {
 			}
 		},
 
+		// Revalidate only the header rank when a dormant tab becomes visible.
+		// Conditional requests return no body when the rank has not changed.
+		refreshRank: async (force = false) => {
+			if (!browser || document.hidden) return;
+			const state = get({ subscribe });
+			if (!state.isAuthenticated || !state.user || state.isLoading) return;
+			if (!force && Date.now() - lastRankChecked < RANK_CHECK_INTERVAL) return;
+			if (rankRefreshPromise) return rankRefreshPromise;
+
+			const generation = authGeneration;
+			const currentRankGeneration = rankGeneration;
+			const isCurrent = () => generation === authGeneration && currentRankGeneration === rankGeneration;
+			const currentPromise = (async () => {
+				const request = (token: string) => {
+					const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+					if (rankETag) headers['If-None-Match'] = rankETag;
+					return fetchWithRetry(`${API_BASE}/api/v1/user/me/rank`, {
+						headers
+					});
+				};
+
+				try {
+					let token = localStorage.getItem('accessToken');
+					if (!token) return;
+					let response = await request(token);
+					if (!isCurrent()) return;
+
+					if (response.status === 401) {
+						const refreshedToken = await refreshAccessToken();
+						if (!refreshedToken || !isCurrent()) return;
+						token = refreshedToken;
+						response = await request(token);
+						if (!isCurrent()) return;
+					}
+
+					if (response.status === 304) {
+						rankETag = response.headers.get('etag') || rankETag;
+						lastRankChecked = Date.now();
+						return;
+					}
+					if (!response.ok) return;
+
+					const payload: unknown = await response.json();
+					if (!isCurrent() || !payload || typeof payload !== 'object') return;
+					const rank = (payload as { rank?: unknown }).rank;
+					if (typeof rank !== 'number' || !Number.isInteger(rank) || rank < 0) return;
+					rankETag = response.headers.get('etag') || '';
+					lastRankChecked = Date.now();
+					storeRank(rank);
+				} catch (error) {
+					if (isCurrent()) console.error('Rank refresh failed:', error);
+				}
+			})();
+			rankRefreshPromise = currentPromise;
+			try {
+				await currentPromise;
+			} finally {
+				if (rankRefreshPromise === currentPromise) rankRefreshPromise = null;
+			}
+		},
+
+		updateRank: (rank: number) => {
+			resetRankRevalidation(Date.now());
+			storeRank(rank);
+		},
+
 		updateUser: (user: User) => {
 			update((state) => ({
 				...state,
@@ -315,6 +409,7 @@ function createAuthStore() {
 		clearAuth: () => {
 			authGeneration++;
 			refreshPromise = null;
+			resetRankRevalidation();
 			if (browser) {
 				localStorage.removeItem('accessToken');
 				localStorage.removeItem('refreshToken');

@@ -203,7 +203,7 @@
 	<title>My Instances - Anvil</title>
 </svelte:head>
 
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
 	<PageHeader title="My Instances" subtitle={instances.length ? `${instances.length} active` : ''}>
 		<a
 			slot="actions"
@@ -254,7 +254,7 @@
 			</a>
 		</EmptyState>
 	{:else}
-		<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+		<div class="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 min-[2200px]:grid-cols-4 gap-4 sm:gap-6">
 			{#each instances as instance (instance.id)}
 				{@const expired = instance.expires_at <= Math.floor(Date.now() / 1000)}
 				{@const busy = !!actionLoading[instance.id]}

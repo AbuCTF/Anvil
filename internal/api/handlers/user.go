@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -34,6 +35,38 @@ func currentUserRank(ctx context.Context, db *database.DB, userID uuid.UUID) (in
 		), 0)
 	`, userID).Scan(&rank)
 	return rank, err
+}
+
+func userRankETag(rank int) string {
+	return `"rank-` + strconv.Itoa(rank) + `"`
+}
+
+// GetRank returns only the viewer's current global rank for lightweight header
+// revalidation. The ETag lets a returning tab avoid downloading an unchanged
+// response without coupling the navigation to the full profile endpoint.
+func (h *UserHandler) GetRank(c *gin.Context) {
+	uid, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	rank, err := currentUserRank(c.Request.Context(), h.db, uid)
+	if err != nil {
+		h.logger.Error("failed to get current user rank", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch rank"})
+		return
+	}
+
+	etag := userRankETag(rank)
+	c.Header("Cache-Control", "private, no-cache")
+	c.Header("ETag", etag)
+	c.Header("Vary", "Authorization")
+	if c.GetHeader("If-None-Match") == etag {
+		c.Status(http.StatusNotModified)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"rank": rank})
 }
 
 // UserService handles user operations

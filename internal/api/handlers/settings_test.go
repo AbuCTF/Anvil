@@ -89,3 +89,13 @@ func TestEventPhase(t *testing.T) {
 		})
 	}
 }
+
+func TestEventClockVisibleForTwoDaysAfterEnd(t *testing.T) {
+	endAt := time.Date(2026, time.September, 14, 10, 0, 0, 0, time.UTC)
+	if !eventClockVisible(endAt.Add(eventClockGracePeriod-time.Nanosecond), endAt) {
+		t.Fatal("event clock was hidden before the grace period elapsed")
+	}
+	if eventClockVisible(endAt.Add(eventClockGracePeriod), endAt) {
+		t.Fatal("event clock remained visible at the grace-period boundary")
+	}
+}

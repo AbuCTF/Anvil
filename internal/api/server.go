@@ -166,6 +166,7 @@ func (s *Server) setupRouter() {
 			{
 				userHandler := handlers.NewUserHandler(s.config, s.db, s.logger)
 				user.GET("/me", userHandler.GetProfile)
+				user.GET("/me/rank", userHandler.GetRank)
 				user.PUT("/me", userHandler.UpdateProfile)
 				user.GET("/me/stats", userHandler.GetStats)
 				user.GET("/me/solves", userHandler.GetSolves)

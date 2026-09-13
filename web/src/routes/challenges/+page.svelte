@@ -6,7 +6,6 @@
 	import { categoryColor } from '$lib/rank';
 	import ChallengeTile from '$lib/components/ChallengeTile.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
-	import EmptyState from '$lib/components/EmptyState.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 
 	interface Challenge {
@@ -55,6 +54,7 @@
 	$: categories = [...new Set(challenges.map((c) => c.category).filter(Boolean))].sort() as string[];
 
 	$: hasFilters = !!(searchQuery || selectedDifficulty || selectedCategory || showSolved);
+	$: solvedOnlyEmpty = showSolved && !searchQuery && !selectedDifficulty && !selectedCategory;
 
 	$: filteredChallenges = challenges.filter((c) => {
 		if (searchQuery && !c.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
@@ -113,7 +113,7 @@
 </svelte:head>
 
 <div class="min-h-screen bg-stone-950">
-	<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+	<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
 		<PageHeader
 			title="Challenges"
 			subtitle={loading ? 'Loading…' : `${categories.length} categories · pick a target`}
@@ -209,7 +209,7 @@
 					{:else}
 						<span></span>
 					{/if}
-					{#if hasFilters}
+					{#if hasFilters && filteredChallenges.length > 0}
 						<button on:click={resetFilters} class="text-xs leading-none text-stone-500 hover:text-stone-300 transition-colors inline-flex items-center gap-1">
 							<OpticalIcon icon="mdi:filter-remove-outline" size={12} box={12} />
 							<span class="optical-label">Reset filters</span>
@@ -228,7 +228,7 @@
 							<span class="h-3 w-40 rounded bg-stone-900/60 animate-pulse"></span>
 							<div class="flex-1 h-px bg-stone-800/60"></div>
 						</div>
-						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[2200px]:grid-cols-5 gap-4">
 							{#each [0, 1, 2] as k (k)}
 								<div class="h-32 rounded-lg border border-stone-800 bg-stone-900/40 animate-pulse"></div>
 							{/each}
@@ -242,12 +242,25 @@
 				<p class="text-down text-sm">{error}</p>
 			</div>
 		{:else if filteredChallenges.length === 0}
-			<div class="rounded-lg border border-stone-800 bg-stone-900/40 py-4">
-				<EmptyState icon="mdi:flag-off-outline" text="No challenges match the current filters.">
-					{#if hasFilters}
-						<button on:click={resetFilters} class="mt-3 text-xs text-amber-500 hover:text-amber-400 transition-colors">Reset filters</button>
-					{/if}
-				</EmptyState>
+			<div class="flex min-h-52 flex-col items-center justify-center px-4 text-center" role="status">
+				<span class="mb-3 inline-flex h-8 w-8 items-center justify-center text-stone-600">
+					<OpticalIcon icon={solvedOnlyEmpty ? 'mdi:check-circle-outline' : 'mdi:filter-off-outline'} size={22} box={24} />
+				</span>
+				<p class="text-sm font-medium text-stone-300">{solvedOnlyEmpty ? 'No solved challenges yet' : 'No matching challenges'}</p>
+				<p class="mt-1 text-xs text-stone-600">
+					{solvedOnlyEmpty
+						? 'Completed challenges will appear here.'
+						: 'Try adjusting or clearing the current filters.'}
+				</p>
+				{#if hasFilters}
+					<button
+						on:click={resetFilters}
+						class="mt-4 inline-flex items-center gap-1.5 rounded-full border border-stone-800 bg-stone-900/30 px-3 py-2 text-xs leading-none text-stone-400 transition-colors hover:border-stone-700 hover:bg-stone-900/60 hover:text-stone-200"
+					>
+						<OpticalIcon icon="mdi:filter-remove-outline" size={13} box={14} />
+						<span class="optical-label">Reset filters</span>
+					</button>
+				{/if}
 			</div>
 		{:else}
 			<div class="space-y-10">
@@ -262,7 +275,7 @@
 							</span>
 							<div class="flex-1 h-px bg-stone-800/60"></div>
 						</div>
-						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[2200px]:grid-cols-5 gap-4">
 							{#each group.challenges as challenge (challenge.id)}
 								<ChallengeTile {challenge} />
 							{/each}

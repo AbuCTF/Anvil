@@ -321,7 +321,7 @@
   <title>{username} - Anvil</title>
 </svelte:head>
 
-<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
   <a
     href="/scoreboard"
     class="inline-flex items-center gap-1.5 text-sm text-stone-500 hover:text-stone-300 transition mb-6"
