@@ -182,9 +182,9 @@
 							</a>
 							<a
 								href="/register"
-								class="inline-flex h-8 items-center rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-3.5 text-xs font-medium leading-none text-amber-500 transition-colors hover:border-amber-500/40 hover:bg-amber-500/[0.12] hover:text-amber-400"
+								class="inline-grid h-8 w-[86px] shrink-0 place-items-center rounded-full border border-amber-500/25 bg-amber-500/[0.07] text-xs font-medium leading-none text-amber-500 transition-colors hover:border-amber-500/40 hover:bg-amber-500/[0.12] hover:text-amber-400"
 							>
-								<span class="optical-label">Register</span>
+								<span class="relative -top-[0.5px] leading-none">Register</span>
 							</a>
 						{/if}
 					</div>
