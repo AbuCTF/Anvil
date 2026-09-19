@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
@@ -9,7 +8,10 @@
 	let error = '';
 
 	onMount(async () => {
-		const token = $page.url.searchParams.get('token');
+		// token arrives in the fragment so it never hits history, referrers, or server logs
+		const hash = window.location.hash.replace(/^#/, '');
+		const token = new URLSearchParams(hash).get('token');
+		history.replaceState(null, '', window.location.pathname);
 		if (!token) {
 			error = 'Missing sign-in token.';
 			return;
