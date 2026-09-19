@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
 	import { api } from '$api';
+	import { registerHref } from '$lib/stores/platform';
 
 	let stats: { challenges: number | null; users: number | null; solves: number | null } = {
 		challenges: null,
@@ -53,7 +54,7 @@
 			<Icon icon="mdi:arrow-right" class="w-3.5 h-3.5 shrink-0" />
 		</a>
 		<a
-			href="/register"
+			href={$registerHref}
 			class="px-6 py-2.5 border border-stone-700 text-stone-300 text-sm hover:bg-stone-800/40 hover:text-stone-100 transition-colors rounded-full"
 		>
 			Register

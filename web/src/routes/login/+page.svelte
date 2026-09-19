@@ -3,25 +3,19 @@
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
+	import { platformInfo, loadPlatformInfo } from '$lib/stores/platform';
 
 	let username = '';
 	let password = '';
 	let loading = false;
 	let error = '';
 
-	let discordWalkin = false;
 	let discordLoading = false;
-	let registerUrl = '';
 
-	onMount(async () => {
-		try {
-			const info = await api.getPlatformInfo();
-			discordWalkin = info.discord_walkin;
-			registerUrl = info.register_url ?? '';
-		} catch {
-			// the discord option stays hidden if platform info is unavailable
-		}
-	});
+	$: discordWalkin = $platformInfo?.discord_walkin ?? false;
+	$: registerUrl = $platformInfo?.register_url ?? '';
+
+	onMount(() => loadPlatformInfo());
 
 	async function discordSignIn() {
 		discordLoading = true;

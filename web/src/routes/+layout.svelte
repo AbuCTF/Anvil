@@ -9,6 +9,7 @@
 	import Icon from '@iconify/svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import EventClock from '$lib/components/EventClock.svelte';
+	import { loadPlatformInfo, registerHref } from '$lib/stores/platform';
 	import RankBadge from '$lib/components/RankBadge.svelte';
 
 	let mobileMenuOpen = false;
@@ -62,6 +63,7 @@
 
 	onMount(() => {
 		auth.checkAuth();
+		loadPlatformInfo();
 		theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
 		const refreshVisibleRank = () => {
 			if (!document.hidden) void auth.refreshRank();
@@ -204,7 +206,7 @@
 								Login
 							</a>
 							<a
-								href="/register"
+								href={$registerHref}
 								class="inline-grid h-8 w-[86px] shrink-0 place-items-center rounded-full border border-amber-500/25 bg-amber-500/[0.07] text-xs font-medium leading-none text-amber-500 transition-colors hover:border-amber-500/40 hover:bg-amber-500/[0.12] hover:text-amber-400"
 							>
 								<span class="relative -top-[0.5px] leading-none">Register</span>
@@ -275,7 +277,7 @@
 					{:else}
 						<div class="border-t border-stone-800 pt-3 mt-3 flex gap-3">
 							<a href="/login" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-medium text-stone-300 border border-stone-800 rounded-md hover:bg-stone-800/40 hover:text-stone-100 transition-colors">Login</a>
-							<a href="/register" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-semibold text-amber-950 bg-amber-500 rounded-full hover:bg-amber-400 transition-colors">Register</a>
+							<a href={$registerHref} on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-semibold text-amber-950 bg-amber-500 rounded-full hover:bg-amber-400 transition-colors">Register</a>
 						</div>
 					{/if}
 				</div>

@@ -1,8 +1,18 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import Icon from '@iconify/svelte';
 	import { goto } from '$app/navigation';
 	import { api } from '$lib/api';
 	import { auth } from '$lib/stores/auth';
+	import { loadPlatformInfo, platformInfo } from '$lib/stores/platform';
+
+	// when registration is handled off-platform, send direct visits there too
+	onMount(async () => {
+		await loadPlatformInfo();
+		const url = get(platformInfo)?.register_url;
+		if (url) window.location.href = url;
+	});
 
 	let username = '';
 	let email = '';
