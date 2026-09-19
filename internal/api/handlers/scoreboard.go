@@ -63,14 +63,12 @@ func (h *ScoreboardHandler) respondQueryError(c *gin.Context, message string, er
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch scoreboard data"})
 }
 
-// ScoreboardService handles scoreboard operations
 type ScoreboardService struct {
 	config *config.Config
 	db     *database.DB
 	logger *zap.Logger
 }
 
-// NewScoreboardService creates a new scoreboard service
 func NewScoreboardService(cfg *config.Config, db *database.DB, logger *zap.Logger) *ScoreboardService {
 	return &ScoreboardService{config: cfg, db: db, logger: logger}
 }
@@ -88,7 +86,7 @@ func (h *ScoreboardHandler) scoreboardAvailable(c *gin.Context) bool {
 	h.availabilityMu.Lock()
 	defer h.availabilityMu.Unlock()
 
-	// Another request may have refreshed the setting while this one waited.
+	// another request may have refreshed the setting while this one waited
 	now = time.Now()
 	h.cacheMu.Lock()
 	if now.Before(h.availabilityUntil) {
@@ -187,9 +185,7 @@ func (h *ScoreboardHandler) serveCachedJSON(c *gin.Context, key string) bool {
 	return true
 }
 
-// beginCacheFill coalesces concurrent misses for the same public payload. A
-// waiter either consumes the freshly cached response or becomes the sole next
-// loader if the previous query failed.
+// coalesces concurrent misses for the same public payload; a waiter either consumes the freshly cached response or becomes the sole next loader if the previous query failed
 func (h *ScoreboardHandler) beginCacheFill(c *gin.Context, key string) bool {
 	for {
 		h.flightMu.Lock()
@@ -270,7 +266,6 @@ func (h *ScoreboardHandler) respondCacheableJSON(
 	c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 }
 
-// ScoreboardEntry represents an entry in the scoreboard
 type ScoreboardEntry struct {
 	Rank             int     `json:"rank"`
 	UserID           string  `json:"user_id"`
@@ -285,11 +280,7 @@ type ScoreboardEntry struct {
 	Spark            []int   `json:"spark,omitempty"`
 }
 
-// Get returns the scoreboard, paginated so the full field is served page by page.
-// teamScoreboardQuery ranks TEAMS (teams mode) with the same column shape,
-// params ($1 limit, $2 offset, $3 search, $4 sort), and scan order as the user
-// query: id, name(as username), display_name(NULL), total_score, challenges_solved
-// (fully-completed), flags_solved (distinct flags), last_solve, rank.
+// teamScoreboardQuery ranks teams (teams mode) with the same column shape, params ($1 limit, $2 offset, $3 search, $4 sort), and scan order as the user query: id, name (as username), display_name (null), total_score, challenges_solved (fully-completed), flags_solved (distinct flags), last_solve, rank
 const teamScoreboardQuery = `
 	WITH team_solves AS (
 		SELECT DISTINCT u.team_id AS team_id, s.flag_id, f.challenge_id
@@ -342,9 +333,7 @@ const teamScoreboardQuery = `
 	ORDER BY CASE WHEN $4 = 'name' THEN LOWER(pt.name) END, pt.rank
 `
 
-// teamEconomyScoreboardQuery ranks TEAMS by their economy point total (economy
-// mode). Same column/scan shape as the user + team queries. challenges/flags
-// "solved" = challenges the team holds under the economy.
+// teamEconomyScoreboardQuery ranks teams by their economy point total (economy mode); same column/scan shape as the user + team queries; challenges/flags "solved" = challenges the team holds under the economy
 const teamEconomyScoreboardQuery = `
 	WITH scores AS (
 		SELECT t.id, t.name,
@@ -424,8 +413,7 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	}
 	defer tx.Rollback(c.Request.Context())
 
-	// Teams mode ranks teams instead of users. The team path is fully isolated
-	// (separate count + query, trends skipped) so the user path is untouched.
+	// teams mode ranks teams instead of users; the team path is fully isolated (separate count + query, trends skipped) so the user path is untouched
 	teamsMode, tmErr := isTeamsMode(c.Request.Context(), h.db)
 	if tmErr != nil {
 		h.respondQueryError(c, "failed to read teams_mode", tmErr)
@@ -568,8 +556,7 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	}
 	rows.Close()
 
-	// Trends (spark + rank delta) key on user_id; skip in teams mode where the
-	// entry ids are teams. (Team trends are a follow-up unit.)
+	// trends (spark + rank delta) key on user_id; skip in teams mode where the entry ids are teams (team trends are a follow-up)
 	if !teamRanked {
 		if err := h.attachTrends(c.Request.Context(), tx, entries); err != nil {
 			h.respondQueryError(c, "failed to attach scoreboard trends", err)
@@ -601,8 +588,7 @@ func escapeScoreboardSearch(value string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(value)
 }
 
-// attachTrends fills each entry's per-team sparkline (cumulative score over its
-// solves) and rank delta (movement since the 20th-most-recent solve).
+// fills each entry's per-team sparkline (cumulative score over its solves) and rank delta (movement since the 20th-most-recent solve)
 func (h *ScoreboardHandler) attachTrends(ctx context.Context, query scoreboardQuerier, entries []ScoreboardEntry) error {
 	if len(entries) == 0 {
 		return nil
@@ -617,9 +603,7 @@ func (h *ScoreboardHandler) attachTrends(ctx context.Context, query scoreboardQu
 		return nil
 	}
 
-	// Sparkline: cumulative score events per user. Hint deductions are score
-	// events too, so the terminal spark value agrees with the live score unless
-	// an administrator has manually overridden it.
+	// sparkline: cumulative score events per user; hint deductions are score events too, so the terminal spark value agrees with the live score unless an admin has manually overridden it
 	sparks := map[string][]int{}
 	rows, err := query.Query(ctx,
 		`SELECT user_id, points
@@ -666,9 +650,7 @@ func (h *ScoreboardHandler) attachTrends(ctx context.Context, query scoreboardQu
 	return nil
 }
 
-// historicRanks ranks the entire active field at the comparison cutoff, then
-// returns only the requested users. This keeps deltas correct across the top-
-// 500 matrix boundary and applies the same deterministic tie-breakers as now.
+// ranks the entire active field at the comparison cutoff, then returns only the requested users; keeps deltas correct across the top-500 matrix boundary and applies the same deterministic tie-breakers as now
 func (h *ScoreboardHandler) historicRanks(ctx context.Context, query scoreboardQuerier, ids []uuid.UUID) (map[string]int, error) {
 	ranks := map[string]int{}
 	if len(ids) == 0 {
@@ -738,7 +720,6 @@ type sbSeries struct {
 	Points []sbPoint `json:"points"`
 }
 
-// History returns the top players' cumulative score over time for the race chart.
 func (h *ScoreboardHandler) History(c *gin.Context) {
 	cancel := limitScoreboardRequest(c)
 	defer cancel()
@@ -844,7 +825,6 @@ type profileChallenge struct {
 	BloodRank     int    `json:"blood_rank"`
 }
 
-// Profile returns a player's solved challenges with times and categories.
 func (h *ScoreboardHandler) Profile(c *gin.Context) {
 	cancel := limitScoreboardRequest(c)
 	defer cancel()
@@ -1105,8 +1085,7 @@ type matrixRowSB struct {
 	Cells    []matrixCellSB `json:"cells"`
 }
 
-// Matrix returns the teams x challenges grid: solve state, blood medals, and
-// recent rank movement. Columns are challenges grouped by category.
+// returns the teams x challenges grid: solve state, blood medals, and recent rank movement; columns are challenges grouped by category
 func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 	cancel := limitScoreboardRequest(c)
 	defer cancel()
@@ -1127,7 +1106,6 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Columns: published challenges, grouped by category.
 	chRows, err := tx.Query(ctx, `
 		SELECT c.id, c.slug, c.name, COALESCE(cat.name, 'Uncategorized'),
 		       COALESCE(cat.color, '#94a3b8'), c.base_points
@@ -1162,9 +1140,7 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 	}
 	chRows.Close()
 
-	// Rows: the leaderboard, same ordering as the list view. The matrix is
-	// deliberately capped so a large event cannot force every browser to render
-	// an unbounded users x challenges table; total_users makes that cap explicit.
+	// rows: the leaderboard, same ordering as the list view; the matrix is deliberately capped so a large event can't force every browser to render an unbounded users x challenges table; total_users makes that cap explicit
 	userRows, err := tx.Query(ctx, `
 		SELECT u.id, u.username, u.display_name, u.total_score, COUNT(*) OVER()
 		FROM users u
@@ -1211,9 +1187,7 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 	}
 	userRows.Close()
 
-	// Rank completions globally so blood placement remains correct, but only
-	// return rows for matrix users. This keeps Go memory bounded at 500 x the
-	// published challenge count even when the event has millions of solves.
+	// rank completions globally so blood placement stays correct, but only return rows for matrix users; keeps Go memory bounded at 500 x the published challenge count even with millions of solves
 	bloodRows, err := tx.Query(ctx, `
 		WITH published AS (
 			SELECT id FROM challenges

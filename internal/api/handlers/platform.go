@@ -54,7 +54,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		}
 	}
 
-	// The server timestamp corrects client clock drift; do not cache it.
+	// server timestamp corrects client clock drift; do not cache it.
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, response)
 }

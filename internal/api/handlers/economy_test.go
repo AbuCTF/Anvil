@@ -50,9 +50,9 @@ func TestChallengeValue(t *testing.T) {
 // TestIntegrationScore reproduces economy_test_vectors.md §10 end-to-end total.
 func TestIntegrationScore(t *testing.T) {
 	cfg := shippingEconomy()
-	easy := challengeValue(cfg, "easy", 16, 0)   // 36.25
+	easy := challengeValue(cfg, "easy", 16, 0)     // 36.25
 	medium := challengeValue(cfg, "medium", 12, 0) // 143.75
-	hard := challengeValue(cfg, "hard", 0, 2)    // 281.25
+	hard := challengeValue(cfg, "hard", 0, 2)      // 281.25
 	realised := easy + medium + hard
 	approx(t, "realised", realised, 461.25)
 	freeze := 300.0 * cfg.C2PRate // 4.5

@@ -14,7 +14,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Logger middleware for request logging
 func Logger(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -39,7 +38,6 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 	}
 }
 
-// RequestID middleware adds a unique request ID
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		requestID := c.GetHeader("X-Request-ID")
@@ -52,7 +50,6 @@ func RequestID() gin.HandlerFunc {
 	}
 }
 
-// CORS middleware
 func CORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
@@ -70,7 +67,6 @@ func CORS() gin.HandlerFunc {
 	}
 }
 
-// SecurityHeaders middleware adds security-related headers
 func SecurityHeaders() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
@@ -82,7 +78,6 @@ func SecurityHeaders() gin.HandlerFunc {
 	}
 }
 
-// Claims represents JWT claims
 type Claims struct {
 	UserID    uuid.UUID `json:"user_id,omitempty"`
 	SessionID uuid.UUID `json:"session_id,omitempty"`
@@ -136,7 +131,6 @@ func parseAccessToken(tokenString string, cfg *config.Config) (*Claims, error) {
 	return claims, nil
 }
 
-// Auth middleware validates JWT tokens
 func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -165,10 +159,9 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			return
 		}
 
-		// Check if it's a user token or team token
 		if claims.TokenType == "user" {
-			// Verify user still exists and is active. Role and username come from the
-			// database so account changes take effect without waiting for token expiry.
+			// role and username come from the database so account changes take
+			// effect without waiting for token expiry.
 			var username, role, status string
 			err := db.Pool.QueryRow(c.Request.Context(),
 				"SELECT username, role, status FROM users WHERE id = $1",
@@ -194,7 +187,6 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			c.Set("role", role)
 			c.Set("token_type", "user")
 		} else if claims.TokenType == "team" {
-			// For team tokens, verify session is still valid
 			var expiresAt time.Time
 			var teamName string
 			err := db.Pool.QueryRow(c.Request.Context(),
@@ -221,7 +213,7 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 
 			c.Set("session_id", claims.SessionID)
 			c.Set("username", teamName)
-			c.Set("role", "user") // Team tokens are always user role
+			c.Set("role", "user") // team tokens are always user role
 			c.Set("token_type", "team")
 		}
 
@@ -229,9 +221,8 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 	}
 }
 
-// OptionalAuth middleware validates JWT tokens if present, but does not require them.
-// If a valid token is found the user context is populated; otherwise the request
-// continues unauthenticated.
+// like Auth, but never aborts: a valid token populates the context, anything
+// else falls through unauthenticated.
 func OptionalAuth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
@@ -296,7 +287,6 @@ func OptionalAuth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 	}
 }
 
-// RequireRole middleware checks if user has required role
 func RequireRole(roles ...string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userRole, exists := c.Get("role")
@@ -321,7 +311,6 @@ func RequireRole(roles ...string) gin.HandlerFunc {
 	}
 }
 
-// GetUserID extracts user ID from context (handles both user and session)
 func GetUserID(c *gin.Context) *uuid.UUID {
 	if userID, exists := c.Get("user_id"); exists {
 		if id, ok := userID.(uuid.UUID); ok {
@@ -331,7 +320,6 @@ func GetUserID(c *gin.Context) *uuid.UUID {
 	return nil
 }
 
-// GetSessionID extracts session ID from context
 func GetSessionID(c *gin.Context) *uuid.UUID {
 	if sessionID, exists := c.Get("session_id"); exists {
 		if id, ok := sessionID.(uuid.UUID); ok {
@@ -341,7 +329,6 @@ func GetSessionID(c *gin.Context) *uuid.UUID {
 	return nil
 }
 
-// GetIdentifier returns either user_id or session_id based on token type
 func GetIdentifier(c *gin.Context) (userID *uuid.UUID, sessionID *uuid.UUID) {
 	tokenType, _ := c.Get("token_type")
 	if tokenType == "user" {

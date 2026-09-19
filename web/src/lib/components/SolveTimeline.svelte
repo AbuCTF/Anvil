@@ -2,7 +2,7 @@
 	import { linear } from '$lib/chart/scale';
 	import { formatDur, timeTicks } from '$lib/chart/time';
 
-	// One lane per category; a dot per solve at its time (seconds since first solve).
+	// one lane per category; a dot per solve at its time (seconds since first solve).
 	export let rows: { name: string; color: string }[] = [];
 	export let solves: { row: number; x: number; color: string; label: string }[] = [];
 

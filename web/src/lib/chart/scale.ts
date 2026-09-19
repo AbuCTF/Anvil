@@ -1,4 +1,4 @@
-// Minimal linear scale + nice axis rounding. Zero dependency.
+// minimal linear scale + nice axis rounding. zero dependency.
 
 export type Scale = (v: number) => number;
 

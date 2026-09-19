@@ -6,20 +6,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// VPNConfig represents a user's VPN configuration
 type VPNConfig struct {
 	ID        uuid.UUID  `json:"id" db:"id"`
 	UserID    *uuid.UUID `json:"user_id,omitempty" db:"user_id"`
 	SessionID *uuid.UUID `json:"session_id,omitempty" db:"session_id"`
 
-	// WireGuard keys
-	PrivateKey string `json:"-" db:"private_key"` // Never expose
+	PrivateKey string `json:"-" db:"private_key"` // never expose
 	PublicKey  string `json:"public_key" db:"public_key"`
 
-	// Assigned IP
 	AssignedIP string `json:"assigned_ip" db:"assigned_ip"`
 
-	// Status
 	IsActive      bool       `json:"is_active" db:"is_active"`
 	LastHandshake *time.Time `json:"last_handshake,omitempty" db:"last_handshake"`
 
@@ -27,17 +23,15 @@ type VPNConfig struct {
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }
 
-// VPNConfigResponse represents the VPN configuration file content
 type VPNConfigResponse struct {
-	ConfigFile string `json:"config_file"`
-	AssignedIP string `json:"assigned_ip"`
-	PublicKey  string `json:"public_key"`
+	ConfigFile      string `json:"config_file"`
+	AssignedIP      string `json:"assigned_ip"`
+	PublicKey       string `json:"public_key"`
 	ServerPublicKey string `json:"server_public_key"`
-	Endpoint   string `json:"endpoint"`
-	DNS        string `json:"dns"`
+	Endpoint        string `json:"endpoint"`
+	DNS             string `json:"dns"`
 }
 
-// GenerateWireGuardConfig generates the WireGuard configuration file content
 func (v *VPNConfig) GenerateWireGuardConfig(serverPublicKey, endpoint, dns, allowedIPs string) string {
 	return `[Interface]
 PrivateKey = ` + v.PrivateKey + `
@@ -52,7 +46,6 @@ PersistentKeepalive = 25
 `
 }
 
-// AuditLogEntry represents an entry in the audit log
 type AuditLogEntry struct {
 	ID         uuid.UUID  `json:"id" db:"id"`
 	UserID     *uuid.UUID `json:"user_id,omitempty" db:"user_id"`
@@ -66,7 +59,6 @@ type AuditLogEntry struct {
 	CreatedAt  time.Time  `json:"created_at" db:"created_at"`
 }
 
-// PlatformSetting represents a platform configuration setting
 type PlatformSetting struct {
 	Key         string     `json:"key" db:"key"`
 	Value       string     `json:"value" db:"value"`
@@ -75,34 +67,33 @@ type PlatformSetting struct {
 	UpdatedBy   *uuid.UUID `json:"updated_by,omitempty" db:"updated_by"`
 }
 
-// Common audit actions
 const (
-	AuditActionUserRegistered     = "user.registered"
-	AuditActionUserLogin          = "user.login"
-	AuditActionUserLogout         = "user.logout"
-	AuditActionUserUpdated        = "user.updated"
-	AuditActionUserBanned         = "user.banned"
-	AuditActionUserUnbanned       = "user.unbanned"
+	AuditActionUserRegistered = "user.registered"
+	AuditActionUserLogin      = "user.login"
+	AuditActionUserLogout     = "user.logout"
+	AuditActionUserUpdated    = "user.updated"
+	AuditActionUserBanned     = "user.banned"
+	AuditActionUserUnbanned   = "user.unbanned"
 
 	AuditActionChallengeCreated   = "challenge.created"
 	AuditActionChallengeUpdated   = "challenge.updated"
 	AuditActionChallengeDeleted   = "challenge.deleted"
 	AuditActionChallengePublished = "challenge.published"
 
-	AuditActionFlagSubmitted      = "flag.submitted"
-	AuditActionFlagSolved         = "flag.solved"
-	AuditActionFirstBlood         = "flag.first_blood"
+	AuditActionFlagSubmitted = "flag.submitted"
+	AuditActionFlagSolved    = "flag.solved"
+	AuditActionFirstBlood    = "flag.first_blood"
 
-	AuditActionInstanceStarted    = "instance.started"
-	AuditActionInstanceStopped    = "instance.stopped"
-	AuditActionInstanceExtended   = "instance.extended"
-	AuditActionInstanceExpired    = "instance.expired"
+	AuditActionInstanceStarted  = "instance.started"
+	AuditActionInstanceStopped  = "instance.stopped"
+	AuditActionInstanceExtended = "instance.extended"
+	AuditActionInstanceExpired  = "instance.expired"
 
 	AuditActionVPNConfigGenerated = "vpn.config_generated"
 	AuditActionVPNConnected       = "vpn.connected"
 	AuditActionVPNDisconnected    = "vpn.disconnected"
 
-	AuditActionHintUnlocked       = "hint.unlocked"
+	AuditActionHintUnlocked = "hint.unlocked"
 
-	AuditActionSettingUpdated     = "setting.updated"
+	AuditActionSettingUpdated = "setting.updated"
 )

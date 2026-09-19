@@ -10,15 +10,14 @@ import (
 	"github.com/google/uuid"
 )
 
-// RateLimiter implements a simple in-memory rate limiter
-// The API currently runs as a single stateful control-plane process, so a
-// process-local limiter avoids an external dependency on the request path.
+// the api runs as a single stateful control-plane process, so a process-local
+// limiter avoids an external dependency on the request path.
 type rateLimiter struct {
 	visitors map[string]*visitor
 	mu       sync.RWMutex
-	rate     int           // requests allowed
-	window   time.Duration // time window
-	burst    int           // burst size
+	rate     int
+	window   time.Duration
+	burst    int
 }
 
 type visitor struct {
@@ -34,7 +33,6 @@ func newRateLimiter(rate int, window time.Duration, burst int) *rateLimiter {
 		burst:    burst,
 	}
 
-	// Cleanup old visitors every minute
 	go rl.cleanup()
 
 	return rl
@@ -66,16 +64,14 @@ func (rl *rateLimiter) allow(key string) bool {
 		return true
 	}
 
-	// Token bucket algorithm
+	// token bucket
 	now := time.Now()
 	elapsed := now.Sub(v.lastCheck)
 	v.lastCheck = now
 
-	// Add tokens based on elapsed time
 	rate := float64(rl.rate) / float64(rl.window.Seconds())
 	v.tokens += elapsed.Seconds() * rate
 
-	// Cap at burst size
 	if v.tokens > float64(rl.burst) {
 		v.tokens = float64(rl.burst)
 	}
@@ -88,10 +84,8 @@ func (rl *rateLimiter) allow(key string) bool {
 	return true
 }
 
-// Global rate limiter instance
 var globalLimiter *rateLimiter
 
-// RateLimiter middleware for global rate limiting
 func RateLimiter(cfg config.RateLimitConfig) gin.HandlerFunc {
 	globalLimiter = newRateLimiter(
 		cfg.RequestsPerMinute,
@@ -114,11 +108,9 @@ func RateLimiter(cfg config.RateLimitConfig) gin.HandlerFunc {
 	}
 }
 
-// Endpoint-specific rate limiters
 var endpointLimiters = make(map[string]*rateLimiter)
 var endpointLimitersMu sync.Mutex
 
-// RateLimitEndpoint creates rate limiting for specific endpoints
 func RateLimitEndpoint(cfg config.RateLimit) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		endpoint := c.FullPath()
@@ -131,7 +123,7 @@ func RateLimitEndpoint(cfg config.RateLimit) gin.HandlerFunc {
 		}
 		endpointLimitersMu.Unlock()
 
-		// Use IP + user/session as key for per-user limiting
+		// key on user/session when available so limits are per-user, not per-ip
 		key := c.ClientIP()
 		if userID, exists := c.Get("user_id"); exists {
 			if uid, ok := userID.(uuid.UUID); ok {
@@ -159,9 +151,7 @@ func RateLimitEndpoint(cfg config.RateLimit) gin.HandlerFunc {
 	}
 }
 
-// AbuseDetection middleware for detecting suspicious patterns
 func AbuseDetection() gin.HandlerFunc {
-	// Track suspicious patterns
 	type suspiciousActivity struct {
 		failedLogins int
 		flagAttempts int
@@ -180,12 +170,10 @@ func AbuseDetection() gin.HandlerFunc {
 		mu.RUnlock()
 
 		if exists {
-			// Check if activity is suspicious
 			if activity.failedLogins > 10 ||
 				activity.flagAttempts > 50 ||
 				activity.scanPatterns > 100 {
 
-				// If last activity was recent, block
 				if time.Since(activity.lastActivity) < 15*time.Minute {
 					c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 						"error": "Suspicious activity detected. Please try again later.",
@@ -193,7 +181,6 @@ func AbuseDetection() gin.HandlerFunc {
 					return
 				}
 
-				// Reset after cooldown
 				mu.Lock()
 				delete(suspects, ip)
 				mu.Unlock()
@@ -202,7 +189,6 @@ func AbuseDetection() gin.HandlerFunc {
 
 		c.Next()
 
-		// Record failed attempts after request
 		if c.Writer.Status() == http.StatusUnauthorized {
 			mu.Lock()
 			if _, exists := suspects[ip]; !exists {

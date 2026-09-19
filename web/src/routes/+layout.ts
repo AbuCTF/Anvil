@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 import type { LayoutLoad } from './$types';
 
-// Enable SSR for faster initial page load, hydrate client-side
+// SSR on here for a fast first paint, then hydrate client-side
 export const ssr = true;
 export const prerender = false;
 

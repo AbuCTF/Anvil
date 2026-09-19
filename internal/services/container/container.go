@@ -31,15 +31,12 @@ type Service struct {
 
 const interContainerCommunicationOption = "com.docker.network.bridge.enable_icc"
 
-// NewService creates a new container service
 func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error) {
-	// Create Docker client
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
 
-	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -63,7 +60,6 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 	return s, nil
 }
 
-// Status returns the service status
 func (s *Service) Status() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -75,9 +71,7 @@ func (s *Service) Status() string {
 	return "connected"
 }
 
-// ensureNetwork creates the challenge network if it doesn't exist
 func (s *Service) ensureNetwork(ctx context.Context) error {
-	// Check if network exists
 	networks, err := s.client.NetworkList(ctx, client.NetworkListOptions{
 		Filters: make(client.Filters).Add("name", s.config.NetworkName),
 	})
@@ -96,7 +90,6 @@ func (s *Service) ensureNetwork(ctx context.Context) error {
 		return nil
 	}
 
-	// Create network
 	createOptions, err := challengeNetworkCreateOptions(s.config)
 	if err != nil {
 		return err
@@ -132,7 +125,6 @@ func challengeNetworkCreateOptions(cfg config.ContainerConfig) (client.NetworkCr
 	}, nil
 }
 
-// CreateInstanceRequest contains the request to create a container instance
 type CreateInstanceRequest struct {
 	InstanceID      uuid.UUID
 	ChallengeSlug   string
@@ -147,27 +139,22 @@ type CreateInstanceRequest struct {
 	EnvironmentVars []string
 }
 
-// ExposedPort represents a port to expose
 type ExposedPort struct {
 	Port     int
 	Protocol string
 }
 
-// CreateInstanceResponse contains the response from creating a container
 type CreateInstanceResponse struct {
 	ContainerID   string
 	ContainerName string
 	IPAddress     string
 }
 
-// CreateInstance creates a new challenge container
 func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest) (*CreateInstanceResponse, error) {
-	// Build image name
 	image := req.Image
 	if req.Registry != "" {
 		image = req.Registry + "/" + image
 	}
-	// Only append tag if image doesn't already contain one
 	if !strings.Contains(image, ":") {
 		if req.Tag != "" {
 			image = image + ":" + req.Tag
@@ -176,12 +163,10 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		}
 	}
 
-	// Pull image if needed (with platform for cross-arch support)
 	if err := s.pullImage(ctx, image, req.Platform); err != nil {
 		return nil, fmt.Errorf("failed to pull image: %w", err)
 	}
 
-	// Build exposed ports set
 	exposedPorts := make(network.PortSet)
 	for _, p := range req.ExposedPorts {
 		protocol := p.Protocol
@@ -195,10 +180,8 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		exposedPorts[containerPort] = struct{}{}
 	}
 
-	// Container name
 	containerName := fmt.Sprintf("anvil-%s-%s", req.ChallengeSlug, req.InstanceID.String()[:8])
 
-	// Add default labels
 	labels := make(map[string]string)
 	for k, v := range s.config.Labels {
 		labels[k] = v
@@ -209,7 +192,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	labels["anvil.instance.id"] = req.InstanceID.String()
 	labels["anvil.challenge.slug"] = req.ChallengeSlug
 
-	// Parse resource limits
 	cpuLimit, _ := parseCPULimit(req.CPULimit)
 	memoryLimit, _ := parseMemoryLimit(req.MemoryLimit)
 
@@ -244,7 +226,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		},
 	}
 
-	// Create container directly on the challenge network
 	createOptions := client.ContainerCreateOptions{
 		Config:     containerCfg,
 		HostConfig: hostCfg,
@@ -266,7 +247,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
 
-	// Start container
 	if _, err := s.client.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
 		_, _ = s.client.ContainerRemove(ctx, resp.ID, client.ContainerRemoveOptions{Force: true})
 		return nil, fmt.Errorf("failed to start container: %w", err)
@@ -294,7 +274,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 					zap.Strings("network_ips", netNames),
 				)
 			}
-			// Try exact network name match
 			if net, ok := inspect.NetworkSettings.Networks[s.config.NetworkName]; ok && net.IPAddress.IsValid() {
 				ipAddress = net.IPAddress.String()
 				break
@@ -319,7 +298,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		zap.String("network", s.config.NetworkName),
 	)
 
-	// Build host port map for the response
 	return &CreateInstanceResponse{
 		ContainerID:   resp.ID,
 		ContainerName: containerName,
@@ -338,13 +316,11 @@ func (s *Service) StopInstance(ctx context.Context, containerID string) error {
 	return err
 }
 
-// StartInstance starts a stopped container
 func (s *Service) StartInstance(ctx context.Context, containerID string) error {
 	_, err := s.client.ContainerStart(ctx, containerID, client.ContainerStartOptions{})
 	return err
 }
 
-// RemoveInstance removes a container
 func (s *Service) RemoveInstance(ctx context.Context, containerID string) error {
 	_, err := s.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{
 		Force:         true,
@@ -353,7 +329,6 @@ func (s *Service) RemoveInstance(ctx context.Context, containerID string) error 
 	return err
 }
 
-// GetInstanceStatus gets the status of a container
 func (s *Service) GetInstanceStatus(ctx context.Context, containerID string) (string, error) {
 	inspect, err := s.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
@@ -362,7 +337,6 @@ func (s *Service) GetInstanceStatus(ctx context.Context, containerID string) (st
 	return string(inspect.Container.State.Status), nil
 }
 
-// GetInstanceLogs gets the logs from a container
 func (s *Service) GetInstanceLogs(ctx context.Context, containerID string, tail int) (string, error) {
 	options := client.ContainerLogsOptions{
 		ShowStdout: true,
@@ -401,7 +375,6 @@ func (s *Service) Cleanup(ctx context.Context) error {
 	}
 
 	for _, c := range containers {
-		// Check if container should be cleaned up
 		// This will be coordinated with the database
 		s.logger.Debug("Cleanup check", zap.String("container", c.ID[:12]))
 	}
@@ -409,7 +382,6 @@ func (s *Service) Cleanup(ctx context.Context) error {
 	return nil
 }
 
-// cleanupLoop runs periodic cleanup
 func (s *Service) cleanupLoop() {
 	ticker := time.NewTicker(s.config.CleanupInterval)
 	defer ticker.Stop()
@@ -423,9 +395,7 @@ func (s *Service) cleanupLoop() {
 	}
 }
 
-// pullImage pulls a Docker image
 func (s *Service) pullImage(ctx context.Context, image string, platform string) error {
-	// Check if image exists locally
 	imageExists := false
 	_, err := s.client.ImageInspect(ctx, image)
 	if err == nil {
@@ -438,7 +408,6 @@ func (s *Service) pullImage(ctx context.Context, image string, platform string) 
 
 	s.logger.Info("Pulling image", zap.String("image", image), zap.String("platform", platform))
 
-	// Try to load registry auth from Docker config
 	authStr := getRegistryAuth(image)
 	pullOpts := client.ImagePullOptions{}
 	if parsed := parsePlatform(platform); parsed != nil {
@@ -451,7 +420,6 @@ func (s *Service) pullImage(ctx context.Context, image string, platform string) 
 	reader, err := s.client.ImagePull(ctx, image, pullOpts)
 	if err != nil {
 		if platform != "" {
-			// Platform-specific pull failed.
 			if imageExists {
 				// A local copy already exists (possibly a different arch); use it and
 				// let ContainerCreate decide whether it is compatible.
@@ -629,7 +597,6 @@ func (s *Service) GetNetworkInfo() (string, string) {
 	return s.networkID, s.config.NetworkSubnet
 }
 
-// Stats returns container statistics
 type ContainerStats struct {
 	TotalContainers   int
 	RunningContainers int

@@ -1,5 +1,5 @@
 <script lang="ts">
-	// Surface panel. See DESIGN.md. Optional header (title + right-aligned meta slot).
+	// surface panel. see DESIGN.md. optional header (title + right-aligned meta slot).
 	export let title = '';
 	export let bodyClass = 'p-4';
 	export let hasHeader = true;

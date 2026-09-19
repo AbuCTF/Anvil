@@ -18,7 +18,6 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
-// Service handles VPN configuration and management
 type Service struct {
 	config config.VPNConfig
 	db     *database.DB
@@ -31,9 +30,7 @@ type Service struct {
 	nextIP    net.IP
 }
 
-// NewService creates a new VPN service
 func NewService(cfg config.VPNConfig, db *database.DB, logger *zap.Logger) (*Service, error) {
-	// Parse the address range
 	_, ipNet, err := net.ParseCIDR(cfg.AddressRange)
 	if err != nil {
 		return nil, fmt.Errorf("invalid address range: %w", err)
@@ -54,7 +51,6 @@ func NewService(cfg config.VPNConfig, db *database.DB, logger *zap.Logger) (*Ser
 		nextIP:    startIP,
 	}
 
-	// Load existing allocated IPs from database
 	if err := s.loadAllocatedIPs(); err != nil {
 		logger.Warn("failed to load existing VPN IPs", zap.Error(err))
 	}
@@ -87,7 +83,6 @@ func (s *Service) loadAllocatedIPs() error {
 		}
 	}
 
-	// Set nextIP to highest + 1
 	if highestIP != nil {
 		s.nextIP = make(net.IP, len(highestIP))
 		copy(s.nextIP, highestIP)
@@ -101,7 +96,6 @@ func (s *Service) loadAllocatedIPs() error {
 	return rows.Err()
 }
 
-// Status returns the VPN service status
 func (s *Service) Status() string {
 	if !s.config.Enabled {
 		return "disabled"
@@ -109,9 +103,7 @@ func (s *Service) Status() string {
 	return "enabled"
 }
 
-// GenerateKeyPair generates a new WireGuard key pair
 func (s *Service) GenerateKeyPair() (privateKey, publicKey string, err error) {
-	// Generate private key
 	privKey, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
 		// Fallback to manual generation if wgctrl fails
@@ -123,7 +115,6 @@ func (s *Service) GenerateKeyPair() (privateKey, publicKey string, err error) {
 
 // generateKeyPairManual generates keys without wgctrl (for systems without WireGuard kernel module)
 func (s *Service) generateKeyPairManual() (string, string, error) {
-	// Generate 32 random bytes for private key
 	privKeyBytes := make([]byte, 32)
 	if _, err := rand.Read(privKeyBytes); err != nil {
 		return "", "", fmt.Errorf("failed to generate random bytes: %w", err)
@@ -136,7 +127,6 @@ func (s *Service) generateKeyPairManual() (string, string, error) {
 
 	privateKeyStr := base64.StdEncoding.EncodeToString(privKeyBytes)
 
-	// Generate public key using curve25519
 	// For a proper implementation, we'd use golang.org/x/crypto/curve25519
 	// For now, we'll use wgtypes if available
 	privKey, err := wgtypes.ParseKey(privateKeyStr)
@@ -147,25 +137,20 @@ func (s *Service) generateKeyPairManual() (string, string, error) {
 	return privateKeyStr, privKey.PublicKey().String(), nil
 }
 
-// AllocateIP allocates a unique IP address for a VPN client
 func (s *Service) AllocateIP() (string, error) {
 	s.ipMu.Lock()
 	defer s.ipMu.Unlock()
 
-	// Find next available IP
 	for {
 		ipStr := s.nextIP.String()
 
-		// Check if IP is within network range
 		if !s.ipNetwork.Contains(s.nextIP) {
 			return "", fmt.Errorf("IP address pool exhausted")
 		}
 
-		// Check if IP is already used
 		if !s.usedIPs[ipStr] {
 			s.usedIPs[ipStr] = true
 
-			// Prepare next IP
 			incrementIP(s.nextIP)
 
 			return ipStr, nil
@@ -175,7 +160,6 @@ func (s *Service) AllocateIP() (string, error) {
 	}
 }
 
-// ReleaseIP releases an IP address back to the pool
 func (s *Service) ReleaseIP(ip string) {
 	s.ipMu.Lock()
 	defer s.ipMu.Unlock()
@@ -208,7 +192,6 @@ func (s *Service) ReleaseIP(ip string) {
 	}
 }
 
-// GenerateClientConfig generates a WireGuard client configuration
 func (s *Service) GenerateClientConfig(privateKey, assignedIP string) string {
 	// AllowedIPs - route challenge networks through VPN
 	// 10.100.0.0/16 = VM network (libvirt)
@@ -249,7 +232,6 @@ PersistentKeepalive = %d
 	)
 }
 
-// GenerateServerPeerConfig generates the server-side peer configuration for a client
 func (s *Service) GenerateServerPeerConfig(publicKey, assignedIP string) string {
 	return fmt.Sprintf(`[Peer]
 PublicKey = %s
@@ -260,7 +242,6 @@ AllowedIPs = %s/32
 	)
 }
 
-// AddPeer adds a peer to the WireGuard server
 func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) error {
 	s.logger.Info("Adding VPN peer",
 		zap.String("public_key", abbreviatedPublicKey(publicKey)),
@@ -284,7 +265,6 @@ func (s *Service) AddPeer(ctx context.Context, publicKey, assignedIP string) err
 	return nil
 }
 
-// RemovePeer removes a peer from the WireGuard server
 func (s *Service) RemovePeer(ctx context.Context, publicKey string) error {
 	s.logger.Info("Removing VPN peer",
 		zap.String("public_key", abbreviatedPublicKey(publicKey)),
@@ -314,7 +294,6 @@ func abbreviatedPublicKey(publicKey string) string {
 	return publicKey[:8] + "..."
 }
 
-// GetPeerStatus gets the status of a VPN peer
 type PeerStatus struct {
 	Connected     bool
 	LastHandshake int64 // Unix timestamp
@@ -324,13 +303,11 @@ type PeerStatus struct {
 }
 
 func (s *Service) GetPeerStatus(publicKey string) (*PeerStatus, error) {
-	// Parse the public key
 	key, err := wgtypes.ParseKey(publicKey)
 	if err != nil {
 		return nil, fmt.Errorf("invalid public key: %w", err)
 	}
 
-	// Connect to WireGuard via wgctrl
 	client, err := wgctrl.New()
 	if err != nil {
 		s.logger.Warn("failed to connect to wgctrl, returning disconnected", zap.Error(err))
@@ -338,14 +315,12 @@ func (s *Service) GetPeerStatus(publicKey string) (*PeerStatus, error) {
 	}
 	defer client.Close()
 
-	// Get device info
 	device, err := client.Device(s.config.Interface)
 	if err != nil {
 		s.logger.Warn("failed to get WireGuard device", zap.String("interface", s.config.Interface), zap.Error(err))
 		return &PeerStatus{Connected: false}, nil
 	}
 
-	// Find the peer
 	for _, peer := range device.Peers {
 		if peer.PublicKey == key {
 			var endpoint string
@@ -370,17 +345,14 @@ func (s *Service) GetPeerStatus(publicKey string) (*PeerStatus, error) {
 	return &PeerStatus{Connected: false}, nil
 }
 
-// GetServerPublicKey returns the server's public key
 func (s *Service) GetServerPublicKey() string {
 	return s.config.PublicKey
 }
 
-// GetEndpoint returns the server endpoint
 func (s *Service) GetEndpoint() string {
 	return fmt.Sprintf("%s:%d", s.config.PublicEndpoint, s.config.ListenPort)
 }
 
-// incrementIP increments an IP address by 1
 func incrementIP(ip net.IP) {
 	for j := len(ip) - 1; j >= 0; j-- {
 		ip[j]++
@@ -390,7 +362,6 @@ func incrementIP(ip net.IP) {
 	}
 }
 
-// VPNStats returns VPN statistics
 type VPNStats struct {
 	Enabled        bool
 	TotalPeers     int

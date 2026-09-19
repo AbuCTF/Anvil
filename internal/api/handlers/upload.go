@@ -26,13 +26,11 @@ const (
 	maximumUploadInitBody  = int64(64 << 10)
 )
 
-// UploadHandler handles file upload operations
 type UploadHandler struct {
 	uploadService *upload.Service
 	logger        *zap.Logger
 }
 
-// NewUploadHandler creates a new upload handler
 func NewUploadHandler(uploadService *upload.Service, logger *zap.Logger) *UploadHandler {
 	return &UploadHandler{
 		uploadService: uploadService,
@@ -40,7 +38,6 @@ func NewUploadHandler(uploadService *upload.Service, logger *zap.Logger) *Upload
 	}
 }
 
-// InitUploadRequest represents the request to initialize an upload
 type InitUploadRequest struct {
 	Filename    string          `json:"filename" binding:"required"`
 	FileType    upload.FileType `json:"file_type" binding:"required"`
@@ -51,7 +48,6 @@ type InitUploadRequest struct {
 	ChallengeID *string         `json:"challenge_id"`
 }
 
-// InitUploadResponse is returned when an upload is initialized
 type InitUploadResponse struct {
 	UploadID    string `json:"upload_id"`
 	ChunkSize   int64  `json:"chunk_size"`
@@ -197,7 +193,6 @@ func (h *UploadHandler) ownedUpload(c *gin.Context, uploadID string) (string, *u
 	return canonicalID, uploadSession, true
 }
 
-// InitUpload initializes a new chunked upload
 // POST /api/v1/uploads
 func (h *UploadHandler) InitUpload(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maximumUploadInitBody)
@@ -212,7 +207,6 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 		return
 	}
 
-	// Get user ID from context
 	userID := middleware.GetUserID(c)
 	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -222,7 +216,6 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 		return
 	}
 
-	// Validate file type info
 	req.FileType = upload.FileType(strings.ToLower(strings.TrimSpace(string(req.FileType))))
 	typeInfo, ok := upload.GetFileTypeInfo(req.FileType)
 	if !ok || !supportedUploadType(req.FileType) {
@@ -230,7 +223,6 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 		return
 	}
 
-	// Check size limits
 	if req.TotalSize > typeInfo.MaxSize {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":    "file too large",
@@ -267,7 +259,6 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 		return
 	}
 
-	// Initialize upload
 	uploadReq := upload.InitUploadRequest{
 		Filename:    filename,
 		FileType:    req.FileType,
@@ -298,7 +289,6 @@ func (h *UploadHandler) InitUpload(c *gin.Context) {
 	})
 }
 
-// UploadChunk handles uploading a single chunk
 // PUT /api/v1/uploads/:id/chunks/:number
 func (h *UploadHandler) UploadChunk(c *gin.Context) {
 	chunkNumberStr := c.Param("number")
@@ -322,7 +312,6 @@ func (h *UploadHandler) UploadChunk(c *gin.Context) {
 		return
 	}
 
-	// Get content length
 	contentLength := c.Request.ContentLength
 	if contentLength <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "content-length required"})
@@ -343,7 +332,6 @@ func (h *UploadHandler) UploadChunk(c *gin.Context) {
 	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, expectedLength)
 
-	// Upload the chunk
 	if err := h.uploadService.UploadChunk(
 		c.Request.Context(),
 		uploadID,
@@ -366,7 +354,6 @@ func (h *UploadHandler) UploadChunk(c *gin.Context) {
 	})
 }
 
-// CompleteUpload finalizes a chunked upload
 // POST /api/v1/uploads/:id/complete
 func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 	uploadID, uploadSession, ok := h.ownedUpload(c, c.Param("id"))
@@ -396,7 +383,6 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 		return
 	}
 
-	// Complete the upload
 	completed, err := h.uploadService.CompleteUpload(c.Request.Context(), uploadID)
 	if err != nil {
 		h.logger.Error("failed to complete upload",
@@ -421,7 +407,6 @@ func (h *UploadHandler) CompleteUpload(c *gin.Context) {
 	})
 }
 
-// GetUploadStatus returns the current status of an upload
 // GET /api/v1/uploads/:id
 func (h *UploadHandler) GetUploadStatus(c *gin.Context) {
 	_, uploadSession, ok := h.ownedUpload(c, c.Param("id"))
@@ -432,7 +417,6 @@ func (h *UploadHandler) GetUploadStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, publicUpload(uploadSession))
 }
 
-// GetUploadProgress returns detailed progress info
 // GET /api/v1/uploads/:id/progress
 func (h *UploadHandler) GetUploadProgress(c *gin.Context) {
 	uploadID, _, ok := h.ownedUpload(c, c.Param("id"))
@@ -455,7 +439,6 @@ func (h *UploadHandler) GetUploadProgress(c *gin.Context) {
 	c.JSON(http.StatusOK, progress)
 }
 
-// GetMissingChunks returns which chunks still need to be uploaded
 // GET /api/v1/uploads/:id/missing
 func (h *UploadHandler) GetMissingChunks(c *gin.Context) {
 	uploadID, _, ok := h.ownedUpload(c, c.Param("id"))
@@ -479,7 +462,6 @@ func (h *UploadHandler) GetMissingChunks(c *gin.Context) {
 	})
 }
 
-// CancelUpload cancels an in-progress upload
 // DELETE /api/v1/uploads/:id
 func (h *UploadHandler) CancelUpload(c *gin.Context) {
 	uploadID, uploadSession, ok := h.ownedUpload(c, c.Param("id"))
@@ -507,7 +489,6 @@ func (h *UploadHandler) CancelUpload(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "upload cancelled"})
 }
 
-// ListUserUploads lists all uploads for the current user
 // GET /api/v1/uploads
 func (h *UploadHandler) ListUserUploads(c *gin.Context) {
 	userID := middleware.GetUserID(c)
@@ -541,7 +522,6 @@ func (h *UploadHandler) ListUserUploads(c *gin.Context) {
 	})
 }
 
-// SimpleUpload handles small file uploads without chunking
 // POST /api/v1/uploads/simple
 func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 	userID := middleware.GetUserID(c)
@@ -553,8 +533,7 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 		return
 	}
 
-	// Bound the whole multipart request before parsing so oversized uploads do
-	// not spill arbitrary amounts of form data to temporary disk.
+	// bound the whole multipart request before parsing so oversized uploads don't spill arbitrary form data to temporary disk
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maximumSimpleRequest)
 	if err := c.Request.ParseMultipartForm(16 << 20); err != nil {
 		var maxBytesErr *http.MaxBytesError
@@ -595,7 +574,6 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 
 	fileTypeStr := c.PostForm("file_type")
 	if fileTypeStr == "" {
-		// Try to detect from filename
 		fileTypeStr = string(upload.DetectFileType(header.Filename, header.Header.Get("Content-Type")))
 	}
 
@@ -606,7 +584,6 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 		return
 	}
 
-	// For simple upload, enforce smaller limit
 	maxSimpleSize := maximumSimpleUpload
 	if typeInfo.MaxSize < maxSimpleSize {
 		maxSimpleSize = typeInfo.MaxSize
@@ -636,13 +613,12 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 		return
 	}
 
-	// Initialize and complete upload in one go
 	uploadReq := upload.InitUploadRequest{
 		Filename:    filename,
 		FileType:    fileType,
 		TotalSize:   header.Size,
 		ContentType: contentType,
-		ChunkSize:   header.Size, // Single chunk
+		ChunkSize:   header.Size,
 		ChallengeID: challengeIDPtr,
 	}
 
@@ -658,7 +634,6 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 		return
 	}
 
-	// Upload as single chunk
 	if err := h.uploadService.UploadChunk(c.Request.Context(), uploadSession.ID, 1, file, header.Size); err != nil {
 		if cleanupErr := h.uploadService.CancelUpload(c.Request.Context(), uploadSession.ID); cleanupErr != nil {
 			h.logger.Error("failed to cancel incomplete simple upload", zap.String("upload_id", uploadSession.ID), zap.Error(cleanupErr))
@@ -668,7 +643,6 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 		return
 	}
 
-	// Complete upload
 	completed, err := h.uploadService.CompleteUpload(c.Request.Context(), uploadSession.ID)
 	if err != nil {
 		h.logger.Error("failed to complete simple upload", zap.Error(err))
@@ -693,7 +667,6 @@ func (h *UploadHandler) SimpleUpload(c *gin.Context) {
 	})
 }
 
-// GetSupportedTypes returns information about supported file types
 // GET /api/v1/uploads/types
 func (h *UploadHandler) GetSupportedTypes(c *gin.Context) {
 	descriptions := map[upload.FileType]string{
@@ -737,7 +710,6 @@ func (h *UploadHandler) GetSupportedTypes(c *gin.Context) {
 	})
 }
 
-// Helper to format bytes
 func formatBytes(bytes int64) string {
 	const unit = 1024
 	if bytes < unit {

@@ -19,7 +19,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// FileType represents supported file types
 type FileType string
 
 const (
@@ -34,7 +33,6 @@ const (
 	FileTypeUnknown       FileType = "unknown"
 )
 
-// FileTypeInfo contains metadata about a file type
 type FileTypeInfo struct {
 	Type         FileType
 	MimeTypes    []string
@@ -111,7 +109,6 @@ var fileTypeRegistry = map[FileType]FileTypeInfo{
 	},
 }
 
-// UploadStatus represents the current state of an upload
 type UploadStatus string
 
 const (
@@ -124,7 +121,6 @@ const (
 	UploadStatusCancelled  UploadStatus = "cancelled"
 )
 
-// Upload represents an upload session
 type Upload struct {
 	ID              string                        `json:"id"`
 	UserID          string                        `json:"user_id"`
@@ -147,7 +143,6 @@ type Upload struct {
 	ExpiresAt       time.Time                     `json:"expires_at"`
 }
 
-// UploadProgress contains progress information for an upload
 type UploadProgress struct {
 	UploadID               string       `json:"upload_id"`
 	Status                 UploadStatus `json:"status"`
@@ -160,7 +155,6 @@ type UploadProgress struct {
 	EstimatedTimeRemaining int64        `json:"estimated_time_remaining,omitempty"`
 }
 
-// InitUploadRequest contains parameters for initializing an upload
 type InitUploadRequest struct {
 	Filename    string   `json:"filename" binding:"required"`
 	FileType    FileType `json:"file_type" binding:"required"`
@@ -171,7 +165,6 @@ type InitUploadRequest struct {
 	ChallengeID *string  `json:"challenge_id"`
 }
 
-// Service handles file uploads
 type Service struct {
 	storage storage.StorageBackend
 	logger  *zap.Logger
@@ -180,7 +173,6 @@ type Service struct {
 	config  Config
 }
 
-// Config contains upload service configuration
 type Config struct {
 	DefaultChunkSize     int64         // Default chunk size (e.g., 10MB)
 	MinChunkSize         int64         // Minimum allowed chunk size
@@ -190,7 +182,6 @@ type Config struct {
 	AllowedFileTypes     []FileType    // Which file types are allowed
 }
 
-// DefaultConfig returns sensible default configuration
 func DefaultConfig() Config {
 	return Config{
 		DefaultChunkSize:     10 * 1024 * 1024,  // 10MB
@@ -209,7 +200,6 @@ func DefaultConfig() Config {
 	}
 }
 
-// NewService creates a new upload service
 func NewService(storage storage.StorageBackend, logger *zap.Logger, config Config) *Service {
 	return &Service{
 		storage: storage,
@@ -219,15 +209,12 @@ func NewService(storage storage.StorageBackend, logger *zap.Logger, config Confi
 	}
 }
 
-// InitUpload initializes a new upload session
 func (s *Service) InitUpload(ctx context.Context, userID string, req InitUploadRequest) (*Upload, error) {
-	// Validate file type
 	typeInfo, ok := fileTypeRegistry[req.FileType]
 	if !ok {
 		return nil, fmt.Errorf("unsupported file type: %s", req.FileType)
 	}
 
-	// Check if file type is allowed
 	allowed := false
 	for _, ft := range s.config.AllowedFileTypes {
 		if ft == req.FileType {
@@ -239,12 +226,10 @@ func (s *Service) InitUpload(ctx context.Context, userID string, req InitUploadR
 		return nil, fmt.Errorf("file type not allowed: %s", req.FileType)
 	}
 
-	// Validate size
 	if req.TotalSize > typeInfo.MaxSize {
 		return nil, fmt.Errorf("file too large: max size for %s is %d bytes", req.FileType, typeInfo.MaxSize)
 	}
 
-	// Determine chunk size
 	chunkSize := req.ChunkSize
 	if chunkSize == 0 {
 		chunkSize = s.config.DefaultChunkSize
@@ -256,14 +241,11 @@ func (s *Service) InitUpload(ctx context.Context, userID string, req InitUploadR
 		chunkSize = s.config.MaxChunkSize
 	}
 
-	// Calculate total chunks
 	totalChunks := int((req.TotalSize + chunkSize - 1) / chunkSize)
 
-	// Generate upload ID and storage key
 	uploadID := uuid.New().String()
 	storageKey := generateStorageKey(userID, req.FileType, uploadID, req.Filename)
 
-	// Initialize backend multipart upload
 	backendUploadID, err := s.storage.InitMultipartUpload(ctx, storageKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage upload: %w", err)
@@ -307,7 +289,6 @@ func (s *Service) InitUpload(ctx context.Context, userID string, req InitUploadR
 	return upload, nil
 }
 
-// UploadChunk handles uploading a single chunk
 func (s *Service) UploadChunk(ctx context.Context, uploadID string, chunkNumber int, reader io.Reader, size int64) error {
 	s.mu.RLock()
 	upload, exists := s.uploads[uploadID]
@@ -325,7 +306,6 @@ func (s *Service) UploadChunk(ctx context.Context, uploadID string, chunkNumber 
 		return fmt.Errorf("invalid chunk number: %d (expected 1-%d)", chunkNumber, upload.TotalChunks)
 	}
 
-	// Check if chunk already uploaded
 	s.mu.RLock()
 	if _, uploaded := upload.UploadedChunks[chunkNumber]; uploaded {
 		s.mu.RUnlock()
@@ -333,19 +313,16 @@ func (s *Service) UploadChunk(ctx context.Context, uploadID string, chunkNumber 
 	}
 	s.mu.RUnlock()
 
-	// Update status
 	s.mu.Lock()
 	upload.Status = UploadStatusUploading
 	upload.UpdatedAt = time.Now()
 	s.mu.Unlock()
 
-	// Upload chunk to storage backend
 	etag, err := s.storage.UploadPart(ctx, upload.StorageKey, upload.BackendUploadID, chunkNumber, reader, size)
 	if err != nil {
 		return fmt.Errorf("failed to upload chunk: %w", err)
 	}
 
-	// Record completed chunk
 	s.mu.Lock()
 	upload.UploadedChunks[chunkNumber] = storage.CompletedPart{
 		PartNumber: chunkNumber,
@@ -365,7 +342,6 @@ func (s *Service) UploadChunk(ctx context.Context, uploadID string, chunkNumber 
 	return nil
 }
 
-// CompleteUpload finalizes an upload
 func (s *Service) CompleteUpload(ctx context.Context, uploadID string) (*Upload, error) {
 	s.mu.RLock()
 	upload, exists := s.uploads[uploadID]
@@ -375,7 +351,6 @@ func (s *Service) CompleteUpload(ctx context.Context, uploadID string) (*Upload,
 		return nil, fmt.Errorf("upload not found: %s", uploadID)
 	}
 
-	// Verify all chunks are uploaded
 	if len(upload.UploadedChunks) != upload.TotalChunks {
 		return nil, fmt.Errorf("incomplete upload: %d/%d chunks uploaded", len(upload.UploadedChunks), upload.TotalChunks)
 	}
@@ -385,7 +360,6 @@ func (s *Service) CompleteUpload(ctx context.Context, uploadID string) (*Upload,
 	upload.UpdatedAt = time.Now()
 	s.mu.Unlock()
 
-	// Sort parts by number
 	parts := make([]storage.CompletedPart, 0, len(upload.UploadedChunks))
 	for _, part := range upload.UploadedChunks {
 		parts = append(parts, part)
@@ -394,7 +368,6 @@ func (s *Service) CompleteUpload(ctx context.Context, uploadID string) (*Upload,
 		return parts[i].PartNumber < parts[j].PartNumber
 	})
 
-	// Complete multipart upload on storage backend
 	if err := s.storage.CompleteMultipartUpload(ctx, upload.StorageKey, upload.BackendUploadID, parts); err != nil {
 		s.mu.Lock()
 		upload.Status = UploadStatusFailed
@@ -404,7 +377,6 @@ func (s *Service) CompleteUpload(ctx context.Context, uploadID string) (*Upload,
 		return nil, fmt.Errorf("failed to complete upload: %w", err)
 	}
 
-	// Verify checksum if provided
 	if upload.Checksum != "" {
 		if err := s.verifyChecksum(ctx, upload); err != nil {
 			s.mu.Lock()
@@ -430,7 +402,6 @@ func (s *Service) CompleteUpload(ctx context.Context, uploadID string) (*Upload,
 	return upload, nil
 }
 
-// CancelUpload cancels an in-progress upload
 func (s *Service) CancelUpload(ctx context.Context, uploadID string) error {
 	s.mu.RLock()
 	upload, exists := s.uploads[uploadID]
@@ -440,7 +411,6 @@ func (s *Service) CancelUpload(ctx context.Context, uploadID string) error {
 		return fmt.Errorf("upload not found: %s", uploadID)
 	}
 
-	// Abort backend upload
 	if err := s.storage.AbortMultipartUpload(ctx, upload.StorageKey, upload.BackendUploadID); err != nil {
 		s.logger.Warn("failed to abort backend upload", zap.Error(err))
 	}
@@ -455,7 +425,6 @@ func (s *Service) CancelUpload(ctx context.Context, uploadID string) error {
 	return nil
 }
 
-// GetUpload returns upload information
 func (s *Service) GetUpload(ctx context.Context, uploadID string) (*Upload, error) {
 	s.mu.RLock()
 	upload, exists := s.uploads[uploadID]
@@ -468,7 +437,6 @@ func (s *Service) GetUpload(ctx context.Context, uploadID string) (*Upload, erro
 	return upload, nil
 }
 
-// GetProgress returns upload progress information
 func (s *Service) GetProgress(ctx context.Context, uploadID string) (*UploadProgress, error) {
 	s.mu.RLock()
 	upload, exists := s.uploads[uploadID]
@@ -494,7 +462,6 @@ func (s *Service) GetProgress(ctx context.Context, uploadID string) (*UploadProg
 	}, nil
 }
 
-// GetMissingChunks returns the list of chunk numbers that haven't been uploaded yet
 func (s *Service) GetMissingChunks(ctx context.Context, uploadID string) ([]int, error) {
 	s.mu.RLock()
 	upload, exists := s.uploads[uploadID]
@@ -514,7 +481,6 @@ func (s *Service) GetMissingChunks(ctx context.Context, uploadID string) ([]int,
 	return missing, nil
 }
 
-// CleanupExpired removes expired uploads
 func (s *Service) CleanupExpired(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -522,7 +488,6 @@ func (s *Service) CleanupExpired(ctx context.Context) error {
 	now := time.Now()
 	for uploadID, upload := range s.uploads {
 		if now.After(upload.ExpiresAt) && upload.Status != UploadStatusCompleted {
-			// Abort backend upload
 			s.storage.AbortMultipartUpload(ctx, upload.StorageKey, upload.BackendUploadID)
 			delete(s.uploads, uploadID)
 
@@ -536,7 +501,6 @@ func (s *Service) CleanupExpired(ctx context.Context) error {
 	return nil
 }
 
-// GetUserUploads returns all uploads for a user
 func (s *Service) GetUserUploads(ctx context.Context, userID string) ([]*Upload, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -551,7 +515,6 @@ func (s *Service) GetUserUploads(ctx context.Context, userID string) ([]*Upload,
 	return uploads, nil
 }
 
-// verifyChecksum verifies the SHA256 checksum of the uploaded file
 func (s *Service) verifyChecksum(ctx context.Context, upload *Upload) error {
 	reader, err := s.storage.Download(ctx, upload.StorageKey)
 	if err != nil {
@@ -572,7 +535,6 @@ func (s *Service) verifyChecksum(ctx context.Context, upload *Upload) error {
 	return nil
 }
 
-// generateStorageKey creates a storage path for the uploaded file
 func generateStorageKey(userID string, fileType FileType, uploadID string, filename string) string {
 	typeInfo := fileTypeRegistry[fileType]
 	var prefix string
@@ -588,13 +550,11 @@ func generateStorageKey(userID string, fileType FileType, uploadID string, filen
 	return fmt.Sprintf("%s/%s/%s/%s", prefix, userID, uploadID, safeName)
 }
 
-// GetFileTypeInfo returns information about a file type
 func GetFileTypeInfo(ft FileType) (FileTypeInfo, bool) {
 	info, ok := fileTypeRegistry[ft]
 	return info, ok
 }
 
-// DetectFileType attempts to detect file type from filename and content type
 func DetectFileType(filename, contentType string) FileType {
 	// Check by extension first
 	for ft, info := range fileTypeRegistry {

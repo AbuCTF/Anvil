@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// Submission represents a flag submission attempt
 type Submission struct {
 	ID          uuid.UUID  `json:"id" db:"id"`
 	UserID      *uuid.UUID `json:"user_id,omitempty" db:"user_id"`
@@ -15,7 +14,7 @@ type Submission struct {
 	FlagID      *uuid.UUID `json:"flag_id,omitempty" db:"flag_id"`
 	InstanceID  *uuid.UUID `json:"instance_id,omitempty" db:"instance_id"`
 
-	SubmittedFlag string `json:"-" db:"submitted_flag"` // Don't expose in API
+	SubmittedFlag string `json:"-" db:"submitted_flag"` // don't expose in api
 	IsCorrect     bool   `json:"is_correct" db:"is_correct"`
 	PointsAwarded int    `json:"points_awarded" db:"points_awarded"`
 
@@ -25,7 +24,6 @@ type Submission struct {
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 }
 
-// SolvedFlag represents a successfully solved flag
 type SolvedFlag struct {
 	ID           uuid.UUID  `json:"id" db:"id"`
 	UserID       *uuid.UUID `json:"user_id,omitempty" db:"user_id"`
@@ -38,7 +36,6 @@ type SolvedFlag struct {
 	SolvedAt      time.Time `json:"solved_at" db:"solved_at"`
 }
 
-// HintUnlock represents an unlocked hint
 type HintUnlock struct {
 	ID             uuid.UUID  `json:"id" db:"id"`
 	UserID         *uuid.UUID `json:"user_id,omitempty" db:"user_id"`
@@ -48,13 +45,11 @@ type HintUnlock struct {
 	UnlockedAt     time.Time  `json:"unlocked_at" db:"unlocked_at"`
 }
 
-// FlagSubmitRequest represents a flag submission request
 type FlagSubmitRequest struct {
 	ChallengeID uuid.UUID `json:"challenge_id" binding:"required"`
 	Flag        string    `json:"flag" binding:"required"`
 }
 
-// FlagSubmitResponse represents the response to a flag submission
 type FlagSubmitResponse struct {
 	Correct       bool    `json:"correct"`
 	Message       string  `json:"message"`
@@ -65,7 +60,6 @@ type FlagSubmitResponse struct {
 	AlreadySolved bool    `json:"already_solved"`
 }
 
-// ScoreboardEntry represents an entry on the scoreboard
 type ScoreboardEntry struct {
 	Rank             int        `json:"rank"`
 	UserID           *uuid.UUID `json:"user_id,omitempty"`
@@ -78,14 +72,12 @@ type ScoreboardEntry struct {
 	LastSolveAt      *time.Time `json:"last_solve_at,omitempty"`
 }
 
-// Scoreboard represents the full scoreboard
 type Scoreboard struct {
 	Entries    []ScoreboardEntry `json:"entries"`
 	TotalUsers int               `json:"total_users"`
 	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
-// UserStats represents detailed statistics for a user
 type UserStats struct {
 	UserID           uuid.UUID `json:"user_id"`
 	Username         string    `json:"username"`
@@ -97,14 +89,11 @@ type UserStats struct {
 	HintsUsed        int       `json:"hints_used"`
 	PointsDeducted   int       `json:"points_deducted"`
 
-	// Category breakdown
 	CategoryStats []CategoryStat `json:"category_stats"`
 
-	// Activity
 	RecentSolves []RecentSolve `json:"recent_solves"`
 }
 
-// CategoryStat represents stats for a specific category
 type CategoryStat struct {
 	CategoryID   uuid.UUID `json:"category_id"`
 	CategoryName string    `json:"category_name"`
@@ -113,7 +102,6 @@ type CategoryStat struct {
 	Points       int       `json:"points"`
 }
 
-// RecentSolve represents a recently solved challenge
 type RecentSolve struct {
 	ChallengeID   uuid.UUID `json:"challenge_id"`
 	ChallengeName string    `json:"challenge_name"`

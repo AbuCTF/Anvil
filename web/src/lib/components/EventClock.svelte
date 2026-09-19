@@ -114,7 +114,7 @@
 				updateClock();
 				if (eventWindow) clockTimer = window.setInterval(updateClock, 1000);
 			} catch {
-				// The navigation remains complete without event timing.
+				// the navigation remains complete without event timing.
 			}
 		})();
 

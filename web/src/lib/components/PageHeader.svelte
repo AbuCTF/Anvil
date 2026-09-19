@@ -1,5 +1,5 @@
 <script lang="ts">
-	// Page title + subtitle, with an optional right-aligned actions slot. See DESIGN.md.
+	// page title + subtitle, with an optional right-aligned actions slot. see DESIGN.md.
 	export let title: string;
 	export let subtitle = '';
 	export let compact = false;

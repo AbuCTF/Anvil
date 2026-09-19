@@ -30,12 +30,10 @@ type migration struct {
 	Checksum string
 }
 
-// DB wraps the database connection pool
 type DB struct {
 	Pool *pgxpool.Pool
 }
 
-// New creates a new database connection
 func New(cfg config.DatabaseConfig) (*DB, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -44,8 +42,8 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse database config: %w", err)
 	}
-	// TIMESTAMPTZ is stored as an instant; make every connection serialize and
-	// compare it from the same UTC session baseline. Browsers localize it for the
+	// timestamptz is stored as an instant; make every connection serialize and
+	// compare it from the same utc session baseline. browsers localize it for the
 	// viewer at the presentation edge.
 	if poolConfig.ConnConfig.RuntimeParams == nil {
 		poolConfig.ConnConfig.RuntimeParams = make(map[string]string)
@@ -66,7 +64,6 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 		return nil
 	}
 
-	// Connection pool settings for better performance
 	poolConfig.MaxConns = int32(cfg.MaxOpenConns)
 	poolConfig.MinConns = int32(cfg.MaxIdleConns)
 	poolConfig.MaxConnLifetime = 30 * time.Minute
@@ -78,7 +75,6 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}
 
-	// Test connection
 	if err := pool.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
@@ -86,12 +82,10 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 	return &DB{Pool: pool}, nil
 }
 
-// Close closes the database connection
 func (db *DB) Close() {
 	db.Pool.Close()
 }
 
-// Migrate runs database migrations
 func (db *DB) Migrate() error {
 	ctx := context.Background()
 	conn, err := db.Pool.Acquire(ctx)
@@ -107,7 +101,6 @@ func (db *DB) Migrate() error {
 		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey)
 	}()
 
-	// Create migrations table if not exists
 	_, err = conn.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY,
@@ -185,7 +178,7 @@ func (db *DB) Migrate() error {
 			if existing.checksum != nil && *existing.checksum != item.Checksum {
 				return fmt.Errorf("migration %d checksum mismatch", item.Version)
 			}
-			// Older Anvil releases recorded only the version. Pin the current
+			// older anvil releases recorded only the version. pin the current
 			// embedded name and checksum the first time the upgraded runner sees it.
 			if existing.name == nil || existing.checksum == nil {
 				if _, err := conn.Exec(ctx,
@@ -197,7 +190,6 @@ func (db *DB) Migrate() error {
 			continue
 		}
 
-		// Execute migration in transaction
 		tx, err := conn.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction for migration %d: %w", item.Version, err)

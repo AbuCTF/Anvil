@@ -34,7 +34,7 @@
 	let selectedCategory = '';
 	let showSolved = false;
 
-	// Icons only — the accent color always comes from the muted categoryColor palette.
+	// icons only — the accent color always comes from the muted categoryColor palette.
 	const categoryIcons: Record<string, { icon: string; size: number }> = {
 		b2r: { icon: 'mdi:server-security', size: 13.75 },
 		web3: { icon: 'mdi:ethereum', size: 15.5 },

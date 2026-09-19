@@ -21,7 +21,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// InstanceService handles instance operations
 type InstanceService struct {
 	config       *config.Config
 	db           *database.DB
@@ -29,7 +28,6 @@ type InstanceService struct {
 	logger       *zap.Logger
 }
 
-// NewInstanceService creates a new instance service
 func NewInstanceService(cfg *config.Config, db *database.DB, containerSvc *container.Service, logger *zap.Logger) *InstanceService {
 	return &InstanceService{
 		config:       cfg,
@@ -39,7 +37,6 @@ func NewInstanceService(cfg *config.Config, db *database.DB, containerSvc *conta
 	}
 }
 
-// InstanceResponse represents an instance in the API response
 type InstanceResponse struct {
 	ID             string         `json:"id"`
 	ChallengeID    string         `json:"challenge_id"`
@@ -57,7 +54,6 @@ type InstanceResponse struct {
 	MaxResets      int            `json:"max_resets"`
 }
 
-// CreateInstanceRequest represents the request to create an instance
 type CreateInstanceRequest struct {
 	ChallengeSlug string `json:"challenge_slug" binding:"required"`
 }
@@ -111,12 +107,8 @@ type instanceRuntime struct {
 	ReservedMemoryMB int
 }
 
-// List returns all instances for the current user
-// instanceOwnerScope returns the column + argument that scope instance
-// ownership for read paths: "team_id" in teams mode when the caller is on a
-// team, otherwise "user_id". A teamless caller in teams mode scopes by user_id
-// (and simply owns no team instances). Ported from CTFRiced's
-// is_teams_mode() ? team_id : user_id branch.
+// scopes instance ownership for reads: team_id in teams mode when the caller is
+// on a team, else user_id (a teamless caller owns no team instances).
 func (h *InstanceHandler) instanceOwnerScope(ctx context.Context, uid uuid.UUID) (string, interface{}, error) {
 	teamsMode, err := isTeamsMode(ctx, h.db)
 	if err != nil {
@@ -142,8 +134,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	// Team-shared instances: in teams mode any member sees the whole team's
-	// instances. Off (default) => per-user listing, unchanged.
+	// teams mode: any member sees the whole team's instances; off => per-user
 	ownerCol, ownerArg, err := h.instanceOwnerScope(ctx, uid)
 	if err != nil {
 		h.logger.Error("failed to resolve instance owner scope", zap.Error(err))
@@ -203,7 +194,6 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		inst.CreatedAt = createdAt.Unix()
 		inst.ExpiresAt = expiresAt.Unix()
 
-		// Parse ports JSON and build connection info
 		if len(portsJSON) > 0 {
 			if err := json.Unmarshal(portsJSON, &inst.Ports); err != nil {
 				h.logger.Error("failed to parse assigned_ports", zap.String("instance_id", inst.ID), zap.Error(err))
@@ -373,7 +363,6 @@ func (h *InstanceHandler) writeInstanceOperationError(c *gin.Context, logMessage
 	c.JSON(opErr.status, opErr.body)
 }
 
-// Create spawns a new instance for a challenge
 func (h *InstanceHandler) Create(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -396,9 +385,9 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Serialize admission for a user across all API processes. This closes the
-	// count-then-insert and same-challenge races without holding a transaction
-	// open while Docker or libvirt performs slow external work.
+	// serialize admission per user across all api processes: closes the
+	// count-then-insert and same-challenge races without holding a tx open
+	// while docker or libvirt does slow external work.
 	if _, err := tx.Exec(ctx,
 		`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
 		"anvil-instance-create:"+uid.String()); err != nil {
@@ -418,9 +407,8 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Static / download-only challenges have no container image and no VM
-	// template, so there is nothing to spawn. Reject cleanly rather than
-	// surfacing a 500 from the provisioning plan.
+	// static/download-only challenges have nothing to spawn; reject cleanly
+	// instead of 500ing from the provision plan.
 	if challenge.ResourceType == "docker" && challenge.ContainerImage == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "this challenge has no instance to start"})
 		return
@@ -457,8 +445,8 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Team-shared instances (teams mode): scope reuse, the concurrency limit, and
-	// ownership on the team; keep user_id for attribution. Off => per-user, unchanged.
+	// teams mode: scope reuse, the concurrency limit, and ownership on the team;
+	// keep user_id for attribution.
 	teamsMode, err := isTeamsMode(ctx, h.db)
 	if err != nil {
 		h.logger.Error("failed to read teams_mode", zap.Error(err))
@@ -533,10 +521,9 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Calculate timeout (instance_timeout is stored in minutes)
+	// instance_timeout is stored in minutes
 	timeout := h.instanceTimeout(challenge)
 
-	// Create instance record
 	instanceID := uuid.New()
 	expiresAt := time.Now().Add(timeout)
 
@@ -595,11 +582,9 @@ func (h *InstanceHandler) provisionInstance(
 	var reservedVCPU int
 	var reservedMemoryMB int
 
-	// Start instance based on resource type
 	if challenge.ResourceType == "vm" {
-		// VM-based challenge
-		// Note: We don't check IsAvailable() anymore since we use SSH to remote nodes
-		// Node availability is verified by the database query below
+		// no IsAvailable() check: nodes are remote over ssh; availability is
+		// verified by the db query below.
 		vmTemplate := *plan.vmTemplate
 
 		node, err := h.reserveVMNode(ctx, instanceID, vmTemplate.VCPU, vmTemplate.MemoryMB)
@@ -616,7 +601,6 @@ func (h *InstanceHandler) provisionInstance(
 		reservedVCPU = vmTemplate.VCPU
 		reservedMemoryMB = vmTemplate.MemoryMB
 
-		// Create VM instance using template data on the selected node
 		vmInfo, err := h.vmSvc.CreateInstanceOnNode(ctx, challenge.ID, instanceID.String(), &vmTemplate, &node)
 		if err != nil {
 			h.logger.Error("failed to create VM", zap.Error(err))
@@ -649,7 +633,6 @@ func (h *InstanceHandler) provisionInstance(
 			},
 		}
 
-		// Parse exposed_ports from challenge definition
 		if len(plan.portConfig) > 0 {
 			for _, pc := range plan.portConfig {
 				proto := pc.Protocol
@@ -663,7 +646,6 @@ func (h *InstanceHandler) provisionInstance(
 			}
 		}
 
-		// Generate per-instance flags for dynamic-flag challenges and inject as env vars
 		envVars, err := h.generateAndStoreDynamicFlags(ctx, instanceID, uid, challenge.ID)
 		if err != nil {
 			h.logger.Error("dynamic flag generation failed", zap.Error(err), zap.String("challenge_id", challenge.ID))
@@ -697,7 +679,6 @@ func (h *InstanceHandler) provisionInstance(
 		}
 	}
 
-	// Serialize port mappings for DB storage
 	portsJSON, err := json.Marshal(portMappings)
 	if err != nil {
 		h.cleanupUnpublishedResource(instanceID, challenge.ResourceType, resourceID, reservedNodeID, reservedVCPU, reservedMemoryMB)
@@ -705,7 +686,6 @@ func (h *InstanceHandler) provisionInstance(
 		return nil, newInstanceOperationError(http.StatusInternalServerError, "failed to save instance", err)
 	}
 
-	// Update instance record with ports
 	result, err := h.db.Pool.Exec(ctx,
 		`UPDATE instances
 		 SET container_id = $1, ip_address = $2, assigned_ports = $3,
@@ -925,9 +905,8 @@ type instanceCapacityExecer interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }
 
-// releaseVMNodeCapacity releases the exact capacity recorded when an instance
-// was admitted. Older instance rows have no reservation metadata, so they are
-// intentionally left alone instead of guessing a node or resource size.
+// older instance rows have no reservation metadata, so they're intentionally
+// left alone instead of guessing a node or resource size.
 func releaseVMNodeCapacity(
 	ctx context.Context,
 	execer instanceCapacityExecer,
@@ -993,7 +972,7 @@ func (h *InstanceHandler) cleanupUnpublishedResource(
 	if cleanupErr != nil {
 		h.logger.Error("failed to clean up unpublished runtime",
 			zap.Error(cleanupErr), zap.String("instance_id", instanceID.String()), zap.String("resource_id", resourceID))
-		// A VM may still be consuming the reservation when cleanup is uncertain.
+		// a vm may still be consuming the reservation when cleanup is uncertain.
 		return
 	}
 	if resourceType == "vm" && nodeID != "" {
@@ -1029,7 +1008,6 @@ func (h *InstanceHandler) cleanupUnpublishedResource(
 	}
 }
 
-// Get returns details of a specific instance
 func (h *InstanceHandler) Get(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -1042,7 +1020,7 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 		return
 	}
 
-	// Team-shared instances: in teams mode any member may view the team's instance.
+	// teams mode: any member may view the team's instance.
 	ownerCol, ownerArg, err := h.instanceOwnerScope(c.Request.Context(), uid)
 	if err != nil {
 		h.logger.Error("failed to resolve instance owner scope", zap.Error(err))
@@ -1106,7 +1084,6 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, inst)
 }
 
-// Extend extends the lifetime of an instance
 func (h *InstanceHandler) Extend(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -1120,7 +1097,7 @@ func (h *InstanceHandler) Extend(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 
-	// Team-shared instances: in teams mode any member may extend the team's instance.
+	// teams mode: any member may extend the team's instance.
 	ownerCol, ownerArg, err := h.instanceOwnerScope(ctx, uid)
 	if err != nil {
 		h.logger.Error("failed to resolve instance owner scope", zap.Error(err))
@@ -1250,9 +1227,9 @@ func (h *InstanceHandler) restoreClaimedInstance(ctx context.Context, uid, insta
 	return nil
 }
 
-// Revert destroys and recreates an owned running instance without applying the
-// normal user-stop cooldown. The server derives every replacement parameter
-// from the claimed instance; there is no client-controlled cooldown bypass.
+// destroys and recreates an owned running instance with no user-stop cooldown.
+// every replacement param is server-derived from the claimed instance, so
+// there's no client-controlled cooldown bypass.
 func (h *InstanceHandler) Revert(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -1361,9 +1338,9 @@ func (h *InstanceHandler) Revert(c *gin.Context) {
 		return
 	}
 
-	// Once the claim is committed, finish the lifecycle even if the client
-	// disconnects. Otherwise a cancelled request can strand a stopping row and
-	// a half-destroyed runtime.
+	// once the claim is committed, finish the lifecycle even if the client
+	// disconnects, or a cancelled request strands a stopping row and a
+	// half-destroyed runtime.
 	operationCtx, operationCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer operationCancel()
 
@@ -1454,7 +1431,6 @@ func (h *InstanceHandler) persistRevertFailure(instanceID uuid.UUID, message str
 	}
 }
 
-// Stop stops an instance
 func (h *InstanceHandler) Stop(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -1467,14 +1443,13 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		return
 	}
 
-	// Create context with timeout to prevent hanging
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
 	h.logger.Info("Stop handler called", zap.String("user_id", uid.String()), zap.String("instance_id", instanceID.String()))
 
-	// Lock and claim the row before touching its runtime. Revert uses the same
-	// state transition, so concurrent Stop/Revert requests cannot both destroy it.
+	// lock and claim the row before touching its runtime; Revert uses the same
+	// state transition, so concurrent Stop/Revert can't both destroy it.
 	claimTx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
 		h.logger.Error("failed to begin instance stop claim", zap.Error(err))
@@ -1532,7 +1507,6 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		zap.String("resource_type", inst.ResourceType),
 		zap.Bool("has_container_id", inst.RuntimeID != nil && *inst.RuntimeID != ""))
 
-	// Stop and destroy the resource (container or VM)
 	if err := h.destroyInstanceRuntime(ctx, inst); err != nil {
 		h.logger.Error("failed to destroy instance runtime", zap.Error(err), zap.String("instance_id", instanceID.String()))
 		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1544,7 +1518,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		return
 	}
 
-	// Commit the record removal, exact capacity release, and cooldown together.
+	// commit the record removal, exact capacity release, and cooldown together.
 	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
 		h.logger.Error("failed to begin instance stop transaction", zap.Error(err))
@@ -1576,7 +1550,6 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		}
 	}
 
-	// Get cooldown duration from challenge settings (default 15 minutes)
 	var cooldownMinutes int
 	err = tx.QueryRow(ctx,
 		`SELECT COALESCE(cooldown_minutes, 15) FROM challenges WHERE id = $1`,
@@ -1587,7 +1560,6 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		return
 	}
 
-	// Set cooldown for this user/challenge combination
 	cooldownUntil := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
 	result, err = tx.Exec(ctx,
 		`INSERT INTO user_cooldowns (id, user_id, challenge_id, cooldown_until, created_at)
@@ -1623,28 +1595,20 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	})
 }
 
-// logAction logs user actions for audit trail
 func (h *InstanceHandler) logAction(c *gin.Context, userID, action string, details map[string]interface{}) {
 	if err := logAdminAction(h.db, c, userID, action, "instance", "", details); err != nil {
 		h.logger.Warn("failed to log instance action", zap.Error(err))
 	}
 }
 
-// Delete terminates and removes an instance
 func (h *InstanceHandler) Delete(c *gin.Context) {
 	h.Stop(c)
 }
 
-// generateAndStoreDynamicFlags queries all dynamic flags for a challenge, generates
-// a unique PREFIX{uuid} value per flag, persists them in instance_flags, and returns
-// the set of Docker env-var strings to inject into the container.
-//
-// Env vars injected:
-//
-//	FLAG=<value>              — first (or only) dynamic flag
-//	FLAG_<UPPER_SLUG>=<value> — every dynamic flag by sanitised name
-//
-// Static flags are ignored — they live in flag_hash and need no injection.
+// generates a unique PREFIX{uuid} value per dynamic flag, persists them in
+// instance_flags, and returns the docker env vars to inject: FLAG=<value>
+// (first/only flag) and FLAG_<UPPER_SLUG>=<value> per flag by sanitised name.
+// static flags are ignored — they live in flag_hash and need no injection.
 func (h *InstanceHandler) generateAndStoreDynamicFlags(
 	ctx context.Context,
 	instanceID uuid.UUID,
@@ -1702,12 +1666,10 @@ func (h *InstanceHandler) generateAndStoreDynamicFlags(
 
 	var envVars []string
 	for i, df := range dynamicFlags {
-		// Generate unique value: PREFIX{uuid}
 		flagValue := fmt.Sprintf("%s{%s}", df.Prefix, uuid.New().String())
 
-		// Persist atomically. If this helper is retried, preserve and return the
-		// already-injected value instead of generating a value that disagrees
-		// with the database.
+		// on retry, preserve and return the already-injected value instead of
+		// one that disagrees with the db.
 		var storedValue string
 		err := tx.QueryRow(ctx,
 			`INSERT INTO instance_flags
@@ -1722,11 +1684,11 @@ func (h *InstanceHandler) generateAndStoreDynamicFlags(
 			return nil, fmt.Errorf("storing dynamic flag %s: %w", df.ID, err)
 		}
 
-		// First dynamic flag → canonical FLAG env var
+		// first dynamic flag → canonical FLAG env var
 		if i == 0 {
 			envVars = append(envVars, "FLAG="+storedValue)
 		}
-		// Name-scoped var for multi-flag challenges: FLAG_TOKEN_OVERFLOW=...
+		// name-scoped var for multi-flag challenges: FLAG_TOKEN_OVERFLOW=...
 		envVars = append(envVars, fmt.Sprintf("%s=%s", dynamicFlagEnvName(df.Name), storedValue))
 	}
 

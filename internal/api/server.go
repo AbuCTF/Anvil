@@ -17,7 +17,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Server represents the API server
 type Server struct {
 	config       *config.Config
 	db           *database.DB
@@ -30,7 +29,6 @@ type Server struct {
 	router       *gin.Engine
 }
 
-// NewServer creates a new API server
 func NewServer(
 	cfg *config.Config,
 	db *database.DB,
@@ -41,7 +39,6 @@ func NewServer(
 	vpnSvc *vpn.Service,
 	logger *zap.Logger,
 ) *Server {
-	// Set Gin mode based on environment
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
 	}
@@ -61,7 +58,6 @@ func NewServer(
 	return s
 }
 
-// Router returns the HTTP router
 func (s *Server) Router() http.Handler {
 	return s.router
 }
@@ -70,40 +66,33 @@ func (s *Server) setupRouter() {
 	r := gin.New()
 	if err := r.SetTrustedProxies(s.config.Server.TrustedProxies); err != nil {
 		s.logger.Error("invalid trusted proxy configuration", zap.Error(err))
-		// Invalid proxy configuration must not leave Gin trusting forwarded
+		// invalid proxy configuration must not leave gin trusting forwarded
 		// addresses from arbitrary clients.
 		_ = r.SetTrustedProxies(nil)
 	}
 
-	// Set max multipart memory for large file uploads (20GB)
-	r.MaxMultipartMemory = 20 << 30 // 20GB
+	r.MaxMultipartMemory = 20 << 30 // 20gb
 
-	// Global middleware
 	r.Use(gin.Recovery())
 	r.Use(middleware.Logger(s.logger))
 	r.Use(middleware.CORS())
 	r.Use(middleware.RequestID())
 	r.Use(middleware.SecurityHeaders())
 
-	// Health probes must remain independent from user traffic limits.
+	// health probes must remain independent from user traffic limits.
 	r.GET("/health", s.healthCheck)
 	r.GET("/api/health", s.healthCheck)
 
-	// Rate limiting (if enabled)
 	if s.config.RateLimit.Enabled {
 		r.Use(middleware.RateLimiter(s.config.RateLimit))
 	}
 
-	// API v1
 	v1 := r.Group("/api/v1")
 	{
-		// Public routes
 		public := v1.Group("")
 		{
-			// Platform info
 			public.GET("/info", handlers.NewPlatformHandler(s.config, s.db, s.logger).GetInfo)
 
-			// Auth routes
 			auth := public.Group("/auth")
 			{
 				authHandler := handlers.NewAuthHandler(s.config, s.db, s.logger)
@@ -115,14 +104,14 @@ func (s *Server) setupRouter() {
 				} else {
 					auth.POST("/login", authHandler.Login)
 				}
-				auth.POST("/token", authHandler.TokenAuth) // For team token auth
-				auth.POST("/sso", authHandler.SSOLogin)    // ZeroPool -> Anvil SSO (model B); gated by sso.enabled
+				auth.POST("/token", authHandler.TokenAuth) // team token auth
+				auth.POST("/sso", authHandler.SSOLogin)    // zeropool -> anvil sso (model b); gated by sso.enabled
 				auth.POST("/refresh", authHandler.RefreshToken)
 				auth.POST("/logout", authHandler.Logout)
 			}
 
-			// Public challenge listing — optionally enriched with per-user progress
-			// when the caller supplies a valid JWT.
+			// public challenge listing, optionally enriched with per-user progress
+			// when the caller supplies a valid jwt.
 			challengesPublic := v1.Group("")
 			challengesPublic.Use(middleware.OptionalAuth(s.config, s.db))
 			{
@@ -130,12 +119,11 @@ func (s *Server) setupRouter() {
 				challengeHandler := handlers.NewChallengeHandlerWithAttachments(s.config, s.db, s.containerSvc, s.vmSvc, s.logger, attachmentHandler)
 				challengesPublic.GET("/challenges", challengeHandler.List)
 				challengesPublic.GET("/challenges/:slug", challengeHandler.Get)
-				// File attachment downloads
 				challengesPublic.GET("/challenges/:slug/attachments/:attachment_id/download", attachmentHandler.Download)
 			}
 
-			// Scoreboard routes accept optional auth so scoreboard_public can keep
-			// the same URLs while limiting private events to signed-in players.
+			// scoreboard routes accept optional auth so scoreboard_public can keep
+			// the same urls while limiting private events to signed-in players.
 			scoreboardHandler := handlers.NewScoreboardHandler(s.config, s.db, s.logger)
 			scoreboardRoutes := public.Group("")
 			scoreboardRoutes.Use(middleware.OptionalAuth(s.config, s.db))
@@ -144,10 +132,9 @@ func (s *Server) setupRouter() {
 			scoreboardRoutes.GET("/scoreboard/matrix", scoreboardHandler.Matrix)
 			scoreboardRoutes.GET("/profile/:username", scoreboardHandler.Profile)
 
-			// Public stats
 			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
 
-			// Arena (Attack-Defense + KotH) read endpoints
+			// arena (attack-defense + koth) read endpoints
 			arenaRead := handlers.NewGameHandler(s.config, s.db, s.logger)
 			public.GET("/arena/state", arenaRead.State)
 			public.GET("/arena/scoreboard", arenaRead.Scoreboard)
@@ -158,11 +145,9 @@ func (s *Server) setupRouter() {
 			public.GET("/arena/events", arenaRead.Events)
 		}
 
-		// Protected routes (require authentication)
 		protected := v1.Group("")
 		protected.Use(middleware.Auth(s.config, s.db))
 		{
-			// User profile
 			user := protected.Group("/user")
 			{
 				userHandler := handlers.NewUserHandler(s.config, s.db, s.logger)
@@ -173,7 +158,7 @@ func (s *Server) setupRouter() {
 				user.GET("/me/solves", userHandler.GetSolves)
 			}
 
-			// Teams / membership (gated by the 'teams_mode' platform setting)
+			// gated by the teams_mode platform setting
 			teams := protected.Group("/teams")
 			{
 				teamsHandler := handlers.NewTeamsHandler(s.config, s.db, s.logger)
@@ -183,7 +168,6 @@ func (s *Server) setupRouter() {
 				teams.POST("/leave", teamsHandler.Leave)
 			}
 
-			// Challenge interactions
 			challenges := protected.Group("/challenges")
 			{
 				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
@@ -199,7 +183,6 @@ func (s *Server) setupRouter() {
 				challenges.POST("/:slug/hints/:hint_id/unlock", challengeHandler.UnlockHint)
 			}
 
-			// Arena (Attack-Defense + KotH) flag submission
 			arenaRoutes := protected.Group("/arena")
 			{
 				arenaHandler := handlers.NewGameHandler(s.config, s.db, s.logger)
@@ -208,7 +191,7 @@ func (s *Server) setupRouter() {
 				), arenaHandler.SubmitFlag)
 			}
 
-			// Economy (team-level: balance, bailout, convert) — gated by economy_mode
+			// team-level; gated by economy_mode
 			economyRoutes := protected.Group("/economy")
 			{
 				economyHandler := handlers.NewEconomyHandler(s.config, s.db, s.logger)
@@ -217,7 +200,6 @@ func (s *Server) setupRouter() {
 				economyRoutes.POST("/convert", economyHandler.Convert)
 			}
 
-			// Instance management
 			instances := protected.Group("/instances")
 			{
 				instanceHandler := handlers.NewInstanceHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
@@ -234,7 +216,6 @@ func (s *Server) setupRouter() {
 				instances.DELETE("/:id", instanceHandler.Delete)
 			}
 
-			// VPN management
 			vpnRoutes := protected.Group("/vpn")
 			{
 				vpnHandler := handlers.NewVPNHandler(s.config, s.db, s.vpnSvc, s.logger)
@@ -248,7 +229,6 @@ func (s *Server) setupRouter() {
 				vpnRoutes.GET("/status", vpnHandler.GetStatus)
 			}
 
-			// File uploads (chunked upload support for large files)
 			uploads := protected.Group("/uploads")
 			{
 				uploadHandler := handlers.NewUploadHandler(s.uploadSvc, s.logger)
@@ -264,7 +244,6 @@ func (s *Server) setupRouter() {
 				uploads.DELETE("/:id", uploadHandler.CancelUpload)
 			}
 
-			// VM management (only if VM service is available)
 			if s.vmSvc != nil {
 				vms := protected.Group("/vms")
 				{
@@ -283,12 +262,10 @@ func (s *Server) setupRouter() {
 			}
 		}
 
-		// Admin routes
 		admin := v1.Group("/admin")
 		admin.Use(middleware.Auth(s.config, s.db))
 		admin.Use(middleware.RequireRole("admin"))
 		{
-			// User management
 			users := admin.Group("/users")
 			{
 				adminUserHandler := handlers.NewAdminUserHandler(s.config, s.db, s.logger)
@@ -300,7 +277,6 @@ func (s *Server) setupRouter() {
 				users.DELETE("/:id", adminUserHandler.Delete)
 			}
 
-			// Arena (Attack-Defense + KotH) setup
 			gameAdmin := admin.Group("/arena")
 			{
 				gameAdminHandler := handlers.NewGameAdminHandler(s.config, s.db, s.logger)
@@ -320,7 +296,6 @@ func (s *Server) setupRouter() {
 				gameAdmin.DELETE("/hills/:id", gameAdminHandler.DeleteHill)
 			}
 
-			// Challenge management
 			challenges := admin.Group("/challenges")
 			{
 				adminChallengeHandler := handlers.NewAdminChallengeHandler(s.config, s.db, s.containerSvc, s.logger)
@@ -334,26 +309,23 @@ func (s *Server) setupRouter() {
 				challenges.POST("/:id/unpublish", adminChallengeHandler.Unpublish)
 				challenges.POST("/:id/archive", adminChallengeHandler.Archive)
 
-				// Flag management
 				challenges.GET("/:id/flags", adminChallengeHandler.ListFlags)
 				challenges.POST("/:id/flags", adminChallengeHandler.CreateFlag)
 				challenges.PUT("/:id/flags/:flag_id", adminChallengeHandler.UpdateFlag)
 				challenges.DELETE("/:id/flags/:flag_id", adminChallengeHandler.DeleteFlag)
 
-				// Hint management
 				challenges.GET("/:id/hints", adminChallengeHandler.ListHints)
 				challenges.POST("/:id/hints", adminChallengeHandler.CreateHint)
 				challenges.PUT("/:id/hints/:hint_id", adminChallengeHandler.UpdateHint)
 				challenges.DELETE("/:id/hints/:hint_id", adminChallengeHandler.DeleteHint)
 
-				// Attachment management (admin: upload/list/delete; download is public)
+				// admin: upload/list/delete; download is public
 				adminAttachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger)
 				challenges.GET("/:id/attachments", adminAttachmentHandler.List)
 				challenges.POST("/:id/attachments", adminAttachmentHandler.Upload)
 				challenges.DELETE("/:id/attachments/:attachment_id", adminAttachmentHandler.Delete)
 			}
 
-			// Category management
 			categories := admin.Group("/categories")
 			{
 				categoryHandler := handlers.NewCategoryHandler(s.config, s.db, s.logger)
@@ -363,12 +335,10 @@ func (s *Server) setupRouter() {
 				categories.DELETE("/:id", categoryHandler.Delete)
 			}
 
-			// Dynamic flag monitoring (admin only)
 			adminChalMonitor := handlers.NewAdminChallengeHandler(s.config, s.db, s.containerSvc, s.logger)
 			admin.GET("/instance-flags", adminChalMonitor.ListInstanceFlags)
 			admin.GET("/flag-shares", adminChalMonitor.ListFlagShareEvents)
 
-			// Instance management (admin view)
 			instances := admin.Group("/instances")
 			{
 				adminInstanceHandler := handlers.NewAdminInstanceHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
@@ -379,7 +349,6 @@ func (s *Server) setupRouter() {
 				instances.DELETE("/:id", adminInstanceHandler.ForceDelete)
 			}
 
-			// Team tokens & invite codes
 			tokens := admin.Group("/tokens")
 			{
 				tokenHandler := handlers.NewTokenHandler(s.config, s.db, s.logger)
@@ -392,7 +361,6 @@ func (s *Server) setupRouter() {
 				tokens.DELETE("/invite/:id", tokenHandler.DeleteInviteCode)
 			}
 
-			// Platform settings
 			settings := admin.Group("/settings")
 			{
 				settingsHandler := handlers.NewSettingsHandler(s.config, s.db, s.logger)
@@ -400,16 +368,13 @@ func (s *Server) setupRouter() {
 				settings.PUT("", settingsHandler.Update)
 			}
 
-			// Economy admin (freeze flip: auto-convert leftover credits + blind board)
+			// economy freeze flip: auto-convert leftover credits + blind board
 			admin.POST("/economy/freeze", handlers.NewEconomyHandler(s.config, s.db, s.logger).Freeze)
 
-			// Audit log
 			admin.GET("/audit", handlers.NewAuditHandler(s.db, s.logger).List)
 
-			// Statistics
 			admin.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
 
-			// VM Template management (admin)
 			vmTemplates := admin.Group("/vm-templates")
 			{
 				templateHandler := handlers.NewVMTemplateHandler(s.config, s.db, s.logger)
@@ -422,7 +387,6 @@ func (s *Server) setupRouter() {
 				vmTemplates.DELETE("/:id", templateHandler.Delete)
 			}
 
-			// VM Node management (admin)
 			nodes := admin.Group("/nodes")
 			{
 				nodeHandler := handlers.NewNodeHandler(s.config, s.db, s.logger)
@@ -433,7 +397,6 @@ func (s *Server) setupRouter() {
 				nodes.DELETE("/:id", nodeHandler.Delete)
 			}
 
-			// Infrastructure stats
 			infrastructure := admin.Group("/infrastructure")
 			{
 				nodeHandler := handlers.NewNodeHandler(s.config, s.db, s.logger)
@@ -450,7 +413,6 @@ func (s *Server) setupRouter() {
 }
 
 func (s *Server) healthCheck(c *gin.Context) {
-	// Check database connection
 	ctx := c.Request.Context()
 	err := s.db.Pool.Ping(ctx)
 	containerStatus := s.containerSvc.Status()

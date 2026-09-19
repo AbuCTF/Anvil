@@ -177,7 +177,7 @@
 		return `${minutes}m`;
 	}
 
-	// Muted status dot — the semantic color lives on the dot, the label stays gray.
+	// muted status dot — the semantic color lives on the dot, the label stays gray.
 	function statusDot(status: string): string {
 		switch (status) {
 			case 'running':
@@ -274,7 +274,6 @@
 					<span slot="meta" class="text-xs text-stone-400 capitalize tracking-wide">{instance.status}</span>
 
 					<div class="p-4 sm:p-5 space-y-4">
-						<!-- Target -->
 						<div class="flex items-center justify-between gap-3">
 							<span class="metadata-label text-stone-500 shrink-0">Target</span>
 							<div class="flex items-center gap-1.5 min-w-0">
@@ -292,7 +291,6 @@
 							</div>
 						</div>
 
-						<!-- Connect -->
 						{#if instance.ports && Object.keys(instance.ports).length > 0}
 							<div>
 								<span class="metadata-label text-stone-500 block mb-2">Connect</span>
@@ -327,7 +325,6 @@
 							</div>
 						{/if}
 
-						<!-- Stats -->
 						<div class="grid grid-cols-2 gap-3 pt-1">
 							<div class="p-3 bg-stone-950/50 border border-stone-800 rounded-md">
 								<div class="flex items-center gap-1.5 text-stone-500 mb-1.5">
@@ -354,7 +351,6 @@
 						</div>
 					</div>
 
-					<!-- Actions -->
 					<div class="px-4 py-3 sm:px-5 border-t border-stone-800 grid grid-cols-3 gap-2">
 						<button
 							on:click={() => extendInstance(instance.id)}

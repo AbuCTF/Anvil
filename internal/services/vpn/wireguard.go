@@ -16,7 +16,6 @@ import (
 	"golang.org/x/crypto/curve25519"
 )
 
-// WireGuardManager handles WireGuard VPN configuration and peer management
 type WireGuardManager struct {
 	db             *sql.DB
 	configDir      string
@@ -30,7 +29,6 @@ type WireGuardManager struct {
 	peers          map[string]*Peer
 }
 
-// Peer represents a WireGuard peer (user)
 type Peer struct {
 	UserID        string    `json:"user_id"`
 	PublicKey     string    `json:"public_key"`
@@ -41,7 +39,6 @@ type Peer struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
-// VPNConfig represents the WireGuard config file for a user
 type VPNConfig struct {
 	Interface InterfaceConfig
 	Peer      PeerConfig
@@ -62,7 +59,6 @@ type PeerConfig struct {
 	PersistentKeepalive int
 }
 
-// Config holds WireGuard manager configuration
 type Config struct {
 	ConfigDir      string
 	InterfaceName  string
@@ -71,7 +67,6 @@ type Config struct {
 	NetworkCIDR    string
 }
 
-// NewWireGuardManager creates a new WireGuard manager
 func NewWireGuardManager(db *sql.DB, config *Config) (*WireGuardManager, error) {
 	if config.ConfigDir == "" {
 		config.ConfigDir = "/etc/wireguard"
@@ -96,12 +91,10 @@ func NewWireGuardManager(db *sql.DB, config *Config) (*WireGuardManager, error) 
 		peers:          make(map[string]*Peer),
 	}
 
-	// Initialize or load server keys
 	if err := mgr.initServerKeys(); err != nil {
 		return nil, fmt.Errorf("failed to initialize server keys: %w", err)
 	}
 
-	// Load existing peers
 	if err := mgr.loadPeers(); err != nil {
 		return nil, fmt.Errorf("failed to load peers: %w", err)
 	}
@@ -109,14 +102,11 @@ func NewWireGuardManager(db *sql.DB, config *Config) (*WireGuardManager, error) 
 	return mgr, nil
 }
 
-// initServerKeys generates or loads server keys
 func (m *WireGuardManager) initServerKeys() error {
 	keyPath := filepath.Join(m.configDir, m.interfaceName+".key")
 	pubPath := filepath.Join(m.configDir, m.interfaceName+".pub")
 
-	// Check if keys exist
 	if _, err := os.Stat(keyPath); err == nil {
-		// Load existing keys
 		privKey, err := os.ReadFile(keyPath)
 		if err != nil {
 			return err
@@ -130,7 +120,6 @@ func (m *WireGuardManager) initServerKeys() error {
 		return nil
 	}
 
-	// Generate new keys
 	privKey, pubKey, err := generateKeyPair()
 	if err != nil {
 		return err
@@ -139,7 +128,6 @@ func (m *WireGuardManager) initServerKeys() error {
 	m.serverPrivKey = privKey
 	m.serverPubKey = pubKey
 
-	// Save keys
 	if err := os.MkdirAll(m.configDir, 0700); err != nil {
 		return err
 	}
@@ -150,11 +138,9 @@ func (m *WireGuardManager) initServerKeys() error {
 		return err
 	}
 
-	// Generate server config
 	return m.generateServerConfig()
 }
 
-// generateServerConfig creates the WireGuard server configuration
 func (m *WireGuardManager) generateServerConfig() error {
 	configPath := filepath.Join(m.configDir, m.interfaceName+".conf")
 
@@ -170,7 +156,6 @@ PostDown = iptables -D FORWARD -i %s -j ACCEPT; iptables -t nat -D POSTROUTING -
 	return os.WriteFile(configPath, []byte(config), 0600)
 }
 
-// loadPeers loads existing peers from database
 func (m *WireGuardManager) loadPeers() error {
 	rows, err := m.db.Query(`
 		SELECT user_id, public_key, allowed_ips, assigned_ip, created_at
@@ -200,18 +185,15 @@ func (m *WireGuardManager) loadPeers() error {
 	return nil
 }
 
-// GenerateUserConfig generates a WireGuard config for a user
 func (m *WireGuardManager) GenerateUserConfig(userID string, subnetCIDR string, userIP string) (*VPNConfig, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check if user already has a config
 	if existing, ok := m.peers[userID]; ok {
 		// Return existing config (user needs to re-download if they lost it)
 		return nil, "", fmt.Errorf("config already exists, assigned IP: %s", existing.AssignedIP)
 	}
 
-	// Generate user keys
 	privKey, pubKey, err := generateKeyPair()
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to generate keys: %w", err)
@@ -226,7 +208,6 @@ func (m *WireGuardManager) GenerateUserConfig(userID string, subnetCIDR string, 
 		CreatedAt:  time.Now(),
 	}
 
-	// Save to database
 	_, err = m.db.Exec(`
 		INSERT INTO vpn_peers (user_id, public_key, private_key_encrypted, allowed_ips, assigned_ip, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -243,13 +224,11 @@ func (m *WireGuardManager) GenerateUserConfig(userID string, subnetCIDR string, 
 
 	m.peers[userID] = peer
 
-	// Add peer to WireGuard interface
 	if err := m.addPeerToInterface(peer); err != nil {
 		// Non-fatal - can be synced later
 		fmt.Printf("Warning: failed to add peer to interface: %v\n", err)
 	}
 
-	// Generate user config
 	config := &VPNConfig{
 		Interface: InterfaceConfig{
 			PrivateKey: privKey,
@@ -264,13 +243,11 @@ func (m *WireGuardManager) GenerateUserConfig(userID string, subnetCIDR string, 
 		},
 	}
 
-	// Generate config file content
 	configContent := m.renderConfig(config)
 
 	return config, configContent, nil
 }
 
-// GetUserConfig retrieves existing VPN config for a user
 func (m *WireGuardManager) GetUserConfig(userID string) (string, string, error) {
 	var privKey, allowedIPs, assignedIP string
 	err := m.db.QueryRow(`
@@ -302,7 +279,6 @@ func (m *WireGuardManager) GetUserConfig(userID string) (string, string, error) 
 	return m.renderConfig(config), assignedIP, nil
 }
 
-// renderConfig renders a VPN config to string
 func (m *WireGuardManager) renderConfig(config *VPNConfig) string {
 	const configTemplate = `[Interface]
 PrivateKey = {{.Interface.PrivateKey}}
@@ -322,7 +298,6 @@ PersistentKeepalive = {{.Peer.PersistentKeepalive}}
 	return buf.String()
 }
 
-// addPeerToInterface adds a peer to the running WireGuard interface
 func (m *WireGuardManager) addPeerToInterface(peer *Peer) error {
 	cmd := exec.Command("wg", "set", m.interfaceName,
 		"peer", peer.PublicKey,
@@ -335,7 +310,6 @@ func (m *WireGuardManager) addPeerToInterface(peer *Peer) error {
 	return nil
 }
 
-// RemovePeer removes a peer from WireGuard
 func (m *WireGuardManager) RemovePeer(userID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -345,18 +319,15 @@ func (m *WireGuardManager) RemovePeer(userID string) error {
 		return nil
 	}
 
-	// Remove from WireGuard interface
 	cmd := exec.Command("wg", "set", m.interfaceName, "peer", peer.PublicKey, "remove")
 	cmd.Run() // Ignore error
 
-	// Remove from database
 	m.db.Exec("DELETE FROM vpn_peers WHERE user_id = $1", userID)
 
 	delete(m.peers, userID)
 	return nil
 }
 
-// SyncPeers syncs all peers to the WireGuard interface
 func (m *WireGuardManager) SyncPeers() error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -370,7 +341,6 @@ func (m *WireGuardManager) SyncPeers() error {
 	return nil
 }
 
-// GetStatus returns WireGuard interface status
 func (m *WireGuardManager) GetStatus() (map[string]interface{}, error) {
 	cmd := exec.Command("wg", "show", m.interfaceName)
 	output, err := cmd.CombinedOutput()
@@ -386,12 +356,10 @@ func (m *WireGuardManager) GetStatus() (map[string]interface{}, error) {
 	}, nil
 }
 
-// StartInterface starts the WireGuard interface
 func (m *WireGuardManager) StartInterface() error {
 	cmd := exec.Command("wg-quick", "up", m.interfaceName)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		// Check if already up
 		if strings.Contains(string(output), "already exists") {
 			return nil
 		}
@@ -400,7 +368,6 @@ func (m *WireGuardManager) StartInterface() error {
 	return nil
 }
 
-// StopInterface stops the WireGuard interface
 func (m *WireGuardManager) StopInterface() error {
 	cmd := exec.Command("wg-quick", "down", m.interfaceName)
 	output, err := cmd.CombinedOutput()
@@ -413,7 +380,6 @@ func (m *WireGuardManager) StopInterface() error {
 	return nil
 }
 
-// generateKeyPair generates a WireGuard key pair
 func generateKeyPair() (privateKey, publicKey string, err error) {
 	var privKey [32]byte
 	if _, err := rand.Read(privKey[:]); err != nil {

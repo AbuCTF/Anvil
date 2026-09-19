@@ -21,7 +21,6 @@
 	let editingChallenge: any = null;
 	let actionLoading = '';
 
-	// Infrastructure data
 	let infraStats: any = null;
 	let nodes: any[] = [];
 	let templates: any[] = [];
@@ -29,7 +28,6 @@
 	let activeDockerInstances: any[] = [];
 	let infrastructureError = '';
 
-	// Audit data
 	let intelLoading = false;
 	let flagShares: any[] = [];
 	let instanceFlags: any[] = [];
@@ -38,7 +36,6 @@
 	let showNodeModal = false;
 	let showTemplateUploadModal = false;
 
-	// New node form
 	let newNode = {
 		name: '',
 		hostname: '',
@@ -51,7 +48,6 @@
 		provider: 'gcp'
 	};
 
-	// Template upload
 	let templateFile: File | null = null;
 	let templateName = '';
 	let templateDescription = '';
@@ -60,7 +56,6 @@
 	let templateUploadProgress = 0;
 	let templateUploading = false;
 
-	// Platform settings
 	let platformSettings: Record<string, any> = {};
 	let savingSettings = false;
 	let settingsChanged = false;
@@ -68,7 +63,6 @@
 	let eventWindowError = '';
 	let browserTimeZone = 'local time';
 
-	// Challenge creation
 	let categories: any[] = [];
 	let newChallenge = {
 		name: '',
@@ -88,7 +82,6 @@
 		vm_template_id: '',
 		vm_source: 'template',
 		files: [],
-		// Timer settings
 		instance_timeout: 120,
 		max_extensions: 3,
 		vm_timeout_minutes: 60,
@@ -101,7 +94,6 @@
 	let ovaFile: File | null = null;
 	let uploadProgress = 0;
 
-	// File attachments for challenge creation
 	interface PendingAttachment {
 		file: File;
 		description: string;
@@ -109,7 +101,7 @@
 	let pendingAttachments: PendingAttachment[] = [];
 	let attachmentUploadStatus = '';
 
-	// Shared design-system class tokens (see DESIGN.md).
+	// shared design-system class tokens (see DESIGN.md).
 	const fieldCls = 'px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-500 transition-colors';
 	const labelCls = 'metadata-label block text-stone-400 mb-1.5';
 	const btnPrimary = 'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-md bg-amber-500/90 text-stone-950 text-sm leading-none font-medium hover:bg-amber-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed';
@@ -129,7 +121,7 @@
 			for (const file of Array.from(input.files)) {
 				pendingAttachments = [...pendingAttachments, { file, description: '' }];
 			}
-			// Reset the input so the same file can be re-added if needed
+			// reset the input so the same file can be re-added if needed
 			input.value = '';
 		}
 	}
@@ -206,7 +198,7 @@
 	function openEditModal(challenge: any) {
 		editingChallenge = {
 			...challenge,
-			// Ensure arrays/optional fields have proper defaults for the form
+			// ensure arrays/optional fields have proper defaults for the form
 			exposed_ports: challenge.exposed_ports || [],
 			instance_timeout: challenge.instance_timeout ?? 120,
 			max_extensions: challenge.max_extensions ?? 3,
@@ -238,16 +230,13 @@
 				cooldown_minutes: editingChallenge.cooldown_minutes,
 			};
 
-			// Category: send category_id (may be empty string to clear it) or fallback to name
+			// category: send category_id (may be empty string to clear it) or fall back to name
 			if (categories.length > 0) {
-				// categories dropdown was shown — send the selected ID (or null to clear)
 				payload.category_id = editingChallenge.category_id || null;
 			} else if (editingChallenge.category_name) {
-				// free-text fallback — send by name for backend resolution
 				payload.category = editingChallenge.category_name;
 			}
 
-			// Docker-specific fields
 			if (editingChallenge.resource_type !== 'vm') {
 				payload.container_image = editingChallenge.container_image;
 				payload.container_tag = editingChallenge.container_tag || 'latest';
@@ -259,7 +248,6 @@
 				}
 			}
 
-			// VM-specific fields
 			if (editingChallenge.resource_type === 'vm' && editingChallenge.vm_template_id) {
 				payload.vm_template_id = editingChallenge.vm_template_id;
 			}
@@ -299,7 +287,6 @@
 			categories = categoriesRes.categories || [];
 			error = '';
 
-			// Load infrastructure data in parallel
 			try {
 				const [infraRes, nodesRes, templatesRes, instancesRes, dockerInstancesRes] = await Promise.all([
 					api.getInfrastructureStats(),
@@ -323,7 +310,6 @@
 				activeDockerInstances = [];
 			}
 
-			// Load platform settings
 			try {
 				const settingsRes = await api.getPlatformSettings();
 				platformSettings = settingsRes.settings || {};
@@ -582,12 +568,12 @@
 		uploadProgress = 0;
 		attachmentUploadStatus = '';
 
-		// Resolve the category: either an existing ID or a new category name
+		// resolve the category: either an existing ID or a new category name
 		let categoryId: string | undefined;
 		let categoryName: string | undefined;
 
 		if (newChallenge.category_id === '__new__') {
-			// User wants to create a new category - send by name for backend resolution
+			// new category (the __new__ sentinel): send by name for the backend to resolve
 			const trimmed = (newChallenge.newCategoryName || '').trim();
 			if (!trimmed) {
 				uploadError = 'Please enter a name for the new category.';
@@ -596,10 +582,8 @@
 			}
 			categoryName = trimmed;
 		} else if (newChallenge.category_id) {
-			// Existing category selected by ID
 			categoryId = newChallenge.category_id;
 		} else if (newChallenge.category) {
-			// Free-text fallback (no categories loaded)
 			categoryName = newChallenge.category;
 		}
 
@@ -608,7 +592,6 @@
 
 			if (newChallenge.type === 'ova') {
 				if (newChallenge.vm_source === 'template' && newChallenge.vm_template_id) {
-					// Create VM challenge using existing template
 					const result = await api.createAdminChallenge({
 						name: newChallenge.name,
 						description: newChallenge.description,
@@ -624,7 +607,6 @@
 					});
 					createdChallengeId = result?.id;
 				} else if (ovaFile) {
-					// OVA upload using FormData
 					const formData = new FormData();
 					formData.append('file', ovaFile);
 					formData.append('name', newChallenge.name);
@@ -643,7 +625,6 @@
 					throw new Error('Please select a template or upload an OVA file');
 				}
 			} else {
-				// Container challenge
 				const result = await api.createAdminChallenge({
 					name: newChallenge.name,
 					description: newChallenge.description,
@@ -670,7 +651,6 @@
 				createdChallengeId = result?.id;
 			}
 
-			// Upload any pending file attachments
 			const failedFiles: string[] = [];
 			if (createdChallengeId && pendingAttachments.length > 0) {
 				for (let i = 0; i < pendingAttachments.length; i++) {
@@ -689,11 +669,10 @@
 				attachmentUploadStatus = '';
 			}
 
-			// Challenge was created — close modal and reset form regardless of attachment failures
+			// challenge was created — close modal and reset form regardless of attachment failures
 			showCreateModal = false;
 			await loadDashboard();
 
-			// Reset form
 			newChallenge = {
 				name: '',
 				description: '',
@@ -723,8 +702,8 @@
 			pendingAttachments = [];
 
 			if (failedFiles.length > 0) {
-				// Challenge was created — surface file upload failures as a page-level warning
-				// so the admin can re-upload from the challenge detail page
+				// surface file upload failures as a page-level warning so the admin can
+				// re-upload from the challenge detail page
 				const maxShown = 3;
 				const shown = failedFiles.slice(0, maxShown).join(', ');
 				const extra = failedFiles.length > maxShown ? ` and ${failedFiles.length - maxShown} more` : '';
@@ -785,7 +764,6 @@
 		{:else if error}
 			<EmptyState icon="mdi:alert-circle-outline" text={error} />
 		{:else}
-			<!-- Tabs -->
 			<div class="border-b border-stone-800 mb-8 overflow-x-auto">
 				<div class="flex gap-1 min-w-max">
 					{#each TABS as tab}
@@ -804,9 +782,7 @@
 				</div>
 			</div>
 
-			<!-- Dashboard Tab -->
 			{#if activeTab === 'overview'}
-				<!-- Stats Grid -->
 				<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
 					{#each [
 						{ label: 'Users', value: stats?.total_users || 0 },
@@ -821,9 +797,7 @@
 					{/each}
 				</div>
 
-				<!-- Recent Activity -->
 				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-					<!-- Recent Users -->
 					<Card title="Recent Users" bodyClass="">
 						{#if users.length === 0}
 							<EmptyState icon="mdi:account-off-outline" text="No users yet." />
@@ -847,7 +821,6 @@
 						{/if}
 					</Card>
 
-					<!-- Top Challenges -->
 					<Card title="Top Challenges" bodyClass="">
 						{#if challenges.length === 0}
 							<EmptyState icon="mdi:flag-outline" text="No challenges yet." />
@@ -868,7 +841,6 @@
 				</div>
 			{/if}
 
-			<!-- Challenges Tab -->
 			{#if activeTab === 'challenges'}
 				{#if categoriesError}
 					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-warn/20 bg-warn/5 px-4 py-3 text-sm text-warn" aria-live="polite">
@@ -885,7 +857,6 @@
 						</EmptyState>
 					</Card>
 				{:else}
-					<!-- Mobile: Card view -->
 					<div class="lg:hidden space-y-3">
 						{#each challenges as challenge}
 							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
@@ -952,7 +923,6 @@
 						{/each}
 					</div>
 
-					<!-- Desktop: Table view -->
 					<div class="hidden lg:block">
 						<Card title="Challenges" bodyClass="">
 							<span slot="meta" class="text-stone-500 text-xs tabular-nums">{challenges.length}</span>
@@ -1040,14 +1010,12 @@
 				{/if}
 			{/if}
 
-			<!-- Users Tab -->
 			{#if activeTab === 'users'}
 				{#if users.length === 0}
 					<Card hasHeader={false}>
 						<EmptyState icon="mdi:account-off-outline" text="No users yet." />
 					</Card>
 				{:else}
-					<!-- Mobile: Card view -->
 					<div class="lg:hidden space-y-3">
 						{#each users as user}
 							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
@@ -1088,7 +1056,6 @@
 						{/each}
 					</div>
 
-					<!-- Desktop: Table view -->
 					<div class="hidden lg:block">
 						<Card title="Users" bodyClass="">
 							<span slot="meta" class="text-stone-500 text-xs tabular-nums">{users.length}</span>
@@ -1152,7 +1119,6 @@
 				{/if}
 			{/if}
 
-			<!-- Infrastructure Tab -->
 			{#if activeTab === 'infrastructure'}
 				{#if infrastructureError}
 					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-warn/20 bg-warn/5 px-4 py-3 text-sm text-warn" aria-live="polite">
@@ -1160,7 +1126,6 @@
 						<button type="button" on:click={loadDashboard} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
 					</div>
 				{/if}
-				<!-- Stats Cards -->
 				<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
 						<p class="metadata-label text-stone-500">Nodes</p>
@@ -1191,7 +1156,6 @@
 				</div>
 
 				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-					<!-- Nodes Section -->
 					<Card title="VM Nodes" bodyClass="">
 						<span slot="meta" class="text-stone-500 text-xs tabular-nums">{nodes.length} nodes</span>
 						{#if nodes.length === 0}
@@ -1228,7 +1192,6 @@
 											<span class="mx-2 text-stone-700">•</span>
 											<span>{node.used_vcpu}/{node.total_vcpu} vCPU</span>
 										</div>
-										<!-- Resource bars -->
 										<div class="mt-2 space-y-1">
 											<div class="flex items-center gap-2">
 												<span class="metadata-label text-stone-600 w-10">CPU</span>
@@ -1255,7 +1218,6 @@
 						{/if}
 					</Card>
 
-					<!-- VM Templates Section -->
 					<Card title="VM Templates" bodyClass="">
 						<span slot="meta" class="text-stone-500 text-xs tabular-nums">{templates.length} templates</span>
 						{#if templates.length === 0}
@@ -1301,7 +1263,6 @@
 					</Card>
 				</div>
 
-				<!-- Active Instances -->
 				<div class="mb-8">
 					<Card title="Active VM Instances" bodyClass="">
 						<span slot="meta" class="text-stone-500 text-xs tabular-nums">{activeInstances.length} running</span>
@@ -1353,7 +1314,6 @@
 					</Card>
 				</div>
 
-				<!-- Active Docker Instances -->
 				<Card title="Active Docker Instances" bodyClass="">
 					<span slot="meta" class="text-stone-500 text-xs tabular-nums">{activeDockerInstances.length} running</span>
 					{#if activeDockerInstances.length === 0}
@@ -1404,7 +1364,6 @@
 				</Card>
 			{/if}
 
-			<!-- Settings Tab -->
 			{#if activeTab === 'settings'}
 				{#if settingsError}
 					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-down/20 bg-down/10 px-4 py-3 text-sm text-down" aria-live="polite">
@@ -1413,7 +1372,6 @@
 					</div>
 				{/if}
 				<div class="space-y-6 {settingsError ? 'pointer-events-none select-none opacity-40' : ''}" aria-disabled={settingsError ? 'true' : undefined}>
-					<!-- Save Button -->
 					{#if settingsChanged}
 						<div class="flex justify-end">
 							<button on:click={savePlatformSettings} disabled={savingSettings || !!eventWindowError} class={btnPrimary}>
@@ -1427,7 +1385,6 @@
 						</div>
 					{/if}
 
-					<!-- Instance Timeouts -->
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
@@ -1461,7 +1418,6 @@
 						</div>
 					</Card>
 
-					<!-- Cooldown Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
@@ -1495,7 +1451,6 @@
 						</div>
 					</Card>
 
-					<!-- Extension Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
@@ -1533,7 +1488,6 @@
 						</div>
 					</Card>
 
-					<!-- User Limits -->
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
@@ -1557,7 +1511,6 @@
 					</div>
 					</Card>
 
-					<!-- VPN Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
@@ -1581,7 +1534,6 @@
 						</div>
 					</Card>
 
-					<!-- Platform Settings -->
 					<Card bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
@@ -1668,7 +1620,6 @@
 							<button type="button" on:click={loadIntel} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
 						</div>
 					{/if}
-					<!-- Flag Share Events -->
 					<div>
 						<div class="flex items-center justify-between mb-4">
 							<h3 class="text-sm font-semibold text-stone-200">Flag Share Events</h3>
@@ -1720,7 +1671,6 @@
 						{/if}
 					</div>
 
-					<!-- Instance Flags -->
 					<div>
 						<h3 class="text-sm font-semibold text-stone-200 mb-4">Instance Flags ({instanceFlags.length})</h3>
 						{#if intelLoading}
@@ -1764,12 +1714,10 @@
 	</div>
 </div>
 
-<!-- Create Challenge Modal -->
 {#if showCreateModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
 		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showCreateModal = false}></button>
 		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-2xl max-h-[90vh] flex flex-col" role="dialog" aria-modal="true">
-			<!-- Header with Type Tabs -->
 			<div class="p-6 border-b border-stone-800 flex-shrink-0">
 				<div class="flex items-center justify-between mb-4">
 					<h2 class="text-lg font-semibold text-stone-100 flex items-center gap-2">
@@ -1781,7 +1729,6 @@
 					</button>
 				</div>
 
-				<!-- Type Tabs at Top -->
 				<div class="flex gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md">
 					<button
 						type="button"
@@ -1802,7 +1749,6 @@
 				</div>
 			</div>
 
-			<!-- Scrollable Form Content -->
 			<div class="overflow-y-auto flex-1 min-h-0">
 				{#if uploadLoading && uploadProgress > 0}
 					<div class="px-6 py-3 bg-stone-900/50 border-b border-stone-800">
@@ -1824,7 +1770,6 @@
 						</div>
 					{/if}
 
-					<!-- Basic Info -->
 					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
 						<label class="block md:col-span-2">
 							<span class={labelCls}>Challenge Name *</span>
@@ -1904,7 +1849,6 @@
 						</label>
 					</div>
 
-					<!-- Type-specific fields -->
 					{#if newChallenge.type === 'container'}
 						<div class="pt-4 border-t border-stone-800 space-y-5">
 							<label class="block">
@@ -1919,7 +1863,6 @@
 								<p class="text-stone-500 text-xs mt-2">Pre-built image from a registry (GHCR, Docker Hub, etc.)</p>
 							</label>
 
-							<!-- Platform -->
 							<label class="block">
 								<span class={labelCls}>Platform</span>
 								<select bind:value={newChallenge.container_platform} class="w-full {fieldCls}">
@@ -1930,7 +1873,6 @@
 								<p class="text-stone-500 text-xs mt-2">Set if the image architecture differs from the server (e.g. amd64 image on ARM host)</p>
 							</label>
 
-							<!-- Exposed Ports -->
 							<div>
 								<div class="flex items-center justify-between mb-2">
 									<span class="metadata-label block text-stone-400">Exposed Ports</span>
@@ -1970,7 +1912,6 @@
 								</p>
 							</div>
 
-							<!-- Flags -->
 							<div>
 								<div class="flex items-center justify-between mb-2">
 									<span class="metadata-label block text-stone-400">Flags</span>
@@ -2010,7 +1951,6 @@
 								</div>
 							</div>
 
-							<!-- Timer & Limits -->
 							<div>
 								<span class="metadata-label block text-stone-400 mb-3">Instance Settings</span>
 								<div class="grid grid-cols-3 gap-3">
@@ -2032,7 +1972,6 @@
 						</div>
 					{:else}
 						<div class="pt-4 border-t border-stone-800 space-y-5">
-							<!-- VM Source Selection -->
 							<div>
 								<span class={labelCls}>VM Source</span>
 								<div class="flex gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md">
@@ -2056,7 +1995,6 @@
 							</div>
 
 							{#if newChallenge.vm_source === 'template'}
-								<!-- Template Selector -->
 								<div>
 									<span class={labelCls}>Select VM Template *</span>
 									{#if templates.length === 0}
@@ -2090,7 +2028,6 @@
 									{/if}
 								</div>
 							{:else}
-								<!-- OVA Upload -->
 								<div>
 									<span class={labelCls}>OVA File *</span>
 									<div class="border-2 border-dashed border-stone-700 rounded-md p-6 text-center hover:border-stone-600 transition-colors">
@@ -2118,7 +2055,6 @@
 								</div>
 							{/if}
 
-							<!-- Multiple Flags -->
 							<div>
 								<div class="flex items-center justify-between mb-3">
 									<span class="metadata-label block text-stone-400">Flags <span class="font-mono tracking-normal tabular-nums">({newChallenge.flags.length})</span></span>
@@ -2165,7 +2101,6 @@
 						</div>
 					{/if}
 
-					<!-- File Attachments -->
 					<div class="pt-4 border-t border-stone-800 space-y-3">
 						<div class="flex items-center justify-between">
 							<span class="metadata-label block text-stone-400">File Attachments <span class="text-stone-500 font-normal">(optional)</span></span>
@@ -2211,7 +2146,6 @@
 						{/if}
 					</div>
 
-					<!-- Actions -->
 					<div class="flex gap-3 pt-4">
 						<button type="submit" disabled={uploadLoading} class="flex-1 {btnPrimary}">
 							{#if uploadLoading}
@@ -2243,7 +2177,6 @@
 	</div>
 {/if}
 
-<!-- Edit Challenge Modal -->
 {#if showEditModal && editingChallenge}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
 		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => { showEditModal = false; editingChallenge = null; }}></button>
@@ -2264,7 +2197,6 @@
 
 			<form on:submit|preventDefault={handleEditChallenge} class="p-6 space-y-5">
 
-				<!-- ── Core ─────────────────────────────────────── -->
 				<label class="block">
 					<span class={labelCls}>Name *</span>
 					<input type="text" bind:value={editingChallenge.name} required class="w-full {fieldCls}" />
@@ -2275,7 +2207,6 @@
 					<textarea bind:value={editingChallenge.description} rows="4" class="w-full {fieldCls} resize-none"></textarea>
 				</label>
 
-				<!-- ── Category / Difficulty / Points / Author ─── -->
 				<div class="grid grid-cols-2 gap-4">
 					<label class="block">
 						<span class={labelCls}>Category</span>
@@ -2309,7 +2240,6 @@
 					</label>
 				</div>
 
-				<!-- ── Docker-specific ───────────────────────────── -->
 				{#if editingChallenge.resource_type !== 'vm'}
 					<div class="border border-stone-800 rounded-lg p-4 space-y-4">
 						<h3 class="metadata-label text-stone-400">Container Settings</h3>
@@ -2340,7 +2270,6 @@
 							</label>
 						</div>
 
-						<!-- Exposed Ports -->
 						<div>
 							<div class="flex items-center justify-between mb-2">
 								<span class="metadata-label block text-stone-400">Exposed Ports</span>
@@ -2373,7 +2302,6 @@
 					</div>
 				{/if}
 
-				<!-- ── VM-specific ───────────────────────────────── -->
 				{#if editingChallenge.resource_type === 'vm'}
 					<div class="border border-stone-800 rounded-lg p-4">
 						<h3 class="metadata-label text-stone-400 mb-3">VM Settings</h3>
@@ -2389,7 +2317,6 @@
 					</div>
 				{/if}
 
-				<!-- ── Timer / Instance Settings ─────────────────── -->
 				<div class="border border-stone-800 rounded-lg p-4 space-y-3">
 					<h3 class="metadata-label text-stone-400">Instance Settings</h3>
 					<div class="grid grid-cols-3 gap-3">
@@ -2408,7 +2335,6 @@
 					</div>
 				</div>
 
-				<!-- ── Actions ───────────────────────────────────── -->
 				<div class="flex gap-3 pt-2">
 					<button type="submit" disabled={actionLoading === editingChallenge.id} class="flex-1 {btnPrimary}">
 						{actionLoading === editingChallenge.id ? 'Saving...' : 'Save Changes'}
@@ -2426,7 +2352,6 @@
 	</div>
 {/if}
 
-<!-- Add Node Modal -->
 {#if showNodeModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
 		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showNodeModal = false}></button>
@@ -2502,7 +2427,6 @@
 	</div>
 {/if}
 
-<!-- Upload Template Modal -->
 {#if showTemplateUploadModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
 		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showTemplateUploadModal = false}></button>

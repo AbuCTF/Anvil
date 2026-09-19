@@ -27,16 +27,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// Handler struct definitions and constructors
-// Method implementations are in their respective files:
-// - challenge.go: ChallengeHandler methods
-// - user.go: UserHandler methods
-// - scoreboard.go: ScoreboardHandler methods
-// - instance.go: InstanceHandler methods
-// - vpn.go: VPNHandler methods
-// - admin.go: Admin handler methods
-
-// PlatformHandler handles platform info requests
 type PlatformHandler struct {
 	config *config.Config
 	db     *database.DB
@@ -47,7 +37,6 @@ func NewPlatformHandler(cfg *config.Config, db *database.DB, logger *zap.Logger)
 	return &PlatformHandler{config: cfg, db: db, logger: logger}
 }
 
-// ChallengeHandler - methods implemented in challenge.go
 type ChallengeHandler struct {
 	config         *config.Config
 	db             *database.DB
@@ -61,12 +50,10 @@ func NewChallengeHandler(cfg *config.Config, db *database.DB, containerSvc *cont
 	return &ChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger}
 }
 
-// NewChallengeHandlerWithAttachments creates a ChallengeHandler with attachment support.
 func NewChallengeHandlerWithAttachments(cfg *config.Config, db *database.DB, containerSvc *container.Service, vmSvc *vm.Service, logger *zap.Logger, ah *AttachmentHandler) *ChallengeHandler {
 	return &ChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger, attachmentHdlr: ah}
 }
 
-// ScoreboardHandler - methods implemented in scoreboard.go
 type ScoreboardHandler struct {
 	config            *config.Config
 	db                *database.DB
@@ -91,7 +78,6 @@ func NewScoreboardHandler(cfg *config.Config, db *database.DB, logger *zap.Logge
 	}
 }
 
-// UserHandler - methods implemented in user.go
 type UserHandler struct {
 	config *config.Config
 	db     *database.DB
@@ -102,7 +88,6 @@ func NewUserHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *Us
 	return &UserHandler{config: cfg, db: db, logger: logger}
 }
 
-// InstanceHandler - methods implemented in instance.go
 type InstanceHandler struct {
 	config       *config.Config
 	db           *database.DB
@@ -115,7 +100,6 @@ func NewInstanceHandler(cfg *config.Config, db *database.DB, containerSvc *conta
 	return &InstanceHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger}
 }
 
-// VPNHandler - methods implemented in vpn.go
 type VPNHandler struct {
 	config *config.Config
 	db     *database.DB
@@ -127,7 +111,6 @@ func NewVPNHandler(cfg *config.Config, db *database.DB, vpnSvc *vpn.Service, log
 	return &VPNHandler{config: cfg, db: db, vpnSvc: vpnSvc, logger: logger}
 }
 
-// AdminUserHandler - methods implemented in admin.go
 type AdminUserHandler struct {
 	config *config.Config
 	db     *database.DB
@@ -138,7 +121,6 @@ func NewAdminUserHandler(cfg *config.Config, db *database.DB, logger *zap.Logger
 	return &AdminUserHandler{config: cfg, db: db, logger: logger}
 }
 
-// AdminChallengeHandler - methods implemented in admin.go
 type AdminChallengeHandler struct {
 	config       *config.Config
 	db           *database.DB
@@ -150,7 +132,6 @@ func NewAdminChallengeHandler(cfg *config.Config, db *database.DB, containerSvc 
 	return &AdminChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
 }
 
-// CategoryHandler for challenge categories
 type CategoryHandler struct {
 	config *config.Config
 	db     *database.DB
@@ -243,9 +224,6 @@ func (h *CategoryHandler) Create(c *gin.Context) {
 	})
 }
 
-// buildCategorySlug converts a human-readable name into a URL-safe slug.
-// Non-alphanumeric characters are replaced by dashes; consecutive dashes are
-// collapsed and leading/trailing dashes are trimmed.
 func buildCategorySlug(name string) string {
 	var b strings.Builder
 	prevDash := false
@@ -330,7 +308,6 @@ func (h *CategoryHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "category deleted"})
 }
 
-// AdminInstanceHandler for admin instance management
 type AdminInstanceHandler struct {
 	config       *config.Config
 	db           *database.DB
@@ -593,14 +570,13 @@ func (h *AdminInstanceHandler) stopInstanceRuntime(
 }
 
 func (h *AdminInstanceHandler) ForceDelete(c *gin.Context) {
-	h.ForceStop(c) // Same implementation
+	h.ForceStop(c) // same implementation
 }
 
 func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// Failed VM creation can leave a durable reservation when remote cleanup was
-	// uncertain, so retry those alongside normally expired instances.
+	// failed vm creation can leave a durable reservation when remote cleanup was uncertain, so retry those alongside normally expired instances.
 	rows, err := h.db.Pool.Query(ctx, `
 		SELECT i.id, i.container_id, i.resource_type, i.vm_node_id,
 		       COALESCE(i.reserved_vcpu, 0), COALESCE(i.reserved_memory_mb, 0)
@@ -697,7 +673,6 @@ func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 		expiredCount++
 	}
 
-	// Delete old failed/stopped/expired instances
 	result, err := h.db.Pool.Exec(ctx, `
 		DELETE FROM instances
 		WHERE status IN ('failed', 'stopped', 'expired')
@@ -721,7 +696,6 @@ func (h *AdminInstanceHandler) Cleanup(c *gin.Context) {
 	})
 }
 
-// TokenHandler for team tokens and invite codes
 type TokenHandler struct {
 	config *config.Config
 	db     *database.DB
@@ -983,7 +957,6 @@ func tokenSummary(id, teamName, suffix string, maxUses, currentUses int, expires
 	return result
 }
 
-// SettingsHandler for platform settings
 type SettingsHandler struct {
 	config *config.Config
 	db     *database.DB
@@ -1066,7 +1039,6 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		}
 	}
 
-	// Start transaction
 	tx, err := h.db.Pool.Begin(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to start transaction"})
@@ -1083,7 +1055,6 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// Upsert each setting
 	for key, value := range req.Settings {
 		valueJSON, err := json.Marshal(value)
 		if err != nil {
@@ -1223,7 +1194,6 @@ func validateEventSettingsUpdate(ctx context.Context, tx pgx.Tx, settings map[st
 	return nil
 }
 
-// AuditHandler for audit logs
 type AuditHandler struct {
 	db     *database.DB
 	logger *zap.Logger
@@ -1328,7 +1298,6 @@ func postgresErrorCode(err error) string {
 	return ""
 }
 
-// StatsHandler for platform statistics
 type StatsHandler struct {
 	db     *database.DB
 	logger *zap.Logger
@@ -1338,9 +1307,6 @@ func NewStatsHandler(db *database.DB, logger *zap.Logger) *StatsHandler {
 	return &StatsHandler{db: db, logger: logger}
 }
 
-// Get method is implemented in admin.go
-
-// AttachmentHandler handles challenge file attachment operations
 type AttachmentHandler struct {
 	db         *database.DB
 	storageSvc storage.StorageBackend
@@ -1351,7 +1317,6 @@ func NewAttachmentHandler(db *database.DB, storageSvc storage.StorageBackend, lo
 	return &AttachmentHandler{db: db, storageSvc: storageSvc, logger: logger}
 }
 
-// logAdminAction logs an admin action to the audit log
 func logAdminAction(db *database.DB, c *gin.Context, userID, action, resourceType, resourceID string, metadata map[string]interface{}) error {
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
@@ -1362,8 +1327,7 @@ func logAdminAction(db *database.DB, c *gin.Context, userID, action, resourceTyp
 		return fmt.Errorf("parse audit user id: %w", err)
 	}
 
-	// audit_log uses entity_type/entity_id/new_values (the initial schema), not
-	// the resource_* / metadata names used by an older handler.
+	// audit_log uses entity_type/entity_id/new_values (the initial schema), not the resource_*/metadata names used by an older handler.
 	var entityID interface{}
 	if resourceID != "" {
 		parsedID, err := uuid.Parse(resourceID)

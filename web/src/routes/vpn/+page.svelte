@@ -246,7 +246,6 @@
 		</Card>
 	{:else}
 		<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-4 sm:gap-6 items-start">
-			<!-- Status -->
 			<Card title="Connection Status" bodyClass="p-5 sm:p-6">
 				{#if statusError}
 					<div class="mb-4 border border-warn/30 bg-warn/5 rounded-md px-3 py-2 text-warn text-xs" aria-live="polite">
@@ -321,7 +320,6 @@
 				{/if}
 			</Card>
 
-			<!-- Configuration -->
 			<Card title="Configuration" bodyClass="p-5 sm:p-6">
 				{#if vpnConfig}
 					<div class="space-y-4">

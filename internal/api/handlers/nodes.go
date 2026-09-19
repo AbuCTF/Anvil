@@ -17,14 +17,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// NodeHandler handles VM node management
 type NodeHandler struct {
 	config *config.Config
 	db     *database.DB
 	logger *zap.Logger
 }
 
-// NewNodeHandler creates a new node handler
 func NewNodeHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *NodeHandler {
 	return &NodeHandler{config: cfg, db: db, logger: logger}
 }
@@ -43,7 +41,6 @@ func (h *NodeHandler) logError(message string, fields ...zap.Field) {
 	}
 }
 
-// NodeResponse represents a VM node in API responses
 type NodeResponse struct {
 	ID            string  `json:"id"`
 	Name          string  `json:"name"`
@@ -64,7 +61,6 @@ type NodeResponse struct {
 	CreatedAt     int64   `json:"created_at"`
 }
 
-// ListNodes returns all VM nodes
 // GET /api/v1/admin/nodes
 func (h *NodeHandler) List(c *gin.Context) {
 	if !h.ready(c) {
@@ -130,7 +126,6 @@ func (h *NodeHandler) List(c *gin.Context) {
 	})
 }
 
-// GetNode returns a specific node
 // GET /api/v1/admin/nodes/:id
 func (h *NodeHandler) Get(c *gin.Context) {
 	if !h.ready(c) {
@@ -180,7 +175,6 @@ func (h *NodeHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, n)
 }
 
-// CreateNodeRequest represents the request to create a node
 type CreateNodeRequest struct {
 	Name          string `json:"name" binding:"required"`
 	Hostname      string `json:"hostname" binding:"required"`
@@ -246,7 +240,6 @@ func validateCreateNodeRequest(req *CreateNodeRequest) error {
 	return nil
 }
 
-// Create adds a new VM node
 // POST /api/v1/admin/nodes
 func (h *NodeHandler) Create(c *gin.Context) {
 	if !h.ready(c) {
@@ -294,7 +287,6 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	})
 }
 
-// UpdateNode updates a node
 // PUT /api/v1/admin/nodes/:id
 func (h *NodeHandler) Update(c *gin.Context) {
 	if !h.ready(c) {
@@ -404,7 +396,6 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "node updated"})
 }
 
-// DeleteNode removes a node
 // DELETE /api/v1/admin/nodes/:id
 func (h *NodeHandler) Delete(c *gin.Context) {
 	if !h.ready(c) {
@@ -479,7 +470,6 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "node deleted"})
 }
 
-// Heartbeat updates a node's heartbeat timestamp
 // POST /api/v1/nodes/heartbeat
 func (h *NodeHandler) Heartbeat(c *gin.Context) {
 	if !h.ready(c) {
@@ -536,7 +526,6 @@ func (h *NodeHandler) Heartbeat(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "heartbeat received"})
 }
 
-// GetInfrastructureStats returns overall infrastructure statistics
 // GET /api/v1/admin/infrastructure/stats
 func (h *NodeHandler) GetInfrastructureStats(c *gin.Context) {
 	if !h.ready(c) {

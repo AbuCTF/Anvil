@@ -93,7 +93,6 @@ type submitFlagRequest struct {
 	Flag string `json:"flag" binding:"required"`
 }
 
-// SubmitFlag records a stolen flag for the caller's team.
 func (h *GameHandler) SubmitFlag(c *gin.Context) {
 	if !h.config.Game.Enabled {
 		c.JSON(http.StatusNotFound, gin.H{"error": "game not active"})
@@ -188,7 +187,6 @@ func (h *GameHandler) standingsData(ctx context.Context, query gameStateQuerier)
 	return standings, rows.Err()
 }
 
-// Scoreboard returns the combined AD + KotH standings.
 func (h *GameHandler) Scoreboard(c *gin.Context) {
 	if h.off(c) {
 		return
@@ -237,7 +235,6 @@ func (h *GameHandler) hillsData(ctx context.Context, query gameStateQuerier) ([]
 	return hills, rows.Err()
 }
 
-// Hills returns each hill's current controller for the control-map.
 func (h *GameHandler) Hills(c *gin.Context) {
 	if h.off(c) {
 		return
@@ -274,7 +271,6 @@ func (h *GameHandler) statusPayload(ctx context.Context, query gameStateQuerier)
 	}, nil
 }
 
-// Status returns the current tick and KotH round.
 func (h *GameHandler) Status(c *gin.Context) {
 	if h.off(c) {
 		return
@@ -341,7 +337,6 @@ func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier) (
 	return series, nil
 }
 
-// History returns each team's score over time for the race chart.
 func (h *GameHandler) History(c *gin.Context) {
 	if h.off(c) {
 		return
@@ -449,7 +444,6 @@ func (h *GameHandler) matrixData(ctx context.Context, query gameStateQuerier) ([
 	return services, rows, teamRows.Err()
 }
 
-// Services returns the teams x services SLA matrix, rows ordered by rank.
 func (h *GameHandler) Services(c *gin.Context) {
 	if h.off(c) {
 		return
@@ -500,7 +494,6 @@ func (h *GameHandler) eventsData(ctx context.Context, query gameStateQuerier) ([
 	return events, rows.Err()
 }
 
-// Events returns the most recent flag captures for the live event feed.
 func (h *GameHandler) Events(c *gin.Context) {
 	if h.off(c) {
 		return
@@ -649,7 +642,7 @@ func (h *GameHandler) loadLiveState(ctx context.Context) ([]byte, string, error)
 	})
 }
 
-// State returns the whole arena snapshot in one response, so each viewer polls
+// returns the whole arena snapshot in one response, so each viewer polls
 // a single endpoint instead of fanning out across six.
 func (h *GameHandler) State(c *gin.Context) {
 	if !h.config.Game.Enabled {

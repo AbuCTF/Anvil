@@ -92,7 +92,7 @@ type EconomyOpError struct {
 
 func (e *EconomyOpError) Error() string { return e.Message }
 
-// Lazy per-team grant, so teams created before economy_mode was on still get it.
+// lazy per-team grant, so teams created before economy_mode was on still get it.
 func ensureTeamEconomy(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, cfg config.EconomyConfig) error {
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO economy_team_score (team_id) VALUES ($1) ON CONFLICT (team_id) DO NOTHING`, teamID,
@@ -204,8 +204,8 @@ func openChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID uu
 	return nil
 }
 
-// Crowd decay is field-wide and retroactive, so a solve recomputes the value for
-// every team that holds the challenge, not just the solver. No-op if already held.
+// crowd decay is field-wide and retroactive, so a solve recomputes the value for
+// every team that holds the challenge, not just the solver. no-op if already held.
 func applyEconomySolve(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, teamID, challengeID uuid.UUID, difficulty string) error {
 	var status string
 	var wrongSubs int
@@ -355,7 +355,7 @@ func extendChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID 
 	return newExpiry, nil
 }
 
-// Sell points for credits, block by block so the rate diminishes as more is sold.
+// sell points for credits, block by block so the rate diminishes as more is sold.
 func convertPointsToCredits(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, points float64, cfg config.EconomyConfig) (float64, *EconomyOpError) {
 	if points <= 0 {
 		return 0, &EconomyOpError{Status: http.StatusBadRequest, Message: "points must be positive"}
@@ -521,7 +521,9 @@ func (h *EconomyHandler) Bailout(c *gin.Context) {
 	if !ok {
 		return
 	}
-	h.runTx(c, func(tx pgx.Tx) *EconomyOpError { return bailoutEconomy(c.Request.Context(), tx, teamID, h.config.Economy) })
+	h.runTx(c, func(tx pgx.Tx) *EconomyOpError {
+		return bailoutEconomy(c.Request.Context(), tx, teamID, h.config.Economy)
+	})
 }
 
 func (h *EconomyHandler) Convert(c *gin.Context) {
@@ -574,7 +576,7 @@ func (h *EconomyHandler) runTx(c *gin.Context, op func(tx pgx.Tx) *EconomyOpErro
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// Freeze converts every team's leftover credits to points and blinds the board.
+// freeze converts every team's leftover credits to points and blinds the board.
 func (h *EconomyHandler) Freeze(c *gin.Context) {
 	ctx := c.Request.Context()
 	rate := h.config.Economy.C2PRate

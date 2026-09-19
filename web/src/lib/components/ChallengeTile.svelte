@@ -26,7 +26,7 @@
 		? Math.min(100, ((challenge.user_solves || 0) / challenge.total_flags) * 100)
 		: 0;
 
-	// Card previews show plain text, not raw markdown (the detail page renders it).
+	// card previews show plain text, not raw markdown (the detail page renders it).
 	$: descText = (challenge.description ?? '')
 		.replace(/`([^`]*)`/g, '$1')
 		.replace(/\*\*([^*]*)\*\*/g, '$1')

@@ -22,25 +22,21 @@ import (
 	"go.uber.org/zap"
 )
 
-// hashFlagForComparison creates a SHA256 hash of the flag for comparison
 func hashFlagForComparison(flag string) string {
 	hash := sha256.Sum256([]byte(flag))
 	return hex.EncodeToString(hash[:])
 }
 
-// ChallengeService handles challenge-related operations
 type ChallengeService struct {
 	config *config.Config
 	db     *database.DB
 	logger *zap.Logger
 }
 
-// NewChallengeService creates a new challenge service
 func NewChallengeService(cfg *config.Config, db *database.DB, logger *zap.Logger) *ChallengeService {
 	return &ChallengeService{config: cfg, db: db, logger: logger}
 }
 
-// ChallengeListResponse represents the challenge list response
 type ChallengeListResponse struct {
 	ID           string  `json:"id"`
 	Name         string  `json:"name"`
@@ -54,28 +50,26 @@ type ChallengeListResponse struct {
 	TotalFlags   int     `json:"total_flags"`
 	AuthorName   *string `json:"author_name,omitempty"`
 	IsSolved     bool    `json:"is_solved"`
-	UserSolves   int     `json:"user_solves"`   // Flags solved by this user
+	UserSolves   int     `json:"user_solves"`
 	ResourceType string  `json:"resource_type"` // docker or vm
 }
 
-// ChallengeDetailResponse includes more details for single challenge view
 type ChallengeDetailResponse struct {
 	ChallengeListResponse
-	ExposedPorts    []models.ExposedPort `json:"exposed_ports"`
-	Flags           []FlagResponse       `json:"flags"`
-	Hints           []HintResponse       `json:"hints"`
-	Attachments     []AttachmentResponse `json:"attachments"`
-	ReleaseDate     *time.Time           `json:"release_date,omitempty"`
-	InstanceTimeout *int                 `json:"instance_timeout,omitempty"`
-	MaxExtensions   *int                 `json:"max_extensions,omitempty"`
-	Status          string               `json:"status"`        // draft, published, archived
-	HasInstance     bool                 `json:"has_instance"`  // true when the challenge can actually spawn an instance (docker w/ image, or active VM template)
-	SubDescription  *string              `json:"sub_description,omitempty"` // optional pre-launch blurb (shown before launch when the economy gates the full description)
+	ExposedPorts    []models.ExposedPort  `json:"exposed_ports"`
+	Flags           []FlagResponse        `json:"flags"`
+	Hints           []HintResponse        `json:"hints"`
+	Attachments     []AttachmentResponse  `json:"attachments"`
+	ReleaseDate     *time.Time            `json:"release_date,omitempty"`
+	InstanceTimeout *int                  `json:"instance_timeout,omitempty"`
+	MaxExtensions   *int                  `json:"max_extensions,omitempty"`
+	Status          string                `json:"status"`                    // draft, published, archived
+	HasInstance     bool                  `json:"has_instance"`              // true when the challenge can actually spawn an instance (docker w/ image, or active vm template)
+	SubDescription  *string               `json:"sub_description,omitempty"` // optional pre-launch blurb (shown before launch when the economy gates the full description)
 	Economy         *ChallengeEconomyInfo `json:"economy,omitempty"`
 }
 
-// ChallengeEconomyInfo tells the client the economy state of a challenge for the
-// caller's team (present only when economy_mode is on).
+// economy state for the caller's team; present only when economy_mode is on.
 type ChallengeEconomyInfo struct {
 	Enabled    bool    `json:"enabled"`
 	Launched   bool    `json:"launched"`
@@ -84,35 +78,30 @@ type ChallengeEconomyInfo struct {
 	Credits    float64 `json:"credits"`
 }
 
-// FlagResponse represents a flag in the response
 type FlagResponse struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Points      int    `json:"points"`
 	Order       int    `json:"order"`
 	IsSolved    bool   `json:"is_solved"`
-	SolvedAt    *int64 `json:"solved_at,omitempty"` // Unix timestamp
+	SolvedAt    *int64 `json:"solved_at,omitempty"` // unix timestamp
 	TotalSolves int    `json:"total_solves"`
 }
 
-// HintResponse represents a hint in the response
 type HintResponse struct {
 	ID         string  `json:"id"`
-	Content    *string `json:"content,omitempty"` // Only shown if unlocked
+	Content    *string `json:"content,omitempty"` // only shown if unlocked
 	Cost       int     `json:"cost"`
 	Order      int     `json:"order"`
 	IsUnlocked bool    `json:"is_unlocked"`
 }
 
-// List returns all published challenges
 func (h *ChallengeHandler) List(c *gin.Context) {
-	// Get user ID if authenticated
 	var userID *uuid.UUID
 	if uid, ok := contextUserID(c); ok {
 		userID = &uid
 	}
 
-	// Query published challenges
 	query := `
 		SELECT 
 			c.id, c.name, c.slug, c.description, c.difficulty,
@@ -176,11 +165,9 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 	})
 }
 
-// Get returns a single challenge by slug
 func (h *ChallengeHandler) Get(c *gin.Context) {
 	slug := c.Param("slug")
 
-	// Get user ID if authenticated
 	var userID *uuid.UUID
 	var userRole string
 	if uid, ok := contextUserID(c); ok {
@@ -192,7 +179,6 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		}
 	}
 
-	// Query challenge - allow admins to see all challenges, others only published
 	var statusCondition string
 	if userID != nil && userRole == "admin" {
 		statusCondition = "(c.status = 'published' OR c.status = 'draft')"
@@ -254,7 +240,6 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		}
 	}
 
-	// Get flags
 	flagsQuery := `
 		SELECT f.id, f.name, f.points, f.sort_order,
 			(SELECT COUNT(*) FROM solves WHERE flag_id = f.id) AS total_solves,
@@ -294,7 +279,6 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		return
 	}
 
-	// Get hints
 	hintsQuery := `
 		SELECT h.id, h.content, h.cost, h.sort_order, hu.id IS NOT NULL
 		FROM hints h
@@ -331,7 +315,6 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 
 	ch.IsSolved = ch.UserSolves >= ch.TotalFlags && ch.TotalFlags > 0
 
-	// Attach file attachments
 	if h.attachmentHdlr != nil {
 		attachments, err := h.attachmentHdlr.ListPublic(c, ch.ID)
 		if err != nil {
@@ -351,7 +334,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		ch.Attachments = []AttachmentResponse{}
 	}
 
-	// Economy enrichment: when the economy is live, tell the client whether the
+	// economy enrichment: when the economy is live, tell the client whether the
 	// caller's team has launched this challenge (which gates the full description,
 	// files, submission, and instance), the launch cost, and the team's credits.
 	if on, _ := isEconomyMode(c.Request.Context(), h.db); on {
@@ -374,18 +357,15 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, ch)
 }
 
-// GetFlags returns flag information for a challenge
 func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 	slug := c.Param("slug")
 
-	// Get user ID
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
 
-	// Get challenge ID
 	var challengeID string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT id FROM challenges
@@ -400,7 +380,6 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 		return
 	}
 
-	// Get flags
 	query := `
 		SELECT f.id, f.name, f.points, f.sort_order,
 			(SELECT COUNT(*) FROM solves WHERE flag_id = f.id) as total_solves,
@@ -448,19 +427,13 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"flags": flags})
 }
 
-// SubmitFlagRequest represents the flag submission request
 type SubmitFlagRequest struct {
 	Flag string `json:"flag" binding:"required"`
 }
 
 const maxSubmittedFlagLength = 4096
 
-// SubmitFlag handles flag submission
-// OpenChallenge is the economy "launch/open" gate: charge the launch cost, take a
-// concurrency slot, start the band timer, and mark the challenge open for the team
-// (which enables submission and reveals the full challenge). Container challenges
-// also open via the Start-Instance flow; this handles opening in general, incl.
-// static-download challenges that have no instance.
+// economy launch/open gate: charge launch cost, take a concurrency slot, start the band timer, and mark the challenge open for the team (enables submission, reveals the full challenge). container challenges also open via start-instance; this covers opening in general, incl. static-download challenges with no instance.
 func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -529,9 +502,7 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "open", "credits": credits, "message": "challenge launched"})
 }
 
-// economyChallengeCtx resolves the economy context for a challenge-scoped action:
-// economy on, caller's team, and the challenge id + difficulty. Writes the error
-// response and returns ok=false on any failure.
+// resolves the economy context for a challenge action (economy on, caller's team, challenge id + difficulty). writes the error response and returns ok=false on any failure.
 func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID uuid.UUID, difficulty string, ok bool) {
 	uid, uok := contextUserID(c)
 	if !uok {
@@ -572,7 +543,7 @@ func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID u
 	return *tid, chalID, difficulty, true
 }
 
-// AbandonChallenge releases an open challenge early for a partial refund.
+// releases an open challenge early for a partial refund.
 func (h *ChallengeHandler) AbandonChallenge(c *gin.Context) {
 	teamID, chalID, difficulty, ok := h.economyChallengeCtx(c)
 	if !ok {
@@ -583,7 +554,7 @@ func (h *ChallengeHandler) AbandonChallenge(c *gin.Context) {
 	})
 }
 
-// ExtendChallenge extends an open challenge's timer at an escalating credit cost.
+// extends an open challenge's timer at an escalating credit cost.
 func (h *ChallengeHandler) ExtendChallenge(c *gin.Context) {
 	teamID, chalID, difficulty, ok := h.economyChallengeCtx(c)
 	if !ok {
@@ -608,7 +579,6 @@ func (h *ChallengeHandler) ExtendChallenge(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "extended", "expires_at": newExpiry.Unix()})
 }
 
-// economyTx runs a challenge-scoped economy op in a transaction.
 func (h *ChallengeHandler) economyTx(c *gin.Context, op func(tx pgx.Tx) *EconomyOpError) {
 	ctx := c.Request.Context()
 	tx, err := h.db.Pool.Begin(ctx)
@@ -631,7 +601,6 @@ func (h *ChallengeHandler) economyTx(c *gin.Context, op func(tx pgx.Tx) *Economy
 func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	slug := c.Param("slug")
 
-	// Get user ID
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -653,7 +622,6 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Get challenge
 	var challengeID string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT id FROM challenges
@@ -668,9 +636,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// ── Economy gate ──────────────────────────────────────────────────────────
-	// In economy mode a team must have LAUNCHED (opened) the challenge before it
-	// can submit; scoring is then dynamic + per-team. Resolve the context once.
+	// economy mode: a team must have launched (opened) the challenge before it can submit; scoring is then dynamic and per-team.
 	economyMode, err := isEconomyMode(c.Request.Context(), h.db)
 	if err != nil {
 		h.logger.Error("failed to read economy_mode", zap.Error(err))
@@ -706,9 +672,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		}
 	}
 
-	// ── Brute-force lockout check ─────────────────────────────────────────────
-	// After flagLockoutThreshold consecutive wrong attempts in flagLockoutWindow,
-	// the user is locked out for flagLockoutDuration.
+	// after flagLockoutThreshold consecutive wrong attempts within flagLockoutWindow, the user is locked out for flagLockoutDuration.
 	const (
 		flagLockoutThreshold = 10
 		flagLockoutWindow    = 5 * time.Minute
@@ -737,8 +701,6 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		})
 		return
 	}
-	// ── Static flag check ────────────────────────────────────────────────────
-	// Query static flags and compare by hashing the submitted value.
 	query := `
 		SELECT f.id, f.flag_hash, f.name, f.points, f.case_sensitive
 		FROM flags f
@@ -797,9 +759,8 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	}
 	rows.Close()
 
-	// ── Regex flag check ─────────────────────────────────────────────────────
-	// Container generates its own dynamic flag; admin defines a regex pattern.
-	// Any submission matching the regex is correct. Duplicate values across
+	// container generates its own dynamic flag; admin defines a regex pattern.
+	// any submission matching the regex is correct. duplicate values across
 	// users trigger a silent flag-share event.
 	if !found {
 		regexRows, regexErr := h.db.Pool.Query(c.Request.Context(),
@@ -849,7 +810,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		regexRows.Close()
 
 		if found {
-			// Flag share detection: same exact value previously submitted by another user.
+			// flag share detection: same exact value previously submitted by another user.
 			var priorUserID string
 			shareErr := h.db.Pool.QueryRow(c.Request.Context(),
 				`SELECT user_id FROM flag_attempts
@@ -886,9 +847,8 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		}
 	}
 
-	// ── Dynamic flag check ───────────────────────────────────────────────────
-	// 1. Look for a flag generated for THIS user → clean solve.
-	// 2. If not found, check if the value exists for ANY other user's instance
+	// 1. look for a flag generated for this user → clean solve.
+	// 2. if not found, check whether the value exists for any other user's instance
 	//    → flag share detected: still grant the solve (silent detection) and
 	//      log a flag_share_events record for admin review.
 	if !found {
@@ -904,13 +864,11 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			uid, challengeID, submittedFlag,
 		).Scan(&dynFlagID, &dynFlagName, &dynPoints)
 		if err == nil {
-			// Legit: flag belongs to this user
 			matchedFlag.ID = dynFlagID
 			matchedFlag.Name = dynFlagName
 			matchedFlag.Points = dynPoints
 			found = true
 		} else if errors.Is(err, pgx.ErrNoRows) {
-			// Check whether this exact flag value was generated for someone ELSE
 			var ownerUserID, ownerInstanceID, sharedFlagID, sharedFlagName string
 			var sharedPoints int
 			shareErr := h.db.Pool.QueryRow(c.Request.Context(),
@@ -924,7 +882,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 				submittedFlag, challengeID, uid,
 			).Scan(&ownerUserID, &ownerInstanceID, &sharedFlagID, &sharedFlagName, &sharedPoints)
 			if shareErr == nil {
-				// Flag share detected — accept transparently, log silently
+				// flag share detected — accept transparently, log silently
 				matchedFlag.ID = sharedFlagID
 				matchedFlag.Name = sharedFlagName
 				matchedFlag.Points = sharedPoints
@@ -966,8 +924,8 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Record the attempt and increment the challenge counter in one statement so
-	// neither half can be persisted without the other.
+	// record the attempt and increment the challenge counter in one statement so
+	// neither half can persist without the other.
 	attemptID := uuid.New()
 	var matchedFlagID any
 	if found {
@@ -996,7 +954,6 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	}
 
 	if !found {
-		// ── Update brute-force lockout tracking ───────────────────────────────
 		var newCount int
 		if upsertErr := h.db.Pool.QueryRow(c.Request.Context(),
 			`INSERT INTO flag_attempt_lockouts (user_id, challenge_id, wrong_attempts, first_attempt_at, locked_until, updated_at)
@@ -1032,8 +989,8 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		if attemptsRemaining < 0 {
 			attemptsRemaining = 0
 		}
-		// Economy: a wrong submission multiplicatively decays this team's eventual
-		// point value for the challenge (it costs POINTS, not credits). Best-effort.
+		// economy: a wrong submission multiplicatively decays this team's eventual
+		// point value for the challenge (it costs points, not credits). best-effort.
 		if economyMode && ecoTeamID != nil {
 			if _, ecErr := h.db.Pool.Exec(c.Request.Context(),
 				`UPDATE economy_challenge_state SET wrong_subs = wrong_subs + 1
@@ -1059,7 +1016,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Serialize solves for this challenge so its denormalized counts cannot lose
+	// serialize solves for this challenge so its denormalized counts cannot lose
 	// concurrent updates.
 	var challengeLock int
 	if err := tx.QueryRow(ctx,
@@ -1077,7 +1034,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Count the source rows rather than trusting total_flags, which admin flag
+	// count the source rows rather than trusting total_flags, which admin flag
 	// edits update separately and may briefly leave stale.
 	var totalFlags int
 	if err := tx.QueryRow(ctx,
@@ -1088,7 +1045,6 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Record solve (with ON CONFLICT to handle duplicate submissions).
 	solveID := uuid.New()
 	result, err := tx.Exec(ctx,
 		`INSERT INTO solves (id, user_id, challenge_id, flag_id, points_awarded, solved_at)
@@ -1102,7 +1058,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Check if row was actually inserted (RowsAffected=0 means conflict/already existed)
+	// rowsAffected == 0 means the insert hit a conflict / already existed
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
 		var solvedFlags int
@@ -1137,7 +1093,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Update user and denormalized solve counts only for a newly inserted solve.
+	// update user and denormalized solve counts only for a newly inserted solve.
 	userResult, err := tx.Exec(ctx,
 		`UPDATE users SET total_score = total_score + $1, updated_at = NOW() WHERE id = $2`,
 		matchedFlag.Points, uid)
@@ -1152,10 +1108,10 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Economy scoring (economy mode): the team's DYNAMIC point value for this
+	// economy scoring: the team's dynamic point value for this
 	// challenge (ceiling × crowd-decay × wrong-sub), retroactively recomputed for
-	// all holders, plus the clean-solve credit refund. Replaces the flat team
-	// scoring below. Idempotent per team+challenge.
+	// all holders, plus the clean-solve credit refund. replaces the flat team
+	// scoring below. idempotent per team+challenge.
 	if economyMode && ecoTeamID != nil {
 		if chalUUID, pErr := uuid.Parse(challengeID); pErr != nil {
 			h.logger.Error("failed to parse challenge id for economy solve", zap.Error(pErr))
@@ -1167,8 +1123,8 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			return
 		}
 	} else if teamsMode, tErr := isTeamsMode(ctx, h.db); tErr != nil {
-		// Team-aggregated scoring (teams mode, economy off): credit the team once
-		// per DISTINCT flag. Best-effort; teams.total_score is denormalized.
+		// team-aggregated scoring (teams mode, economy off): credit the team once
+		// per distinct flag. best-effort; teams.total_score is denormalized.
 		h.logger.Warn("teams_mode read failed during solve; skipping team score", zap.Error(tErr))
 	} else if teamsMode {
 		var teamID *uuid.UUID
@@ -1233,7 +1189,6 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	// Check if all flags solved (first blood check)
 	var solvedFlags int
 	if err := tx.QueryRow(ctx,
 		`SELECT COUNT(*) FROM solves s JOIN flags f ON s.flag_id = f.id
@@ -1260,7 +1215,6 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		"total_flags":  totalFlags,
 	}
 
-	// Auto-stop and remove instance when challenge is fully solved
 	if solvedFlags >= totalFlags && totalFlags > 0 {
 		go h.cleanupSolvedInstance(challengeID, uid)
 	}
@@ -1268,14 +1222,12 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// cleanupSolvedInstance stops and removes the user's active instance for
-// a fully-solved challenge. Runs in a background goroutine so the flag
-// submission response is not delayed.
+// stops and removes the user's active instance for a fully-solved challenge;
+// runs in a background goroutine so the submission response is not delayed.
 func (h *ChallengeHandler) cleanupSolvedInstance(challengeID string, userID uuid.UUID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Find the user's active instance for this challenge
 	var instanceID, containerID, resourceType string
 	var vmNodeID *uuid.UUID
 	var reservedVCPU, reservedMemoryMB int
@@ -1370,7 +1322,7 @@ func (h *ChallengeHandler) cleanupSolvedInstance(challengeID string, userID uuid
 		}
 	}
 
-	// Clear cooldown so the user doesn't get penalized for an auto-stop
+	// clear cooldown so the user isn't penalized for an auto-stop
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM user_cooldowns WHERE user_id = $1 AND challenge_id = $2`,
 		userID, challengeID); err != nil {
@@ -1387,17 +1339,14 @@ func (h *ChallengeHandler) cleanupSolvedInstance(challengeID string, userID uuid
 		zap.String("user_id", userID.String()))
 }
 
-// GetHints returns hints for a challenge
 func (h *ChallengeHandler) GetHints(c *gin.Context) {
 	slug := c.Param("slug")
 
-	// Get user ID if authenticated
 	var userID *uuid.UUID
 	if uid, ok := contextUserID(c); ok {
 		userID = &uid
 	}
 
-	// Get challenge ID
 	var challengeID string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT id FROM challenges
@@ -1412,7 +1361,6 @@ func (h *ChallengeHandler) GetHints(c *gin.Context) {
 		return
 	}
 
-	// Get hints
 	query := `
 		SELECT h.id, h.content, h.cost, h.sort_order, hu.id IS NOT NULL
 		FROM hints h
@@ -1456,12 +1404,10 @@ func (h *ChallengeHandler) GetHints(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"hints": hints})
 }
 
-// UnlockHint unlocks a hint for the user
 func (h *ChallengeHandler) UnlockHint(c *gin.Context) {
 	slug := c.Param("slug")
 	hintID := c.Param("hint_id")
 
-	// Get user ID
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -1473,7 +1419,6 @@ func (h *ChallengeHandler) UnlockHint(c *gin.Context) {
 		return
 	}
 
-	// Verify the published challenge exists before opening the unlock transaction.
 	var challengeID string
 	err = h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT id FROM challenges
@@ -1522,7 +1467,7 @@ func (h *ChallengeHandler) UnlockHint(c *gin.Context) {
 		return
 	}
 
-	// Serialize all hint purchases for this user so concurrent requests cannot
+	// serialize all hint purchases for this user so concurrent requests cannot
 	// spend the same score or charge twice for one hint.
 	var userScore int
 	err = tx.QueryRow(ctx, `SELECT total_score FROM users WHERE id = $1 FOR UPDATE`, uid).Scan(&userScore)

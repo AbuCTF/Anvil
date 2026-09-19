@@ -17,7 +17,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// VPNService handles VPN operations
 type VPNService struct {
 	config *config.Config
 	db     *database.DB
@@ -25,7 +24,6 @@ type VPNService struct {
 	logger *zap.Logger
 }
 
-// NewVPNService creates a new VPN service handler
 func NewVPNService(cfg *config.Config, db *database.DB, vpnSvc *vpn.Service, logger *zap.Logger) *VPNService {
 	return &VPNService{config: cfg, db: db, vpnSvc: vpnSvc, logger: logger}
 }
@@ -68,7 +66,6 @@ func (h *VPNHandler) addPeerForCleanup(publicKey, ipAddress string) {
 	_ = h.vpnSvc.AddPeer(ctx, publicKey, ipAddress)
 }
 
-// VPNConfigResponse represents the VPN configuration response
 type VPNConfigResponse struct {
 	HasConfig       bool    `json:"has_config"`
 	IPAddress       *string `json:"ip_address,omitempty"`
@@ -76,10 +73,9 @@ type VPNConfigResponse struct {
 	ServerPublicKey string  `json:"server_public_key,omitempty"`
 	Endpoint        string  `json:"endpoint,omitempty"`
 	CreatedAt       *int64  `json:"created_at,omitempty"`
-	ConfigFile      *string `json:"config_file,omitempty"` // Full WireGuard config
+	ConfigFile      *string `json:"config_file,omitempty"` // full wireguard config
 }
 
-// VPNStatusResponse represents VPN connection status
 type VPNStatusResponse struct {
 	Connected     bool   `json:"connected"`
 	IPAddress     string `json:"ip_address,omitempty"`
@@ -88,7 +84,6 @@ type VPNStatusResponse struct {
 	BytesReceived int64  `json:"bytes_received,omitempty"`
 }
 
-// GetConfig returns the user's VPN configuration
 func (h *VPNHandler) GetConfig(c *gin.Context) {
 	if !h.config.VPN.Enabled {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "VPN is disabled"})
@@ -100,7 +95,6 @@ func (h *VPNHandler) GetConfig(c *gin.Context) {
 		return
 	}
 
-	// Check if user has a VPN config
 	var vpnConfig struct {
 		IPAddress  string
 		PublicKey  string
@@ -115,7 +109,6 @@ func (h *VPNHandler) GetConfig(c *gin.Context) {
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
-		// No config exists
 		c.JSON(http.StatusOK, VPNConfigResponse{
 			HasConfig: false,
 			Endpoint:  h.config.VPN.PublicEndpoint,
@@ -130,7 +123,6 @@ func (h *VPNHandler) GetConfig(c *gin.Context) {
 
 	createdAt := vpnConfig.CreatedAt.Unix()
 
-	// Generate config file
 	configFile := h.generateWireGuardConfig(vpnConfig.PrivateKey, vpnConfig.IPAddress)
 
 	c.JSON(http.StatusOK, VPNConfigResponse{
@@ -144,7 +136,6 @@ func (h *VPNHandler) GetConfig(c *gin.Context) {
 	})
 }
 
-// GenerateConfig generates a new VPN configuration for the user
 func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 	if !h.config.VPN.Enabled {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "VPN is disabled"})
@@ -156,7 +147,6 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		return
 	}
 
-	// Check if user already has a config
 	var existingIP string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT assigned_ip FROM vpn_configs WHERE user_id = $1`, uid).Scan(&existingIP)
@@ -174,7 +164,6 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		return
 	}
 
-	// Generate key pair
 	privateKey, publicKey, err := h.vpnSvc.GenerateKeyPair()
 	if err != nil {
 		h.logger.Error("failed to generate key pair", zap.Error(err))
@@ -182,7 +171,6 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		return
 	}
 
-	// Allocate IP address
 	ipAddress, err := h.vpnSvc.AllocateIP()
 	if err != nil {
 		h.logger.Error("failed to allocate IP", zap.Error(err))
@@ -204,7 +192,6 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 	}
 	defer rollbackVPNTransaction(tx)
 
-	// Store VPN config
 	configID := uuid.New()
 	createdAt := time.Now().UTC()
 	result, err := tx.Exec(c.Request.Context(),
@@ -228,8 +215,8 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		return
 	}
 
-	// The database row remains uncommitted until the production peer exists.
-	// Treat AddPeer's outcome as uncertain on error and remove the generated key
+	// the database row remains uncommitted until the production peer exists.
+	// treat AddPeer's outcome as uncertain on error and remove the generated key
 	// during cleanup so a failed request cannot leave an orphaned peer.
 	peerMayExist := false
 	if h.managesWireGuardPeers() {
@@ -253,7 +240,6 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 	peerMayExist = false
 	releaseIPAddress = false
 
-	// Generate config file
 	configFile := h.generateWireGuardConfig(privateKey, ipAddress)
 	createdAtUnix := createdAt.Unix()
 
@@ -268,7 +254,6 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 	})
 }
 
-// GetStatus returns the VPN connection status
 func (h *VPNHandler) GetStatus(c *gin.Context) {
 	if !h.config.VPN.Enabled {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "VPN is disabled"})
@@ -280,8 +265,7 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 		return
 	}
 
-	// Get user's VPN config with status from database
-	// Status is updated by wg-status-sync.sh script running on host
+	// status is updated by the wg-status-sync.sh script running on the host
 	var ipAddress string
 	var lastHandshake *time.Time
 	var bytesSent, bytesReceived int64
@@ -321,7 +305,7 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 	})
 }
 
-// RegenerateConfig atomically replaces the old config with a new one.
+// atomically replaces the old config with a new one.
 func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	if !h.config.VPN.Enabled {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "VPN is disabled"})
@@ -341,8 +325,8 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	}
 	defer rollbackVPNTransaction(tx)
 
-	// Lock the current config so concurrent lifecycle requests cannot replace the
-	// same row while its WireGuard peer is being transitioned.
+	// lock the current config so concurrent lifecycle requests cannot replace the
+	// same row while its wireguard peer is being transitioned.
 	var oldPublicKey, oldIPAddress string
 	err = tx.QueryRow(c.Request.Context(),
 		`SELECT public_key, assigned_ip FROM vpn_configs WHERE user_id = $1 FOR UPDATE`, uid).
@@ -357,7 +341,7 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 		return
 	}
 
-	// Prepare the replacement without releasing the old allocation. That keeps
+	// prepare the replacement without releasing the old allocation. that keeps
 	// the current config usable if any later step fails.
 	privateKey, publicKey, err := h.vpnSvc.GenerateKeyPair()
 	if err != nil {
@@ -366,7 +350,6 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 		return
 	}
 
-	// Allocate new IP address
 	ipAddress, err := h.vpnSvc.AllocateIP()
 	if err != nil {
 		h.logger.Error("failed to allocate IP", zap.Error(err))
@@ -407,7 +390,7 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 		return
 	}
 
-	// Add the replacement before removing the old peer. On any failure, the
+	// add the replacement before removing the old peer. on any failure, the
 	// transaction rolls back and cleanup restores the old server-side state.
 	newPeerMayExist := false
 	oldPeerMayNeedRestore := false
@@ -449,7 +432,6 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	newIPAddressAllocated = false
 	h.vpnSvc.ReleaseIP(oldIPAddress)
 
-	// Generate config file
 	configFile := h.generateWireGuardConfig(privateKey, ipAddress)
 	createdAtUnix := createdAt.Unix()
 
@@ -464,15 +446,12 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	})
 }
 
-// generateWireGuardConfig generates a WireGuard client configuration
 func (h *VPNHandler) generateWireGuardConfig(privateKey, ipAddress string) string {
-	// Include port in endpoint if not already present
 	endpoint := h.config.VPN.PublicEndpoint
 	if !strings.Contains(endpoint, ":") {
 		endpoint = fmt.Sprintf("%s:%d", endpoint, h.config.VPN.ListenPort)
 	}
 
-	// DNS is optional - only include if configured
 	dnsLine := ""
 	if h.config.VPN.DNS != "" {
 		dnsLine = fmt.Sprintf("DNS = %s\n", h.config.VPN.DNS)

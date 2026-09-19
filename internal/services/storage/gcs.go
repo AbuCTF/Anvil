@@ -12,7 +12,6 @@ import (
 	"google.golang.org/api/iterator"
 )
 
-// GCSStorage implements StorageBackend for Google Cloud Storage
 type GCSStorage struct {
 	client     *storage.Client
 	bucketName string
@@ -20,14 +19,12 @@ type GCSStorage struct {
 	logger     *zap.Logger
 }
 
-// GCSConfig contains configuration for GCS storage
 type GCSConfig struct {
 	BucketName      string
 	ProjectID       string
 	CredentialsFile string // Path to service account JSON (optional if using default credentials)
 }
 
-// NewGCSStorage creates a new Google Cloud Storage backend
 func NewGCSStorage(ctx context.Context, cfg GCSConfig, logger *zap.Logger) (*GCSStorage, error) {
 	var client *storage.Client
 	var err error
@@ -40,7 +37,6 @@ func NewGCSStorage(ctx context.Context, cfg GCSConfig, logger *zap.Logger) (*GCS
 
 	bucket := client.Bucket(cfg.BucketName)
 
-	// Verify bucket exists and is accessible
 	_, err = bucket.Attrs(ctx)
 	if err != nil {
 		client.Close()
@@ -59,17 +55,14 @@ func NewGCSStorage(ctx context.Context, cfg GCSConfig, logger *zap.Logger) (*GCS
 	}, nil
 }
 
-// Close closes the GCS client
 func (g *GCSStorage) Close() error {
 	return g.client.Close()
 }
 
-// Upload implements StorageBackend.Upload
 func (g *GCSStorage) Upload(ctx context.Context, key string, reader io.Reader, size int64) error {
 	obj := g.bucket.Object(key)
 	writer := obj.NewWriter(ctx)
 
-	// Set content type based on extension if possible
 	writer.ContentType = "application/octet-stream"
 
 	if size > 0 {
@@ -94,7 +87,6 @@ func (g *GCSStorage) Upload(ctx context.Context, key string, reader io.Reader, s
 	return nil
 }
 
-// Download implements StorageBackend.Download
 func (g *GCSStorage) Download(ctx context.Context, key string) (io.ReadCloser, error) {
 	obj := g.bucket.Object(key)
 	reader, err := obj.NewReader(ctx)
@@ -107,7 +99,6 @@ func (g *GCSStorage) Download(ctx context.Context, key string) (io.ReadCloser, e
 	return reader, nil
 }
 
-// Delete implements StorageBackend.Delete
 func (g *GCSStorage) Delete(ctx context.Context, key string) error {
 	obj := g.bucket.Object(key)
 	if err := obj.Delete(ctx); err != nil {
@@ -121,7 +112,6 @@ func (g *GCSStorage) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// Exists implements StorageBackend.Exists
 func (g *GCSStorage) Exists(ctx context.Context, key string) (bool, error) {
 	obj := g.bucket.Object(key)
 	_, err := obj.Attrs(ctx)
@@ -134,7 +124,6 @@ func (g *GCSStorage) Exists(ctx context.Context, key string) (bool, error) {
 	return false, err
 }
 
-// GetURL implements StorageBackend.GetURL
 // Returns a signed URL for temporary access
 func (g *GCSStorage) GetURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	opts := &storage.SignedURLOptions{
@@ -150,7 +139,6 @@ func (g *GCSStorage) GetURL(ctx context.Context, key string, expiry time.Duratio
 	return url, nil
 }
 
-// GetSize implements StorageBackend.GetSize
 func (g *GCSStorage) GetSize(ctx context.Context, key string) (int64, error) {
 	obj := g.bucket.Object(key)
 	attrs, err := obj.Attrs(ctx)
@@ -160,10 +148,8 @@ func (g *GCSStorage) GetSize(ctx context.Context, key string) (int64, error) {
 	return attrs.Size, nil
 }
 
-// InitMultipartUpload implements StorageBackend.InitMultipartUpload
 // GCS uses resumable uploads natively, but we'll implement compose-based multipart
 func (g *GCSStorage) InitMultipartUpload(ctx context.Context, key string) (string, error) {
-	// For GCS, we use object composition approach
 	// Upload ID is just a unique prefix for the parts
 	uploadID := fmt.Sprintf("multipart/%s/%d", key, time.Now().UnixNano())
 
@@ -175,7 +161,6 @@ func (g *GCSStorage) InitMultipartUpload(ctx context.Context, key string) (strin
 	return uploadID, nil
 }
 
-// UploadPart implements StorageBackend.UploadPart
 func (g *GCSStorage) UploadPart(ctx context.Context, key, uploadID string, partNumber int, reader io.Reader, size int64) (string, error) {
 	partKey := fmt.Sprintf("%s/part_%d", uploadID, partNumber)
 
@@ -212,14 +197,12 @@ func (g *GCSStorage) UploadPart(ctx context.Context, key, uploadID string, partN
 	return etag, nil
 }
 
-// CompleteMultipartUpload implements StorageBackend.CompleteMultipartUpload
 func (g *GCSStorage) CompleteMultipartUpload(ctx context.Context, key, uploadID string, parts []CompletedPart) error {
 	// GCS has a limit of 32 objects per compose operation
 	// For large files, we need to compose in batches
 
 	const maxComposeObjects = 32
 
-	// Collect all part objects
 	var partObjects []*storage.ObjectHandle
 	for _, part := range parts {
 		partKey := fmt.Sprintf("%s/part_%d", uploadID, part.PartNumber)
@@ -241,7 +224,6 @@ func (g *GCSStorage) CompleteMultipartUpload(ctx context.Context, key, uploadID 
 		}
 	}
 
-	// Delete all part objects
 	for _, partObj := range partObjects {
 		if err := partObj.Delete(ctx); err != nil && err != storage.ErrObjectNotExist {
 			g.logger.Warn("failed to delete part object", zap.Error(err))
@@ -278,7 +260,6 @@ func (g *GCSStorage) composeInBatches(ctx context.Context, destObj *storage.Obje
 				continue
 			}
 
-			// Create intermediate object
 			tempKey := fmt.Sprintf("%s_temp_batch_%d", destObj.ObjectName(), batchNum)
 			tempObj := g.bucket.Object(tempKey)
 			tempObjects = append(tempObjects, tempObj)
@@ -295,16 +276,13 @@ func (g *GCSStorage) composeInBatches(ctx context.Context, destObj *storage.Obje
 		parts = newParts
 	}
 
-	// Final compose to destination
 	if len(parts) == 1 {
-		// Copy the final temp object to destination
 		copier := destObj.CopierFrom(parts[0])
 		if _, err := copier.Run(ctx); err != nil {
 			return fmt.Errorf("failed to copy final object: %w", err)
 		}
 	}
 
-	// Cleanup temp objects
 	for _, tempObj := range tempObjects {
 		tempObj.Delete(ctx)
 	}
@@ -312,9 +290,7 @@ func (g *GCSStorage) composeInBatches(ctx context.Context, destObj *storage.Obje
 	return nil
 }
 
-// AbortMultipartUpload implements StorageBackend.AbortMultipartUpload
 func (g *GCSStorage) AbortMultipartUpload(ctx context.Context, key, uploadID string) error {
-	// List and delete all parts
 	prefix := uploadID + "/part_"
 	it := g.bucket.Objects(ctx, &storage.Query{Prefix: prefix})
 
@@ -339,7 +315,6 @@ func (g *GCSStorage) AbortMultipartUpload(ctx context.Context, key, uploadID str
 	return nil
 }
 
-// ListParts implements StorageBackend.ListParts
 func (g *GCSStorage) ListParts(ctx context.Context, key, uploadID string) ([]CompletedPart, error) {
 	prefix := uploadID + "/part_"
 	it := g.bucket.Objects(ctx, &storage.Query{Prefix: prefix})
@@ -354,7 +329,6 @@ func (g *GCSStorage) ListParts(ctx context.Context, key, uploadID string) ([]Com
 			return nil, fmt.Errorf("failed to list parts: %w", err)
 		}
 
-		// Extract part number from name
 		var partNum int
 		fmt.Sscanf(attrs.Name, uploadID+"/part_%d", &partNum)
 

@@ -100,7 +100,7 @@
 	let requestController: AbortController | null = null;
 	let disposed = false;
 
-	// Muted status colors — only a genuine problem is meant to draw the eye.
+	// muted status colors — only a genuine problem is meant to draw the eye.
 	const SLA: Record<string, { color: string; label: string }> = {
 		OK: { color: '#4b7355', label: 'Up' },
 		DOWN: { color: '#b0453a', label: 'Down' },
@@ -351,7 +351,6 @@
 			<EmptyState icon="mdi:sword-cross" text="No live arena round is running." />
 		{:else}
 
-		<!-- King of the Hill -->
 		{#if hills.length}
 			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden mb-6">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
@@ -389,7 +388,6 @@
 			</div>
 		{/if}
 
-		<!-- Service status + captures -->
 		<div class="grid lg:grid-cols-3 gap-6 mb-6">
 			<div class="lg:col-span-2 bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
@@ -456,7 +454,6 @@
 				</div>
 			</div>
 
-			<!-- Captures -->
 			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden flex flex-col">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
 					<h2 class="text-[0.95rem] font-semibold text-stone-200">Captures</h2>
@@ -490,7 +487,6 @@
 			</div>
 		</div>
 
-		<!-- Score over time -->
 		{#if raceSeries.length}
 			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden mb-6">
 				<div class="px-4 py-3 border-b border-stone-800">
@@ -502,7 +498,6 @@
 			</div>
 		{/if}
 
-		<!-- Standings -->
 		<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 			<div class="px-4 py-3 border-b border-stone-800">
 				<h2 class="text-[0.95rem] font-semibold text-stone-200">Standings</h2>

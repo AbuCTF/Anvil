@@ -1,5 +1,5 @@
 <script lang="ts">
-	// One bar per category, segmented per solve. Bar length scales to the top category.
+	// one bar per category, segmented per solve. bar length scales to the top category.
 	export let categories: {
 		name: string;
 		color: string;

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import Icon from '@iconify/svelte';
-	// Terse, mono empty state. No illustrations. See DESIGN.md.
+	// terse, mono empty state. no illustrations. see DESIGN.md.
 	export let icon = 'mdi:inbox-outline';
 	export let text = 'Nothing here yet.';
 </script>

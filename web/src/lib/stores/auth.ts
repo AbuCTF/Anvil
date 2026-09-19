@@ -20,8 +20,8 @@ interface AuthState {
 	lastChecked: number | null;
 }
 
-const AUTH_CHECK_INTERVAL = 60000; // Re-check auth every 60 seconds max
-const RANK_CHECK_INTERVAL = 60000; // Revalidate at most once per visible minute
+const AUTH_CHECK_INTERVAL = 60000; // re-check auth every 60 seconds max
+const RANK_CHECK_INTERVAL = 60000; // revalidate at most once per visible minute
 const MAX_RETRIES = 2;
 const RETRY_DELAY = 1000;
 
@@ -59,10 +59,8 @@ function createAuthStore() {
 		});
 	};
 
-	// Helper to delay execution
 	const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-	// Fetch with retry logic for network errors
 	const fetchWithRetry = async (url: string, options: RequestInit, retries = MAX_RETRIES): Promise<Response> => {
 		try {
 			return await fetch(url, options);
@@ -151,18 +149,17 @@ function createAuthStore() {
 				localStorage.removeItem('user');
 			}
 			set(initialState);
-			// Redirect to login after logout
 			if (browser && redirect) {
 				window.location.href = '/login';
 			}
 		},
 
-		// Initialize auth from stored token - call once on app load
+		// initialize auth from stored token — call once on app load
 		initialize: async () => {
 			if (!browser) return;
 			
 			const currentState = get({ subscribe });
-			if (currentState.isLoading) return; // Prevent concurrent checks
+			if (currentState.isLoading) return; // prevent concurrent checks
 			const generation = authGeneration;
 
 			const token = localStorage.getItem('accessToken');
@@ -192,7 +189,6 @@ function createAuthStore() {
 						lastChecked: Date.now()
 					});
 				} else if (response.status === 401) {
-					// Token expired - try refresh
 					const newToken = await refreshAccessToken();
 					if (generation !== authGeneration) return;
 					if (newToken) {
@@ -215,32 +211,30 @@ function createAuthStore() {
 							return;
 						}
 					}
-					// Refresh failed - clear auth
 					localStorage.removeItem('accessToken');
 					localStorage.removeItem('refreshToken');
 					localStorage.removeItem('user');
 					set(initialState);
 				} else {
-					// Server error (5xx) - don't clear auth, keep trying
+					// server error (5xx) — don't clear auth, keep trying
 					console.error('Auth check failed with status:', response.status);
 					update(s => ({ ...s, isLoading: false }));
 				}
 			} catch (error) {
 				if (generation !== authGeneration) return;
-				// Network error - don't clear auth, user might be offline
+				// network error — don't clear auth, user might be offline
 				console.error('Auth check network error:', error);
-				// Keep existing token but mark as unchecked
 				update(s => ({ 
 					...s, 
 					isLoading: false,
-					// If we had a token, assume still authenticated (offline mode)
+					// if we had a token, assume still authenticated (offline mode)
 					isAuthenticated: !!token,
 					accessToken: token
 				}));
 			}
 		},
 
-		// Check auth - debounced by default; score-changing actions can force a refresh.
+		// check auth — debounced by default; score-changing actions can force a refresh
 		checkAuth: async (force = false) => {
 			if (!browser) return;
 
@@ -248,17 +242,14 @@ function createAuthStore() {
 			const now = Date.now();
 			const generation = authGeneration;
 
-			// Skip if already loading
 			if (currentState.isLoading) return;
 
-			// Skip if recently checked (within interval)
 			if (!force && currentState.lastChecked && (now - currentState.lastChecked) < AUTH_CHECK_INTERVAL) {
 				return;
 			}
 
 			const token = localStorage.getItem('accessToken');
 			
-			// No token - ensure state is cleared
 			if (!token) {
 				if (currentState.isAuthenticated) {
 					set(initialState);
@@ -266,7 +257,7 @@ function createAuthStore() {
 				return;
 			}
 
-			// Token exists but state doesn't reflect it - sync from storage
+			// token exists but state doesn't reflect it — sync from storage
 			if (!currentState.accessToken && token) {
 				update(s => ({ ...s, accessToken: token, isLoading: true }));
 			} else {
@@ -291,7 +282,6 @@ function createAuthStore() {
 						lastChecked: now
 					});
 				} else if (response.status === 401) {
-					// Token invalid - try refresh
 					const newToken = await refreshAccessToken();
 					if (generation !== authGeneration) return;
 					if (newToken) {
@@ -314,26 +304,25 @@ function createAuthStore() {
 							return;
 						}
 					}
-					// Refresh failed - clear everything
 					localStorage.removeItem('accessToken');
 					localStorage.removeItem('refreshToken');
 					localStorage.removeItem('user');
 					set(initialState);
 				} else {
-					// Server error - don't clear auth
+					// server error — don't clear auth
 					console.error('Auth check failed with status:', response.status);
 					update(s => ({ ...s, isLoading: false, lastChecked: now }));
 				}
 			} catch (error) {
 				if (generation !== authGeneration) return;
-				// Network error - keep existing auth state
+				// network error — keep existing auth state
 				console.error('Auth check error:', error);
 				update(s => ({ ...s, isLoading: false }));
 			}
 		},
 
-		// Revalidate only the header rank when a dormant tab becomes visible.
-		// Conditional requests return no body when the rank has not changed.
+		// revalidate only the header rank when a dormant tab becomes visible.
+		// conditional requests return no body when the rank has not changed.
 		refreshRank: async (force = false) => {
 			if (!browser || document.hidden) return;
 			const state = get({ subscribe });
@@ -405,7 +394,7 @@ function createAuthStore() {
 			}));
 		},
 
-		// Force clear auth (for explicit logout or security reasons)
+		// force clear auth (for explicit logout or security reasons)
 		clearAuth: () => {
 			authGeneration++;
 			refreshPromise = null;
@@ -418,7 +407,6 @@ function createAuthStore() {
 			set(initialState);
 		},
 
-		// Get current token (for API calls)
 		getToken: (): string | null => {
 			if (browser) {
 				return localStorage.getItem('accessToken');

@@ -1,5 +1,5 @@
 <script lang="ts">
-	// A tertiary-gray caption above a large mono value. See DESIGN.md.
+	// a tertiary-gray caption above a large mono value. see DESIGN.md.
 	export let label: string;
 	export let value: string | number;
 	export let sub = '';

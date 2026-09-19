@@ -70,8 +70,8 @@ class ApiClient {
 
 	constructor(baseUrl: string) {
 		this.baseUrl = baseUrl;
-		// Use dedicated upload domain for large files (bypasses Cloudflare 100MB limit)
-		// upload.{domain} is DNS-only (grey cloud) — goes direct to origin
+		// dedicated upload domain for large files bypasses the Cloudflare 100MB limit;
+		// upload.{domain} is DNS-only (grey cloud) so it goes direct to origin
 		if (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) {
 			this.uploadUrl = baseUrl;
 		} else if (browser) {
@@ -84,11 +84,9 @@ class ApiClient {
 
 	private getAuthToken(): string | null {
 		if (browser) {
-			// First try localStorage (most reliable)
 			const token = localStorage.getItem('accessToken');
 			if (token) return token;
 			
-			// Fallback to store
 			const authState = get(auth);
 			return authState.accessToken;
 		}
@@ -103,7 +101,7 @@ class ApiClient {
 				details = body as ApiErrorDetails;
 			}
 		} catch {
-			// Upstream failures may have an empty or non-JSON body.
+			// upstream failures may have an empty or non-JSON body
 		}
 		return new ApiError(response.status, details, fallbackMessage);
 	}
@@ -127,12 +125,10 @@ class ApiClient {
 			...(options.headers as Record<string, string> || {})
 		};
 
-		// Add auth token if available
 		const token = this.getAuthToken();
 		if (token) {
 			headers['Authorization'] = `Bearer ${token}`;
 		} else if (requiresAuth) {
-			// If auth is required but no token, redirect to login
 			if (browser) {
 				window.location.href = '/login';
 			}
@@ -146,16 +142,13 @@ class ApiClient {
 			});
 
 			if (requiresAuth && response.status === 401) {
-				// Token expired or invalid
 				if (browser) {
-					// Try to refresh token
 					const newToken = await auth.refreshAccessToken();
 					if (newToken) {
 						headers['Authorization'] = `Bearer ${newToken}`;
 						response = await fetch(url, { ...options, headers });
 						if (response.status !== 401) return this.parseResponse<T>(response);
 					}
-					// Refresh failed - clear auth and redirect
 					auth.clearAuth();
 					window.location.href = '/login';
 				}
@@ -164,7 +157,7 @@ class ApiClient {
 
 			return this.parseResponse<T>(response);
 		} catch (error) {
-			// Network errors - don't clear auth
+			// network errors — don't clear auth
 			if (error instanceof TypeError && error.message.includes('fetch')) {
 				throw new Error('Network error. Please check your connection.', { cause: error });
 			}
@@ -238,12 +231,12 @@ class ApiClient {
 		return parsed as T;
 	}
 
-	// Platform
+	// platform
 	async getPlatformInfo() {
 		return this.request<PlatformInfoResponse>('/info', { cache: 'no-store' }, false);
 	}
 
-	// Auth
+	// auth
 	async login(username: string, password: string) {
 		return this.request<{
 			access_token: string;
@@ -276,7 +269,7 @@ class ApiClient {
 		}, false);
 	}
 
-	// Challenges - public endpoint
+	// challenges — public endpoint
 	async getChallenges(params?: { category?: string; difficulty?: string }) {
 		const queryString = params
 			? '?' + new URLSearchParams(params as Record<string, string>).toString()
@@ -299,7 +292,7 @@ class ApiClient {
 		});
 	}
 
-	// Instances
+	// instances
 	async getInstances(options: RequestInit = {}) {
 		return this.request<{ instances: any[] }>('/instances', options);
 	}
@@ -335,7 +328,7 @@ class ApiClient {
 		});
 	}
 
-	// VPN
+	// vpn
 	async getVPNConfig(options: RequestInit = {}) {
 		return this.request<VpnConfigResponse>('/vpn/config', options);
 	}
@@ -356,7 +349,7 @@ class ApiClient {
 		return this.request<VpnStatusResponse>('/vpn/status', options);
 	}
 
-	// User
+	// user
 	async getProfile() {
 		return this.request<any>('/user/me');
 	}
@@ -376,17 +369,17 @@ class ApiClient {
 		return this.request<{ solves: any[] }>('/user/me/solves');
 	}
 
-	// Public stats - no auth required
+	// public stats — no auth required
 	async getStats() {
 		return this.request<any>('/stats', {}, false);
 	}
 
-	// Scoreboard - public endpoint
+	// scoreboard — public endpoint
 	async getScoreboard() {
 		return this.request<{ leaderboard: any[]; total_users: number }>('/scoreboard', {}, false);
 	}
 
-	// Teams (membership layer; active when teams mode is enabled)
+	// teams (membership layer; active when teams mode is enabled)
 	async getMyTeam() {
 		return this.request<{ team: any | null }>('/teams/me');
 	}
@@ -409,7 +402,7 @@ class ApiClient {
 		return this.request<{ message: string }>('/teams/leave', { method: 'POST' });
 	}
 
-	// Economy (active when economy_mode is enabled)
+	// economy (active when economy_mode is enabled)
 	async getEconomy() {
 		return this.request<{
 			credits: number; points: number; grant_issued: boolean; bailout_used: boolean;
@@ -439,7 +432,7 @@ class ApiClient {
 			'/economy/convert', { method: 'POST', body: JSON.stringify({ points }) });
 	}
 
-	// Admin
+	// admin
 	async getAdminStats() {
 		return this.request<any>('/admin/stats');
 	}
@@ -549,7 +542,7 @@ class ApiClient {
 		});
 	}
 
-	// Challenge Attachments (admin)
+	// challenge attachments (admin)
 	async listAttachments(challengeId: string) {
 		return this.request<{ attachments: any[] }>(`/admin/challenges/${challengeId}/attachments`);
 	}
@@ -568,7 +561,7 @@ class ApiClient {
 		});
 	}
 
-	// VM Templates
+	// VM templates
 	async getVMTemplates() {
 		return this.request<{ templates: any[] }>('/admin/vm-templates');
 	}
@@ -590,7 +583,7 @@ class ApiClient {
 		});
 	}
 
-	// VM Nodes
+	// VM nodes
 	async getNodes() {
 		return this.request<{ nodes: any[] }>('/admin/nodes');
 	}
@@ -615,7 +608,7 @@ class ApiClient {
 		});
 	}
 
-	// VM Templates
+	// VM templates
 	async getTemplates() {
 		return this.request<{ templates: any[] }>('/admin/vm-templates');
 	}
@@ -651,7 +644,7 @@ class ApiClient {
 		});
 	}
 
-	// Infrastructure Stats
+	// infrastructure stats
 	async getInfrastructureStats() {
 		return this.request<any>('/admin/infrastructure/stats');
 	}
@@ -664,7 +657,7 @@ class ApiClient {
 		return this.request<{ instances: any[] }>('/admin/infrastructure/docker-instances');
 	}
 
-	// Platform Settings
+	// platform settings
 	async getPlatformSettings() {
 		return this.request<{ settings: Record<string, any> }>('/admin/settings');
 	}

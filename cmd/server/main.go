@@ -23,7 +23,6 @@ import (
 )
 
 func main() {
-	// Initialize logger
 	logger, _ := zap.NewProduction()
 	if os.Getenv("ANVIL_ENV") == "development" {
 		logger, _ = zap.NewDevelopment()
@@ -33,7 +32,6 @@ func main() {
 	sugar := logger.Sugar()
 	sugar.Info("Starting Anvil Platform...")
 
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		sugar.Fatalf("Failed to load configuration: %v", err)
@@ -44,7 +42,6 @@ func main() {
 
 	sugar.Infof("Loaded configuration for environment: %s", cfg.Environment)
 
-	// Initialize database
 	db, err := database.New(cfg.Database)
 	if err != nil {
 		sugar.Fatalf("Failed to connect to database: %v", err)
@@ -53,14 +50,12 @@ func main() {
 
 	sugar.Info("Connected to database")
 
-	// Run migrations
 	if err := db.Migrate(); err != nil {
 		sugar.Fatalf("Failed to run migrations: %v", err)
 	}
 
 	sugar.Info("Database migrations completed")
 
-	// Initialize services
 	containerSvc, err := container.NewService(cfg.Container, logger)
 	if err != nil {
 		sugar.Fatalf("Failed to initialize container service: %v", err)
@@ -71,28 +66,24 @@ func main() {
 		sugar.Fatalf("Failed to initialize VPN service: %v", err)
 	}
 
-	// Initialize storage service
 	storageSvc, err := storage.NewLocalStorage(cfg.Storage.Path, logger)
 	if err != nil {
 		sugar.Fatalf("Failed to initialize storage service: %v", err)
 	}
 
-	// Initialize upload service
 	uploadSvc := upload.NewService(storageSvc, logger, upload.DefaultConfig())
 
-	// Initialize VM service (optional - may fail if libvirt not available)
+	// vm service is optional; it may fail when libvirt is unavailable
 	vmSvc, err := vm.NewService(logger, vm.DefaultConfig(), db)
 	if err != nil {
 		sugar.Warnf("VM service not available (this is OK for Docker-only mode): %v", err)
 		vmSvc = nil
 	}
 
-	// Reconcile VM state on startup (cleanup orphaned VMs)
 	if vmSvc != nil {
-		// Get node connection details from environment or use defaults
 		nodeIP := os.Getenv("VM_NODE_IP")
 		if nodeIP == "" {
-			nodeIP = "172.17.0.1" // Docker host default
+			nodeIP = "172.17.0.1" // docker host default
 		}
 		sshUser := os.Getenv("VM_NODE_SSH_USER")
 		if sshUser == "" {
@@ -112,17 +103,14 @@ func main() {
 		cancel()
 	}
 
-	// Start background cleanup goroutines
-
-	// Container instance expiry goroutine — runs every minute and stops/removes
-	// Docker containers whose timer has expired.
+	// container instance expiry: every minute, stop/remove docker containers
+	// whose timer has expired.
 	go func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
 			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 
-			// Find all expired container instances that are still running.
 			type expiredInst struct {
 				ID          string
 				ContainerID string
@@ -160,13 +148,11 @@ func main() {
 				}
 				sugar.Infof("Expiring container instance %s (container %s)", inst.ID, shortID)
 
-				// Stop and remove the Docker container.
 				if stopErr := containerSvc.StopInstance(ctx, inst.ContainerID); stopErr != nil {
 					sugar.Warnf("Failed to stop expired container %s: %v", shortID, stopErr)
-					// Continue: mark as expired in DB anyway so it doesn't stay 'running'
+					// mark as expired in the db anyway so it doesn't stay 'running'
 				}
 
-				// Look up the challenge cooldown (default 15 min).
 				var cooldownMinutes int
 				if scanErr := db.Pool.QueryRow(ctx,
 					`SELECT COALESCE(cooldown_minutes, 15) FROM challenges WHERE id = $1`,
@@ -180,20 +166,18 @@ func main() {
 					 ON CONFLICT (user_id, challenge_id) DO UPDATE SET cooldown_until = $3`,
 					inst.UserID, inst.ChallengeID, cooldownUntil)
 
-				// Mark the instance as expired so the UI shows the correct state.
 				db.Pool.Exec(ctx,
 					`UPDATE instances SET status = 'expired', updated_at = NOW() WHERE id = $1`,
 					inst.ID)
 			}
 
-			// Orphaned container cleanup: find Docker containers that are running
-			// but have no matching active DB record, and stop/remove them.
+			// orphaned container cleanup: docker containers that are running but
+			// have no matching active db record get stopped/removed.
 			if containerSvc != nil {
 				allContainers, listErr := containerSvc.ListInstances(ctx)
 				if listErr != nil {
 					sugar.Warnf("Failed to list Docker containers for orphan cleanup: %v", listErr)
 				} else if len(allContainers) > 0 {
-					// Build a set of container IDs that are tracked as active in the DB.
 					activeRows, activeErr := db.Pool.Query(ctx, `
 						SELECT container_id FROM instances
 						WHERE status IN ('running', 'creating', 'pending')
@@ -237,7 +221,6 @@ func main() {
 			case <-ticker.C:
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 
-				// Get count of running instances that will expire
 				var expiringCount int
 				db.Pool.QueryRow(ctx, `
 					SELECT COUNT(*) FROM instances i  
@@ -247,8 +230,8 @@ func main() {
 					  AND c.resource_type = 'vm'
 				`).Scan(&expiringCount)
 
-				// Clean up expired DB instances (VM only — container expiry is handled
-				// by the 1-minute goroutine above which stops Docker containers first)
+				// vm only; container expiry is handled by the 1-minute goroutine above,
+				// which stops docker containers first.
 				if _, err := db.Pool.Exec(ctx, `
 					UPDATE instances
 					SET status = 'expired', updated_at = NOW()
@@ -259,7 +242,6 @@ func main() {
 				`); err != nil {
 					sugar.Errorf("Failed to mark expired instances: %v", err)
 				} else if expiringCount > 0 {
-					// Decrement node counters for expired VMs
 					db.Pool.Exec(ctx, `
 						UPDATE vm_nodes 
 						SET active_vms = GREATEST(0, active_vms - $1),
@@ -270,7 +252,6 @@ func main() {
 					`, expiringCount)
 				}
 
-				// Get count of instances about to be deleted (for node counter correction)
 				var deletingCount int
 				db.Pool.QueryRow(ctx, `
 					SELECT COUNT(*) FROM instances i
@@ -280,7 +261,6 @@ func main() {
 					  AND c.resource_type = 'vm'
 				`).Scan(&deletingCount)
 
-				// Delete old failed/stopped/expired instances
 				if _, err := db.Pool.Exec(ctx, `
 					DELETE FROM instances 
 					WHERE status IN ('failed', 'stopped', 'expired') 
@@ -289,8 +269,8 @@ func main() {
 					sugar.Errorf("Failed to cleanup old instances: %v", err)
 				}
 
-				// Force synchronize node counters with reality (safety net)
-				// Uses 1 vCPU / 1024 MB per VM (current template defaults)
+				// safety net: force node counters to match reality.
+				// 1 vcpu / 1024 mb per vm (current template defaults).
 				db.Pool.Exec(ctx, `
 					UPDATE vm_nodes n
 					SET active_vms = (
@@ -332,7 +312,7 @@ func main() {
 						sugar.Errorf("VM cleanup failed: %v", err)
 					}
 
-					// Sync node counters with actual DB state after cleanup (joins with challenges to only count VMs)
+					// after cleanup, resync node counters from db state; joins challenges to count vms only
 					db.Pool.Exec(ctx, `
 					UPDATE vm_nodes n
 					SET active_vms = (
@@ -363,14 +343,13 @@ func main() {
 		}()
 	}
 
-	// Game engine (Attack-Defense + KotH) — no-op unless game.enabled.
+	// game engine (attack-defense + koth) — no-op unless game.enabled.
 	gameCtx, gameCancel := context.WithCancel(context.Background())
 	go game.NewController(cfg.Game, db, logger).Run(gameCtx)
 
-	// Initialize API server
 	server := api.NewServer(cfg, db, containerSvc, vmSvc, uploadSvc, storageSvc, vpnSvc, logger)
 
-	// Create HTTP server with extended timeouts for large file uploads
+	// extended timeouts for large file uploads
 	httpServer := &http.Server{
 		Addr:              net.JoinHostPort(cfg.Server.Host, fmt.Sprintf("%d", cfg.Server.Port)),
 		Handler:           server.Router(),
@@ -380,7 +359,6 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// Start server in goroutine
 	go func() {
 		sugar.Infof("Server listening on port %d", cfg.Server.Port)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -388,7 +366,6 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -400,7 +377,6 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
-	// Cleanup running containers
 	if err := containerSvc.Cleanup(ctx); err != nil {
 		sugar.Errorf("Error during container cleanup: %v", err)
 	}

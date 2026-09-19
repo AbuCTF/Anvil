@@ -1,4 +1,4 @@
-// Monotone-cubic interpolation to an SVG path string. Zero dependency.
+// monotone-cubic interpolation to an SVG path string. zero dependency.
 
 export interface Pt {
 	x: number;
@@ -13,7 +13,7 @@ export interface Series {
 
 const r = (n: number) => Math.round(n * 100) / 100;
 
-// Step-after: the value holds until the next x, then jumps. Accurate for a
+// step-after: the value holds until the next x, then jumps. accurate for a
 // cumulative score, which is flat between solves and steps up at each solve.
 export function stepPath(points: Pt[]): string {
 	const n = points.length;
@@ -25,7 +25,7 @@ export function stepPath(points: Pt[]): string {
 	return d;
 }
 
-// A smooth, overshoot-free cubic through the points (Fritsch-Carlson tangents).
+// a smooth, overshoot-free cubic through the points (Fritsch-Carlson tangents).
 export function monotonePath(points: Pt[]): string {
 	const n = points.length;
 	if (n === 0) return '';

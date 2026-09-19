@@ -1,5 +1,5 @@
-// Zero-dependency shareable rank card. Draws to an offscreen canvas in the stoic
-// theme (JetBrains Mono) and triggers a PNG download. See DESIGN.md.
+// zero-dependency shareable rank card. draws to an offscreen canvas in the stoic
+// theme (JetBrains Mono) and triggers a PNG download. see DESIGN.md.
 
 export interface RankCardData {
 	rank: number;

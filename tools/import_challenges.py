@@ -1,28 +1,11 @@
 #!/usr/bin/env python3
-"""
-Anvil challenge importer — reads H7CTF'26 challenge.yml files (frozen schema v1)
-and creates the challenges through Anvil's admin API.
+"""anvil challenge importer: reads H7CTF'26 challenge.yml files and creates the
+challenges via the admin API (schema: h7ctf26-challenge-schema.md).
 
-Schema: h7ctf26-challenge-schema.md (frozen 2026-09-19).
-Maps 1:1 to the admin API:
-  POST /api/v1/admin/challenges           (Create; inline flags)
-  POST /api/v1/admin/challenges/ova       (CreateOVAChallenge; multipart, OVA upload)
-  POST /api/v1/admin/challenges/:id/flags (CreateFlag; case_sensitive support)
-  POST /api/v1/admin/challenges/:id/attachments (multipart handout upload)
-  POST /api/v1/admin/challenges/:id/publish
-
-Usage:
-  # dry run over a repo (no writes, no auth needed) — see exactly what would happen
   python3 tools/import_challenges.py ../H7CTF26 --dry-run
+  ANVIL_ADMIN_PASSWORD=... python3 tools/import_challenges.py ../H7CTF26 --api http://localhost:8080 --user admin
 
-  # real import against local dev
-  ANVIL_ADMIN_PASSWORD=anvil-admin-2026 \
-    python3 tools/import_challenges.py ../H7CTF26 --api http://localhost:8080 --user admin
-
-  # one challenge, publish it, keep going past errors
-  python3 tools/import_challenges.py ../H7CTF26/pwn/coatroom --publish --continue-on-error
-
-Deps: requests, pyyaml (both present in this env).
+deps: requests, pyyaml.
 """
 from __future__ import annotations
 
@@ -45,7 +28,6 @@ try:
 except ImportError:
     sys.exit("error: requests is required  (pip install requests)")
 
-# ---- constants pinned to the Anvil enums / handlers -------------------------
 DIFFICULTIES = {"easy", "medium", "hard", "insane"}
 STATUSES = {"draft", "published", "archived"}
 RESOURCE_TYPES = {"docker", "vm"}
@@ -64,7 +46,6 @@ ALLOWED_ATTACH_EXT = {
     "",  # no extension
 }
 
-# ---- tiny ANSI helpers ------------------------------------------------------
 _C = sys.stderr.isatty() and os.environ.get("NO_COLOR") is None
 def _p(code: str, s: str) -> str: return f"\033[{code}m{s}\033[0m" if _C else s
 def bold(s): return _p("1", s)
@@ -76,7 +57,7 @@ def cyan(s): return _p("36", s)
 
 
 class ValidationError(Exception):
-    """A challenge.yml that violates the schema."""
+    """a challenge.yml that violates the schema."""
 
 
 def slugify(name: str) -> str:
@@ -85,13 +66,11 @@ def slugify(name: str) -> str:
 
 
 def strip_flag_prefix(prefix: str) -> str:
-    """Schema authors write dynamic_flag_prefix as "H7CTF{"; Anvil wraps the
-    UUID itself as `<prefix>{<uuid>}` (instance.go: fmt.Sprintf("%s{%s}",...)),
-    so the trailing brace must be removed or you get H7CTF{{uuid}}."""
+    """authors write "H7CTF{"; anvil wraps the uuid as <prefix>{<uuid>}, so the
+    trailing brace must go or you get H7CTF{{uuid}}."""
     return prefix.strip().rstrip("{").rstrip("{}").rstrip("{")
 
 
-# ---- normalized model -------------------------------------------------------
 @dataclass
 class Flag:
     name: str
@@ -104,7 +83,6 @@ class Flag:
 
     @property
     def inlineable(self) -> bool:
-        # inline Create can express static/dynamic but NOT case_sensitive=false
         return self.case_sensitive
 
 
@@ -129,7 +107,6 @@ class Challenge:
     sub_description: str = ""
     flags: list[Flag] = field(default_factory=list)
     attachments: list[Attachment] = field(default_factory=list)
-    # deploy
     resource_type: str | None = None   # docker | vm | None (static-download)
     instancing: str = "on_demand"
     container_image: str = ""
@@ -161,7 +138,6 @@ class Challenge:
         return self.resource_type == "docker" and self.instancing == "on_demand"
 
 
-# ---- parsing / validation ---------------------------------------------------
 def _req(d: dict, key: str, where: str) -> Any:
     if key not in d or d[key] in (None, ""):
         raise ValidationError(f"{where}: missing required field '{key}'")
@@ -233,7 +209,7 @@ def parse_deploy(doc: dict, src_dir: Path, ch: Challenge, where: str) -> None:
     if rt == "docker":
         image = str(_req(dep, "image", where))
         registry = dep.get("registry")
-        # Anvil has no separate registry field — fold it into the image reference.
+        # anvil has no registry field; fold it into the image ref
         ch.container_image = f"{registry}/{image}" if registry else image
         ch.container_tag = str(dep.get("tag") or "")
         if dep.get("cpu_limit") is not None:
@@ -309,7 +285,6 @@ def load_challenge(yml_path: Path) -> Challenge:
     ch.flags = parse_flags(doc, points, where)
     parse_deploy(doc, src_dir, ch, where)
 
-    # attachments
     for i, item in enumerate(doc.get("provide", []) or []):
         if not isinstance(item, dict) or "path" not in item:
             raise ValidationError(f"{where}: provide[{i}] must be a mapping with 'path'")
@@ -322,11 +297,9 @@ def load_challenge(yml_path: Path) -> Challenge:
             ch.warnings.append(f"handout '{as_name}' has ext '{ext}' not in Anvil's allowlist — upload will be rejected")
         ch.attachments.append(Attachment(src=src, as_name=as_name))
 
-    # description templating heads-up (Anvil may not substitute these)
     if "{{" in description:
         ch.warnings.append("description contains Jinja templating ({{ nc }}/{{ link }}); "
                            "Anvil does not substitute it — confirm the endpoint is written literally")
-    # regex flags — no create path stores is_regex
     for fl in ch.flags:
         if fl.is_regex:
             ch.warnings.append(f"flag '{fl.name}' is_regex=true is not supported by the Anvil flag API; "
@@ -342,12 +315,10 @@ def discover(path: Path) -> list[Path]:
         return [direct]
     found = sorted(path.rglob("challenge.yml"))
     if not found:
-        # tolerate .yaml
         found = sorted(path.rglob("challenge.yaml"))
     return found
 
 
-# ---- API client -------------------------------------------------------------
 class Anvil:
     def __init__(self, base: str, verbose: bool = False):
         self.base = base.rstrip("/")
@@ -411,7 +382,6 @@ class Anvil:
                 body["instance_timeout"] = ch.instance_timeout
             if ch.max_extensions is not None:
                 body["max_extensions"] = ch.max_extensions
-        # static/no-container: leave container_image unset (empty → no instancer)
         r = self.s.post(self._url("/admin/challenges"), headers=self._hdr(),
                         json=body, timeout=60)
         if r.status_code not in (200, 201):
@@ -483,7 +453,6 @@ class Anvil:
             raise RuntimeError(f"publish failed ({r.status_code}): {r.text[:300]}")
 
 
-# ---- orchestration ----------------------------------------------------------
 def flag_summary(flags: list[Flag]) -> str:
     parts = []
     for f in flags:
@@ -566,7 +535,6 @@ def main() -> int:
     if not yml_files:
         print(red(f"no challenge.yml found under {root}")); return 2
 
-    # parse + validate everything up front
     print(bold(f"Discovered {len(yml_files)} challenge file(s) under {root}\n"))
     challenges: list[Challenge] = []
     errors = 0
@@ -596,7 +564,6 @@ def main() -> int:
                    f"{errors} invalid, {n_warn} warning(s)."))
         return 0
 
-    # real import
     password = args.password or getpass.getpass(f"admin password for {args.user}@{args.api}: ")
     api = Anvil(args.api, verbose=args.verbose)
     try:

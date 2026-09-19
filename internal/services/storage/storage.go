@@ -18,50 +18,37 @@ import (
 	"go.uber.org/zap"
 )
 
-// StorageBackend defines the interface for storage providers
 type StorageBackend interface {
-	// Upload uploads a file to the storage backend
 	Upload(ctx context.Context, key string, reader io.Reader, size int64) error
 
-	// Download retrieves a file from storage
 	Download(ctx context.Context, key string) (io.ReadCloser, error)
 
-	// Delete removes a file from storage
 	Delete(ctx context.Context, key string) error
 
-	// Exists checks if a file exists
 	Exists(ctx context.Context, key string) (bool, error)
 
 	// GetURL returns a URL for accessing the file (may be signed/temporary)
 	GetURL(ctx context.Context, key string, expiry time.Duration) (string, error)
 
-	// GetSize returns the size of a stored file
 	GetSize(ctx context.Context, key string) (int64, error)
 
-	// InitMultipartUpload starts a chunked upload session
 	InitMultipartUpload(ctx context.Context, key string) (uploadID string, err error)
 
-	// UploadPart uploads a single chunk
 	UploadPart(ctx context.Context, key, uploadID string, partNumber int, reader io.Reader, size int64) (etag string, err error)
 
-	// CompleteMultipartUpload finalizes a chunked upload
 	CompleteMultipartUpload(ctx context.Context, key, uploadID string, parts []CompletedPart) error
 
-	// AbortMultipartUpload cancels an in-progress chunked upload
 	AbortMultipartUpload(ctx context.Context, key, uploadID string) error
 
-	// ListParts returns uploaded parts for a multipart upload
 	ListParts(ctx context.Context, key, uploadID string) ([]CompletedPart, error)
 }
 
-// CompletedPart represents a successfully uploaded chunk
 type CompletedPart struct {
 	PartNumber int    `json:"part_number"`
 	ETag       string `json:"etag"`
 	Size       int64  `json:"size"`
 }
 
-// UploadMetadata contains information about an upload
 type UploadMetadata struct {
 	ID            string          `json:"id"`
 	Key           string          `json:"key"`
@@ -78,7 +65,6 @@ type UploadMetadata struct {
 	ExpiresAt     time.Time       `json:"expires_at"`
 }
 
-// LocalStorage implements StorageBackend for local filesystem
 type LocalStorage struct {
 	basePath      string
 	tempPath      string
@@ -95,7 +81,6 @@ type localUploadState struct {
 	createdAt time.Time
 }
 
-// NewLocalStorage creates a new local filesystem storage backend
 func NewLocalStorage(basePath string, logger *zap.Logger) (*LocalStorage, error) {
 	absBasePath, err := filepath.Abs(basePath)
 	if err != nil {
@@ -110,7 +95,6 @@ func NewLocalStorage(basePath string, logger *zap.Logger) (*LocalStorage, error)
 		return nil, fmt.Errorf("failed to resolve storage directory %s: %w", absBasePath, err)
 	}
 
-	// Ensure base directories exist
 	dirs := []string{
 		resolvedBasePath,
 		filepath.Join(resolvedBasePath, "challenges"),
@@ -163,26 +147,22 @@ func (l *LocalStorage) fullPath(key string) (string, error) {
 	return fullPath, nil
 }
 
-// Upload implements StorageBackend.Upload
 func (l *LocalStorage) Upload(ctx context.Context, key string, reader io.Reader, size int64) error {
 	fullPath, err := l.fullPath(key)
 	if err != nil {
 		return fmt.Errorf("invalid storage key: %w", err)
 	}
 
-	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 		return fmt.Errorf("failed to create parent directory: %w", err)
 	}
 
-	// Create file
 	file, err := os.Create(fullPath)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
 	defer file.Close()
 
-	// Copy with context cancellation support
 	written, err := copyWithContext(ctx, file, reader)
 	if err != nil {
 		os.Remove(fullPath) // Cleanup on failure
@@ -202,7 +182,6 @@ func (l *LocalStorage) Upload(ctx context.Context, key string, reader io.Reader,
 	return nil
 }
 
-// Download implements StorageBackend.Download
 func (l *LocalStorage) Download(ctx context.Context, key string) (io.ReadCloser, error) {
 	fullPath, err := l.fullPath(key)
 	if err != nil {
@@ -220,7 +199,6 @@ func (l *LocalStorage) Download(ctx context.Context, key string) (io.ReadCloser,
 	return file, nil
 }
 
-// Delete implements StorageBackend.Delete
 func (l *LocalStorage) Delete(ctx context.Context, key string) error {
 	fullPath, err := l.fullPath(key)
 	if err != nil {
@@ -238,7 +216,6 @@ func (l *LocalStorage) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// Exists implements StorageBackend.Exists
 func (l *LocalStorage) Exists(ctx context.Context, key string) (bool, error) {
 	fullPath, err := l.fullPath(key)
 	if err != nil {
@@ -254,7 +231,6 @@ func (l *LocalStorage) Exists(ctx context.Context, key string) (bool, error) {
 	return false, err
 }
 
-// GetURL implements StorageBackend.GetURL
 // For local storage, returns a file:// URL (for dev) or path to be served via HTTP
 func (l *LocalStorage) GetURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
 	fullPath, err := l.fullPath(key)
@@ -272,7 +248,6 @@ func (l *LocalStorage) GetURL(ctx context.Context, key string, expiry time.Durat
 	return fullPath, nil
 }
 
-// GetSize implements StorageBackend.GetSize
 func (l *LocalStorage) GetSize(ctx context.Context, key string) (int64, error) {
 	fullPath, err := l.fullPath(key)
 	if err != nil {
@@ -285,7 +260,6 @@ func (l *LocalStorage) GetSize(ctx context.Context, key string) (int64, error) {
 	return info.Size(), nil
 }
 
-// InitMultipartUpload implements StorageBackend.InitMultipartUpload
 func (l *LocalStorage) InitMultipartUpload(ctx context.Context, key string) (string, error) {
 	if _, err := l.fullPath(key); err != nil {
 		return "", fmt.Errorf("invalid storage key: %w", err)
@@ -293,7 +267,6 @@ func (l *LocalStorage) InitMultipartUpload(ctx context.Context, key string) (str
 
 	uploadID := generateUploadID()
 
-	// Create temp directory for this upload
 	tempDir := filepath.Join(l.tempPath, uploadID)
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
@@ -316,7 +289,6 @@ func (l *LocalStorage) InitMultipartUpload(ctx context.Context, key string) (str
 	return uploadID, nil
 }
 
-// UploadPart implements StorageBackend.UploadPart
 func (l *LocalStorage) UploadPart(ctx context.Context, key, uploadID string, partNumber int, reader io.Reader, size int64) (string, error) {
 	l.mu.RLock()
 	state, exists := l.activeUploads[uploadID]
@@ -329,7 +301,6 @@ func (l *LocalStorage) UploadPart(ctx context.Context, key, uploadID string, par
 		return "", fmt.Errorf("storage key does not match upload")
 	}
 
-	// Create part file
 	partPath := filepath.Join(state.tempDir, fmt.Sprintf("part_%d", partNumber))
 	file, err := os.Create(partPath)
 	if err != nil {
@@ -337,7 +308,6 @@ func (l *LocalStorage) UploadPart(ctx context.Context, key, uploadID string, par
 	}
 	defer file.Close()
 
-	// Write part and calculate checksum
 	hasher := sha256.New()
 	writer := io.MultiWriter(file, hasher)
 
@@ -354,7 +324,6 @@ func (l *LocalStorage) UploadPart(ctx context.Context, key, uploadID string, par
 
 	etag := hex.EncodeToString(hasher.Sum(nil))
 
-	// Record completed part
 	state.mu.Lock()
 	state.parts[partNumber] = &CompletedPart{
 		PartNumber: partNumber,
@@ -372,7 +341,6 @@ func (l *LocalStorage) UploadPart(ctx context.Context, key, uploadID string, par
 	return etag, nil
 }
 
-// CompleteMultipartUpload implements StorageBackend.CompleteMultipartUpload
 func (l *LocalStorage) CompleteMultipartUpload(ctx context.Context, key, uploadID string, parts []CompletedPart) error {
 	l.mu.RLock()
 	state, exists := l.activeUploads[uploadID]
@@ -390,12 +358,10 @@ func (l *LocalStorage) CompleteMultipartUpload(ctx context.Context, key, uploadI
 		return fmt.Errorf("invalid storage key: %w", err)
 	}
 
-	// Ensure parent directory exists
 	if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
 		return fmt.Errorf("failed to create parent directory: %w", err)
 	}
 
-	// Create final file
 	finalFile, err := os.Create(fullPath)
 	if err != nil {
 		return fmt.Errorf("failed to create final file: %w", err)
@@ -421,7 +387,6 @@ func (l *LocalStorage) CompleteMultipartUpload(ctx context.Context, key, uploadI
 		}
 	}
 
-	// Cleanup temp files
 	os.RemoveAll(state.tempDir)
 
 	l.mu.Lock()
@@ -437,7 +402,6 @@ func (l *LocalStorage) CompleteMultipartUpload(ctx context.Context, key, uploadI
 	return nil
 }
 
-// AbortMultipartUpload implements StorageBackend.AbortMultipartUpload
 func (l *LocalStorage) AbortMultipartUpload(ctx context.Context, key, uploadID string) error {
 	l.mu.Lock()
 	state, exists := l.activeUploads[uploadID]
@@ -450,7 +414,6 @@ func (l *LocalStorage) AbortMultipartUpload(ctx context.Context, key, uploadID s
 		return nil // Already cleaned up
 	}
 
-	// Remove temp directory
 	os.RemoveAll(state.tempDir)
 
 	l.logger.Info("multipart upload aborted",
@@ -461,7 +424,6 @@ func (l *LocalStorage) AbortMultipartUpload(ctx context.Context, key, uploadID s
 	return nil
 }
 
-// ListParts implements StorageBackend.ListParts
 func (l *LocalStorage) ListParts(ctx context.Context, key, uploadID string) ([]CompletedPart, error) {
 	l.mu.RLock()
 	state, exists := l.activeUploads[uploadID]
@@ -482,7 +444,6 @@ func (l *LocalStorage) ListParts(ctx context.Context, key, uploadID string) ([]C
 	return parts, nil
 }
 
-// CleanupStaleUploads removes uploads older than the specified duration
 func (l *LocalStorage) CleanupStaleUploads(maxAge time.Duration) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -501,8 +462,6 @@ func (l *LocalStorage) CleanupStaleUploads(maxAge time.Duration) error {
 
 	return nil
 }
-
-// Helper functions
 
 func copyWithContext(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
 	buf := make([]byte, 32*1024) // 32KB buffer

@@ -25,7 +25,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// VMState represents the current state of a VM
 type VMState string
 
 const (
@@ -42,7 +41,6 @@ const (
 	legacyOverlayDir            = "/var/lib/anvil/storage/vms/overlays"
 )
 
-// ImageFormat represents supported disk image formats
 type ImageFormat string
 
 const (
@@ -53,7 +51,6 @@ const (
 	ImageFormatRAW   ImageFormat = "raw"
 )
 
-// NodeInfo contains connection details for a VM node
 type NodeInfo struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -66,7 +63,6 @@ type NodeInfo struct {
 	NetworkName string `json:"network_name"`
 }
 
-// VMTemplate represents a VM template from an uploaded image
 type VMTemplate struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
@@ -83,7 +79,6 @@ type VMTemplate struct {
 	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
-// VMInstance represents a running VM instance
 type VMInstance struct {
 	ID           string            `json:"id"`
 	Name         string            `json:"name"`
@@ -107,7 +102,6 @@ type VMInstance struct {
 	ExpiresAt    time.Time         `json:"expires_at"`
 }
 
-// CreateVMRequest contains parameters for creating a new VM
 type CreateVMRequest struct {
 	Name        string            `json:"name"`
 	TemplateID  string            `json:"template_id"`
@@ -120,7 +114,6 @@ type CreateVMRequest struct {
 	Metadata    map[string]string `json:"metadata,omitempty"`
 }
 
-// Service manages virtual machines using libvirt
 type Service struct {
 	logger       *zap.Logger
 	config       Config
@@ -132,7 +125,6 @@ type Service struct {
 	usedIPs      map[string]bool
 }
 
-// Config contains VM service configuration
 type Config struct {
 	ImageStorePath      string // Where VM images are stored
 	InstanceStorePath   string // Where instance overlays are stored
@@ -148,7 +140,6 @@ type Config struct {
 	MaxDuration         time.Duration
 }
 
-// DefaultConfig returns sensible default configuration
 func DefaultConfig() Config {
 	return Config{
 		ImageStorePath:      "/var/lib/anvil/images",
@@ -166,9 +157,7 @@ func DefaultConfig() Config {
 	}
 }
 
-// NewService creates a new VM management service
 func NewService(logger *zap.Logger, config Config, db *database.DB) (*Service, error) {
-	// Ensure storage directories exist
 	dirs := []string{
 		config.ImageStorePath,
 		config.InstanceStorePath,
@@ -180,7 +169,6 @@ func NewService(logger *zap.Logger, config Config, db *database.DB) (*Service, e
 		}
 	}
 
-	// Verify libvirt/QEMU is available
 	if err := verifyLibvirtAvailable(); err != nil {
 		logger.Warn("libvirt not available, VM features will be limited", zap.Error(err))
 	}
@@ -196,15 +184,12 @@ func NewService(logger *zap.Logger, config Config, db *database.DB) (*Service, e
 	}, nil
 }
 
-// IsAvailable checks if the VM service can create VMs
 func (s *Service) IsAvailable() bool {
 	return verifyLibvirtAvailable() == nil
 }
 
-// CreateInstanceForChallenge creates a VM instance for a specific challenge
 // This is a simplified wrapper for the instance handler
 func (s *Service) CreateInstanceForChallenge(ctx context.Context, challengeID, instanceID string, templateID string) (*VMInstanceInfo, error) {
-	// Look up the template by ID from in-memory cache
 	s.mu.RLock()
 	template, exists := s.templates[templateID]
 	s.mu.RUnlock()
@@ -233,14 +218,12 @@ func (s *Service) CreateInstanceForChallenge(ctx context.Context, challengeID, i
 	}, nil
 }
 
-// CreateInstanceWithTemplate creates a VM instance using template data provided by caller
 // This allows the caller to fetch template from database
 func (s *Service) CreateInstanceWithTemplate(ctx context.Context, challengeID, instanceID string, template *VMTemplate) (*VMInstanceInfo, error) {
 	if template == nil {
 		return nil, fmt.Errorf("template cannot be nil")
 	}
 
-	// Cache the template for future use
 	s.mu.Lock()
 	s.templates[template.ID] = template
 	s.mu.Unlock()
@@ -265,7 +248,6 @@ func (s *Service) CreateInstanceWithTemplate(ctx context.Context, challengeID, i
 	}, nil
 }
 
-// VMInstanceInfo contains basic info returned to the instance handler
 type VMInstanceInfo struct {
 	VMID      string
 	IPAddress string
@@ -289,13 +271,11 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 		zap.String("node_ip", node.IPAddress),
 	)
 
-	// Create overlay disk on the remote node via SSH
 	overlayPath, err := s.createOverlayOnNode(ctx, template.ImagePath, instanceID, node)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create disk overlay: %w", err)
 	}
 
-	// Allocate resources
 	vncPort := s.allocateVNCPort()
 	macAddress := generateMAC(instanceID)
 	vmName := fmt.Sprintf("anvil-%s", instanceID[:8])
@@ -307,7 +287,6 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 		existingIPs = make(map[string]bool)
 	}
 
-	// Allocate IP avoiding conflicts
 	allocatedIP := s.allocateAvailableIP(existingIPs)
 	s.logger.Info("allocated IP for new VM",
 		zap.String("instance_id", instanceID),
@@ -317,13 +296,11 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 	// Try to create DHCP reservation (best effort - not critical)
 	s.createDHCPReservation(ctx, node, macAddress, allocatedIP)
 
-	// Generate libvirt XML
 	domainXML, err := s.generateDomainXML(vmName, instanceID, template.VCPU, template.MemoryMB, overlayPath, macAddress, vncPort, node.NetworkName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate domain XML: %w", err)
 	}
 
-	// Define and start VM on node via SSH + virsh
 	err = s.defineAndStartVMOnNode(ctx, domainXML, vmName, node)
 	if err != nil {
 		// Cleanup overlay on failure
@@ -351,7 +328,6 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 		zap.String("instance_id", instanceID),
 		zap.String("ip_address", actualIP))
 
-	// Store instance info with actual IP
 	instance := &VMInstance{
 		ID:          instanceID,
 		Name:        vmName,
@@ -384,7 +360,6 @@ func (s *Service) CreateInstanceOnNode(ctx context.Context, challengeID, instanc
 // syncImageToNode ensures the base image exists on the remote node.
 // If the file is not present (or is a different size), it is copied via SCP.
 func (s *Service) syncImageToNode(ctx context.Context, localPath string, node *NodeInfo) error {
-	// Check whether the file already exists on the node with the same size
 	checkCmd := fmt.Sprintf("stat -c%%s %s 2>/dev/null || echo missing", localPath)
 	remoteOut, _ := s.runSSHCommand(ctx, node, checkCmd)
 	remoteOut = strings.TrimSpace(remoteOut)
@@ -396,7 +371,6 @@ func (s *Service) syncImageToNode(ctx context.Context, localPath string, node *N
 	localSize := fmt.Sprintf("%d", localInfo.Size())
 
 	if remoteOut == localSize {
-		// File already present and same size — nothing to do
 		s.logger.Info("base image already present on node, skipping sync",
 			zap.String("path", localPath),
 			zap.String("node", node.Name),
@@ -410,13 +384,11 @@ func (s *Service) syncImageToNode(ctx context.Context, localPath string, node *N
 		zap.String("node_ip", node.IPAddress),
 	)
 
-	// Ensure the remote directory exists
 	remoteDir := filepath.Dir(localPath)
 	if _, err := s.runSSHCommand(ctx, node, fmt.Sprintf("mkdir -p %s", remoteDir)); err != nil {
 		return fmt.Errorf("failed to create remote directory %s: %w", remoteDir, err)
 	}
 
-	// SCP the file over
 	scpArgs := []string{
 		"-q",
 		"-o", "StrictHostKeyChecking=no",
@@ -445,7 +417,6 @@ func (s *Service) syncImageToNode(ctx context.Context, localPath string, node *N
 // createOverlayOnNode creates a CoW overlay disk on a remote node via SSH.
 // It first ensures the base image is present on the node, copying it via SCP if needed.
 func (s *Service) createOverlayOnNode(ctx context.Context, basePath string, instanceID string, node *NodeInfo) (string, error) {
-	// Ensure the base image exists on the node (copy if needed)
 	if err := s.syncImageToNode(ctx, basePath, node); err != nil {
 		return "", fmt.Errorf("failed to sync base image to node: %w", err)
 	}
@@ -453,7 +424,6 @@ func (s *Service) createOverlayOnNode(ctx context.Context, basePath string, inst
 	overlayDir := filepath.Join(s.config.InstanceStorePath, "overlays")
 	overlayPath := fmt.Sprintf("%s/%s.qcow2", overlayDir, instanceID)
 
-	// Ensure overlay directory exists and create the overlay
 	cmd := fmt.Sprintf("mkdir -p %s && qemu-img create -f qcow2 -F qcow2 -b %s %s",
 		shellQuote(overlayDir), shellQuote(basePath), shellQuote(overlayPath))
 
@@ -465,15 +435,12 @@ func (s *Service) createOverlayOnNode(ctx context.Context, basePath string, inst
 	return overlayPath, nil
 }
 
-// allocateIPWithReservation allocates a specific IP and creates a DHCP reservation
 // This ensures the VM gets a predictable IP that we know before it boots
 func (s *Service) allocateIPWithReservation(ctx context.Context, node *NodeInfo, macAddress, instanceID string) (string, error) {
-	// Allocate next available IP from our pool
 	s.mu.Lock()
 	ipAddress := s.allocateIPLocked()
 	s.mu.Unlock()
 
-	// Add DHCP host reservation to libvirt network
 	// Format: virsh net-update <network> add ip-dhcp-host "<host mac='XX:XX:XX:XX:XX:XX' ip='10.100.X.Y'/>" --live --config
 	virshCmd := "virsh -c qemu:///system"
 	hostXML := fmt.Sprintf("<host mac='%s' ip='%s'/>", macAddress, ipAddress)
@@ -528,7 +495,6 @@ func (s *Service) allocateIPLocked() string {
 	return fmt.Sprintf("10.100.%d.%d", 100+len(s.usedIPs)%150, 10+len(s.usedIPs)%240)
 }
 
-// getActiveDHCPLeases queries existing DHCP leases from libvirt
 func (s *Service) getActiveDHCPLeases(ctx context.Context, node *NodeInfo) (map[string]bool, error) {
 	virshCmd := "virsh -c qemu:///system"
 	cmd := fmt.Sprintf("%s net-dhcp-leases %s 2>/dev/null | tail -n +3 | awk '{print $5}' | cut -d'/' -f1", virshCmd, node.NetworkName)
@@ -552,7 +518,6 @@ func (s *Service) getActiveDHCPLeases(ctx context.Context, node *NodeInfo) (map[
 
 // allocateAvailableIP finds a random available IP from the pool
 func (s *Service) allocateAvailableIP(existingIPs map[string]bool) string {
-	// Build list of all possible IPs in 10.100.10.x - 10.100.250.x range
 	var availableIPs []string
 	for subnet := 10; subnet <= 250; subnet++ {
 		for host := 10; host <= 250; host++ {
@@ -570,7 +535,6 @@ func (s *Service) allocateAvailableIP(existingIPs map[string]bool) string {
 		rng := rand2.New(rand2.NewSource(seed))
 		return availableIPs[rng.Intn(len(availableIPs))]
 	}
-	// Fallback
 	return fmt.Sprintf("10.100.100.%d", 10+len(existingIPs)%240)
 }
 
@@ -594,9 +558,7 @@ func (s *Service) createDHCPReservation(ctx context.Context, node *NodeInfo, mac
 	}
 }
 
-// defineAndStartVMOnNode defines and starts a VM on a remote node via SSH
 func (s *Service) defineAndStartVMOnNode(ctx context.Context, domainXML, vmName string, node *NodeInfo) error {
-	// Write XML to temp file on node, define VM, then start it
 	xmlPath := fmt.Sprintf("/tmp/anvil-vm-%s.xml", vmName)
 
 	// Escape the XML for shell
@@ -606,7 +568,6 @@ func (s *Service) defineAndStartVMOnNode(ctx context.Context, domainXML, vmName 
 	// This is needed because SSH user session defaults to qemu:///session
 	virshCmd := "virsh -c qemu:///system"
 
-	// Write XML, define, start, cleanup
 	cmd := fmt.Sprintf("echo '%s' > %s && %s define %s && %s start %s && rm -f %s",
 		escapedXML, xmlPath, virshCmd, xmlPath, virshCmd, vmName, xmlPath)
 
@@ -618,7 +579,6 @@ func (s *Service) defineAndStartVMOnNode(ctx context.Context, domainXML, vmName 
 	return nil
 }
 
-// runSSHCommand executes a command on a remote node via SSH
 func (s *Service) runSSHCommand(ctx context.Context, node *NodeInfo, command string) (string, error) {
 	sshArgs := []string{
 		"-q", // Quiet mode - suppress warnings
@@ -629,7 +589,6 @@ func (s *Service) runSSHCommand(ctx context.Context, node *NodeInfo, command str
 		"-p", fmt.Sprintf("%d", node.SSHPort),
 	}
 
-	// Add SSH key if specified
 	if node.SSHKeyPath != "" {
 		sshArgs = append(sshArgs, "-i", node.SSHKeyPath)
 	}
@@ -661,12 +620,10 @@ func (s *Service) queryVMIP(ctx context.Context, vmName string, node *NodeInfo, 
 	virshCmd := "virsh -c qemu:///system"
 	cmd := fmt.Sprintf("%s domifaddr %s | grep -oP 'ipv4\\s+\\K[0-9.]+' | head -1", virshCmd, vmName)
 
-	// Retry for up to timeout seconds
 	for i := 0; i < timeoutSeconds; i++ {
 		output, err := s.runSSHCommand(ctx, node, cmd)
 		if err == nil && strings.TrimSpace(output) != "" {
 			ip := strings.TrimSpace(output)
-			// Remove /prefix if present
 			if idx := strings.Index(ip, "/"); idx > 0 {
 				ip = ip[:idx]
 			}
@@ -678,7 +635,6 @@ func (s *Service) queryVMIP(ctx context.Context, vmName string, node *NodeInfo, 
 	return "", fmt.Errorf("timeout waiting for VM to get IP address")
 }
 
-// generateDomainXML creates libvirt domain XML for a VM
 func (s *Service) generateDomainXML(name, uuid string, vcpu, memoryMB int, diskPath, macAddress string, vncPort int, networkName string) (string, error) {
 	xml := fmt.Sprintf(`<domain type='kvm'>
   <name>%s</name>
@@ -732,7 +688,6 @@ func (s *Service) generateDomainXML(name, uuid string, vcpu, memoryMB int, diskP
 	return xml, nil
 }
 
-// RegisterTemplate registers a new VM template from an uploaded image
 func (s *Service) RegisterTemplate(ctx context.Context, template *VMTemplate) error {
 	// Convert image to QCOW2 if needed (QCOW2 supports CoW snapshots)
 	if template.ImageFormat != ImageFormatQCOW2 {
@@ -757,7 +712,6 @@ func (s *Service) RegisterTemplate(ctx context.Context, template *VMTemplate) er
 	return nil
 }
 
-// GetTemplate retrieves a template by ID
 func (s *Service) GetTemplate(ctx context.Context, templateID string) (*VMTemplate, error) {
 	s.mu.RLock()
 	template, exists := s.templates[templateID]
@@ -770,7 +724,6 @@ func (s *Service) GetTemplate(ctx context.Context, templateID string) (*VMTempla
 	return template, nil
 }
 
-// ListTemplates returns all available templates
 func (s *Service) ListTemplates(ctx context.Context) ([]*VMTemplate, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -783,21 +736,17 @@ func (s *Service) ListTemplates(ctx context.Context) ([]*VMTemplate, error) {
 	return templates, nil
 }
 
-// CreateInstance creates a new VM instance from a template
 func (s *Service) CreateInstance(ctx context.Context, req CreateVMRequest) (*VMInstance, error) {
-	// Get template
 	template, err := s.GetTemplate(ctx, req.TemplateID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check user limits
 	userInstances := s.getUserInstanceCount(req.UserID)
 	if userInstances >= s.config.MaxInstancesPerUser {
 		return nil, fmt.Errorf("user has reached maximum instances limit (%d)", s.config.MaxInstancesPerUser)
 	}
 
-	// Use template defaults or overrides
 	vcpu := template.VCPU
 	if req.VCPU > 0 {
 		vcpu = req.VCPU
@@ -816,19 +765,15 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateVMRequest) (*VMI
 
 	instanceID := uuid.New().String()
 
-	// Create CoW overlay disk
 	overlayPath, err := s.createOverlay(ctx, template.ImagePath, instanceID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create disk overlay: %w", err)
 	}
 
-	// Allocate VNC port
 	vncPort := s.allocateVNCPort()
 
-	// Allocate IP address
 	ipAddress := s.allocateIP()
 
-	// Generate MAC address
 	macAddress := generateMAC(instanceID)
 
 	metadata := req.Metadata
@@ -855,7 +800,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateVMRequest) (*VMI
 		ExpiresAt:    time.Now().Add(duration),
 	}
 
-	// Define and start VM
 	if err := s.defineAndStartVM(ctx, instance); err != nil {
 		// Cleanup on failure
 		os.Remove(overlayPath)
@@ -883,7 +827,6 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateVMRequest) (*VMI
 	return instance, nil
 }
 
-// GetInstance retrieves an instance by ID
 func (s *Service) GetInstance(ctx context.Context, instanceID string) (*VMInstance, error) {
 	s.mu.RLock()
 	instance, exists := s.instances[instanceID]
@@ -893,7 +836,6 @@ func (s *Service) GetInstance(ctx context.Context, instanceID string) (*VMInstan
 		return nil, fmt.Errorf("instance not found: %s", instanceID)
 	}
 
-	// Update state from libvirt
 	state, err := s.getVMState(ctx, instance.Name)
 	if err == nil {
 		instance.State = state
@@ -902,7 +844,6 @@ func (s *Service) GetInstance(ctx context.Context, instanceID string) (*VMInstan
 	return instance, nil
 }
 
-// StopInstance stops a running VM instance
 func (s *Service) StopInstance(ctx context.Context, instanceID string) error {
 	instance, err := s.GetInstance(ctx, instanceID)
 	if err != nil {
@@ -932,7 +873,6 @@ func (s *Service) StopInstance(ctx context.Context, instanceID string) error {
 	return nil
 }
 
-// StartInstance starts a stopped VM instance
 func (s *Service) StartInstance(ctx context.Context, instanceID string) error {
 	instance, err := s.GetInstance(ctx, instanceID)
 	if err != nil {
@@ -958,7 +898,6 @@ func (s *Service) StartInstance(ctx context.Context, instanceID string) error {
 	return nil
 }
 
-// ResetInstance resets a VM to its initial state
 func (s *Service) ResetInstance(ctx context.Context, instanceID string) error {
 	instance, err := s.GetInstance(ctx, instanceID)
 	if err != nil {
@@ -980,14 +919,11 @@ func (s *Service) ResetInstance(ctx context.Context, instanceID string) error {
 		NetworkName: "anvil-lab",
 	}
 
-	// Stop VM on node
 	s.stopVMOnNode(ctx, node, instance.Name)
 
-	// Delete old overlay on node
 	delCmd := fmt.Sprintf("rm -f %s", instance.DiskPath)
 	s.runSSHCommand(ctx, node, delCmd)
 
-	// Create new overlay on node
 	overlayPath, err := s.createOverlayOnNode(ctx, template.ImagePath, instanceID, node)
 	if err != nil {
 		return fmt.Errorf("failed to create new overlay: %w", err)
@@ -997,7 +933,6 @@ func (s *Service) ResetInstance(ctx context.Context, instanceID string) error {
 	instance.DiskPath = overlayPath
 	s.mu.Unlock()
 
-	// Start VM with new disk on node
 	startCmd := fmt.Sprintf("virsh -c qemu:///system start %s", instance.Name)
 	if _, err := s.runSSHCommand(ctx, node, startCmd); err != nil {
 		return fmt.Errorf("failed to start VM after reset: %w", err)
@@ -1014,7 +949,6 @@ func (s *Service) ResetInstance(ctx context.Context, instanceID string) error {
 	return nil
 }
 
-// DestroyInstance permanently destroys a VM instance
 func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error {
 	instance, err := s.GetInstance(ctx, instanceID)
 	if err != nil {
@@ -1031,12 +965,10 @@ func (s *Service) DestroyInstance(ctx context.Context, instanceID string) error 
 		NetworkName: "anvil-lab",
 	}
 
-	// Stop and undefine VM on node
 	s.stopVMOnNode(ctx, node, instance.Name)
 	s.undefineVMOnNode(ctx, node, instance.Name)
 
 	// Cleanup resources (DHCP lease will expire automatically)
-	// Delete overlay disk on remote node
 	delCmd := fmt.Sprintf("rm -f %s", instance.DiskPath)
 	s.runSSHCommand(ctx, node, delCmd)
 
@@ -1059,7 +991,6 @@ func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) 
 	// Convert full UUID to VM name format if needed
 	vmName := vmNameOrID
 	if !strings.HasPrefix(vmName, "anvil-") {
-		// Assume it's a full UUID, convert to VM name
 		if len(vmNameOrID) >= 8 {
 			vmName = fmt.Sprintf("anvil-%s", vmNameOrID[:8])
 		}
@@ -1084,7 +1015,6 @@ func (s *Service) DestroyInstanceByName(ctx context.Context, vmNameOrID string) 
 	}
 
 	s.logger.Info("attempting to acquire mutex lock for instance cleanup", zap.String("vm_name", vmName))
-	// Remove from memory map if present (extract instance ID from name)
 	// VM names are in format "anvil-{first 8 chars of UUID}"
 	var vncPort int
 	var ipAddress string
@@ -1179,7 +1109,6 @@ func (s *Service) DestroyInstanceByNameOnNode(ctx context.Context, vmNameOrID st
 	return nil
 }
 
-// ListUserInstances returns all instances for a user
 func (s *Service) ListUserInstances(ctx context.Context, userID string) ([]*VMInstance, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1194,7 +1123,6 @@ func (s *Service) ListUserInstances(ctx context.Context, userID string) ([]*VMIn
 	return instances, nil
 }
 
-// CleanupExpired destroys expired instances
 func (s *Service) CleanupExpired(ctx context.Context) error {
 	s.mu.RLock()
 	var expired []string
@@ -1237,7 +1165,6 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 		NetworkName: s.config.NetworkName,
 	}
 
-	// List all VMs with "anvil-" prefix
 	virshCmd := "virsh -c qemu:///system"
 	cmd := fmt.Sprintf("%s list --all --name | grep '^anvil-'", virshCmd)
 	output, err := s.runSSHCommand(ctx, node, cmd)
@@ -1257,13 +1184,10 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 			continue
 		}
 
-		// Extract instance ID from name (anvil-{first 8 chars of UUID})
-		// Check if this VM exists in the database (any status)
 		var instanceID string
 		var status string
 		var expiresAt *time.Time
 
-		// Query database for instance with this container_id
 		err := s.db.Pool.QueryRow(ctx,
 			`SELECT id, status, expires_at FROM instances WHERE container_id = $1`,
 			vmName).Scan(&instanceID, &status, &expiresAt)
@@ -1308,7 +1232,6 @@ func (s *Service) ReconcileState(ctx context.Context, nodeHostname, nodeIP, sshU
 	return nil
 }
 
-// ExtendInstance extends the expiration time of an instance
 func (s *Service) ExtendInstance(ctx context.Context, instanceID string, duration time.Duration) error {
 	s.mu.Lock()
 	instance, exists := s.instances[instanceID]
@@ -1334,7 +1257,6 @@ func (s *Service) ExtendInstance(ctx context.Context, instanceID string, duratio
 	return nil
 }
 
-// convertToQCOW2 converts an image to QCOW2 format
 func (s *Service) convertToQCOW2(ctx context.Context, imagePath string, format ImageFormat) (string, error) {
 	outputPath := strings.TrimSuffix(imagePath, filepath.Ext(imagePath)) + ".qcow2"
 
@@ -1359,7 +1281,6 @@ func (s *Service) convertToQCOW2(ctx context.Context, imagePath string, format I
 		return "", fmt.Errorf("unsupported format: %s", format)
 	}
 
-	// Use qemu-img to convert
 	cmd := exec.CommandContext(ctx, "qemu-img", "convert",
 		"-f", inputFormat,
 		"-O", "qcow2",
@@ -1381,7 +1302,6 @@ func (s *Service) convertToQCOW2(ctx context.Context, imagePath string, format I
 	return outputPath, nil
 }
 
-// extractOVA extracts VMDK from OVA file
 func (s *Service) extractOVA(ctx context.Context, ovaPath string) (string, error) {
 	extractedRoot := filepath.Join(s.config.ImageStorePath, "extracted")
 	if err := os.MkdirAll(extractedRoot, 0750); err != nil {
@@ -1401,7 +1321,6 @@ func (s *Service) extractOVA(ctx context.Context, ovaPath string) (string, error
 	return vmdkPath, nil
 }
 
-// createOverlay creates a CoW overlay disk for an instance
 func (s *Service) createOverlay(ctx context.Context, basePath string, instanceID string) (string, error) {
 	overlayPath := filepath.Join(s.config.InstanceStorePath, "overlays", instanceID+".qcow2")
 
@@ -1420,7 +1339,6 @@ func (s *Service) createOverlay(ctx context.Context, basePath string, instanceID
 	return overlayPath, nil
 }
 
-// libvirt XML template for VM definition
 const domainXMLTemplate = `
 <domain type='kvm'>
   <name>{{.Name}}</name>
@@ -1465,7 +1383,6 @@ const domainXMLTemplate = `
 </domain>
 `
 
-// VMDomainXML represents the XML structure for libvirt domain
 type VMDomainXML struct {
 	XMLName     xml.Name `xml:"domain"`
 	Name        string
@@ -1478,12 +1395,10 @@ type VMDomainXML struct {
 	VNCPort     int
 }
 
-// defineAndStartVM defines and starts a VM using virsh
 func (s *Service) defineAndStartVM(ctx context.Context, instance *VMInstance) error {
 	// For now, use virsh commands directly
 	// In production, use libvirt Go bindings
 
-	// Generate domain XML
 	xmlPath := filepath.Join(s.config.InstanceStorePath, instance.ID+".xml")
 	domainXML := fmt.Sprintf(`
 <domain type='kvm'>
@@ -1533,13 +1448,11 @@ func (s *Service) defineAndStartVM(ctx context.Context, instance *VMInstance) er
 	}
 	defer os.Remove(xmlPath)
 
-	// Define domain
 	cmd := exec.CommandContext(ctx, "virsh", "-c", s.config.LibvirtURI, "define", xmlPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("virsh define failed: %s: %w", string(output), err)
 	}
 
-	// Start domain
 	cmd = exec.CommandContext(ctx, "virsh", "-c", s.config.LibvirtURI, "start", instance.Name)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("virsh start failed: %s: %w", string(output), err)
@@ -1550,7 +1463,6 @@ func (s *Service) defineAndStartVM(ctx context.Context, instance *VMInstance) er
 
 func (s *Service) stopVM(ctx context.Context, name string) error {
 	s.logger.Info("executing SSH virsh destroy", zap.String("vm_name", name))
-	// Execute virsh on host via SSH
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
@@ -1571,7 +1483,6 @@ func (s *Service) stopVM(ctx context.Context, name string) error {
 func (s *Service) stopVMOnNode(ctx context.Context, node *NodeInfo, name string) error {
 	s.logger.Info("attempting to stop VM", zap.String("name", name), zap.String("node", node.IPAddress))
 
-	// First check if VM exists and is running
 	checkCmd := fmt.Sprintf("virsh -c qemu:///system list --name | grep -q '^%s$'", name)
 	_, err := s.runSSHCommand(ctx, node, checkCmd)
 	if err != nil {
@@ -1582,7 +1493,6 @@ func (s *Service) stopVMOnNode(ctx context.Context, node *NodeInfo, name string)
 
 	s.logger.Info("VM found running, destroying", zap.String("name", name))
 
-	// Stop the VM
 	cmd := fmt.Sprintf("virsh -c qemu:///system destroy %s", name)
 	output, err := s.runSSHCommand(ctx, node, cmd)
 	if err != nil {
@@ -1602,12 +1512,10 @@ func (s *Service) stopVMOnNode(ctx context.Context, node *NodeInfo, name string)
 func (s *Service) undefineVMOnNode(ctx context.Context, node *NodeInfo, name string) error {
 	cmd := fmt.Sprintf("virsh -c qemu:///system undefine %s 2>/dev/null || true", name)
 	_, err := s.runSSHCommand(ctx, node, cmd)
-	// Ignore errors
 	return err
 }
 
 func (s *Service) startVM(ctx context.Context, name string) error {
-	// Execute virsh on host via SSH
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
@@ -1622,7 +1530,6 @@ func (s *Service) startVM(ctx context.Context, name string) error {
 
 func (s *Service) undefineVM(ctx context.Context, name string) error {
 	s.logger.Info("executing SSH virsh undefine", zap.String("vm_name", name))
-	// Execute virsh on host via SSH
 	cmd := exec.CommandContext(ctx, "ssh", "-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",
@@ -1661,8 +1568,6 @@ func (s *Service) getVMState(ctx context.Context, name string) (VMState, error) 
 		return VMStateNoState, nil
 	}
 }
-
-// Helper functions
 
 func (s *Service) getUserInstanceCount(userID string) int {
 	s.mu.RLock()

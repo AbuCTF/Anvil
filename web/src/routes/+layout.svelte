@@ -45,7 +45,6 @@
 	let theme: 'dark' | 'light' = 'dark';
 
 	onMount(() => {
-		// Check for existing auth token
 		auth.checkAuth();
 		theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
 		const refreshVisibleRank = () => {
@@ -77,16 +76,13 @@
 </script>
 
 <div class="min-h-screen bg-stone-950 text-stone-100 flex flex-col">
-	<!-- Navigation -->
 	<nav class="border-b border-stone-800 bg-stone-950/95 backdrop-blur-sm sticky top-0 z-50">
 		<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10">
 			<div class="grid h-16 grid-cols-[auto_1fr_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-				<!-- Logo / wordmark -->
 				<a href="/" class="col-start-1 row-start-1 flex shrink-0 items-center justify-self-start">
 					<img src="/logo.png" alt="Anvil" class="h-10 w-auto" />
 				</a>
 
-				<!-- Desktop Navigation - Centered -->
 				<div class="col-start-2 row-start-1 hidden items-center justify-self-center lg:flex">
 					<div class="flex items-center bg-stone-900/50 rounded-full p-1 border border-stone-800/50">
 						{#each navigation as item}
@@ -106,7 +102,6 @@
 					</div>
 				</div>
 
-				<!-- Event and account utilities -->
 				<div class="col-start-3 row-start-1 flex min-w-0 shrink-0 items-center justify-self-end gap-1 lg:gap-2 xl:gap-3">
 					<EventClock className="mr-1 shrink-0 lg:mr-0" />
 					<div class="hidden items-center gap-0.5 lg:flex">
@@ -190,7 +185,6 @@
 							</a>
 						{/if}
 					</div>
-					<!-- Mobile menu button -->
 					<div class="flex items-center gap-1 lg:hidden">
 						<button on:click={toggleTheme} aria-label="Toggle theme" class="p-2 text-stone-400 hover:text-stone-100">
 							<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
@@ -208,7 +202,6 @@
 			</div>
 		</div>
 
-		<!-- Mobile menu -->
 		{#if mobileMenuOpen}
 			<div class="border-t border-stone-800 bg-stone-950/95 backdrop-blur-md lg:hidden">
 				<div class="px-4 py-3 space-y-1">
@@ -264,7 +257,6 @@
 		{/if}
 	</nav>
 
-	<!-- Main content -->
 	<main class="flex-1">
 		<slot />
 	</main>

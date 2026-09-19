@@ -18,7 +18,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// AttachmentResponse is the public representation of a challenge attachment
 type AttachmentResponse struct {
 	ID          string `json:"id"`
 	Filename    string `json:"filename"`
@@ -29,7 +28,7 @@ type AttachmentResponse struct {
 	CreatedAt   int64  `json:"created_at"`
 }
 
-// maxAttachmentSize is the upper limit for a single-request attachment upload (500 MB)
+// upper limit for a single-request attachment upload (500 mb)
 const maxAttachmentSize = 500 * 1024 * 1024
 
 const (
@@ -38,9 +37,9 @@ const (
 	maxAttachmentDescription     = 5000
 )
 
-// allowedAttachmentTypes whitelists MIME types and extensions for challenge files.
-// Path-traversal safety: we never use the original filename as a storage path —
-// we always use a UUID-based key.
+// whitelists mime types and extensions for challenge files.
+// path-traversal safety: we never use the original filename as a storage path —
+// we always use a uuid-based key.
 var allowedAttachmentExtensions = map[string]bool{
 	".zip": true, ".tar": true, ".gz": true, ".tgz": true, ".bz2": true,
 	".7z": true, ".rar": true, ".xz": true,
@@ -56,12 +55,10 @@ var allowedAttachmentExtensions = map[string]bool{
 	"":     true, // no extension (binaries named without extension)
 }
 
-// sanitiseFilename strips directory components and control characters so that
-// the returned name is safe to embed in a Content-Disposition header.
+// strips directory components and control characters so the returned name
+// is safe to embed in a content-disposition header.
 func sanitiseFilename(name string) string {
-	// Strip directory components
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
-	// Remove any characters that are not printable ASCII
 	var b strings.Builder
 	for _, r := range name {
 		if r > 0x1F && r < 0x7F && r != '"' && r != '\\' && unicode.IsPrint(r) {
@@ -75,7 +72,6 @@ func sanitiseFilename(name string) string {
 	return result
 }
 
-// UploadAttachment allows an admin to attach a file to a challenge.
 // POST /api/v1/admin/challenges/:id/attachments
 func (h *AttachmentHandler) Upload(c *gin.Context) {
 	uploaderUID, ok := contextUserID(c)
@@ -94,7 +90,6 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Verify challenge exists
 	var exists bool
 	if err := h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT EXISTS(SELECT 1 FROM challenges WHERE id = $1)`, challengeID,
@@ -107,7 +102,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Allow a small amount of multipart framing overhead in addition to the file
+	// allow a small amount of multipart framing overhead in addition to the file
 	// limit, then enforce the file's own size below.
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAttachmentSize+maxAttachmentRequestOverhead)
 	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
@@ -150,7 +145,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Derive the response type from the accepted extension rather than trusting
+	// derive the response type from the accepted extension rather than trusting
 	// a client-supplied multipart header.
 	contentType := mime.TypeByExtension(ext)
 	if contentType == "" {
@@ -172,7 +167,7 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		sortOrder = int(parsed)
 	}
 
-	// Generate a UUID storage key to prevent path traversal
+	// generate a uuid storage key to prevent path traversal
 	attachmentID := uuid.New()
 	storageKey := fmt.Sprintf("challenge-attachments/%s/%s", challengeID, attachmentID.String())
 
@@ -182,7 +177,6 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Save metadata
 	result, err := h.db.Pool.Exec(c.Request.Context(),
 		`INSERT INTO challenge_attachments
 		 (id, challenge_id, uploaded_by, filename, file_size, content_type, storage_key, description, sort_order, created_at, updated_at)
@@ -224,7 +218,6 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	})
 }
 
-// ListAttachments returns all attachments for a challenge (admin endpoint).
 // GET /api/v1/admin/challenges/:id/attachments
 func (h *AttachmentHandler) List(c *gin.Context) {
 	challengeID := c.Param("id")
@@ -252,7 +245,6 @@ func (h *AttachmentHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"attachments": attachments})
 }
 
-// DeleteAttachment removes an attachment (admin).
 // DELETE /api/v1/admin/challenges/:id/attachments/:attachment_id
 func (h *AttachmentHandler) Delete(c *gin.Context) {
 	challengeID := c.Param("id")
@@ -284,7 +276,7 @@ func (h *AttachmentHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// Metadata is removed first: if object deletion fails, the unreachable file
+	// metadata is removed first: if object deletion fails, the unreachable file
 	// can be cleaned up later without leaving a public record that cannot download.
 	if err := h.storageSvc.Delete(c.Request.Context(), storageKey); err != nil {
 		h.logger.Warn("failed to delete attachment file", zap.Error(err), zap.String("key", storageKey))
@@ -293,7 +285,6 @@ func (h *AttachmentHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "attachment deleted"})
 }
 
-// Download serves an attachment file to participants.
 // GET /api/v1/challenges/:slug/attachments/:attachment_id/download
 func (h *AttachmentHandler) Download(c *gin.Context) {
 	slug := c.Param("slug")
@@ -307,7 +298,7 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 		return
 	}
 
-	// Look up attachment (join with challenge to validate slug ownership and published status)
+	// look up attachment (join with challenge to validate slug ownership and published status)
 	var storageKey, filename, contentType string
 	var fileSize int64
 	err := h.db.Pool.QueryRow(c.Request.Context(),
@@ -348,7 +339,6 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 		return
 	}
 
-	// Open the file from storage
 	reader, err := h.storageSvc.Download(c.Request.Context(), storageKey)
 	if err != nil {
 		h.logger.Error("failed to open attachment", zap.Error(err), zap.String("key", storageKey))
@@ -357,7 +347,7 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 	}
 	defer reader.Close()
 
-	// Force download with original filename; never render inline to prevent XSS
+	// force download with original filename; never render inline to prevent xss
 	safeFilename := sanitiseFilename(filename)
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, safeFilename))
 	c.Header("Content-Type", contentType)
@@ -371,7 +361,6 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 	}
 }
 
-// ListPublic is used by the challenge detail endpoint to embed attachments.
 func (h *AttachmentHandler) ListPublic(c *gin.Context, challengeID string) ([]AttachmentResponse, error) {
 	return h.queryAttachments(c, challengeID)
 }

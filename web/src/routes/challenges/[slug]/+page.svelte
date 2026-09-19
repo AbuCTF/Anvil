@@ -17,12 +17,10 @@
 	let actionError = '';
 	let cooldownInfo: { until: number; remaining: number } | null = null;
 
-	// Flag submission
 	let flagInput = '';
 	let submitting = false;
 	let submitResult: { correct: boolean; message: string } | null = null;
 
-	// Instance management
 	let creatingInstance = false;
 	let instanceAction = '';
 	let instanceError = '';
@@ -31,24 +29,21 @@
 	let timerInterval: ReturnType<typeof setInterval>;
 	let timeRemaining = '';
 
-	// Admin editing
 	let isEditing = false;
 	let editForm: { name: string; description: string; difficulty: string; base_points: number | string } | null = null;
 	let saving = false;
 	let showEditSuccess = false;
 
-	// Flag editing
 	let editingFlags: any[] = [];
 	let showFlagModal = false;
 	let newFlag = { name: '', flag: '', points: 100 };
 	let savingFlag = false;
 
-	// Attachment management (admin)
 	let attachmentUploading = false;
 	let attachmentUploadProgress = 0;
 	let attachmentFileInput: HTMLInputElement;
 	let attachmentDescription = '';
-	// Tracks whether a file is selected (reactive; bind:this alone doesn't trigger re-evaluation)
+	// reactive flag: bind:this alone doesn't trigger re-evaluation when the file changes
 	let attachmentFileSelected = false;
 
 	function onAttachmentFileChange(e: Event) {
@@ -67,7 +62,6 @@
 			fd.append('file', file);
 			if (attachmentDescription) fd.append('description', attachmentDescription);
 			await api.uploadAttachment(challenge.id, fd, (p) => { attachmentUploadProgress = p; });
-			// Reload challenge to refresh attachment list
 			await loadChallenge();
 			attachmentDescription = '';
 			attachmentFileSelected = false;
@@ -115,10 +109,10 @@
 		instance = null;
 	}
 
-	// Colored difficulty pill — shared with the challenge tiles. See DESIGN.md.
+	// colored difficulty pill — shared with the challenge tiles. see DESIGN.md.
 	$: diffClass = difficultyClass(challenge?.difficulty);
 
-	// Solver podium — rendered only if the API supplies ordered solve data. First
+	// solver podium — rendered only if the API supplies ordered solve data. first
 	// blood is the one sanctioned saturated pop (blood token).
 	$: solvers = (() => {
 		const raw = challenge?.solvers ?? challenge?.solves ?? challenge?.first_bloods ?? [];
@@ -145,17 +139,14 @@
 	onMount(async () => {
 		await loadChallenge();
 
-		// Update timer every second
 		timerInterval = setInterval(() => {
 			if (instance?.expires_at) {
 				timeRemaining = formatTimeRemaining(instance.expires_at);
-				// Auto-reload if expired
 				if (instance.expires_at < Math.floor(Date.now() / 1000)) {
 					instance = null;
 					loadUserInstance();
 				}
 			}
-			// Update cooldown
 			if (cooldownInfo && cooldownInfo.until > Math.floor(Date.now() / 1000)) {
 				cooldownInfo.remaining = cooldownInfo.until - Math.floor(Date.now() / 1000);
 			} else if (cooldownInfo) {
@@ -178,7 +169,6 @@
 				difficulty: challenge.difficulty,
 				base_points: challenge.base_points
 			};
-			// Load editable flags for admin
 			if (challenge.flags) {
 				editingFlags = challenge.flags.map((f: any) => ({ ...f, editing: false, newFlag: '' }));
 			}
@@ -219,7 +209,6 @@
 				await Promise.all([loadChallenge(), auth.checkAuth(true)]);
 			}
 		} catch (e: unknown) {
-			// Handle brute-force lockout (429)
 			const msg = e instanceof Error ? e.message : 'Submission failed';
 			submitResult = {
 				correct: false,
@@ -241,7 +230,6 @@
 				timeRemaining = formatTimeRemaining(instance.expires_at);
 			}
 		} catch (e: any) {
-			// Check if it's a cooldown error
 			if (e?.cooldown_until) {
 				cooldownInfo = {
 					until: e.cooldown_until,
@@ -276,7 +264,6 @@
 		try {
 			const result = await api.stopInstance(instance.id);
 			instance = null;
-			// Set cooldown info from response
 			if (result.cooldown_until) {
 				cooldownInfo = {
 					until: result.cooldown_until,
@@ -412,7 +399,7 @@
 		return 'bg-up';
 	}
 
-	// Muted callout tokens — reserved semantic color only, no neon.
+	// muted callout tokens — reserved semantic color only, no neon.
 	const calloutStyles: Record<string, { label: string; cls: string; icon: string }> = {
 		NOTE: { label: 'Note', cls: 'border-info/30 bg-info/10 text-info', icon: 'info' },
 		TIP: { label: 'Tip', cls: 'border-up/30 bg-up/10 text-up', icon: 'info' },
@@ -491,7 +478,6 @@
 		return blocks.join('');
 	}
 
-	// Flag management functions
 	async function saveFlag(flag: any) {
 		if (!challenge) return;
 		savingFlag = true;
@@ -558,7 +544,6 @@
 			</a>
 		</div>
 	{:else if challenge}
-		<!-- Success Toast -->
 		{#if showEditSuccess}
 			<div class="fixed top-4 right-4 z-50 bg-up/10 border border-up/20 text-up px-4 py-2 rounded-lg text-sm leading-none flex items-center gap-2">
 				<OpticalIcon icon="mdi:check" size={14} box={14} />
@@ -567,7 +552,6 @@
 		{/if}
 
 		<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-			<!-- Back Link -->
 			<a href="/challenges" class="inline-flex items-center gap-1.5 text-stone-500 hover:text-stone-300 text-sm leading-none mb-8 transition-colors">
 				<OpticalIcon icon="mdi:arrow-left" size={14} box={14} />
 				<span class="optical-label">Challenges</span>
@@ -583,9 +567,7 @@
 			{/if}
 
 			<div class="detail-in grid grid-cols-1 lg:grid-cols-3 gap-8">
-				<!-- Main Content -->
 				<div class="lg:col-span-2 space-y-6">
-					<!-- Header -->
 					<div class="flex items-start justify-between gap-4 pb-6 border-b border-stone-800">
 						<div class="flex-1 min-w-0">
 							{#if isEditing && editForm}
@@ -656,7 +638,6 @@
 						</div>
 					</div>
 
-					<!-- Admin Controls -->
 					{#if isAdmin}
 						<div class="flex items-center gap-2 pb-4 border-b border-stone-800/60 leading-none">
 							{#if isEditing}
@@ -690,7 +671,6 @@
 						</div>
 					{/if}
 
-					<!-- Description -->
 					<Card title="Description">
 						{#if isEditing && editForm}
 							<textarea
@@ -709,7 +689,6 @@
 						{/if}
 					</Card>
 
-					<!-- Objectives -->
 					{#if (challenge.flags && challenge.flags.length > 0) || (isEditing && isAdmin)}
 						<Card title="Objectives">
 							<svelte:fragment slot="meta">
@@ -728,7 +707,6 @@
 
 							<div class="space-y-2">
 								{#if isEditing && isAdmin}
-									<!-- Admin flag editing mode -->
 									{#each editingFlags as flag, i}
 										<div class="py-3 px-4 bg-stone-950 border border-stone-800 rounded-lg">
 											{#if flag.editing}
@@ -802,7 +780,6 @@
 										<p class="text-stone-600 text-sm py-4 text-center">No flags. Click "Add Flag" to create one.</p>
 									{/if}
 								{:else}
-									<!-- Normal user view -->
 									{#each challenge.flags as flag, i}
 										<div class="flex items-center justify-between py-3 px-4 rounded-lg {flag.is_solved ? 'bg-up/[0.06] border border-up/20' : 'bg-stone-950 border border-stone-800'}">
 											<div class="flex items-center gap-3">
@@ -831,7 +808,6 @@
 						</Card>
 					{/if}
 
-					<!-- Hints -->
 					{#if challenge.hints && challenge.hints.length > 0}
 						<Card title="Hints">
 							<div class="space-y-2">
@@ -853,7 +829,6 @@
 						</Card>
 					{/if}
 
-					<!-- File Attachments -->
 					{#if (challenge.attachments && challenge.attachments.length > 0) || (isEditing && isAdmin)}
 						<Card title="Files">
 							<div class="space-y-2">
@@ -888,7 +863,6 @@
 									</div>
 								{/each}
 
-								<!-- Admin upload form -->
 								{#if isEditing && isAdmin}
 									<div class="py-3 px-4 bg-stone-950 border border-dashed border-stone-700 rounded-lg space-y-3">
 										<p class="metadata-label text-stone-500">Upload file</p>
@@ -926,9 +900,7 @@
 					{/if}
 				</div>
 
-				<!-- Sidebar -->
 				<div class="space-y-6">
-					<!-- Instance Panel -->
 					{#if $auth.isAuthenticated && challenge.has_instance}
 						<Card title="Instance">
 							{#if instanceError}
@@ -945,7 +917,6 @@
 							{/if}
 							{#if instance}
 								<div class="space-y-4">
-									<!-- Status -->
 									<div>
 										<div class="flex items-center justify-between mb-2">
 											<div class="flex items-center gap-2 leading-none">
@@ -962,7 +933,6 @@
 										</div>
 									</div>
 
-									<!-- Connection Details -->
 									<div>
 										<p class="metadata-label text-stone-500 mb-2">Connect</p>
 										{#if instance.ports && Object.keys(instance.ports).length > 0}
@@ -1013,7 +983,6 @@
 										{/if}
 									</div>
 
-									<!-- Time & Extensions -->
 									<div class="grid grid-cols-2 gap-3">
 										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
 											<p class="metadata-label text-stone-500 mb-1">Time left</p>
@@ -1031,7 +1000,6 @@
 										</div>
 									</div>
 
-									<!-- Actions -->
 									<div class="flex gap-2">
 										<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs leading-none py-2 bg-stone-900 text-stone-300 rounded-md border border-stone-800 hover:bg-stone-800/60 hover:border-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
 											{#if instanceAction === 'extending'}
@@ -1052,7 +1020,6 @@
 									</div>
 								</div>
 							{:else if cooldownInfo}
-								<!-- Cooldown State -->
 								<div class="text-center py-4">
 									<div class="w-11 h-11 rounded-full bg-warn/10 flex items-center justify-center mx-auto mb-3">
 										<Icon icon="mdi:timer-sand" class="w-5 h-5 text-warn" />
@@ -1078,7 +1045,6 @@
 						</Card>
 					{/if}
 
-					<!-- Submit Flag -->
 					{#if $auth.isAuthenticated}
 						<Card title="Submit Flag">
 							<form on:submit|preventDefault={submitFlag} class="space-y-3">
@@ -1111,7 +1077,6 @@
 						</Card>
 					{/if}
 
-					<!-- Solves -->
 					<Card title="Solves">
 						<svelte:fragment slot="meta">
 							<span class="text-xs text-stone-500 tabular-nums">{challenge.total_solves}</span>
@@ -1119,7 +1084,6 @@
 
 						<div class="space-y-3">
 							{#if solvers.length > 0}
-								<!-- Podium: first blood is the one sanctioned saturated pop -->
 								<ol class="space-y-2">
 									{#each solvers as s (s.rank)}
 										{@const rk = podiumRank[s.rank] ?? { cls: 'text-stone-300 bg-stone-800/30 border-stone-800', label: `${s.rank}` }}
@@ -1164,7 +1128,6 @@
 						</div>
 					</Card>
 
-					<!-- Details -->
 					<Card title="Details">
 						<div class="space-y-2.5 text-sm">
 							<div class="flex items-center justify-between">
@@ -1218,7 +1181,6 @@
 	</style>
 </div>
 
-<!-- Add Flag Modal -->
 {#if showFlagModal}
 	<div class="fixed inset-0 bg-stone-950/80 flex items-center justify-center z-50 p-4">
 		<div class="bg-stone-900 border border-stone-800 rounded-lg w-full max-w-md">

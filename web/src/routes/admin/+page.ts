@@ -11,7 +11,6 @@ export const load: PageLoad = async ({ parent }) => {
 			throw redirect(302, '/login');
 		}
 		
-		// Get user from parent layout
 		const { user } = await parent();
 		if (user && user.role !== 'admin') {
 			throw redirect(302, '/');

@@ -1,6 +1,6 @@
-// Stable per-team color + rank-tier accents. See DESIGN.md.
-// A muted, low-chroma categorical palette — distinguishable but never rainbow on
-// near-black. Amber is deliberately absent; it is reserved for the accent/leader.
+// stable per-team color + rank-tier accents. see DESIGN.md.
+// a muted, low-chroma categorical palette — distinguishable but never rainbow on
+// near-black. amber is deliberately absent; it is reserved for the accent/leader.
 const SERIES = [
 	'#6f9dc9', // steel blue
 	'#7bb587', // sage green
@@ -24,12 +24,12 @@ export function teamHue(key: string): number {
 	return h;
 }
 
-// Muted, stable per-team color from the categorical palette.
+// muted, stable per-team color from the categorical palette.
 export function teamColor(key: string): string {
 	return SERIES[teamHue(key) % SERIES.length];
 }
 
-// Muted category color — consistent across scoreboard/profile/challenges. Prefer this
+// muted category color — consistent across scoreboard/profile/challenges. prefer this
 // over any vibrant category color stored in the database.
 const CATEGORY: Record<string, string> = {
 	pwn: '#cf7f83',
@@ -56,8 +56,8 @@ export function categoryColor(name: string | null | undefined): string {
 	return teamColor(name);
 }
 
-// Difficulty is a meaningful signal, so it earns color (a sanctioned exception to
-// "muted"): easy=green, medium=yellow, hard=red, insane=purple. See DESIGN.md.
+// difficulty is a meaningful signal, so it earns color (a sanctioned exception to
+// "muted"): easy=green, medium=yellow, hard=red, insane=purple. see DESIGN.md.
 export function difficultyClass(d: string | null | undefined): string {
 	switch ((d || '').toLowerCase()) {
 		case 'easy':
@@ -73,7 +73,7 @@ export function difficultyClass(d: string | null | undefined): string {
 	}
 }
 
-// Resource-type pill: VM = purple, container = blue.
+// resource-type pill: VM = purple, container = blue.
 export function resourceClass(t: string | null | undefined): string {
 	return (t || '').toLowerCase() === 'vm'
 		? 'text-purple-500 border-purple-500/30 bg-purple-500/10'

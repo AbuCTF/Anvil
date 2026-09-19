@@ -1,4 +1,4 @@
-// Compact duration formatting for relative solve times (T+…). Zero dependency.
+// compact duration formatting for relative solve times (T+…). zero dependency.
 
 export function formatDur(seconds: number): string {
 	const s = Math.max(0, Math.floor(seconds));
@@ -13,7 +13,7 @@ export function formatDur(seconds: number): string {
 	return rh ? `${d}d ${rh}h` : `${d}d`;
 }
 
-// Round, human axis ticks across a [0, max] time span (in seconds).
+// round, human axis ticks across a [0, max] time span (in seconds).
 export function timeTicks(maxSeconds: number, count = 4): number[] {
 	if (maxSeconds <= 0) return [0];
 	const step = maxSeconds / count;

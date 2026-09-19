@@ -117,7 +117,7 @@ func (h *GameAdminHandler) requireAffected(c *gin.Context, where string, affecte
 	return false
 }
 
-// Teams
+// teams
 
 type createTeamReq struct {
 	Name      string `json:"name" binding:"required"`
@@ -291,7 +291,7 @@ func (h *GameAdminHandler) AddMember(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "added"})
 }
 
-// Services
+// services
 
 type createServiceReq struct {
 	Name       string `json:"name" binding:"required"`
@@ -443,7 +443,7 @@ func (h *GameAdminHandler) DeleteService(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
-// Hills
+// hills
 
 type createHillReq struct {
 	Name         string `json:"name" binding:"required"`

@@ -79,7 +79,6 @@ type TeamResponse struct {
 
 const maxAuthRequestBytes = 16 << 10
 
-// Register handles user registration
 func (h *AuthHandler) Register(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
 	regMode, err := h.registrationMode(c.Request.Context())
@@ -115,8 +114,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// An invite is checked authoritatively after the password is hashed, inside
-	// the same transaction that creates the account and its refresh token.
+	// an invite is checked authoritatively after the password is hashed, inside the same transaction that creates the account and its refresh token
 	if regMode == "invite" {
 		if req.InviteCode == nil || *req.InviteCode == "" {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -126,7 +124,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 	}
 
-	// Hash password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		h.logger.Error("Failed to hash password", zap.Error(err))
@@ -188,7 +185,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 	}
 
-	// Create user
 	var userID uuid.UUID
 	err = tx.QueryRow(ctx,
 		`INSERT INTO users (username, email, password_hash, role, status)
@@ -243,7 +239,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 	}
 
-	// Generate tokens
 	tokens, err := h.generateTokensWithStore(ctx, tx, userID, req.Username, "user", "user")
 	if err != nil {
 		h.logger.Error("Failed to generate tokens", zap.Error(err))
@@ -260,7 +255,6 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Log audit
 	h.logAudit(c, userID, "user.registered", "user", userID)
 	rank, err := currentUserRank(c.Request.Context(), h.db, userID)
 	if err != nil {
@@ -314,7 +308,6 @@ func isRegistrationMode(mode string) bool {
 	}
 }
 
-// Login handles user login
 func (h *AuthHandler) Login(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
 	var req LoginRequest
@@ -329,7 +322,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Find user
 	var userID uuid.UUID
 	var username, email, passwordHash, role, status string
 	var displayName *string
@@ -354,7 +346,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Verify password
 	if err := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(req.Password)); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": "Invalid credentials",
@@ -368,7 +359,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Update last login
 	_, err = h.db.Pool.Exec(c.Request.Context(),
 		"UPDATE users SET last_login_at = NOW(), last_login_ip = $1 WHERE id = $2",
 		c.ClientIP(), userID,
@@ -377,7 +367,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		h.logger.Warn("Failed to update last login", zap.Error(err))
 	}
 
-	// Generate tokens
 	tokens, err := h.generateTokens(c.Request.Context(), userID, username, role, "user")
 	if err != nil {
 		h.logger.Error("Failed to generate tokens", zap.Error(err))
@@ -387,7 +376,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Log audit
 	h.logAudit(c, userID, "user.login", "user", userID)
 	rank, err := currentUserRank(c.Request.Context(), h.db, userID)
 	if err != nil {
@@ -411,7 +399,6 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	})
 }
 
-// TokenAuth handles team token authentication
 func (h *AuthHandler) TokenAuth(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
 	var req TokenAuthRequest
@@ -437,7 +424,7 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Lock the team token until its session and usage count are committed.
+	// lock the team token until its session and usage count are committed
 	var tokenID uuid.UUID
 	var teamName string
 	var currentUses, maxUses int
@@ -479,7 +466,6 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 		return
 	}
 
-	// Create session
 	sessionToken, err := generateSecureToken(32)
 	if err != nil {
 		h.logger.Error("Failed to generate session token", zap.Error(err))
@@ -504,8 +490,7 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 		return
 	}
 
-	// Increment defensively as well as holding the row lock, so the database
-	// cannot commit a use beyond the configured limit.
+	// increment defensively as well as holding the row lock, so the database can't commit a use beyond the configured limit
 	result, err := tx.Exec(ctx,
 		`UPDATE team_tokens
 		 SET current_uses = COALESCE(current_uses, 0) + 1
@@ -529,7 +514,6 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 		return
 	}
 
-	// Generate JWT for session
 	claims := middleware.Claims{
 		SessionID: sessionID,
 		Username:  teamName,
@@ -570,7 +554,6 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 	})
 }
 
-// RefreshToken handles token refresh
 func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
 	var req struct {
@@ -598,8 +581,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Hash the refresh token to compare with stored hash. Token rotation is kept
-	// in this transaction so a failed revoke cannot leave the old token usable.
+	// hash the refresh token to compare with the stored hash; token rotation stays in this transaction so a failed revoke can't leave the old token usable
 	tokenHash := hashToken(req.RefreshToken)
 
 	var userID uuid.UUID
@@ -640,7 +622,6 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Get user info
 	var username, role, status string
 	err = tx.QueryRow(ctx,
 		"SELECT username, role, status FROM users WHERE id = $1",
@@ -665,8 +646,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Revoke old refresh token. The row lock from the lookup plus the conditional
-	// update prevents two concurrent refreshes from both rotating one token.
+	// revoke old refresh token: the row lock from the lookup plus the conditional update prevents two concurrent refreshes from both rotating one token
 	result, err := tx.Exec(ctx,
 		"UPDATE refresh_tokens SET revoked = true WHERE token_hash = $1 AND revoked = false",
 		tokenHash,
@@ -687,7 +667,6 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Generate new tokens
 	tokens, err := h.generateTokensWithStore(ctx, tx, userID, username, role, "user")
 	if err != nil {
 		h.logger.Error("Failed to generate new tokens", zap.Error(err))
@@ -712,9 +691,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	})
 }
 
-// Logout handles user logout
 func (h *AuthHandler) Logout(c *gin.Context) {
-	// Get token from header
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" {
 		c.JSON(http.StatusOK, gin.H{
@@ -722,8 +699,6 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		})
 		return
 	}
-
-	// Could add token to blocklist here if needed
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Logged out",
@@ -735,9 +710,7 @@ type tokenPair struct {
 	refresh string
 }
 
-// ssoClaims are the claims Anvil expects on a ZeroPool -> Anvil handoff token
-// (model B). ZeroPool signs (HS256, shared secret); Anvil verifies + exchanges
-// for an Anvil session. `sub` = the stable ZeroPool participant id.
+// claims Anvil expects on a ZeroPool -> Anvil handoff token (model B); ZeroPool signs it (hs256, shared secret), Anvil verifies and exchanges for an Anvil session; `sub` = the stable ZeroPool participant id
 type ssoClaims struct {
 	Email         string `json:"email"`
 	Username      string `json:"username"`
@@ -746,9 +719,7 @@ type ssoClaims struct {
 	jwt.RegisteredClaims
 }
 
-// uniqueUsername picks an available Anvil username for a provisioned SSO user,
-// preferring the token's username (or the email local-part), appending a short
-// random suffix on collision. The users.username UNIQUE constraint is the backstop.
+// picks an available Anvil username for a provisioned sso user, preferring the token's username (or email local-part) and appending a short random suffix on collision; the users.username UNIQUE constraint is the backstop
 func (h *AuthHandler) uniqueUsername(ctx context.Context, tx pgx.Tx, preferred, email string) string {
 	base := strings.TrimSpace(preferred)
 	if base == "" {
@@ -781,8 +752,7 @@ func (h *AuthHandler) uniqueUsername(ctx context.Context, tx pgx.Tx, preferred, 
 	return candidate
 }
 
-// SSOLogin verifies a ZeroPool-signed handoff token, links or provisions the
-// Anvil account, and issues an Anvil session. Gated by sso.enabled.
+// verifies a ZeroPool-signed handoff token, links or provisions the Anvil account, and issues an Anvil session; gated by sso.enabled
 func (h *AuthHandler) SSOLogin(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
 	if !h.config.SSO.Enabled || strings.TrimSpace(h.config.SSO.SharedSecret) == "" {
@@ -837,8 +807,7 @@ func (h *AuthHandler) SSOLogin(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "SSO token missing subject or email"})
 		return
 	}
-	// Anvil enforces "must be verified"; ZeroPool owns the verification state
-	// (email-link or GitHub-verified) and only sets this true when appropriate.
+	// Anvil enforces "must be verified"; ZeroPool owns the verification state (email-link or GitHub-verified) and only sets this true when appropriate
 	if !claims.EmailVerified {
 		c.JSON(http.StatusForbidden, gin.H{"error": "email is not verified; verify on ZeroPool first"})
 		return
@@ -858,7 +827,7 @@ func (h *AuthHandler) SSOLogin(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Replay guard: a token's jti is single-use.
+	// replay guard: a token's jti is single-use
 	if jti := strings.TrimSpace(claims.ID); jti != "" {
 		ct, err := tx.Exec(ctx,
 			`INSERT INTO sso_used_tokens (jti, expires_at) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING`,
@@ -879,12 +848,12 @@ func (h *AuthHandler) SSOLogin(c *gin.Context) {
 	var displayName *string
 	var totalScore int
 
-	// 1) existing SSO-linked user
+	// 1) existing sso-linked user
 	err = tx.QueryRow(ctx,
 		`SELECT id, username, role, display_name, total_score FROM users WHERE sso_subject = $1`, subject,
 	).Scan(&userID, &username, &role, &displayName, &totalScore)
 
-	// 2) link an existing user by email (first SSO for a pre-existing account)
+	// 2) link an existing user by email (first sso for a pre-existing account)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(ctx,
 			`UPDATE users SET sso_subject = $1, email_verified = TRUE, updated_at = NOW()
@@ -959,7 +928,6 @@ type tokenStore interface {
 }
 
 func (h *AuthHandler) generateTokensWithStore(ctx context.Context, store tokenStore, userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
-	// Generate access token
 	claims := middleware.Claims{
 		UserID:    userID,
 		Username:  username,
@@ -978,14 +946,12 @@ func (h *AuthHandler) generateTokensWithStore(ctx context.Context, store tokenSt
 		return nil, err
 	}
 
-	// Generate refresh token
 	refreshToken, err := generateSecureToken(32)
 	if err != nil {
 		return nil, fmt.Errorf("generate refresh token: %w", err)
 	}
 	refreshHash := hashToken(refreshToken)
 
-	// Store refresh token
 	_, err = store.Exec(ctx,
 		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
 		 VALUES ($1, $2, $3)`,

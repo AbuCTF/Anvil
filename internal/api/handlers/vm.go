@@ -11,13 +11,11 @@ import (
 	"go.uber.org/zap"
 )
 
-// VMHandler handles VM-related API endpoints
 type VMHandler struct {
 	vmService *vm.Service
 	logger    *zap.Logger
 }
 
-// NewVMHandler creates a new VM handler
 func NewVMHandler(vmService *vm.Service, logger *zap.Logger) *VMHandler {
 	return &VMHandler{
 		vmService: vmService,
@@ -25,7 +23,6 @@ func NewVMHandler(vmService *vm.Service, logger *zap.Logger) *VMHandler {
 	}
 }
 
-// CreateVMRequest is the API request for creating a VM
 type CreateVMRequest struct {
 	TemplateID  string `json:"template_id" binding:"required"`
 	ChallengeID string `json:"challenge_id" binding:"required"`
@@ -34,7 +31,6 @@ type CreateVMRequest struct {
 	Duration    string `json:"duration,omitempty"` // e.g., "2h", "4h"
 }
 
-// VMResponse is the API response for VM operations
 type VMResponse struct {
 	ID           string      `json:"id"`
 	Name         string      `json:"name"`
@@ -52,7 +48,6 @@ type VMResponse struct {
 	ExpiresAt    string      `json:"expires_at"`
 }
 
-// CreateVM creates a new VM instance
 // POST /api/v1/vms
 func (h *VMHandler) CreateVM(c *gin.Context) {
 	var req CreateVMRequest
@@ -67,7 +62,6 @@ func (h *VMHandler) CreateVM(c *gin.Context) {
 		return
 	}
 
-	// Parse duration if provided
 	var duration time.Duration
 	if req.Duration != "" {
 		var err error
@@ -79,7 +73,7 @@ func (h *VMHandler) CreateVM(c *gin.Context) {
 	}
 
 	vmReq := vm.CreateVMRequest{
-		Name:        "", // Auto-generated
+		Name:        "", // auto-generated
 		TemplateID:  req.TemplateID,
 		ChallengeID: req.ChallengeID,
 		UserID:      userID.String(),
@@ -102,7 +96,6 @@ func (h *VMHandler) CreateVM(c *gin.Context) {
 	c.JSON(http.StatusCreated, vmInstanceToResponse(instance))
 }
 
-// GetVM returns details about a specific VM
 // GET /api/v1/vms/:id
 func (h *VMHandler) GetVM(c *gin.Context) {
 	instanceID := c.Param("id")
@@ -119,7 +112,6 @@ func (h *VMHandler) GetVM(c *gin.Context) {
 		return
 	}
 
-	// Check ownership (unless admin)
 	role, _ := c.Get("role")
 	if instance.UserID != userID.String() && role != "admin" {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access denied"})
@@ -129,7 +121,6 @@ func (h *VMHandler) GetVM(c *gin.Context) {
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 
-// ListUserVMs returns all VMs for the current user
 // GET /api/v1/vms
 func (h *VMHandler) ListUserVMs(c *gin.Context) {
 	userID := middleware.GetUserID(c)
@@ -155,7 +146,6 @@ func (h *VMHandler) ListUserVMs(c *gin.Context) {
 	})
 }
 
-// StartVM starts a stopped VM
 // POST /api/v1/vms/:id/start
 func (h *VMHandler) StartVM(c *gin.Context) {
 	instanceID := c.Param("id")
@@ -192,7 +182,6 @@ func (h *VMHandler) StartVM(c *gin.Context) {
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 
-// StopVM stops a running VM
 // POST /api/v1/vms/:id/stop
 func (h *VMHandler) StopVM(c *gin.Context) {
 	instanceID := c.Param("id")
@@ -229,7 +218,6 @@ func (h *VMHandler) StopVM(c *gin.Context) {
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 
-// ResetVM resets a VM to its initial state
 // POST /api/v1/vms/:id/reset
 func (h *VMHandler) ResetVM(c *gin.Context) {
 	instanceID := c.Param("id")
@@ -251,7 +239,6 @@ func (h *VMHandler) ResetVM(c *gin.Context) {
 		return
 	}
 
-	// Check reset limit from metadata (stored during creation)
 	maxResets := 3 // default
 	resetCount := 0
 	if val, ok := instance.Metadata["reset_count"]; ok {
@@ -276,7 +263,6 @@ func (h *VMHandler) ResetVM(c *gin.Context) {
 		return
 	}
 
-	// Increment reset counter
 	if instance.Metadata == nil {
 		instance.Metadata = make(map[string]string)
 	}
@@ -291,7 +277,6 @@ func (h *VMHandler) ResetVM(c *gin.Context) {
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 
-// ExtendVM extends the VM's expiration time
 // POST /api/v1/vms/:id/extend
 func (h *VMHandler) ExtendVM(c *gin.Context) {
 	instanceID := c.Param("id")
@@ -317,7 +302,7 @@ func (h *VMHandler) ExtendVM(c *gin.Context) {
 		Duration string `json:"duration"` // e.g., "1h", "30m"
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		req.Duration = "1h" // Default 1 hour extension
+		req.Duration = "1h" // default 1 hour extension
 	}
 
 	duration, err := time.ParseDuration(req.Duration)
@@ -340,7 +325,6 @@ func (h *VMHandler) ExtendVM(c *gin.Context) {
 	c.JSON(http.StatusOK, vmInstanceToResponse(instance))
 }
 
-// DestroyVM permanently destroys a VM
 // DELETE /api/v1/vms/:id
 func (h *VMHandler) DestroyVM(c *gin.Context) {
 	instanceID := c.Param("id")
@@ -371,7 +355,6 @@ func (h *VMHandler) DestroyVM(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "VM destroyed"})
 }
 
-// ListTemplates returns all available VM templates
 // GET /api/v1/vms/templates
 func (h *VMHandler) ListTemplates(c *gin.Context) {
 	templates, err := h.vmService.ListTemplates(c.Request.Context())
@@ -400,7 +383,6 @@ func (h *VMHandler) ListTemplates(c *gin.Context) {
 	})
 }
 
-// GetTemplate returns details about a specific template
 // GET /api/v1/vms/templates/:id
 func (h *VMHandler) GetTemplate(c *gin.Context) {
 	templateID := c.Param("id")
@@ -425,7 +407,6 @@ func (h *VMHandler) GetTemplate(c *gin.Context) {
 	})
 }
 
-// Helper function to convert VMInstance to API response
 func vmInstanceToResponse(inst *vm.VMInstance) VMResponse {
 	resp := VMResponse{
 		ID:           inst.ID,

@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 )
 
-// User roles
 type UserRole string
 
 const (
@@ -15,7 +14,6 @@ const (
 	RoleAdmin  UserRole = "admin"
 )
 
-// User status
 type UserStatus string
 
 const (
@@ -24,7 +22,6 @@ const (
 	StatusBanned    UserStatus = "banned"
 )
 
-// User represents a platform user
 type User struct {
 	ID           uuid.UUID  `json:"id" db:"id"`
 	Username     string     `json:"username" db:"username"`
@@ -33,16 +30,13 @@ type User struct {
 	Role         UserRole   `json:"role" db:"role"`
 	Status       UserStatus `json:"status" db:"status"`
 
-	// Profile
 	DisplayName *string `json:"display_name,omitempty" db:"display_name"`
 	AvatarURL   *string `json:"avatar_url,omitempty" db:"avatar_url"`
 	Bio         *string `json:"bio,omitempty" db:"bio"`
 
-	// Stats
 	TotalScore       int `json:"total_score" db:"total_score"`
 	ChallengesSolved int `json:"challenges_solved" db:"challenges_solved"`
 
-	// Metadata
 	EmailVerified bool       `json:"email_verified" db:"email_verified"`
 	LastLoginAt   *time.Time `json:"last_login_at,omitempty" db:"last_login_at"`
 	LastLoginIP   *string    `json:"-" db:"last_login_ip"`
@@ -50,7 +44,6 @@ type User struct {
 	UpdatedAt     time.Time  `json:"updated_at" db:"updated_at"`
 }
 
-// TeamToken for token-based access
 type TeamToken struct {
 	ID          uuid.UUID  `json:"id" db:"id"`
 	Token       string     `json:"token" db:"token"`
@@ -62,7 +55,6 @@ type TeamToken struct {
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 }
 
-// InviteCode for invite-only registration
 type InviteCode struct {
 	ID          uuid.UUID  `json:"id" db:"id"`
 	Code        string     `json:"code" db:"code"`
@@ -73,7 +65,6 @@ type InviteCode struct {
 	CreatedAt   time.Time  `json:"created_at" db:"created_at"`
 }
 
-// Session represents an active user session
 type Session struct {
 	ID           uuid.UUID  `json:"id" db:"id"`
 	UserID       *uuid.UUID `json:"user_id,omitempty" db:"user_id"`
@@ -85,7 +76,6 @@ type Session struct {
 	CreatedAt    time.Time  `json:"created_at" db:"created_at"`
 }
 
-// RefreshToken for JWT refresh
 type RefreshToken struct {
 	ID        uuid.UUID `json:"id" db:"id"`
 	UserID    uuid.UUID `json:"user_id" db:"user_id"`

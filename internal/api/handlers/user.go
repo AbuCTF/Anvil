@@ -41,9 +41,7 @@ func userRankETag(rank int) string {
 	return `"rank-` + strconv.Itoa(rank) + `"`
 }
 
-// GetRank returns only the viewer's current global rank for lightweight header
-// revalidation. The ETag lets a returning tab avoid downloading an unchanged
-// response without coupling the navigation to the full profile endpoint.
+// etag lets a returning tab skip re-downloading an unchanged rank.
 func (h *UserHandler) GetRank(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -69,19 +67,16 @@ func (h *UserHandler) GetRank(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"rank": rank})
 }
 
-// UserService handles user operations
 type UserService struct {
 	config *config.Config
 	db     *database.DB
 	logger *zap.Logger
 }
 
-// NewUserService creates a new user service
 func NewUserService(cfg *config.Config, db *database.DB, logger *zap.Logger) *UserService {
 	return &UserService{config: cfg, db: db, logger: logger}
 }
 
-// UserProfileResponse represents the user profile
 type UserProfileResponse struct {
 	ID              string  `json:"id"`
 	Username        string  `json:"username"`
@@ -96,7 +91,6 @@ type UserProfileResponse struct {
 	TotalChallenges int     `json:"total_challenges"`
 }
 
-// UserStatsResponse represents user statistics
 type UserStatsResponse struct {
 	TotalScore         int            `json:"total_score"`
 	Rank               int            `json:"rank"`
@@ -110,7 +104,6 @@ type UserStatsResponse struct {
 	RecentActivity     []ActivityItem `json:"recent_activity"`
 }
 
-// ActivityItem represents a recent activity
 type ActivityItem struct {
 	Type          string  `json:"type"` // solve, hint_unlock
 	ChallengeID   string  `json:"challenge_id"`
@@ -120,7 +113,6 @@ type ActivityItem struct {
 	Timestamp     int64   `json:"timestamp"`
 }
 
-// SolveResponse represents a solve in the history
 type SolveResponse struct {
 	ID            string `json:"id"`
 	ChallengeID   string `json:"challenge_id"`
@@ -132,7 +124,6 @@ type SolveResponse struct {
 	SolvedAt      int64  `json:"solved_at"`
 }
 
-// GetProfile returns the current user's profile
 func (h *UserHandler) GetProfile(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -198,7 +189,6 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, profile)
 }
 
-// UpdateProfileRequest represents the profile update request
 type UpdateProfileRequest struct {
 	DisplayName *string `json:"display_name"`
 	Bio         *string `json:"bio"`
@@ -240,7 +230,6 @@ func normalizeProfileUpdate(req UpdateProfileRequest) (normalizedProfileUpdate, 
 	return update, nil
 }
 
-// UpdateProfile updates the current user's profile
 func (h *UserHandler) UpdateProfile(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -287,7 +276,6 @@ func (h *UserHandler) UpdateProfile(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "profile updated"})
 }
 
-// GetStats returns user statistics
 func (h *UserHandler) GetStats(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -342,7 +330,6 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 		return
 	}
 
-	// Solves by difficulty
 	rows, err := h.db.Pool.Query(c.Request.Context(),
 		`SELECT c.difficulty, COUNT(DISTINCT c.id)
 		 FROM solves s
@@ -374,7 +361,6 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 	}
 	rows.Close()
 
-	// Solves by category
 	rows, err = h.db.Pool.Query(c.Request.Context(),
 		`SELECT COALESCE(cat.name, 'Uncategorized'), COUNT(DISTINCT c.id)
 		 FROM solves s
@@ -407,7 +393,6 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 	}
 	rows.Close()
 
-	// Recent activity
 	activityQuery := `
 		SELECT 'solve' as type, c.id, c.name, f.name, s.points_awarded, s.solved_at
 		FROM solves s
@@ -453,7 +438,6 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
-// GetSolves returns the user's solve history
 func (h *UserHandler) GetSolves(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {

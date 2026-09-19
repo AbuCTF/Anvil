@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config holds all configuration for the application
 type Config struct {
 	Environment string          `mapstructure:"environment"`
 	Server      ServerConfig    `mapstructure:"server"`
@@ -24,11 +23,11 @@ type Config struct {
 	Economy     EconomyConfig   `mapstructure:"economy"`
 }
 
-// EconomyConfig holds the Ledger economy parameters (player 0-1000 anchor, ×10 of
-// ledger-sim/reference_config.json). Band arrays index by difficulty: 0=easy,
-// 1=medium, 2=hard, 3=insane(=the sim's "novel" tier). The live on/off is the
-// runtime `economy_mode` platform setting; these are the validated numbers, guarded
-// by invariant #7 at boot (see Validate). Any change here => CTF26-1 re-sims.
+// ledger economy parameters (player 0-1000 anchor, ×10 of
+// ledger-sim/reference_config.json). band arrays index by difficulty: 0=easy,
+// 1=medium, 2=hard, 3=insane(=the sim's "novel" tier). the live on/off is the
+// runtime economy_mode platform setting; these are the validated numbers, guarded
+// by invariant #7 at boot (see validate). any change here => ctf26-1 re-sims.
 type EconomyConfig struct {
 	Grant             float64   `mapstructure:"grant"`
 	Ceilings          []float64 `mapstructure:"ceilings"`
@@ -54,19 +53,19 @@ type EconomyConfig struct {
 	C2PRate           float64   `mapstructure:"c2p_rate"`
 }
 
-// SSOConfig configures the ZeroPool -> Anvil SSO handoff (model B). ZeroPool
-// signs a short-lived JWT that Anvil verifies and exchanges for an Anvil session.
+// configures the zeropool -> anvil sso handoff (model b). zeropool signs a
+// short-lived jwt that anvil verifies and exchanges for an anvil session.
 type SSOConfig struct {
 	Enabled      bool   `mapstructure:"enabled"`       // off => the /auth/sso endpoint 404s
-	SharedSecret string `mapstructure:"shared_secret"` // HS256 secret shared with ZeroPool
+	SharedSecret string `mapstructure:"shared_secret"` // hs256 secret shared with zeropool
 	Issuer       string `mapstructure:"issuer"`        // expected token iss (e.g. "zeropool")
 	Audience     string `mapstructure:"audience"`      // expected token aud (e.g. "anvil")
 }
 
 const defaultJWTSecret = "change-me-in-production-please"
 
-// Validate checks configuration that would make a production deployment
-// unsafe to start. Development keeps permissive defaults for local work.
+// rejects configuration that would make a production deployment unsafe to
+// start. development keeps permissive defaults for local work.
 func (c Config) Validate() error {
 	if strings.EqualFold(strings.TrimSpace(c.Environment), "production") {
 		secret := strings.TrimSpace(c.JWT.Secret)
@@ -74,8 +73,8 @@ func (c Config) Validate() error {
 			return fmt.Errorf("jwt.secret must be at least 32 bytes and non-default in production")
 		}
 	}
-	// Ledger economy invariant #7 (round-trips lose value) — the only runtime
-	// config-load guard per CTF26-1/metrics.py. Validated in every environment.
+	// ledger economy invariant #7 (round-trips lose value) — the only runtime
+	// config-load guard per ctf26-1/metrics.py. validated in every environment.
 	if c.Economy.P2CBase > 0 && c.Economy.C2PRate > 0 {
 		roundtrip := c.Economy.P2CBase * c.Economy.C2PRate
 		if roundtrip >= 1.0 {
@@ -179,7 +178,7 @@ type RateLimit struct {
 	Window   time.Duration `mapstructure:"window"`
 }
 
-// GameConfig tunes the Attack-Defense + KotH engine. Off by default.
+// tunes the attack-defense + koth engine. off by default.
 type GameConfig struct {
 	Enabled        bool          `mapstructure:"enabled"`
 	TickInterval   time.Duration `mapstructure:"tick_interval"`
@@ -211,7 +210,6 @@ type WebhookConfig struct {
 	ID      string `mapstructure:"id"`
 }
 
-// Load reads configuration from file and environment variables
 func Load() (*Config, error) {
 	v := viper.New()
 
@@ -231,7 +229,7 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("error binding environment variable for %s: %w", key, err)
 		}
 	}
-	// ANVIL_ENV is the established deployment variable; ANVIL_ENVIRONMENT is
+	// anvil_env is the established deployment variable; anvil_environment is
 	// retained as the direct mapstructure spelling.
 	if err := v.BindEnv("environment", "ANVIL_ENVIRONMENT", "ANVIL_ENV"); err != nil {
 		return nil, fmt.Errorf("error binding environment variable for environment: %w", err)
@@ -272,7 +270,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("storage.path", "./data/storage")
 
-	// Ledger economy (player 0-1000 anchor, ×10 of ledger-sim/reference_config.json).
+	// ledger economy (player 0-1000 anchor, ×10 of ledger-sim/reference_config.json).
 	v.SetDefault("economy.grant", 4000.0)
 	v.SetDefault("economy.ceilings", []float64{100, 250, 500, 1000})
 	v.SetDefault("economy.launch_costs", []float64{50, 100, 200, 250})
@@ -297,7 +295,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("economy.c2p_rate", 0.015)
 
 	v.SetDefault("sso.enabled", false)
-	v.SetDefault("sso.shared_secret", "") // must be defaulted so the env-bind loop (AllKeys) binds ANVIL_SSO_SHARED_SECRET
+	v.SetDefault("sso.shared_secret", "") // must be defaulted so the env-bind loop (allkeys) binds anvil_sso_shared_secret
 	v.SetDefault("sso.issuer", "zeropool")
 	v.SetDefault("sso.audience", "anvil")
 

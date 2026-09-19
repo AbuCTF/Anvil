@@ -3,7 +3,7 @@
   import { linear, niceMax } from "$lib/chart/scale";
   import { formatDur, timeTicks } from "$lib/chart/time";
 
-  // Points are cumulative: x = seconds since first solve, y = running total.
+  // points are cumulative: x = seconds since first solve, y = running total.
   export let points: { x: number; y: number; color: string; label: string }[] =
     [];
   export let height = 260;

@@ -27,7 +27,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// VMTemplateHandler handles VM template management
 type VMTemplateHandler struct {
 	config *config.Config
 	db     *database.DB
@@ -44,7 +43,6 @@ const (
 	maxVMConversionOutputBytes  = 64 * 1024
 )
 
-// NewVMTemplateHandler creates a new template handler
 func NewVMTemplateHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *VMTemplateHandler {
 	return &VMTemplateHandler{config: cfg, db: db, logger: logger}
 }
@@ -64,7 +62,6 @@ func (h *VMTemplateHandler) safeLogger() *zap.Logger {
 	return zap.NewNop()
 }
 
-// TemplateResponse represents a VM template in API responses
 type TemplateResponse struct {
 	ID             string            `json:"id"`
 	Name           string            `json:"name"`
@@ -86,7 +83,6 @@ type TemplateResponse struct {
 	CreatedAt      int64             `json:"created_at"`
 }
 
-// List returns all VM templates
 // GET /api/v1/admin/vm-templates
 func (h *VMTemplateHandler) List(c *gin.Context) {
 	if !h.ready(c) {
@@ -151,7 +147,6 @@ func (h *VMTemplateHandler) List(c *gin.Context) {
 	})
 }
 
-// Get returns a specific template
 // GET /api/v1/admin/vm-templates/:id
 func (h *VMTemplateHandler) Get(c *gin.Context) {
 	if !h.ready(c) {
@@ -202,7 +197,6 @@ func (h *VMTemplateHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, t)
 }
 
-// UploadProgress tracks OVA upload and conversion progress
 type UploadProgress struct {
 	UploadID string `json:"upload_id"`
 	Status   string `json:"status"`
@@ -211,7 +205,6 @@ type UploadProgress struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// Upload handles OVA file upload with chunked transfer
 // POST /api/v1/admin/vm-templates/upload
 func (h *VMTemplateHandler) Upload(c *gin.Context) {
 	if !h.ready(c) {
@@ -236,7 +229,6 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 		}()
 	}
 
-	// Get form values
 	name := strings.TrimSpace(c.PostForm("name"))
 	description := c.PostForm("description")
 	osType := strings.TrimSpace(c.DefaultPostForm("os_type", "linux"))
@@ -267,7 +259,6 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Get the uploaded file
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "no file provided"})
@@ -299,18 +290,15 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Generate IDs
 	uploadID := uuid.New()
 	templateID := uuid.New()
 
-	// Get user ID from context
 	userID := middleware.GetUserID(c)
 	if userID == nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not authenticated"})
 		return
 	}
 
-	// Create upload record in database
 	result, err := h.db.Pool.Exec(c.Request.Context(), `
 		INSERT INTO uploads (id, user_id, filename, total_size, content_type, file_type, chunk_size, total_chunks, storage_key, status, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, 'vm_template', 1, 1, $6, 'uploading', NOW(), NOW())
@@ -326,7 +314,6 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Ensure directories exist
 	basePath := vmImageBasePath
 	uploadsDir := filepath.Join(basePath, "uploads")
 	templatesDir := filepath.Join(basePath, "templates")
@@ -341,7 +328,6 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 		}
 	}
 
-	// Save uploaded file
 	uploadPath := filepath.Join(uploadsDir, fmt.Sprintf("%s%s", uploadID.String(), ext))
 	outFile, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -351,7 +337,6 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Copy with hash calculation
 	hasher := sha256.New()
 	writer := io.MultiWriter(outFile, hasher)
 
@@ -384,7 +369,6 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 		zap.Int64("size", written),
 		zap.String("checksum", checksum))
 
-	// Update upload status
 	if err := h.markUploadProcessing(c.Request.Context(), uploadID.String(), written, checksum); err != nil {
 		h.safeLogger().Error("failed to mark upload as processing", zap.String("upload_id", uploadID.String()), zap.Error(err))
 		if removeErr := os.Remove(uploadPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
@@ -394,7 +378,7 @@ func (h *VMTemplateHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	// Convert to QCOW2 (async in background)
+	// convert to qcow2 async in the background
 	go h.processUpload(uploadID.String(), templateID.String(), name, templateSlug, description, originalName, uploadPath, templatesDir, checksum, minVCPU, minMemoryMB, osType)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -530,8 +514,7 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, templateSl
 	conversionCtx, cancelConversion := context.WithTimeout(ctx, vmTemplateConversionTimeout)
 	defer cancelConversion()
 
-	// The template ID keeps untrusted names out of the filesystem and prevents a
-	// duplicate template name from overwriting an existing image.
+	// the template id keeps untrusted names out of the filesystem and prevents a duplicate template name from overwriting an existing image
 	qcow2Path := filepath.Join(templatesDir, templateID+".qcow2")
 	if _, err := os.Lstat(qcow2Path); err == nil {
 		pathErr := errors.New("processed image path already exists")
@@ -551,9 +534,8 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, templateSl
 	var diskSizeGB float64
 
 	if ext == ".qcow2" {
-		// Already QCOW2, just move it
 		if err := os.Rename(uploadPath, qcow2Path); err != nil {
-			// Copy if rename fails (cross-device)
+			// copy if rename fails (cross-device)
 			if copyErr := copyFileDurably(uploadPath, qcow2Path); copyErr != nil {
 				h.safeLogger().Error("failed to copy qcow2 file", zap.Error(copyErr))
 				h.markUploadFailed(ctx, uploadID, copyErr)
@@ -568,12 +550,10 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, templateSl
 			}
 		}
 	} else if ext == ".ova" || ext == ".vmdk" {
-		// Convert using qemu-img
 		var inputPath string
 
 		if ext == ".ova" {
-			// Extract only the VMDK payload. The archive helper rejects traversal
-			// paths and links and never writes an archive-supplied filename.
+			// extract only the vmdk payload; the archive helper rejects traversal paths and links and never writes an archive-supplied filename
 			extractDir := filepath.Join(filepath.Dir(uploadPath), uploadID+"-extracted")
 			if err := os.Mkdir(extractDir, 0700); err != nil {
 				extractErr := fmt.Errorf("create OVA extraction directory: %w", err)
@@ -602,7 +582,6 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, templateSl
 			inputPath = uploadPath
 		}
 
-		// Convert to QCOW2
 		h.safeLogger().Info("converting to qcow2", zap.String("input", inputPath), zap.String("output", qcow2Path))
 		cmd := exec.CommandContext(conversionCtx, "qemu-img", "convert", "-f", "vmdk", "-O", "qcow2", inputPath, qcow2Path)
 		output, err := runCommandWithCappedOutput(cmd)
@@ -621,13 +600,11 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, templateSl
 			return
 		}
 
-		// Clean up original
 		if removeErr := os.Remove(uploadPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			h.safeLogger().Warn("failed to remove converted upload", zap.String("path", uploadPath), zap.Error(removeErr))
 		}
 	}
 
-	// Get disk size
 	info, err := os.Stat(qcow2Path)
 	if err != nil {
 		statErr := fmt.Errorf("stat processed qcow2: %w", err)
@@ -655,7 +632,6 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, templateSl
 	imageSizeBytes := info.Size()
 	diskSizeGB = float64(imageSizeBytes) / (1024 * 1024 * 1024)
 
-	// Determine original format
 	originalFormat := "qcow2"
 	if strings.HasSuffix(strings.ToLower(originalName), ".ova") {
 		originalFormat = "ova"
@@ -663,8 +639,7 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, templateSl
 		originalFormat = "vmdk"
 	}
 
-	// Create the template and complete the upload atomically. If the status
-	// update fails, the active template must not remain visible.
+	// create the template and complete the upload atomically; if the status update fails, the active template must not remain visible
 	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
 		h.safeLogger().Error("failed to begin template transaction", zap.Error(err))
@@ -743,7 +718,6 @@ func (h *VMTemplateHandler) processUpload(uploadID, templateID, name, templateSl
 		zap.Float64("disk_gb", diskSizeGB))
 }
 
-// GetUploadStatus returns the status of an upload
 // GET /api/v1/admin/vm-templates/upload/:id/status
 func (h *VMTemplateHandler) GetUploadStatus(c *gin.Context) {
 	if !h.ready(c) {
@@ -772,7 +746,6 @@ func (h *VMTemplateHandler) GetUploadStatus(c *gin.Context) {
 		return
 	}
 
-	// Check if template was created
 	var templateID string
 	templateErr := h.db.Pool.QueryRow(c.Request.Context(), `
 		SELECT id FROM vm_templates WHERE upload_id = $1
@@ -847,7 +820,6 @@ func pathWithin(rootPath, targetPath string) bool {
 	return err == nil && relativePath != ".." && !strings.HasPrefix(relativePath, ".."+string(os.PathSeparator))
 }
 
-// Delete removes a VM template
 // DELETE /api/v1/admin/vm-templates/:id
 func (h *VMTemplateHandler) Delete(c *gin.Context) {
 	if !h.ready(c) {
@@ -867,8 +839,7 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 	}
 	defer func() { _ = tx.Rollback(c.Request.Context()) }()
 
-	// Lock the template row so a challenge resource cannot be attached while
-	// deletion checks are in flight.
+	// lock the template row so a challenge resource can't be attached while deletion checks are in flight
 	var imagePath string
 	err = tx.QueryRow(c.Request.Context(),
 		`SELECT image_path FROM vm_templates WHERE id = $1 FOR UPDATE`, templateID).Scan(&imagePath)
@@ -882,7 +853,6 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// Check if any challenges use this template
 	var challengeCount int
 	if err := tx.QueryRow(c.Request.Context(), `
 		SELECT COUNT(*) FROM challenge_resources 
@@ -901,7 +871,6 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// Delete template record
 	result, err := tx.Exec(c.Request.Context(),
 		`DELETE FROM vm_templates WHERE id = $1`, templateID)
 	if err != nil {
@@ -924,8 +893,7 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// Uploaded template images are managed under the templates directory.
-	// Registered external paths are references only and must never be deleted.
+	// uploaded template images live under the templates directory; registered external paths are references only and must never be deleted
 	cleanupPending := false
 	managedRoot, rootErr := filepath.Abs(filepath.Join(vmImageBasePath, "templates"))
 	managedImage, imageErr := filepath.Abs(imagePath)
@@ -946,7 +914,6 @@ func (h *VMTemplateHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// Update modifies a VM template
 // PUT /api/v1/admin/vm-templates/:id
 func (h *VMTemplateHandler) Update(c *gin.Context) {
 	if !h.ready(c) {
@@ -1018,7 +985,6 @@ func (h *VMTemplateHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "template updated"})
 }
 
-// TemplateRegisterRequest represents a request to register an existing QCOW2 file
 type TemplateRegisterRequest struct {
 	Name        string `json:"name" binding:"required"`
 	ImagePath   string `json:"image_path" binding:"required"`
@@ -1032,7 +998,6 @@ type TemplateRegisterRequest struct {
 	NetworkMode string `json:"network_mode"`
 }
 
-// Register adds an existing QCOW2 file as a template
 // POST /api/v1/admin/vm-templates/register
 func (h *VMTemplateHandler) Register(c *gin.Context) {
 	if !h.ready(c) {
@@ -1069,7 +1034,6 @@ func (h *VMTemplateHandler) Register(c *gin.Context) {
 	}
 	req.ImagePath = resolvedPath
 
-	// Validate file exists
 	info, err := os.Stat(req.ImagePath)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "image file not found"})
@@ -1092,7 +1056,6 @@ func (h *VMTemplateHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Set defaults
 	if req.VCPU == 0 {
 		req.VCPU = 1
 	}
@@ -1117,7 +1080,6 @@ func (h *VMTemplateHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Generate slug from name
 	templateSlug := slug.Make(req.Name)
 	if templateSlug == "" || len(templateSlug) > 200 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name must contain URL-safe letters or numbers"})
@@ -1231,13 +1193,11 @@ func (h *VMTemplateHandler) listActiveInstances(c *gin.Context, vmOnly bool) {
 	})
 }
 
-// ListActiveInstances returns all running VM instances.
 // GET /api/v1/admin/infrastructure/instances
 func (h *VMTemplateHandler) ListActiveInstances(c *gin.Context) {
 	h.listActiveInstances(c, true)
 }
 
-// ListActiveDockerInstances returns all running Docker instances.
 // GET /api/v1/admin/infrastructure/docker-instances
 func (h *VMTemplateHandler) ListActiveDockerInstances(c *gin.Context) {
 	h.listActiveInstances(c, false)

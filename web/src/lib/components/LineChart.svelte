@@ -5,9 +5,9 @@
   export let series: Series[] = [];
   export let height = 320;
   export let curve: "step" | "monotone" = "step";
-  // Optional x-axis tick formatter (e.g. clock time or tick number). Null = no x labels.
+  // optional x-axis tick formatter (e.g. clock time or tick number). null = no x labels.
   export let xFormat: ((x: number) => string) | null = null;
-  // Index of the series to emphasise (leader); others are drawn dimmer.
+  // index of the series to emphasise (leader); others are drawn dimmer.
   export let emphasize = -1;
   export let ariaLabel = "Score over time";
 
@@ -44,7 +44,7 @@
       )
     : [];
 
-  // Hover crosshair: read each series' value at the cursor's time.
+  // hover crosshair: read each series' value at the cursor's time.
   let hoverX: number | null = null;
   $: dataX =
     hoverX == null

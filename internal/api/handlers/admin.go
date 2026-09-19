@@ -26,7 +26,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// AdminService handles admin operations
 type AdminService struct {
 	config       *config.Config
 	db           *database.DB
@@ -36,12 +35,10 @@ type AdminService struct {
 
 const activeAdminMutationLockID int64 = 0x416e76696c41646d
 
-// NewAdminService creates a new admin service
 func NewAdminService(cfg *config.Config, db *database.DB, containerSvc *container.Service, logger *zap.Logger) *AdminService {
 	return &AdminService{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
 }
 
-// ListUsers returns all users (admin)
 func (h *AdminUserHandler) List(c *gin.Context) {
 	query := `
 		SELECT id, username, email, role, status, total_score, created_at
@@ -88,7 +85,6 @@ func (h *AdminUserHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"users": users, "total": len(users)})
 }
 
-// GetUser returns a specific user
 func (h *AdminUserHandler) Get(c *gin.Context) {
 	userID := c.Param("id")
 
@@ -126,7 +122,6 @@ func (h *AdminUserHandler) Get(c *gin.Context) {
 	})
 }
 
-// UpdateUser updates a user
 func (h *AdminUserHandler) Update(c *gin.Context) {
 	userID := c.Param("id")
 
@@ -217,7 +212,6 @@ func (h *AdminUserHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "user updated"})
 }
 
-// BanUser bans a user
 func (h *AdminUserHandler) Ban(c *gin.Context) {
 	userID := c.Param("id")
 	ctx := c.Request.Context()
@@ -268,7 +262,6 @@ func (h *AdminUserHandler) Ban(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "user banned"})
 }
 
-// UnbanUser unbans a user
 func (h *AdminUserHandler) Unban(c *gin.Context) {
 	userID := c.Param("id")
 
@@ -286,7 +279,6 @@ func (h *AdminUserHandler) Unban(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "user unbanned"})
 }
 
-// DeleteUser deletes a user
 func (h *AdminUserHandler) Delete(c *gin.Context) {
 	userID := c.Param("id")
 	ctx := c.Request.Context()
@@ -365,7 +357,6 @@ func countActiveAdminUsers(ctx context.Context, tx pgx.Tx) (int, error) {
 	return count, nil
 }
 
-// FlagInput represents a flag in the create challenge request
 type FlagInput struct {
 	Name              string `json:"name" binding:"required"`
 	Description       string `json:"description"`
@@ -376,19 +367,17 @@ type FlagInput struct {
 	DynamicFlagPrefix string `json:"dynamic_flag_prefix"` // e.g. "H7CTF" → "H7CTF{uuid}"
 }
 
-// CreateChallengeRequest represents the request to create a challenge
 type CreateChallengeRequest struct {
-	Name        string  `json:"name" binding:"required"`
-	Description string  `json:"description"`
-	SubDescription string `json:"sub_description"` // optional plain-text pre-launch blurb (<=255 chars)
-	Difficulty  string  `json:"difficulty" binding:"required"`
-	CategoryID  *string `json:"category_id"`
-	Category    string  `json:"category"` // human-readable name; auto-resolved to category_id
+	Name           string  `json:"name" binding:"required"`
+	Description    string  `json:"description"`
+	SubDescription string  `json:"sub_description"` // optional plain-text pre-launch blurb (<=255 chars)
+	Difficulty     string  `json:"difficulty" binding:"required"`
+	CategoryID     *string `json:"category_id"`
+	Category       string  `json:"category"` // human-readable name; auto-resolved to category_id
 
-	// Challenge type: "docker" or "vm"
+	// challenge type: "docker" or "vm"
 	ChallengeType string `json:"challenge_type"`
 
-	// Docker-specific fields
 	ContainerImage    string `json:"container_image"`
 	ContainerTag      string `json:"container_tag"`
 	ContainerPlatform string `json:"container_platform"` // e.g. "linux/amd64" for cross-arch
@@ -400,32 +389,27 @@ type CreateChallengeRequest struct {
 		Service  string `json:"service"`
 	} `json:"exposed_ports"`
 
-	// VM-specific fields
 	VMTemplateID *string `json:"vm_template_id"`
 	VCPU         int     `json:"vcpu"`
 	MemoryMB     int     `json:"memory_mb"`
 
-	// Timer and cooldown settings (author-defined)
 	VMTimeoutMinutes   *int `json:"vm_timeout_minutes"`   // nil = use difficulty default
 	VMMaxExtensions    *int `json:"vm_max_extensions"`    // default 2
 	VMExtensionMinutes *int `json:"vm_extension_minutes"` // default 30
 	CooldownMinutes    *int `json:"cooldown_minutes"`     // default 10
 
-	// Common fields
 	BasePoints      int     `json:"base_points"`
 	InstanceTimeout *int    `json:"instance_timeout"`
 	MaxExtensions   *int    `json:"max_extensions"`
 	AuthorName      string  `json:"author_name"`
 	ResourceType    *string `json:"resource_type"` // "docker" or "vm"
 
-	// Multiple flags support
 	Flags []FlagInput `json:"flags"`
 
-	// Legacy single flag support (for backward compatibility)
+	// legacy single flag support, kept for backward compatibility
 	Flag string `json:"flag"`
 }
 
-// ListChallenges returns all challenges (admin)
 func (h *AdminChallengeHandler) List(c *gin.Context) {
 	query := `
 		SELECT c.id, c.name, c.slug, c.description, c.difficulty, c.status, c.base_points,
@@ -489,7 +473,6 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			continue
 		}
 
-		// Parse exposed ports JSON
 		var exposedPorts interface{}
 		if len(ch.ExposedPorts) > 0 {
 			_ = json.Unmarshal(ch.ExposedPorts, &exposedPorts)
@@ -529,7 +512,6 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"challenges": challenges, "total": len(challenges)})
 }
 
-// CreateChallenge creates a new challenge
 func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	var req CreateChallengeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -537,16 +519,13 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Generate slug
 	challengeSlug := slug.Make(req.Name)
 
-	// Determine challenge type
 	challengeType := req.ChallengeType
 	if challengeType == "" {
 		challengeType = "docker" // default
 	}
 
-	// Set defaults based on type
 	resourceType := "docker"
 	supportsDocker := true
 	supportsVM := false
@@ -577,8 +556,7 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		req.BasePoints = 100
 	}
 
-	// Resolve category name to ID (or create the category if new).
-	// category_id takes precedence over category (name) when both are supplied.
+	// category_id takes precedence over category (name) when both are supplied
 	if req.Category != "" && req.CategoryID == nil {
 		catID, err := h.resolveOrCreateCategory(c.Request.Context(), req.Category)
 		if err != nil {
@@ -589,10 +567,8 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		req.CategoryID = catID
 	}
 
-	// Convert exposed ports to JSON
 	portsJSON, _ := json.Marshal(req.ExposedPorts)
 
-	// Start transaction
 	tx, err := h.db.Pool.Begin(c.Request.Context())
 	if err != nil {
 		h.logger.Error("failed to begin transaction", zap.Error(err))
@@ -603,7 +579,6 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 
 	challengeID := uuid.New()
 
-	// Insert challenge
 	_, err = tx.Exec(c.Request.Context(),
 		`INSERT INTO challenges (
 			id, name, slug, description, difficulty, category_id, status,
@@ -625,10 +600,8 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Handle flags - either multiple flags or single legacy flag
 	flagsToCreate := req.Flags
 	if len(flagsToCreate) == 0 && req.Flag != "" {
-		// Legacy single flag support
 		flagsToCreate = []FlagInput{{
 			Name:      "Flag",
 			Flag:      req.Flag,
@@ -637,7 +610,6 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		}}
 	}
 
-	// Insert flags
 	for i, flag := range flagsToCreate {
 		flagID := uuid.New()
 		sortOrder := flag.SortOrder
@@ -648,7 +620,7 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		if flagType == "" {
 			flagType = "static"
 		}
-		// Hash only for static flags; regex stores pattern as-is; dynamic has no pre-set value
+		// hash only for static flags; regex stores the pattern as-is; dynamic has no pre-set value
 		flagHash := ""
 		if flagType == "static" {
 			flagHash = hashFlag(flag.Flag)
@@ -679,7 +651,6 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		}
 	}
 
-	// Update total_flags count
 	_, err = tx.Exec(c.Request.Context(),
 		`UPDATE challenges SET total_flags = $1 WHERE id = $2`,
 		len(flagsToCreate), challengeID,
@@ -690,7 +661,6 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// If VM challenge with template, create resource link
 	if challengeType == "vm" && req.VMTemplateID != nil {
 		resourceID := uuid.New()
 		_, err = tx.Exec(c.Request.Context(),
@@ -706,7 +676,6 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		}
 	}
 
-	// Commit transaction
 	if err := tx.Commit(c.Request.Context()); err != nil {
 		h.logger.Error("failed to commit transaction", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create challenge"})
@@ -721,9 +690,7 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	})
 }
 
-// subDescriptionOrNil normalizes an optional pre-launch sub_description: trims it,
-// caps it to the column width (255 chars, rune-safe), and returns nil for an empty
-// value so the column stores NULL rather than an empty string.
+// normalizes an optional pre-launch sub_description: trims, caps to the column width (255 chars, rune-safe), and returns nil for an empty value so the column stores null rather than an empty string
 func subDescriptionOrNil(s string) *string {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -735,14 +702,12 @@ func subDescriptionOrNil(s string) *string {
 	return &s
 }
 
-// hashFlag creates a SHA256 hash of the flag
 func hashFlag(flag string) string {
 	hash := sha256.Sum256([]byte(flag))
 	return hex.EncodeToString(hash[:])
 }
 
-// resolveOrCreateCategory looks up a category by name (case-insensitive) or creates it if absent.
-// Returns nil when categoryName is blank.
+// looks up a category by name (case-insensitive) or creates it if absent; returns nil when categoryName is blank
 func (h *AdminChallengeHandler) resolveOrCreateCategory(ctx context.Context, categoryName string) (*string, error) {
 	trimmed := strings.TrimSpace(categoryName)
 	if trimmed == "" {
@@ -756,14 +721,13 @@ func (h *AdminChallengeHandler) resolveOrCreateCategory(ctx context.Context, cat
 		return &id, nil
 	}
 
-	// Category not found – create it
 	newID := uuid.New().String()
 	categorySlug := slug.Make(trimmed)
 	_, err = h.db.Pool.Exec(ctx,
 		`INSERT INTO categories (id, name, slug) VALUES ($1, $2, $3)`,
 		newID, trimmed, categorySlug)
 	if err != nil {
-		// Another request may have created it concurrently; retry the lookup
+		// another request may have created it concurrently; retry the lookup
 		if retryErr := h.db.Pool.QueryRow(ctx,
 			`SELECT id FROM categories WHERE LOWER(name) = LOWER($1)`, trimmed).Scan(&id); retryErr == nil {
 			return &id, nil
@@ -774,12 +738,9 @@ func (h *AdminChallengeHandler) resolveOrCreateCategory(ctx context.Context, cat
 	return &newID, nil
 }
 
-// CreateOVAChallenge handles OVA file upload and creates a VM challenge
 func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
-	// Increase request timeout for large uploads
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 20<<30) // 20GB limit
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 20<<30) // 20gb limit
 
-	// Get form fields first (before file)
 	name := c.PostForm("name")
 	description := c.PostForm("description")
 	subDescription := c.PostForm("sub_description")
@@ -803,7 +764,6 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		}
 	}
 
-	// Resolve category name to ID (or create the category if new)
 	var categoryID *string
 	if categoryName != "" {
 		catID, err := h.resolveOrCreateCategory(c.Request.Context(), categoryName)
@@ -815,7 +775,6 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		categoryID = catID
 	}
 
-	// Parse flags
 	var flags []FlagInput
 	if flagsJSON != "" {
 		if err := json.Unmarshal([]byte(flagsJSON), &flags); err != nil {
@@ -824,7 +783,6 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		}
 	}
 
-	// Get the uploaded file
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		h.logger.Error("failed to get form file", zap.Error(err))
@@ -839,17 +797,14 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		zap.Int64("size", header.Size),
 	)
 
-	// Generate slug
 	challengeSlug := slug.Make(name)
 	challengeID := uuid.New()
 
-	// Create temp directory if it doesn't exist
 	tempDir := "/tmp/ova_uploads"
 	if err := os.MkdirAll(tempDir, 0755); err != nil {
 		h.logger.Error("failed to create temp directory", zap.Error(err))
 	}
 
-	// Save file to disk
 	safeFilename := sanitiseFilename(header.Filename)
 	tempPath := filepath.Join(tempDir, challengeID.String()+"_"+safeFilename)
 	dst, err := os.Create(tempPath)
@@ -872,7 +827,6 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		zap.Int64("bytes", written),
 	)
 
-	// Start transaction
 	tx, err := h.db.Pool.Begin(c.Request.Context())
 	if err != nil {
 		h.logger.Error("failed to begin transaction", zap.Error(err))
@@ -881,7 +835,7 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	}
 	defer tx.Rollback(c.Request.Context())
 
-	// Insert challenge (include container_image as empty string to satisfy NOT NULL constraint)
+	// container_image is set to empty string to satisfy the NOT NULL constraint
 	_, err = tx.Exec(c.Request.Context(),
 		`INSERT INTO challenges (
 			id, name, slug, description, difficulty, category_id, status,
@@ -896,7 +850,6 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		return
 	}
 
-	// Insert flags
 	for i, flag := range flags {
 		flagID := uuid.New()
 		flagHash := hashFlag(flag.Flag)
@@ -914,7 +867,6 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		}
 	}
 
-	// Commit transaction
 	if err := tx.Commit(c.Request.Context()); err != nil {
 		h.logger.Error("failed to commit transaction", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create challenge"})
@@ -938,7 +890,6 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	})
 }
 
-// GetChallenge returns a challenge by ID
 func (h *AdminChallengeHandler) Get(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1005,7 +956,6 @@ func (h *AdminChallengeHandler) Get(c *gin.Context) {
 	})
 }
 
-// UpdateChallenge updates a challenge
 func (h *AdminChallengeHandler) Update(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1015,8 +965,7 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// Resolve category name to ID (or create the category if new).
-	// category_id takes precedence over category (name) when both are supplied.
+	// category_id takes precedence over category (name) when both are supplied
 	if req.Category != "" && req.CategoryID == nil {
 		catID, err := h.resolveOrCreateCategory(c.Request.Context(), req.Category)
 		if err != nil {
@@ -1040,10 +989,8 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
-	// Update challenge - handle both container and VM fields
 	var result pgconn.CommandTag
 	if req.ResourceType != nil && *req.ResourceType == "vm" {
-		// VM challenge - update VM-specific fields
 		result, err = tx.Exec(ctx,
 			`UPDATE challenges SET
 				name = $1, description = $2, difficulty = $3, category_id = $4,
@@ -1071,7 +1018,6 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 			return
 		}
 
-		// Update VM template association if provided
 		if req.VMTemplateID != nil {
 			if _, err = tx.Exec(ctx,
 				`UPDATE challenge_resources SET is_active = false, updated_at = NOW()
@@ -1081,7 +1027,6 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 				return
 			}
 
-			// Add new resource
 			_, err = tx.Exec(ctx,
 				`INSERT INTO challenge_resources (challenge_id, resource_type, vm_template_id, created_at, updated_at)
 				 VALUES ($1, 'vm', $2, NOW(), NOW())`,
@@ -1098,7 +1043,6 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 			}
 		}
 	} else {
-		// Docker challenge - update container fields
 		portsJSON, marshalErr := json.Marshal(req.ExposedPorts)
 		if marshalErr != nil {
 			h.logger.Error("failed to marshal exposed ports", zap.Error(marshalErr))
@@ -1148,7 +1092,6 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "challenge updated"})
 }
 
-// DeleteChallenge deletes a challenge
 func (h *AdminChallengeHandler) Delete(c *gin.Context) {
 	challengeID := c.Param("id")
 	ctx := c.Request.Context()
@@ -1221,7 +1164,6 @@ func (h *AdminChallengeHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "challenge deleted"})
 }
 
-// PublishChallenge publishes a challenge
 func (h *AdminChallengeHandler) Publish(c *gin.Context) {
 	challengeID := c.Param("id")
 	ctx := c.Request.Context()
@@ -1272,7 +1214,6 @@ func (h *AdminChallengeHandler) Publish(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "challenge published"})
 }
 
-// UnpublishChallenge sets a challenge back to draft status
 func (h *AdminChallengeHandler) Unpublish(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1290,7 +1231,6 @@ func (h *AdminChallengeHandler) Unpublish(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "challenge unpublished"})
 }
 
-// ArchiveChallenge archives a challenge
 func (h *AdminChallengeHandler) Archive(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1308,7 +1248,6 @@ func (h *AdminChallengeHandler) Archive(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "challenge archived"})
 }
 
-// CreateFlagRequest represents the request to create a flag
 type CreateFlagRequest struct {
 	Name              string `json:"name" binding:"required"`
 	Flag              string `json:"flag"` // empty when FlagType == "dynamic"
@@ -1319,7 +1258,6 @@ type CreateFlagRequest struct {
 	DynamicFlagPrefix string `json:"dynamic_flag_prefix"` // e.g. "H7CTF"
 }
 
-// ListFlags returns flags for a challenge
 func (h *AdminChallengeHandler) ListFlags(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1364,7 +1302,6 @@ func (h *AdminChallengeHandler) ListFlags(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"flags": flags})
 }
 
-// CreateFlag creates a new flag
 func (h *AdminChallengeHandler) CreateFlag(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1455,7 +1392,6 @@ func (h *AdminChallengeHandler) CreateFlag(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"id": flagID.String(), "message": "flag created"})
 }
 
-// UpdateFlag updates a flag
 func (h *AdminChallengeHandler) UpdateFlag(c *gin.Context) {
 	challengeID := c.Param("id")
 	flagID := c.Param("flag_id")
@@ -1552,7 +1488,6 @@ func (h *AdminChallengeHandler) UpdateFlag(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "flag updated"})
 }
 
-// DeleteFlag deletes a flag
 func (h *AdminChallengeHandler) DeleteFlag(c *gin.Context) {
 	challengeID := c.Param("id")
 	flagID := c.Param("flag_id")
@@ -1677,7 +1612,6 @@ func encodeFlagValue(flagType, value string, caseSensitive bool) (string, error)
 	return hashFlag(value), nil
 }
 
-// ListHints lists all hints for a challenge
 func (h *AdminChallengeHandler) ListHints(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1721,7 +1655,6 @@ func (h *AdminChallengeHandler) ListHints(c *gin.Context) {
 	c.JSON(http.StatusOK, hints)
 }
 
-// CreateHint creates a new hint for a challenge
 func (h *AdminChallengeHandler) CreateHint(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1756,7 +1689,6 @@ func (h *AdminChallengeHandler) CreateHint(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"id": hintID, "message": "hint created"})
 }
 
-// UpdateHint updates a hint
 func (h *AdminChallengeHandler) UpdateHint(c *gin.Context) {
 	challengeID := c.Param("id")
 	hintID := c.Param("hint_id")
@@ -1789,7 +1721,6 @@ func (h *AdminChallengeHandler) UpdateHint(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "hint updated"})
 }
 
-// DeleteHint deletes a hint
 func (h *AdminChallengeHandler) DeleteHint(c *gin.Context) {
 	challengeID := c.Param("id")
 	hintID := c.Param("hint_id")
@@ -1808,8 +1739,6 @@ func (h *AdminChallengeHandler) DeleteHint(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "hint deleted"})
 }
 
-// ListFlagShareEvents returns all detected flag-sharing events for admin review.
-// GET /api/v1/admin/flag-shares[?challenge_id=&submitter_id=&limit=]
 func (h *AdminChallengeHandler) ListFlagShareEvents(c *gin.Context) {
 	challengeIDFilter := c.Query("challenge_id")
 	submitterFilter := c.Query("submitter_id")
@@ -1894,8 +1823,7 @@ func (h *AdminChallengeHandler) ListFlagShareEvents(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"flag_shares": results, "total": len(results)})
 }
 
-// ListInstanceFlags returns all generated dynamic flags — admin monitoring only.
-// GET /api/v1/admin/instance-flags[?challenge_id=&user_id=&limit=]
+// all generated dynamic flags; admin monitoring only
 func (h *AdminChallengeHandler) ListInstanceFlags(c *gin.Context) {
 	challengeIDFilter := c.Query("challenge_id")
 	userIDFilter := c.Query("user_id")
@@ -1979,9 +1907,7 @@ func (h *AdminChallengeHandler) ListInstanceFlags(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"instance_flags": results, "total": len(results)})
 }
 
-// GetStats returns platform statistics
 func (h *StatsHandler) Get(c *gin.Context) {
-	// Single optimized query for all stats
 	query := `
 		SELECT
 			(SELECT COUNT(*) FROM users WHERE role != 'admin') as total_users,
