@@ -17,7 +17,7 @@
 		user_solves: number;
 		is_solved: boolean;
 		author_name?: string;
-		description?: string;
+		sub_description?: string;
 	};
 
 	$: points = challenge.base_points ?? challenge.points ?? 0;
@@ -25,16 +25,6 @@
 	$: progress = challenge.total_flags
 		? Math.min(100, ((challenge.user_solves || 0) / challenge.total_flags) * 100)
 		: 0;
-
-	// card previews show plain text, not raw markdown (the detail page renders it).
-	$: descText = (challenge.description ?? '')
-		.replace(/`([^`]*)`/g, '$1')
-		.replace(/\*\*([^*]*)\*\*/g, '$1')
-		.replace(/\*([^*]*)\*/g, '$1')
-		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
-		.replace(/[#>_~]/g, '')
-		.replace(/\s+/g, ' ')
-		.trim();
 </script>
 
 <a
@@ -52,8 +42,8 @@
 		{/if}
 	</div>
 
-	{#if descText}
-		<p class="mt-1.5 text-sm text-stone-500 leading-relaxed line-clamp-2">{descText}</p>
+	{#if challenge.sub_description}
+		<p class="mt-1.5 text-sm text-stone-500 leading-relaxed line-clamp-2">{challenge.sub_description}</p>
 	{/if}
 
 	<div class="mt-3 flex flex-wrap items-center gap-2 leading-none">

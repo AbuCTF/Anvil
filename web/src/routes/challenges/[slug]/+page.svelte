@@ -695,13 +695,13 @@
 
 					{#if locked}
 						<Card title="Locked">
-							<div class="space-y-4">
-								<p class="font-sans text-sm text-stone-400 leading-relaxed">{challenge.sub_description || 'Launch this challenge to reveal it.'}</p>
-								{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
-								<button on:click={launchChallenge} disabled={ecoBusy} class="w-full py-2.5 bg-amber-500 text-amber-950 text-sm font-medium rounded-md hover:bg-amber-400 transition-colors disabled:opacity-50">
-									{ecoBusy ? 'Launching…' : `Launch \u2212${challenge.economy.launch_cost} credits`}
+							<div class="space-y-3">
+								<p class="text-sm text-stone-400 leading-relaxed">Open this challenge to reveal the brief, download the files, and start solving.</p>
+								<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-amber-500 text-amber-950 text-sm font-medium rounded-md hover:bg-amber-400 transition-colors disabled:opacity-50">
+									{ecoBusy ? 'Opening…' : `Open for ${challenge.economy.launch_cost} credits`}
 								</button>
-								<p class="text-xs text-stone-600">you have {challenge.economy.credits} credits</p>
+								<p class="text-xs text-stone-600">balance: {Math.round(challenge.economy.credits)} credits</p>
+								{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
 							</div>
 						</Card>
 					{:else}
@@ -1081,9 +1081,9 @@
 					{/if}
 
 					{#if challenge?.economy?.launched && !challenge.economy.solved}
-						<Card title="Instance Credits">
+						<Card title="Launched">
 							<div class="flex items-center justify-between">
-								<span class="text-sm text-stone-400">{challenge.economy.credits} credits</span>
+								<span class="text-sm text-stone-400"><span class="text-amber-500 font-semibold tabular-nums">{Math.round(challenge.economy.credits)}</span> credits left</span>
 								<div class="flex gap-2">
 									<button on:click={extendTimer} disabled={ecoBusy} class="text-xs py-1.5 px-3 rounded-md border border-stone-800 text-stone-300 hover:bg-stone-800/40 disabled:opacity-40 transition-colors">Extend</button>
 									<button on:click={abandonChallenge} disabled={ecoBusy} class="text-xs py-1.5 px-3 rounded-md border border-down/30 bg-down/10 text-down hover:bg-down/20 disabled:opacity-40 transition-colors">Abandon</button>

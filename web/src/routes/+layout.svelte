@@ -16,13 +16,13 @@
 	const navigation = [
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' },
-		{ name: 'Team', href: '/team', icon: 'mdi:account-group' },
 		{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' },
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
 
 	const userMenu = [
 		{ name: 'Profile', href: '/profile', icon: 'mdi:account' },
+		{ name: 'Team', href: '/team', icon: 'mdi:account-group' },
 		{ name: 'My Instances', href: '/instances', icon: 'mdi:server' },
 		{ name: 'VPN', href: '/vpn', icon: 'mdi:vpn' }
 	];
