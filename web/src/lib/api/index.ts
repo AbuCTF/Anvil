@@ -248,6 +248,17 @@ class ApiClient {
 		}, false);
 	}
 
+	async ssoLogin(token: string) {
+		return this.request<{
+			access_token: string;
+			refresh_token: string;
+			user: any;
+		}>('/auth/sso', {
+			method: 'POST',
+			body: JSON.stringify({ token })
+		}, false);
+	}
+
 	async register(username: string, email: string, password: string, inviteCode?: string) {
 		return this.request<{
 			access_token: string;
