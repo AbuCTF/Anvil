@@ -196,6 +196,28 @@
 		}
 	}
 
+	let ecoBusy = false;
+	let ecoError = '';
+	$: locked = challenge?.economy?.enabled && !challenge.economy.launched;
+
+	async function ecoAction(fn: () => Promise<unknown>) {
+		if (ecoBusy) return;
+		ecoBusy = true;
+		ecoError = '';
+		try {
+			await fn();
+			await loadChallenge();
+		} catch (e) {
+			ecoError = e instanceof Error ? e.message : 'action failed';
+		} finally {
+			ecoBusy = false;
+		}
+	}
+
+	const launchChallenge = () => ecoAction(() => api.openChallenge(slug!));
+	const abandonChallenge = () => ecoAction(() => api.abandonChallenge(slug!));
+	const extendTimer = () => ecoAction(() => api.extendChallenge(slug!));
+
 	async function submitFlag() {
 		if (!slug || !flagInput.trim()) return;
 		submitting = true;
@@ -671,25 +693,38 @@
 						</div>
 					{/if}
 
-					<Card title="Description">
-						{#if isEditing && editForm}
-							<textarea
-								bind:value={editForm.description}
-								rows="6"
-								class="w-full px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-md text-stone-300 text-sm leading-relaxed focus:outline-none focus:border-stone-600 resize-none"
-								placeholder="Challenge description…"
-							></textarea>
-						{:else if challenge.description}
-							<div class="font-sans text-sm text-stone-300 leading-relaxed space-y-3">
-								<!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes source text before adding its fixed markup -->
-								{@html renderMarkdown(challenge.description)}
+					{#if locked}
+						<Card title="Locked">
+							<div class="space-y-4">
+								<p class="font-sans text-sm text-stone-400 leading-relaxed">{challenge.sub_description || 'Launch this challenge to reveal it.'}</p>
+								{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
+								<button on:click={launchChallenge} disabled={ecoBusy} class="w-full py-2.5 bg-amber-500 text-amber-950 text-sm font-medium rounded-md hover:bg-amber-400 transition-colors disabled:opacity-50">
+									{ecoBusy ? 'Launching…' : `Launch \u2212${challenge.economy.launch_cost} credits`}
+								</button>
+								<p class="text-xs text-stone-600">you have {challenge.economy.credits} credits</p>
 							</div>
-						{:else}
-							<p class="text-stone-600 text-sm">No description provided.</p>
-						{/if}
-					</Card>
+						</Card>
+					{:else}
+						<Card title="Description">
+							{#if isEditing && editForm}
+								<textarea
+									bind:value={editForm.description}
+									rows="6"
+									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-md text-stone-300 text-sm leading-relaxed focus:outline-none focus:border-stone-600 resize-none"
+									placeholder="Challenge description…"
+								></textarea>
+							{:else if challenge.description}
+								<div class="font-sans text-sm text-stone-300 leading-relaxed space-y-3">
+									<!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes source text before adding its fixed markup -->
+									{@html renderMarkdown(challenge.description)}
+								</div>
+							{:else}
+								<p class="text-stone-600 text-sm">No description provided.</p>
+							{/if}
+						</Card>
+					{/if}
 
-					{#if (challenge.flags && challenge.flags.length > 0) || (isEditing && isAdmin)}
+					{#if !locked && ((challenge.flags && challenge.flags.length > 0) || (isEditing && isAdmin))}
 						<Card title="Objectives">
 							<svelte:fragment slot="meta">
 								{#if isEditing && isAdmin}
@@ -829,7 +864,7 @@
 						</Card>
 					{/if}
 
-					{#if (challenge.attachments && challenge.attachments.length > 0) || (isEditing && isAdmin)}
+					{#if !locked && ((challenge.attachments && challenge.attachments.length > 0) || (isEditing && isAdmin))}
 						<Card title="Files">
 							<div class="space-y-2">
 								{#each challenge.attachments as attachment}
@@ -901,7 +936,7 @@
 				</div>
 
 				<div class="space-y-6">
-					{#if $auth.isAuthenticated && challenge.has_instance}
+					{#if $auth.isAuthenticated && !locked && challenge.has_instance}
 						<Card title="Instance">
 							{#if instanceError}
 								<div class="mb-4 flex items-start justify-between gap-3 rounded-md border border-down/20 bg-down/10 px-3 py-2 text-xs text-down" aria-live="polite">
@@ -1045,7 +1080,20 @@
 						</Card>
 					{/if}
 
-					{#if $auth.isAuthenticated}
+					{#if challenge?.economy?.launched && !challenge.economy.solved}
+						<Card title="Instance Credits">
+							<div class="flex items-center justify-between">
+								<span class="text-sm text-stone-400">{challenge.economy.credits} credits</span>
+								<div class="flex gap-2">
+									<button on:click={extendTimer} disabled={ecoBusy} class="text-xs py-1.5 px-3 rounded-md border border-stone-800 text-stone-300 hover:bg-stone-800/40 disabled:opacity-40 transition-colors">Extend</button>
+									<button on:click={abandonChallenge} disabled={ecoBusy} class="text-xs py-1.5 px-3 rounded-md border border-down/30 bg-down/10 text-down hover:bg-down/20 disabled:opacity-40 transition-colors">Abandon</button>
+								</div>
+							</div>
+							{#if ecoError}<p class="mt-2 text-xs text-down">{ecoError}</p>{/if}
+						</Card>
+					{/if}
+
+					{#if $auth.isAuthenticated && !locked}
 						<Card title="Submit Flag">
 							<form on:submit|preventDefault={submitFlag} class="space-y-3">
 								<input
@@ -1066,7 +1114,7 @@
 								</div>
 							{/if}
 						</Card>
-					{:else}
+					{:else if !$auth.isAuthenticated}
 						<Card hasHeader={false} bodyClass="p-6">
 							<div class="text-center">
 								<p class="text-stone-500 text-sm mb-4">Login to start this challenge</p>
