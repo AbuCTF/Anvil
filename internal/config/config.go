@@ -21,6 +21,8 @@ type Config struct {
 	Storage     StorageConfig   `mapstructure:"storage"`
 	SSO         SSOConfig       `mapstructure:"sso"`
 	Economy     EconomyConfig   `mapstructure:"economy"`
+	ZeroPool    ZeroPoolConfig  `mapstructure:"zeropool"`
+	Discord     DiscordConfig   `mapstructure:"discord"`
 }
 
 // ledger economy parameters (player 0-1000 anchor, ×10 of
@@ -60,6 +62,23 @@ type SSOConfig struct {
 	SharedSecret string `mapstructure:"shared_secret"` // hs256 secret shared with zeropool
 	Issuer       string `mapstructure:"issuer"`        // expected token iss (e.g. "zeropool")
 	Audience     string `mapstructure:"audience"`      // expected token aud (e.g. "anvil")
+}
+
+// ZeroPoolConfig is the server-to-server link to ZeroPool (the identity store)
+// for native walk-in onboarding: Discord provisions via api_key, email walk-ins
+// proxy to ZeroPool's public event registration.
+type ZeroPoolConfig struct {
+	BaseURL   string `mapstructure:"base_url"`
+	APIKey    string `mapstructure:"api_key"`
+	EventSlug string `mapstructure:"event_slug"`
+}
+
+// DiscordConfig configures Anvil-side Discord OAuth for instant walk-in login.
+type DiscordConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`
+	ClientID     string `mapstructure:"client_id"`
+	ClientSecret string `mapstructure:"client_secret"`
+	RedirectURI  string `mapstructure:"redirect_uri"`
 }
 
 const defaultJWTSecret = "change-me-in-production-please"
@@ -293,6 +312,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("economy.p2c_rate_decay", 0.7)
 	v.SetDefault("economy.p2c_min_rate", 0.05)
 	v.SetDefault("economy.c2p_rate", 0.015)
+
+	v.SetDefault("zeropool.base_url", "")
+	v.SetDefault("zeropool.api_key", "")
+	v.SetDefault("zeropool.event_slug", "h7ctf-2026")
+	v.SetDefault("discord.enabled", false)
+	v.SetDefault("discord.client_id", "")
+	v.SetDefault("discord.client_secret", "")
+	v.SetDefault("discord.redirect_uri", "")
 
 	v.SetDefault("sso.enabled", false)
 	v.SetDefault("sso.shared_secret", "") // must be defaulted so the env-bind loop (allkeys) binds anvil_sso_shared_secret

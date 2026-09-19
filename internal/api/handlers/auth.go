@@ -843,17 +843,23 @@ func (h *AuthHandler) SSOLogin(c *gin.Context) {
 		}
 	}
 
+	h.provisionAndRespond(c, ctx, tx, subject, email, claims.Username)
+}
+
+// provisionAndRespond resolves the anvil user for a verified external identity
+// (sso_subject = the zeropool participant id), issuing an anvil session: find by
+// sso_subject, else link an existing account by email, else create one. Shared by
+// the SSO token exchange and the Discord walk-in. Commits tx and writes the response.
+func (h *AuthHandler) provisionAndRespond(c *gin.Context, ctx context.Context, tx pgx.Tx, subject, email, usernameHint string) {
 	var userID uuid.UUID
 	var username, role string
 	var displayName *string
 	var totalScore int
 
-	// 1) existing sso-linked user
-	err = tx.QueryRow(ctx,
+	err := tx.QueryRow(ctx,
 		`SELECT id, username, role, display_name, total_score FROM users WHERE sso_subject = $1`, subject,
 	).Scan(&userID, &username, &role, &displayName, &totalScore)
 
-	// 2) link an existing user by email (first sso for a pre-existing account)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = tx.QueryRow(ctx,
 			`UPDATE users SET sso_subject = $1, email_verified = TRUE, updated_at = NOW()
@@ -862,15 +868,14 @@ func (h *AuthHandler) SSOLogin(c *gin.Context) {
 		).Scan(&userID, &username, &role, &displayName, &totalScore)
 	}
 
-	// 3) provision a new user
 	if errors.Is(err, pgx.ErrNoRows) {
-		username = h.uniqueUsername(ctx, tx, claims.Username, email)
+		username = h.uniqueUsername(ctx, tx, usernameHint, email)
 		role = "user"
 		randPw, _ := generateSecureToken(24)
 		hashed, hErr := bcrypt.GenerateFromPassword([]byte(randPw), bcrypt.DefaultCost)
 		if hErr != nil {
-			h.logger.Error("failed to hash SSO password", zap.Error(hErr))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+			h.logger.Error("failed to hash provisioned password", zap.Error(hErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
 			return
 		}
 		err = tx.QueryRow(ctx,
@@ -884,26 +889,26 @@ func (h *AuthHandler) SSOLogin(c *gin.Context) {
 				c.JSON(http.StatusConflict, gin.H{"error": "an account with that email or username already exists; sign in normally"})
 				return
 			}
-			h.logger.Error("failed to provision SSO user", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+			h.logger.Error("failed to provision user", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
 			return
 		}
 		displayName = nil
 	} else if err != nil {
-		h.logger.Error("failed to resolve SSO user", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+		h.logger.Error("failed to resolve provisioned user", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
 		return
 	}
 
 	tokens, err := h.generateTokensWithStore(ctx, tx, userID, username, role, "user")
 	if err != nil {
-		h.logger.Error("failed to issue SSO session", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+		h.logger.Error("failed to issue session", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
-		h.logger.Error("failed to commit SSO session", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+		h.logger.Error("failed to commit session", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
 		return
 	}
 

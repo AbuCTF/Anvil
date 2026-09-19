@@ -104,8 +104,11 @@ func (s *Server) setupRouter() {
 				} else {
 					auth.POST("/login", authHandler.Login)
 				}
-				auth.POST("/token", authHandler.TokenAuth) // team token auth
-				auth.POST("/sso", authHandler.SSOLogin)    // zeropool -> anvil sso (model b); gated by sso.enabled
+				auth.POST("/token", authHandler.TokenAuth)                  // team token auth
+				auth.POST("/sso", authHandler.SSOLogin)                     // zeropool -> anvil sso (model b); gated by sso.enabled
+				auth.GET("/discord", authHandler.DiscordAuthorize)          // walk-in: discord oauth url; gated by discord.enabled
+				auth.POST("/discord/callback", authHandler.DiscordCallback) // walk-in: code -> zeropool provision -> anvil session
+				auth.POST("/walkin/email", authHandler.EmailWalkin)         // walk-in fallback: proxy to zeropool registration
 				auth.POST("/refresh", authHandler.RefreshToken)
 				auth.POST("/logout", authHandler.Logout)
 			}
