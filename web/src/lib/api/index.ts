@@ -386,6 +386,59 @@ class ApiClient {
 		return this.request<{ leaderboard: any[]; total_users: number }>('/scoreboard', {}, false);
 	}
 
+	// Teams (membership layer; active when teams mode is enabled)
+	async getMyTeam() {
+		return this.request<{ team: any | null }>('/teams/me');
+	}
+
+	async createTeam(name: string) {
+		return this.request<{ id: string; name: string; join_code: string }>('/teams', {
+			method: 'POST',
+			body: JSON.stringify({ name })
+		});
+	}
+
+	async joinTeam(joinCode: string) {
+		return this.request<{ id: string; name: string; message: string }>('/teams/join', {
+			method: 'POST',
+			body: JSON.stringify({ join_code: joinCode })
+		});
+	}
+
+	async leaveTeam() {
+		return this.request<{ message: string }>('/teams/leave', { method: 'POST' });
+	}
+
+	// Economy (active when economy_mode is enabled)
+	async getEconomy() {
+		return this.request<{
+			credits: number; points: number; grant_issued: boolean; bailout_used: boolean;
+			open: Array<{ slug: string; name: string; status: string; expires_at: string | null; wrong_subs: number; value: number }>;
+		}>('/economy/me');
+	}
+
+	async openChallenge(slug: string) {
+		return this.request<{ status: string; credits: number; message: string }>(
+			`/challenges/${slug}/open`, { method: 'POST' });
+	}
+
+	async abandonChallenge(slug: string) {
+		return this.request<{ status: string }>(`/challenges/${slug}/abandon`, { method: 'POST' });
+	}
+
+	async extendChallenge(slug: string) {
+		return this.request<{ status: string; expires_at: number }>(`/challenges/${slug}/extend`, { method: 'POST' });
+	}
+
+	async economyBailout() {
+		return this.request<{ status: string }>('/economy/bailout', { method: 'POST' });
+	}
+
+	async convertPoints(points: number) {
+		return this.request<{ credits_gained: number; points_spent: number }>(
+			'/economy/convert', { method: 'POST', body: JSON.stringify({ points }) });
+	}
+
 	// Admin
 	async getAdminStats() {
 		return this.request<any>('/admin/stats');

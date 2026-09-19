@@ -112,6 +112,28 @@ type instanceRuntime struct {
 }
 
 // List returns all instances for the current user
+// instanceOwnerScope returns the column + argument that scope instance
+// ownership for read paths: "team_id" in teams mode when the caller is on a
+// team, otherwise "user_id". A teamless caller in teams mode scopes by user_id
+// (and simply owns no team instances). Ported from CTFRiced's
+// is_teams_mode() ? team_id : user_id branch.
+func (h *InstanceHandler) instanceOwnerScope(ctx context.Context, uid uuid.UUID) (string, interface{}, error) {
+	teamsMode, err := isTeamsMode(ctx, h.db)
+	if err != nil {
+		return "", nil, err
+	}
+	if teamsMode {
+		teamID, err := resolveTeamID(ctx, h.db, uid)
+		if err != nil {
+			return "", nil, err
+		}
+		if teamID != nil {
+			return "team_id", *teamID, nil
+		}
+	}
+	return "user_id", uid, nil
+}
+
 func (h *InstanceHandler) List(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
@@ -119,8 +141,18 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		return
 	}
 
-	query := `
-		SELECT 
+	ctx := c.Request.Context()
+	// Team-shared instances: in teams mode any member sees the whole team's
+	// instances. Off (default) => per-user listing, unchanged.
+	ownerCol, ownerArg, err := h.instanceOwnerScope(ctx, uid)
+	if err != nil {
+		h.logger.Error("failed to resolve instance owner scope", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch instances"})
+		return
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
 			i.id, i.challenge_id, i.container_id, i.status,
 			i.ip_address, i.assigned_ports, i.created_at, i.expires_at,
 			i.extensions_used, COALESCE(c.max_extensions, 3) as max_extensions,
@@ -128,13 +160,13 @@ func (h *InstanceHandler) List(c *gin.Context) {
 			c.name as challenge_name, c.slug as challenge_slug
 		FROM instances i
 		JOIN challenges c ON i.challenge_id = c.id
-		WHERE i.user_id = $1 
+		WHERE i.%s = $1
 		  AND i.status NOT IN ('stopped', 'failed', 'expired')
 		  AND i.expires_at > NOW()
 		ORDER BY i.created_at DESC
-	`
+	`, ownerCol)
 
-	rows, err := h.db.Pool.Query(c.Request.Context(), query, uid)
+	rows, err := h.db.Pool.Query(ctx, query, ownerArg)
 	if err != nil {
 		h.logger.Error("failed to list instances", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch instances"})
@@ -386,6 +418,14 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Static / download-only challenges have no container image and no VM
+	// template, so there is nothing to spawn. Reject cleanly rather than
+	// surfacing a 500 from the provisioning plan.
+	if challenge.ResourceType == "docker" && challenge.ContainerImage == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "this challenge has no instance to start"})
+		return
+	}
+
 	if opErr := h.checkVPNEligibility(ctx, tx, uid); opErr != nil {
 		h.writeInstanceOperationError(c, "failed to check instance eligibility", opErr)
 		return
@@ -417,14 +457,38 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Team-shared instances (teams mode): scope reuse, the concurrency limit, and
+	// ownership on the team; keep user_id for attribution. Off => per-user, unchanged.
+	teamsMode, err := isTeamsMode(ctx, h.db)
+	if err != nil {
+		h.logger.Error("failed to read teams_mode", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
+		return
+	}
+	ownerCol, ownerArg := "user_id", interface{}(uid)
+	var teamID *uuid.UUID
+	if teamsMode {
+		tid, tErr := resolveTeamID(ctx, h.db, uid)
+		if tErr != nil {
+			h.logger.Error("failed to resolve team", zap.Error(tErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
+			return
+		}
+		if tid == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "join a team before starting an instance"})
+			return
+		}
+		teamID, ownerCol, ownerArg = tid, "team_id", interface{}(*tid)
+	}
+
 	var existingID uuid.UUID
 	err = tx.QueryRow(ctx,
-		`SELECT id FROM instances
-		 WHERE user_id = $1 AND challenge_id = $2
+		fmt.Sprintf(`SELECT id FROM instances
+		 WHERE %s = $1 AND challenge_id = $2
 		   AND status IN ('running', 'creating', 'pending', 'stopping')
 		   AND (status = 'stopping' OR expires_at IS NULL OR expires_at > NOW())
-		 ORDER BY created_at DESC LIMIT 1`,
-		uid, challenge.ID).Scan(&existingID)
+		 ORDER BY created_at DESC LIMIT 1`, ownerCol),
+		ownerArg, challenge.ID).Scan(&existingID)
 	if err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":       "instance already exists for this challenge",
@@ -451,10 +515,10 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 
 	var activeCount int
 	err = tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM instances
-		 WHERE user_id = $1
+		fmt.Sprintf(`SELECT COUNT(*) FROM instances
+		 WHERE %s = $1
 		   AND status IN ('running', 'creating', 'pending', 'stopping')
-		   AND (status = 'stopping' OR expires_at IS NULL OR expires_at > NOW())`, uid).Scan(&activeCount)
+		   AND (status = 'stopping' OR expires_at IS NULL OR expires_at > NOW())`, ownerCol), ownerArg).Scan(&activeCount)
 	if err != nil {
 		h.logger.Error("failed to count active instances", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check instance limit"})
@@ -478,10 +542,10 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 
 	result, err := tx.Exec(ctx,
 		`INSERT INTO instances
-			(id, user_id, challenge_id, resource_type, status, created_at, expires_at,
+			(id, user_id, team_id, challenge_id, resource_type, status, created_at, expires_at,
 			 reset_count, max_resets)
-		 VALUES ($1, $2, $3, $4, 'creating', NOW(), $5, 0, $6)`,
-		instanceID, uid, challenge.ID, challenge.ResourceType, expiresAt, challenge.MaxResets)
+		 VALUES ($1, $2, $3, $4, $5, 'creating', NOW(), $6, 0, $7)`,
+		instanceID, uid, teamID, challenge.ID, challenge.ResourceType, expiresAt, challenge.MaxResets)
 	if err != nil {
 		h.logger.Error("failed to create instance record", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
@@ -978,8 +1042,16 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 		return
 	}
 
-	query := `
-		SELECT 
+	// Team-shared instances: in teams mode any member may view the team's instance.
+	ownerCol, ownerArg, err := h.instanceOwnerScope(c.Request.Context(), uid)
+	if err != nil {
+		h.logger.Error("failed to resolve instance owner scope", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch instance"})
+		return
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
 			i.id, i.challenge_id, i.container_id, i.status,
 			i.ip_address, i.assigned_ports, i.created_at, i.expires_at,
 			i.extensions_used, COALESCE(c.max_extensions, 3) as max_extensions,
@@ -987,15 +1059,15 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 			c.name as challenge_name, c.slug as challenge_slug
 		FROM instances i
 		JOIN challenges c ON i.challenge_id = c.id
-		WHERE i.id = $1 AND i.user_id = $2
-	`
+		WHERE i.id = $1 AND i.%s = $2
+	`, ownerCol)
 
 	var inst InstanceResponse
 	var portsJSON []byte
 	var createdAt, expiresAt time.Time
 	var ipAddress, containerID *string
 
-	err = h.db.Pool.QueryRow(c.Request.Context(), query, instanceID, uid).Scan(
+	err = h.db.Pool.QueryRow(c.Request.Context(), query, instanceID, ownerArg).Scan(
 		&inst.ID, &inst.ChallengeID, &containerID, &inst.Status,
 		&ipAddress, &portsJSON, &createdAt, &expiresAt,
 		&inst.ExtensionsUsed, &inst.MaxExtensions,
@@ -1048,6 +1120,14 @@ func (h *InstanceHandler) Extend(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 
+	// Team-shared instances: in teams mode any member may extend the team's instance.
+	ownerCol, ownerArg, err := h.instanceOwnerScope(ctx, uid)
+	if err != nil {
+		h.logger.Error("failed to resolve instance owner scope", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to extend instance"})
+		return
+	}
+
 	extensionMinutes, err := h.boundedIntSetting(ctx, h.db.Pool, "instance.extension_minutes", 30, 1, 24*60)
 	if err != nil {
 		h.logger.Error("failed to load instance extension setting", zap.Error(err))
@@ -1057,7 +1137,7 @@ func (h *InstanceHandler) Extend(c *gin.Context) {
 
 	var newExpiry time.Time
 	var extensionsUsed, maxExtensions int
-	err = h.db.Pool.QueryRow(ctx, `
+	err = h.db.Pool.QueryRow(ctx, fmt.Sprintf(`
 		WITH extended AS (
 			UPDATE instances i
 			SET expires_at = COALESCE(i.expires_at, NOW()) + ($3 * INTERVAL '1 minute'),
@@ -1065,12 +1145,12 @@ func (h *InstanceHandler) Extend(c *gin.Context) {
 			    updated_at = NOW()
 			FROM challenges ch
 			WHERE i.challenge_id = ch.id
-			  AND i.id = $1 AND i.user_id = $2 AND i.status = 'running'
+			  AND i.id = $1 AND i.%s = $2 AND i.status = 'running'
 			  AND COALESCE(i.extensions_used, 0) < COALESCE(ch.max_extensions, 3)
 			RETURNING i.expires_at, i.extensions_used, COALESCE(ch.max_extensions, 3) AS max_extensions
 		)
 		SELECT expires_at, extensions_used, max_extensions FROM extended
-	`, instanceID, uid, extensionMinutes).Scan(&newExpiry, &extensionsUsed, &maxExtensions)
+	`, ownerCol), instanceID, ownerArg, extensionMinutes).Scan(&newExpiry, &extensionsUsed, &maxExtensions)
 	if err == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"message":              "Instance extended successfully",
@@ -1088,11 +1168,11 @@ func (h *InstanceHandler) Extend(c *gin.Context) {
 	}
 
 	var status string
-	err = h.db.Pool.QueryRow(ctx, `
+	err = h.db.Pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT i.status, COALESCE(i.extensions_used, 0), COALESCE(ch.max_extensions, 3)
 		FROM instances i JOIN challenges ch ON ch.id = i.challenge_id
-		WHERE i.id = $1 AND i.user_id = $2
-	`, instanceID, uid).Scan(&status, &extensionsUsed, &maxExtensions)
+		WHERE i.id = $1 AND i.%s = $2
+	`, ownerCol), instanceID, ownerArg).Scan(&status, &extensionsUsed, &maxExtensions)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
 		return

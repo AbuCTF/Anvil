@@ -380,6 +380,7 @@ type FlagInput struct {
 type CreateChallengeRequest struct {
 	Name        string  `json:"name" binding:"required"`
 	Description string  `json:"description"`
+	SubDescription string `json:"sub_description"` // optional plain-text pre-launch blurb (<=255 chars)
 	Difficulty  string  `json:"difficulty" binding:"required"`
 	CategoryID  *string `json:"category_id"`
 	Category    string  `json:"category"` // human-readable name; auto-resolved to category_id
@@ -610,13 +611,13 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 			exposed_ports, base_points, instance_timeout, max_extensions,
 			vm_timeout_minutes, vm_max_extensions, vm_extension_minutes, cooldown_minutes,
 			author_name, resource_type, supports_docker, supports_vm,
-			total_flags, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NOW(), NOW())`,
+			total_flags, sub_description, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, NOW(), NOW())`,
 		challengeID, req.Name, challengeSlug, req.Description, req.Difficulty, req.CategoryID,
 		req.ContainerImage, req.ContainerTag, req.ContainerPlatform, req.CPULimit, req.MemoryLimit,
 		portsJSON, req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 		req.VMTimeoutMinutes, req.VMMaxExtensions, req.VMExtensionMinutes, req.CooldownMinutes,
-		req.AuthorName, resourceType, supportsDocker, supportsVM, len(req.Flags),
+		req.AuthorName, resourceType, supportsDocker, supportsVM, len(req.Flags), subDescriptionOrNil(req.SubDescription),
 	)
 	if err != nil {
 		h.logger.Error("failed to create challenge", zap.Error(err))
@@ -720,6 +721,20 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	})
 }
 
+// subDescriptionOrNil normalizes an optional pre-launch sub_description: trims it,
+// caps it to the column width (255 chars, rune-safe), and returns nil for an empty
+// value so the column stores NULL rather than an empty string.
+func subDescriptionOrNil(s string) *string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	if r := []rune(s); len(r) > 255 {
+		s = string(r[:255])
+	}
+	return &s
+}
+
 // hashFlag creates a SHA256 hash of the flag
 func hashFlag(flag string) string {
 	hash := sha256.Sum256([]byte(flag))
@@ -767,6 +782,7 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	// Get form fields first (before file)
 	name := c.PostForm("name")
 	description := c.PostForm("description")
+	subDescription := c.PostForm("sub_description")
 	difficulty := c.PostForm("difficulty")
 	basePointsStr := c.PostForm("base_points")
 	categoryName := c.PostForm("category")
@@ -870,9 +886,9 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 		`INSERT INTO challenges (
 			id, name, slug, description, difficulty, category_id, status,
 			base_points, resource_type, supports_docker, supports_vm,
-			total_flags, container_image, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, 'vm', false, true, $8, '', NOW(), NOW())`,
-		challengeID, name, challengeSlug, description, difficulty, categoryID, basePoints, len(flags),
+			total_flags, container_image, sub_description, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, 'vm', false, true, $8, '', $9, NOW(), NOW())`,
+		challengeID, name, challengeSlug, description, difficulty, categoryID, basePoints, len(flags), subDescriptionOrNil(subDescription),
 	)
 	if err != nil {
 		h.logger.Error("failed to create OVA challenge", zap.Error(err))

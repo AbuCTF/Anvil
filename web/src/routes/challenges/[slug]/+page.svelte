@@ -612,10 +612,12 @@
 									</span>
 								{/if}
 
-								<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
-									<OpticalIcon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} size={12} box={12} />
-									<span class="optical-label">{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}</span>
-								</span>
+								{#if challenge.has_instance}
+									<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
+										<OpticalIcon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} size={12} box={12} />
+										<span class="optical-label">{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}</span>
+									</span>
+								{/if}
 
 								{#if challenge.category}
 									<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
@@ -927,7 +929,7 @@
 				<!-- Sidebar -->
 				<div class="space-y-6">
 					<!-- Instance Panel -->
-					{#if $auth.isAuthenticated}
+					{#if $auth.isAuthenticated && challenge.has_instance}
 						<Card title="Instance">
 							{#if instanceError}
 								<div class="mb-4 flex items-start justify-between gap-3 rounded-md border border-down/20 bg-down/10 px-3 py-2 text-xs text-down" aria-live="polite">
@@ -1169,10 +1171,12 @@
 								<span class="metadata-label text-stone-500">Flags</span>
 								<span class="text-stone-300 tabular-nums">{challenge.total_flags}</span>
 							</div>
-							<div class="flex items-center justify-between">
-								<span class="metadata-label text-stone-500">Type</span>
-								<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'}</span>
-							</div>
+							{#if challenge.has_instance}
+								<div class="flex items-center justify-between">
+									<span class="metadata-label text-stone-500">Type</span>
+									<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'}</span>
+								</div>
+							{/if}
 							{#if challenge.category}
 								<div class="flex items-center justify-between">
 									<span class="metadata-label text-stone-500">Category</span>

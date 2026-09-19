@@ -116,6 +116,7 @@ func (s *Server) setupRouter() {
 					auth.POST("/login", authHandler.Login)
 				}
 				auth.POST("/token", authHandler.TokenAuth) // For team token auth
+				auth.POST("/sso", authHandler.SSOLogin)    // ZeroPool -> Anvil SSO (model B); gated by sso.enabled
 				auth.POST("/refresh", authHandler.RefreshToken)
 				auth.POST("/logout", authHandler.Logout)
 			}
@@ -172,11 +173,25 @@ func (s *Server) setupRouter() {
 				user.GET("/me/solves", userHandler.GetSolves)
 			}
 
+			// Teams / membership (gated by the 'teams_mode' platform setting)
+			teams := protected.Group("/teams")
+			{
+				teamsHandler := handlers.NewTeamsHandler(s.config, s.db, s.logger)
+				teams.GET("/me", teamsHandler.GetMine)
+				teams.POST("", teamsHandler.Create)
+				teams.POST("/join", teamsHandler.Join)
+				teams.POST("/leave", teamsHandler.Leave)
+			}
+
 			// Challenge interactions
 			challenges := protected.Group("/challenges")
 			{
 				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
 				challenges.GET("/:slug/flags", challengeHandler.GetFlags)
+				challenges.POST("/:slug/open", challengeHandler.OpenChallenge)       // economy launch/open gate
+				challenges.POST("/:slug/abandon", challengeHandler.AbandonChallenge) // economy early release (partial refund)
+				challenges.POST("/:slug/extend", challengeHandler.ExtendChallenge)   // economy timer extension
+
 				challenges.POST("/:slug/submit", middleware.RateLimitEndpoint(
 					s.config.RateLimit.FlagSubmission,
 				), challengeHandler.SubmitFlag)
@@ -191,6 +206,15 @@ func (s *Server) setupRouter() {
 				arenaRoutes.POST("/submit", middleware.RateLimitEndpoint(
 					s.config.RateLimit.FlagSubmission,
 				), arenaHandler.SubmitFlag)
+			}
+
+			// Economy (team-level: balance, bailout, convert) — gated by economy_mode
+			economyRoutes := protected.Group("/economy")
+			{
+				economyHandler := handlers.NewEconomyHandler(s.config, s.db, s.logger)
+				economyRoutes.GET("/me", economyHandler.Balance)
+				economyRoutes.POST("/bailout", economyHandler.Bailout)
+				economyRoutes.POST("/convert", economyHandler.Convert)
 			}
 
 			// Instance management
@@ -375,6 +399,9 @@ func (s *Server) setupRouter() {
 				settings.GET("", settingsHandler.List)
 				settings.PUT("", settingsHandler.Update)
 			}
+
+			// Economy admin (freeze flip: auto-convert leftover credits + blind board)
+			admin.POST("/economy/freeze", handlers.NewEconomyHandler(s.config, s.db, s.logger).Freeze)
 
 			// Audit log
 			admin.GET("/audit", handlers.NewAuditHandler(s.db, s.logger).List)

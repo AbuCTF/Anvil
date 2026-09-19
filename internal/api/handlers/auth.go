@@ -735,6 +735,221 @@ type tokenPair struct {
 	refresh string
 }
 
+// ssoClaims are the claims Anvil expects on a ZeroPool -> Anvil handoff token
+// (model B). ZeroPool signs (HS256, shared secret); Anvil verifies + exchanges
+// for an Anvil session. `sub` = the stable ZeroPool participant id.
+type ssoClaims struct {
+	Email         string `json:"email"`
+	Username      string `json:"username"`
+	EmailVerified bool   `json:"email_verified"`
+	EventSlug     string `json:"event_slug,omitempty"`
+	jwt.RegisteredClaims
+}
+
+// uniqueUsername picks an available Anvil username for a provisioned SSO user,
+// preferring the token's username (or the email local-part), appending a short
+// random suffix on collision. The users.username UNIQUE constraint is the backstop.
+func (h *AuthHandler) uniqueUsername(ctx context.Context, tx pgx.Tx, preferred, email string) string {
+	base := strings.TrimSpace(preferred)
+	if base == "" {
+		base = strings.Split(email, "@")[0]
+	}
+	clip := func(s string, n int) string {
+		if r := []rune(s); len(r) > n {
+			return string(r[:n])
+		}
+		return s
+	}
+	base = clip(base, 40)
+	if len([]rune(base)) < 3 {
+		base += "usr"
+	}
+	candidate := base
+	for i := 0; i < 8; i++ {
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM users WHERE lower(username) = lower($1))`, candidate,
+		).Scan(&exists); err != nil {
+			break
+		}
+		if !exists {
+			return candidate
+		}
+		suffix, _ := generateSecureToken(2) // 4 hex chars
+		candidate = clip(base, 44) + "-" + suffix
+	}
+	return candidate
+}
+
+// SSOLogin verifies a ZeroPool-signed handoff token, links or provisions the
+// Anvil account, and issues an Anvil session. Gated by sso.enabled.
+func (h *AuthHandler) SSOLogin(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	if !h.config.SSO.Enabled || strings.TrimSpace(h.config.SSO.SharedSecret) == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "SSO is not enabled"})
+		return
+	}
+	var req struct {
+		Token string `json:"token" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "token is required"})
+		return
+	}
+
+	var claims ssoClaims
+	tok, err := jwt.ParseWithClaims(req.Token, &claims, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return []byte(h.config.SSO.SharedSecret), nil
+	}, jwt.WithValidMethods([]string{"HS256"}))
+	if err != nil || !tok.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid SSO token"})
+		return
+	}
+
+	if h.config.SSO.Issuer != "" {
+		if iss, _ := claims.GetIssuer(); iss != h.config.SSO.Issuer {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid SSO token issuer"})
+			return
+		}
+	}
+	if h.config.SSO.Audience != "" {
+		aud, _ := claims.GetAudience()
+		ok := false
+		for _, a := range aud {
+			if a == h.config.SSO.Audience {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid SSO token audience"})
+			return
+		}
+	}
+
+	subject, _ := claims.GetSubject()
+	subject = strings.TrimSpace(subject)
+	email := strings.ToLower(strings.TrimSpace(claims.Email))
+	if subject == "" || email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "SSO token missing subject or email"})
+		return
+	}
+	// Anvil enforces "must be verified"; ZeroPool owns the verification state
+	// (email-link or GitHub-verified) and only sets this true when appropriate.
+	if !claims.EmailVerified {
+		c.JSON(http.StatusForbidden, gin.H{"error": "email is not verified; verify on ZeroPool first"})
+		return
+	}
+	expiresAt, _ := claims.GetExpirationTime()
+	if expiresAt == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "SSO token missing expiry"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin SSO tx", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Replay guard: a token's jti is single-use.
+	if jti := strings.TrimSpace(claims.ID); jti != "" {
+		ct, err := tx.Exec(ctx,
+			`INSERT INTO sso_used_tokens (jti, expires_at) VALUES ($1, $2) ON CONFLICT (jti) DO NOTHING`,
+			jti, expiresAt.Time)
+		if err != nil {
+			h.logger.Error("failed to record SSO jti", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+			return
+		}
+		if ct.RowsAffected() == 0 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "SSO token already used"})
+			return
+		}
+	}
+
+	var userID uuid.UUID
+	var username, role string
+	var displayName *string
+	var totalScore int
+
+	// 1) existing SSO-linked user
+	err = tx.QueryRow(ctx,
+		`SELECT id, username, role, display_name, total_score FROM users WHERE sso_subject = $1`, subject,
+	).Scan(&userID, &username, &role, &displayName, &totalScore)
+
+	// 2) link an existing user by email (first SSO for a pre-existing account)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = tx.QueryRow(ctx,
+			`UPDATE users SET sso_subject = $1, email_verified = TRUE, updated_at = NOW()
+			 WHERE lower(email) = $2 AND sso_subject IS NULL
+			 RETURNING id, username, role, display_name, total_score`, subject, email,
+		).Scan(&userID, &username, &role, &displayName, &totalScore)
+	}
+
+	// 3) provision a new user
+	if errors.Is(err, pgx.ErrNoRows) {
+		username = h.uniqueUsername(ctx, tx, claims.Username, email)
+		role = "user"
+		randPw, _ := generateSecureToken(24)
+		hashed, hErr := bcrypt.GenerateFromPassword([]byte(randPw), bcrypt.DefaultCost)
+		if hErr != nil {
+			h.logger.Error("failed to hash SSO password", zap.Error(hErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+			return
+		}
+		err = tx.QueryRow(ctx,
+			`INSERT INTO users (username, email, password_hash, role, status, email_verified, sso_subject)
+			 VALUES ($1, $2, $3, 'user', 'active', TRUE, $4)
+			 RETURNING id, total_score`, username, email, string(hashed), subject,
+		).Scan(&userID, &totalScore)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				c.JSON(http.StatusConflict, gin.H{"error": "an account with that email or username already exists; sign in normally"})
+				return
+			}
+			h.logger.Error("failed to provision SSO user", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+			return
+		}
+		displayName = nil
+	} else if err != nil {
+		h.logger.Error("failed to resolve SSO user", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+		return
+	}
+
+	tokens, err := h.generateTokensWithStore(ctx, tx, userID, username, role, "user")
+	if err != nil {
+		h.logger.Error("failed to issue SSO session", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit SSO session", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "SSO failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, AuthResponse{
+		AccessToken:  tokens.access,
+		RefreshToken: tokens.refresh,
+		ExpiresIn:    int(h.config.JWT.AccessExpiry.Seconds()),
+		TokenType:    "Bearer",
+		User: &UserResponse{
+			ID: userID, Username: username, Email: email,
+			DisplayName: displayName, Role: role, TotalScore: totalScore, Rank: 0,
+		},
+	})
+}
+
 func (h *AuthHandler) generateTokens(ctx context.Context, userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
 	return h.generateTokensWithStore(ctx, h.db.Pool, userID, username, role, tokenType)
 }

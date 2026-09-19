@@ -16,6 +16,7 @@
 	const navigation = [
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' },
+		{ name: 'Team', href: '/team', icon: 'mdi:account-group' },
 		{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' },
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
@@ -29,6 +30,7 @@
 	const iconMetrics: Record<string, { size: number }> = {
 		'mdi:flag': { size: 15.5 },
 		'mdi:trophy': { size: 13.5 },
+		'mdi:account-group': { size: 15 },
 		'mdi:sword-cross': { size: 14 },
 		'mdi:server': { size: 12.75 },
 		'mdi:shield-crown': { size: 12.75 },

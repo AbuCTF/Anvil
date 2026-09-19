@@ -20,6 +20,47 @@ type Config struct {
 	RateLimit   RateLimitConfig `mapstructure:"rate_limit"`
 	Game        GameConfig      `mapstructure:"game"`
 	Storage     StorageConfig   `mapstructure:"storage"`
+	SSO         SSOConfig       `mapstructure:"sso"`
+	Economy     EconomyConfig   `mapstructure:"economy"`
+}
+
+// EconomyConfig holds the Ledger economy parameters (player 0-1000 anchor, ×10 of
+// ledger-sim/reference_config.json). Band arrays index by difficulty: 0=easy,
+// 1=medium, 2=hard, 3=insane(=the sim's "novel" tier). The live on/off is the
+// runtime `economy_mode` platform setting; these are the validated numbers, guarded
+// by invariant #7 at boot (see Validate). Any change here => CTF26-1 re-sims.
+type EconomyConfig struct {
+	Grant             float64   `mapstructure:"grant"`
+	Ceilings          []float64 `mapstructure:"ceilings"`
+	LaunchCosts       []float64 `mapstructure:"launch_costs"`
+	CrowdFloors       []float64 `mapstructure:"crowd_floors"`
+	CrowdHalflives    []float64 `mapstructure:"crowd_halflives"`
+	CleanRefundFrac   float64   `mapstructure:"clean_refund_frac"`
+	AbandonRefundFrac float64   `mapstructure:"abandon_refund_frac"`
+	WrongSubPenalty   float64   `mapstructure:"wrong_sub_penalty"`
+	WrongSubFloor     float64   `mapstructure:"wrong_sub_floor"`
+	ConcurrencyCap    int       `mapstructure:"concurrency_cap"`
+	MaxExtensions     int       `mapstructure:"max_extensions"`
+	ExtCostFracs      []float64 `mapstructure:"ext_cost_fracs"`
+	TimerSteps        []float64 `mapstructure:"timer_steps"`  // per-band open-timer length, in steps
+	StepMinutes       float64   `mapstructure:"step_minutes"` // minutes per step
+	ExtAddStepsFrac   float64   `mapstructure:"ext_add_steps_frac"`
+	Bailout           float64   `mapstructure:"bailout"`
+	FreeFlagPoints    float64   `mapstructure:"free_flag_points"`
+	P2CBlock          float64   `mapstructure:"p2c_block"`
+	P2CBase           float64   `mapstructure:"p2c_base"`
+	P2CRateDecay      float64   `mapstructure:"p2c_rate_decay"`
+	P2CMinRate        float64   `mapstructure:"p2c_min_rate"`
+	C2PRate           float64   `mapstructure:"c2p_rate"`
+}
+
+// SSOConfig configures the ZeroPool -> Anvil SSO handoff (model B). ZeroPool
+// signs a short-lived JWT that Anvil verifies and exchanges for an Anvil session.
+type SSOConfig struct {
+	Enabled      bool   `mapstructure:"enabled"`       // off => the /auth/sso endpoint 404s
+	SharedSecret string `mapstructure:"shared_secret"` // HS256 secret shared with ZeroPool
+	Issuer       string `mapstructure:"issuer"`        // expected token iss (e.g. "zeropool")
+	Audience     string `mapstructure:"audience"`      // expected token aud (e.g. "anvil")
 }
 
 const defaultJWTSecret = "change-me-in-production-please"
@@ -31,6 +72,20 @@ func (c Config) Validate() error {
 		secret := strings.TrimSpace(c.JWT.Secret)
 		if secret == defaultJWTSecret || len([]byte(secret)) < 32 {
 			return fmt.Errorf("jwt.secret must be at least 32 bytes and non-default in production")
+		}
+	}
+	// Ledger economy invariant #7 (round-trips lose value) — the only runtime
+	// config-load guard per CTF26-1/metrics.py. Validated in every environment.
+	if c.Economy.P2CBase > 0 && c.Economy.C2PRate > 0 {
+		roundtrip := c.Economy.P2CBase * c.Economy.C2PRate
+		if roundtrip >= 1.0 {
+			return fmt.Errorf("economy invariant #7 violated: roundtrip product %.4f must be < 1", roundtrip)
+		}
+		if len(c.Economy.Ceilings) > 1 {
+			fullGrantToPoints := c.Economy.Grant * c.Economy.C2PRate
+			if midTier := c.Economy.Ceilings[1]; fullGrantToPoints >= midTier {
+				return fmt.Errorf("economy invariant #7 violated: converting the full grant yields %.1f pts, must be < one mid-tier value %.1f", fullGrantToPoints, midTier)
+			}
 		}
 	}
 	return nil
@@ -216,6 +271,35 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.max_idle_conns", 5)
 
 	v.SetDefault("storage.path", "./data/storage")
+
+	// Ledger economy (player 0-1000 anchor, ×10 of ledger-sim/reference_config.json).
+	v.SetDefault("economy.grant", 4000.0)
+	v.SetDefault("economy.ceilings", []float64{100, 250, 500, 1000})
+	v.SetDefault("economy.launch_costs", []float64{50, 100, 200, 250})
+	v.SetDefault("economy.crowd_floors", []float64{0.15, 0.15, 0.15, 0.75})
+	v.SetDefault("economy.crowd_halflives", []float64{8, 12, 20, 40})
+	v.SetDefault("economy.clean_refund_frac", 0.5)
+	v.SetDefault("economy.abandon_refund_frac", 0.3)
+	v.SetDefault("economy.wrong_sub_penalty", 0.25)
+	v.SetDefault("economy.wrong_sub_floor", 0.2)
+	v.SetDefault("economy.concurrency_cap", 3)
+	v.SetDefault("economy.max_extensions", 2)
+	v.SetDefault("economy.ext_cost_fracs", []float64{0.5, 1.0})
+	v.SetDefault("economy.timer_steps", []float64{12, 27, 66, 120})
+	v.SetDefault("economy.step_minutes", 10.0)
+	v.SetDefault("economy.ext_add_steps_frac", 0.5)
+	v.SetDefault("economy.bailout", 100.0)
+	v.SetDefault("economy.free_flag_points", 10.0)
+	v.SetDefault("economy.p2c_block", 50.0)
+	v.SetDefault("economy.p2c_base", 1.0)
+	v.SetDefault("economy.p2c_rate_decay", 0.7)
+	v.SetDefault("economy.p2c_min_rate", 0.05)
+	v.SetDefault("economy.c2p_rate", 0.015)
+
+	v.SetDefault("sso.enabled", false)
+	v.SetDefault("sso.shared_secret", "") // must be defaulted so the env-bind loop (AllKeys) binds ANVIL_SSO_SHARED_SECRET
+	v.SetDefault("sso.issuer", "zeropool")
+	v.SetDefault("sso.audience", "anvil")
 
 	v.SetDefault("jwt.secret", defaultJWTSecret)
 	v.SetDefault("jwt.access_expiry", "15m")

@@ -286,6 +286,90 @@ type ScoreboardEntry struct {
 }
 
 // Get returns the scoreboard, paginated so the full field is served page by page.
+// teamScoreboardQuery ranks TEAMS (teams mode) with the same column shape,
+// params ($1 limit, $2 offset, $3 search, $4 sort), and scan order as the user
+// query: id, name(as username), display_name(NULL), total_score, challenges_solved
+// (fully-completed), flags_solved (distinct flags), last_solve, rank.
+const teamScoreboardQuery = `
+	WITH team_solves AS (
+		SELECT DISTINCT u.team_id AS team_id, s.flag_id, f.challenge_id
+		FROM solves s
+		JOIN users u ON u.id = s.user_id
+		JOIN flags f ON f.id = s.flag_id
+		WHERE u.team_id IS NOT NULL
+	), flag_totals AS (
+		SELECT f.challenge_id, COUNT(*)::int AS total_flags
+		FROM flags f
+		JOIN challenges c ON c.id = f.challenge_id
+		WHERE c.status = 'published' AND (c.release_date IS NULL OR c.release_date <= NOW())
+		GROUP BY f.challenge_id
+	), team_flags AS (
+		SELECT team_id, COUNT(*)::int AS flags_solved
+		FROM team_solves GROUP BY team_id
+	), team_completed AS (
+		SELECT team_id, COUNT(*)::int AS challenges_solved FROM (
+			SELECT ts.team_id, ts.challenge_id
+			FROM team_solves ts
+			JOIN flag_totals ft ON ft.challenge_id = ts.challenge_id
+			GROUP BY ts.team_id, ts.challenge_id, ft.total_flags
+			HAVING COUNT(DISTINCT ts.flag_id) >= ft.total_flags
+		) fully GROUP BY team_id
+	), last_solves AS (
+		SELECT u.team_id, MAX(s.solved_at) AS last_solve
+		FROM solves s JOIN users u ON u.id = s.user_id
+		WHERE u.team_id IS NOT NULL GROUP BY u.team_id
+	), ranked AS (
+		SELECT t.id, t.name, t.total_score, ls.last_solve,
+			ROW_NUMBER() OVER (
+				ORDER BY t.total_score DESC, ls.last_solve ASC NULLS LAST,
+				         t.created_at ASC, t.id ASC
+			) AS rank
+		FROM teams t
+		LEFT JOIN last_solves ls ON ls.team_id = t.id
+	), page_teams AS (
+		SELECT * FROM ranked
+		WHERE $3 = '' OR name ILIKE '%' || $3 || '%' ESCAPE '\'
+		ORDER BY CASE WHEN $4 = 'name' THEN LOWER(name) END, rank
+		LIMIT $1 OFFSET $2
+	)
+	SELECT pt.id, pt.name, NULL::text, pt.total_score,
+		COALESCE(tc.challenges_solved, 0),
+		COALESCE(tf.flags_solved, 0),
+		pt.last_solve, pt.rank
+	FROM page_teams pt
+	LEFT JOIN team_completed tc ON tc.team_id = pt.id
+	LEFT JOIN team_flags tf ON tf.team_id = pt.id
+	ORDER BY CASE WHEN $4 = 'name' THEN LOWER(pt.name) END, pt.rank
+`
+
+// teamEconomyScoreboardQuery ranks TEAMS by their economy point total (economy
+// mode). Same column/scan shape as the user + team queries. challenges/flags
+// "solved" = challenges the team holds under the economy.
+const teamEconomyScoreboardQuery = `
+	WITH scores AS (
+		SELECT t.id, t.name,
+			COALESCE(ets.points, 0) AS points,
+			(SELECT MAX(s.solved_at) FROM solves s JOIN users u ON u.id = s.user_id WHERE u.team_id = t.id) AS last_solve,
+			(SELECT COUNT(*)::int FROM economy_challenge_state e WHERE e.team_id = t.id AND e.holds_solve) AS solved
+		FROM teams t
+		LEFT JOIN economy_team_score ets ON ets.team_id = t.id
+	), ranked AS (
+		SELECT id, name, points, last_solve, solved,
+			ROW_NUMBER() OVER (
+				ORDER BY points DESC, last_solve ASC NULLS LAST, name ASC
+			) AS rank
+		FROM scores
+	), page_teams AS (
+		SELECT * FROM ranked
+		WHERE $3 = '' OR name ILIKE '%' || $3 || '%' ESCAPE '\'
+		ORDER BY CASE WHEN $4 = 'name' THEN LOWER(name) END, rank
+		LIMIT $1 OFFSET $2
+	)
+	SELECT pt.id, pt.name, NULL::text, ROUND(pt.points)::int, pt.solved, pt.solved, pt.last_solve, pt.rank
+	FROM page_teams pt
+	ORDER BY CASE WHEN $4 = 'name' THEN LOWER(pt.name) END, pt.rank
+`
+
 func (h *ScoreboardHandler) Get(c *gin.Context) {
 	cancel := limitScoreboardRequest(c)
 	defer cancel()
@@ -340,14 +424,33 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	}
 	defer tx.Rollback(c.Request.Context())
 
-	var totalUsers, matchingUsers int
-	if err := tx.QueryRow(c.Request.Context(),
-		`SELECT COUNT(*), COUNT(*) FILTER (
+	// Teams mode ranks teams instead of users. The team path is fully isolated
+	// (separate count + query, trends skipped) so the user path is untouched.
+	teamsMode, tmErr := isTeamsMode(c.Request.Context(), h.db)
+	if tmErr != nil {
+		h.respondQueryError(c, "failed to read teams_mode", tmErr)
+		return
+	}
+	economyMode, emErr := isEconomyMode(c.Request.Context(), h.db)
+	if emErr != nil {
+		h.respondQueryError(c, "failed to read economy_mode", emErr)
+		return
+	}
+	teamRanked := teamsMode || economyMode // both rank teams, not users
+
+	countQuery := `SELECT COUNT(*), COUNT(*) FILTER (
 			 WHERE $1 = '' OR username ILIKE '%' || $1 || '%' ESCAPE '\'
 			    OR COALESCE(display_name, '') ILIKE '%' || $1 || '%' ESCAPE '\'
 		 )
-		 FROM users WHERE role != 'admin' AND status = 'active'`, queryPattern).Scan(&totalUsers, &matchingUsers); err != nil {
-		h.respondQueryError(c, "failed to count scoreboard users", err)
+		 FROM users WHERE role != 'admin' AND status = 'active'`
+	if teamRanked {
+		countQuery = `SELECT COUNT(*), COUNT(*) FILTER (
+			 WHERE $1 = '' OR name ILIKE '%' || $1 || '%' ESCAPE '\'
+		 ) FROM teams`
+	}
+	var totalUsers, matchingUsers int
+	if err := tx.QueryRow(c.Request.Context(), countQuery, queryPattern).Scan(&totalUsers, &matchingUsers); err != nil {
+		h.respondQueryError(c, "failed to count scoreboard rows", err)
 		return
 	}
 	if offset >= matchingUsers {
@@ -427,6 +530,11 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 			CASE WHEN $4 = 'name' THEN LOWER(COALESCE(pu.display_name, pu.username)) END,
 			pu.rank
 	`
+	if economyMode {
+		query = teamEconomyScoreboardQuery
+	} else if teamsMode {
+		query = teamScoreboardQuery
+	}
 
 	rows, err := tx.Query(c.Request.Context(), query, limit, offset, queryPattern, sortBy)
 	if err != nil {
@@ -460,14 +568,23 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	}
 	rows.Close()
 
-	if err := h.attachTrends(c.Request.Context(), tx, entries); err != nil {
-		h.respondQueryError(c, "failed to attach scoreboard trends", err)
-		return
+	// Trends (spark + rank delta) key on user_id; skip in teams mode where the
+	// entry ids are teams. (Team trends are a follow-up unit.)
+	if !teamRanked {
+		if err := h.attachTrends(c.Request.Context(), tx, entries); err != nil {
+			h.respondQueryError(c, "failed to attach scoreboard trends", err)
+			return
+		}
 	}
 	if err := tx.Commit(c.Request.Context()); err != nil {
 		h.respondQueryError(c, "failed to commit scoreboard snapshot", err)
 		return
 	}
+
+	var frozen bool
+	_ = h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT COALESCE((SELECT value = 'true'::jsonb FROM platform_settings WHERE key = 'scoreboard_frozen'), false)`,
+	).Scan(&frozen)
 
 	h.respondCacheableJSON(c, cacheKey, 2*time.Second, gin.H{
 		"leaderboard":    entries,
@@ -475,6 +592,8 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		"matching_users": matchingUsers,
 		"page":           page,
 		"limit":          limit,
+		"frozen":         frozen,
+		"economy":        economyMode,
 	})
 }
 
