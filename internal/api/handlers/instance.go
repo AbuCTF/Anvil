@@ -469,6 +469,25 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		teamID, ownerCol, ownerArg = tid, "team_id", interface{}(*tid)
 	}
 
+	if teamID != nil {
+		economyOn, ecErr := isEconomyMode(ctx, h.db)
+		if ecErr != nil {
+			h.logger.Error("failed to read economy_mode", zap.Error(ecErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
+			return
+		}
+		if economyOn {
+			var st string
+			_ = tx.QueryRow(ctx,
+				`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+				*teamID, challenge.ID).Scan(&st)
+			if st != "open" && st != "solved" {
+				c.JSON(http.StatusForbidden, gin.H{"error": "launch this challenge before starting an instance"})
+				return
+			}
+		}
+	}
+
 	var existingID uuid.UUID
 	err = tx.QueryRow(ctx,
 		fmt.Sprintf(`SELECT id FROM instances
