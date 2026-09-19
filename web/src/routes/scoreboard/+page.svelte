@@ -100,6 +100,8 @@
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
+  let frozen = false;
+
   async function loadScores() {
     if (scoreInFlight) {
       scoreReloadPending = true;
@@ -142,6 +144,7 @@
         return;
       }
 
+      frozen = !!scoreboard.frozen;
       const nextEntries: Entry[] = scoreboard.leaderboard ?? [];
       const nextTotalUsers = scoreboard.total_users ?? nextEntries.length;
       const nextMatchingUsers = scoreboard.matching_users ?? nextTotalUsers;
@@ -403,6 +406,12 @@
 </svelte:head>
 
 <div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
+  {#if frozen}
+    <div class="mb-4 flex items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-sm text-amber-500">
+      <Icon icon="mdi:snowflake" class="h-4 w-4 shrink-0" />
+      Scoreboard frozen — final standings are hidden until the results are published.
+    </div>
+  {/if}
   <PageHeader title="Scoreboard" subtitle="{totalUsers} participants">
     <div
       slot="actions"

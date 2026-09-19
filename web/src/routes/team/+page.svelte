@@ -16,6 +16,8 @@
 	let joinCode = '';
 	let busy = false;
 	let copied = false;
+	let eco: any = null;
+	let convertAmt = '';
 
 	const inputClass =
 		'w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors';
@@ -29,6 +31,9 @@
 		try {
 			const res = await api.getMyTeam();
 			team = res.team;
+			if (team) {
+				try { eco = await api.getEconomy(); } catch { eco = null; }
+			}
 		} catch (e: any) {
 			const msg = e?.message ?? 'Failed to load team';
 			if (/team mode/i.test(msg)) teamsDisabled = true;
@@ -77,6 +82,36 @@
 			await load();
 		} catch (e: any) {
 			error = e?.message ?? 'Failed to leave team';
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function convert() {
+		const pts = Number(convertAmt);
+		if (!pts || pts <= 0 || busy) return;
+		busy = true;
+		error = '';
+		try {
+			await api.convertPoints(pts);
+			convertAmt = '';
+			await load();
+		} catch (e: any) {
+			error = e?.message ?? 'convert failed';
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function bailout() {
+		if (busy) return;
+		busy = true;
+		error = '';
+		try {
+			await api.economyBailout();
+			await load();
+		} catch (e: any) {
+			error = e?.message ?? 'bailout failed';
 		} finally {
 			busy = false;
 		}
@@ -169,6 +204,33 @@
 					</button>
 				</div>
 			</Card>
+
+			{#if eco}
+				<Card title="Economy" className="mt-4">
+					<div class="grid gap-4 sm:grid-cols-2">
+						<div>
+							<p class="metadata-label text-stone-500 mb-1">Credits</p>
+							<p class="text-2xl font-semibold text-amber-500 tabular-nums">{Math.round(eco.credits)}</p>
+						</div>
+						<div>
+							<p class="metadata-label text-stone-500 mb-1">Points</p>
+							<p class="text-2xl font-semibold text-stone-100 tabular-nums">{Math.round(eco.points)}</p>
+						</div>
+					</div>
+
+					<form on:submit|preventDefault={convert} class="mt-4 flex gap-2">
+						<input class={inputClass} type="number" min="1" bind:value={convertAmt} placeholder="Convert points → credits" />
+						<button type="submit" disabled={busy || !convertAmt} class="{primaryBtn} whitespace-nowrap">Convert</button>
+					</form>
+					<p class="text-xs text-stone-600 mt-1">diminishing rate — round-trips lose value.</p>
+
+					{#if eco.credits === 0 && !eco.bailout_used}
+						<button on:click={bailout} disabled={busy} class="mt-3 w-full rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-500 py-2 text-sm hover:bg-amber-500/20 disabled:opacity-40 transition-colors">
+							Request bailout (once, when broke)
+						</button>
+					{/if}
+				</Card>
+			{/if}
 		{:else}
 			<div class="grid gap-4 sm:grid-cols-2">
 				<Card title="Create a Team">
