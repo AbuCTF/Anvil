@@ -5,6 +5,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { auth } from '$stores/auth';
+	import { api } from '$api';
 	import Icon from '@iconify/svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import EventClock from '$lib/components/EventClock.svelte';
@@ -43,6 +44,21 @@
 	}
 
 	let theme: 'dark' | 'light' = 'dark';
+	let credits: number | null = null;
+
+	async function loadCredits() {
+		if (!$auth.isAuthenticated) {
+			credits = null;
+			return;
+		}
+		try {
+			const e = await api.getEconomy();
+			credits = e.credits;
+		} catch {
+			credits = null;
+		}
+	}
+	$: if ($auth.isAuthenticated && $page.url.pathname) loadCredits();
 
 	onMount(() => {
 		auth.checkAuth();
@@ -103,6 +119,12 @@
 				</div>
 
 				<div class="col-start-3 row-start-1 flex min-w-0 shrink-0 items-center justify-self-end gap-1 lg:gap-2 xl:gap-3">
+					{#if credits !== null}
+						<span class="hidden items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2.5 py-1 text-xs font-medium leading-none text-amber-500 tabular-nums sm:inline-flex" title="Team credits">
+							<Icon icon="mdi:diamond-stone" class="h-3.5 w-3.5" />
+							{Math.round(credits)}
+						</span>
+					{/if}
 					<EventClock className="mr-1 shrink-0 lg:mr-0" />
 					<div class="hidden items-center gap-0.5 lg:flex">
 						<button
