@@ -71,6 +71,8 @@ type ZeroPoolConfig struct {
 	BaseURL   string `mapstructure:"base_url"`
 	APIKey    string `mapstructure:"api_key"`
 	EventSlug string `mapstructure:"event_slug"`
+	// public turnstile site key for the browser-direct email registration widget
+	TurnstileSiteKey string `mapstructure:"turnstile_site_key"`
 }
 
 // DiscordConfig configures Anvil-side Discord OAuth for instant walk-in login.
@@ -316,6 +318,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("zeropool.base_url", "")
 	v.SetDefault("zeropool.api_key", "")
 	v.SetDefault("zeropool.event_slug", "h7ctf-2026")
+	v.SetDefault("zeropool.turnstile_site_key", "")
 	v.SetDefault("discord.enabled", false)
 	v.SetDefault("discord.client_id", "")
 	v.SetDefault("discord.client_secret", "")

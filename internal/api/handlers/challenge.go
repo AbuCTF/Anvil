@@ -38,20 +38,20 @@ func NewChallengeService(cfg *config.Config, db *database.DB, logger *zap.Logger
 }
 
 type ChallengeListResponse struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Slug         string  `json:"slug"`
-	Description  *string `json:"description,omitempty"`
-	Difficulty   string  `json:"difficulty"`
-	Category     *string `json:"category,omitempty"`
-	CategoryID   *string `json:"category_id,omitempty"`
-	BasePoints   int     `json:"base_points"`
-	TotalSolves  int     `json:"total_solves"`
-	TotalFlags   int     `json:"total_flags"`
-	AuthorName   *string `json:"author_name,omitempty"`
-	IsSolved     bool    `json:"is_solved"`
-	UserSolves   int     `json:"user_solves"`
-	ResourceType string  `json:"resource_type"` // docker or vm
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	Slug           string  `json:"slug"`
+	Description    *string `json:"description,omitempty"`
+	Difficulty     string  `json:"difficulty"`
+	Category       *string `json:"category,omitempty"`
+	CategoryID     *string `json:"category_id,omitempty"`
+	BasePoints     int     `json:"base_points"`
+	TotalSolves    int     `json:"total_solves"`
+	TotalFlags     int     `json:"total_flags"`
+	AuthorName     *string `json:"author_name,omitempty"`
+	IsSolved       bool    `json:"is_solved"`
+	UserSolves     int     `json:"user_solves"`
+	ResourceType   string  `json:"resource_type"`             // docker or vm
 	SubDescription *string `json:"sub_description,omitempty"` // short one-liner shown on the tile
 }
 

@@ -33,6 +33,9 @@ export interface PlatformInfoResponse {
 	scoreboard_enabled: boolean;
 	discord_walkin: boolean;
 	email_walkin: boolean;
+	zeropool_base_url?: string;
+	zeropool_event_slug?: string;
+	turnstile_site_key?: string;
 	server_time: string;
 	event?: {
 		start_at: string;
@@ -273,13 +276,6 @@ class ApiClient {
 		}>('/auth/discord/callback', {
 			method: 'POST',
 			body: JSON.stringify({ code, state })
-		}, false);
-	}
-
-	async emailWalkin(email: string) {
-		return this.request<{ message: string }>('/auth/walkin/email', {
-			method: 'POST',
-			body: JSON.stringify({ email })
 		}, false);
 	}
 

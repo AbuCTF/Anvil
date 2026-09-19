@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
@@ -12,19 +12,58 @@
 	let discordWalkin = false;
 	let emailWalkin = false;
 	let discordLoading = false;
+	let walkinName = '';
 	let walkinEmail = '';
 	let walkinLoading = false;
 	let walkinMsg = '';
+
+	// email fallback registers browser-direct against zeropool so the user stays
+	// on this origin and turnstile + per-ip rate limits apply to the real client
+	let zpBase = '';
+	let eventSlug = '';
+	let turnstileSiteKey = '';
+	let turnstileToken = '';
+	let turnstileEl: HTMLDivElement;
 
 	onMount(async () => {
 		try {
 			const info = await api.getPlatformInfo();
 			discordWalkin = info.discord_walkin;
 			emailWalkin = info.email_walkin;
+			zpBase = info.zeropool_base_url ?? '';
+			eventSlug = info.zeropool_event_slug ?? '';
+			turnstileSiteKey = info.turnstile_site_key ?? '';
+			if (emailWalkin && turnstileSiteKey) {
+				await tick();
+				loadTurnstile();
+			}
 		} catch {
 			// walk-in options stay hidden if platform info is unavailable
 		}
 	});
+
+	function loadTurnstile() {
+		const render = () => {
+			// @ts-expect-error turnstile is injected by the cloudflare script
+			if (window.turnstile && turnstileEl) {
+				// @ts-expect-error injected global
+				window.turnstile.render(turnstileEl, {
+					sitekey: turnstileSiteKey,
+					callback: (t: string) => (turnstileToken = t),
+					'error-callback': () => (turnstileToken = '')
+				});
+			}
+		};
+		// @ts-expect-error injected global
+		if (window.turnstile) return render();
+		if (document.getElementById('cf-turnstile-script')) return;
+		const s = document.createElement('script');
+		s.id = 'cf-turnstile-script';
+		s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+		s.async = true;
+		s.onload = render;
+		document.head.appendChild(s);
+	}
 
 	async function discordSignIn() {
 		discordLoading = true;
@@ -39,15 +78,36 @@
 	}
 
 	async function emailSignIn() {
-		if (!walkinEmail) return;
+		if (!walkinName || !walkinEmail) {
+			error = 'Enter your name and email';
+			return;
+		}
+		if (turnstileSiteKey && !turnstileToken) {
+			error = 'Please complete the verification';
+			return;
+		}
 		walkinLoading = true;
 		walkinMsg = '';
 		error = '';
 		try {
-			const r = await api.emailWalkin(walkinEmail);
-			walkinMsg = r.message;
+			const ev = await fetch(`${zpBase}/api/events/${eventSlug}`);
+			if (!ev.ok) throw new Error('Registration is unavailable right now');
+			const eventId = (await ev.json()).id;
+			const body: Record<string, string> = { name: walkinName, email: walkinEmail };
+			if (turnstileToken) body.turnstile_token = turnstileToken;
+			const reg = await fetch(`${zpBase}/api/events/${eventId}/register`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(body)
+			});
+			const data = await reg.json().catch(() => ({}));
+			if (!reg.ok) throw new Error(data.detail || data.message || 'Registration failed');
+			walkinMsg = data.message || 'Check your email for a verification link, then sign in.';
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Could not send the sign-in email';
+			error = e instanceof Error ? e.message : 'Registration failed';
+			turnstileToken = '';
+			// @ts-expect-error injected global
+			if (window.turnstile) try { window.turnstile.reset(); } catch {}
 		} finally {
 			walkinLoading = false;
 		}
@@ -175,21 +235,33 @@
 							<span>{walkinMsg}</span>
 						</p>
 					{:else}
-						<form on:submit|preventDefault={emailSignIn} class="mt-3 flex gap-2">
+						<form on:submit|preventDefault={emailSignIn} class="mt-3 space-y-2">
 							<input
-								type="email"
-								autocomplete="email"
-								bind:value={walkinEmail}
-								placeholder="you@email.com"
-								class="flex-1 min-w-0 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
+								type="text"
+								autocomplete="name"
+								bind:value={walkinName}
+								placeholder="Your name"
+								class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
 							/>
-							<button
-								type="submit"
-								disabled={walkinLoading}
-								class="shrink-0 rounded-md border border-stone-700 text-stone-200 font-medium px-3 py-2.5 text-sm hover:bg-stone-800/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-							>
-								{walkinLoading ? 'Sending…' : 'Email link'}
-							</button>
+							<div class="flex gap-2">
+								<input
+									type="email"
+									autocomplete="email"
+									bind:value={walkinEmail}
+									placeholder="you@email.com"
+									class="flex-1 min-w-0 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
+								/>
+								<button
+									type="submit"
+									disabled={walkinLoading}
+									class="shrink-0 rounded-md border border-stone-700 text-stone-200 font-medium px-3 py-2.5 text-sm hover:bg-stone-800/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+								>
+									{walkinLoading ? 'Sending…' : 'Email link'}
+								</button>
+							</div>
+							{#if turnstileSiteKey}
+								<div bind:this={turnstileEl}></div>
+							{/if}
 						</form>
 					{/if}
 				{/if}
