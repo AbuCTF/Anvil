@@ -32,10 +32,7 @@ export interface PlatformInfoResponse {
 	scoring_enabled: boolean;
 	scoreboard_enabled: boolean;
 	discord_walkin: boolean;
-	email_walkin: boolean;
-	zeropool_base_url?: string;
-	zeropool_event_slug?: string;
-	turnstile_site_key?: string;
+	register_url?: string;
 	server_time: string;
 	event?: {
 		start_at: string;

@@ -28,10 +28,7 @@ type platformInfoResponse struct {
 	ScoringEnabled    bool             `json:"scoring_enabled"`
 	ScoreboardEnabled bool             `json:"scoreboard_enabled"`
 	DiscordWalkin     bool             `json:"discord_walkin"`
-	EmailWalkin       bool             `json:"email_walkin"`
-	ZeroPoolBaseURL   string           `json:"zeropool_base_url,omitempty"`
-	ZeroPoolEventSlug string           `json:"zeropool_event_slug,omitempty"`
-	TurnstileSiteKey  string           `json:"turnstile_site_key,omitempty"`
+	RegisterURL       string           `json:"register_url,omitempty"`
 	ServerTime        time.Time        `json:"server_time"`
 	Event             *publicEventInfo `json:"event,omitempty"`
 }
@@ -45,10 +42,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		ScoringEnabled:    h.config.Platform.ScoringEnabled,
 		ScoreboardEnabled: h.config.Platform.ScoreboardEnabled,
 		DiscordWalkin:     h.config.Discord.Enabled && h.config.Discord.ClientID != "",
-		EmailWalkin:       strings.TrimRight(h.config.ZeroPool.BaseURL, "/") != "",
-		ZeroPoolBaseURL:   strings.TrimRight(h.config.ZeroPool.BaseURL, "/"),
-		ZeroPoolEventSlug: h.config.ZeroPool.EventSlug,
-		TurnstileSiteKey:  h.config.ZeroPool.TurnstileSiteKey,
+		RegisterURL:       h.config.Platform.RegisterURL,
 		ServerTime:        now,
 	}
 

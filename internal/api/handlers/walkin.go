@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,39 +17,38 @@ import (
 	"go.uber.org/zap"
 )
 
-// walk-in onboarding: native Discord OAuth (instant, discord-verified email) and
-// an email fallback, both writing identity through to zeropool so anvil and the
-// public site share one participant record. see CTF26/reg-anvil-handoff-contract.md.
+// discord sign-in is LOGIN-ONLY: registration + email/discord verification all
+// happen at the external registration site (zeropool). anvil never creates a
+// zeropool account — it only looks one up by discord id and mirrors it locally.
+// see CTF26/reg-anvil-handoff-contract.md.
 
 var walkinHTTP = &http.Client{Timeout: 10 * time.Second}
 
-type zpProvisionRequest struct {
-	Email           string `json:"email"`
-	EmailVerified   bool   `json:"email_verified"`
-	DiscordID       string `json:"discord_id,omitempty"`
-	DiscordUsername string `json:"discord_username,omitempty"`
-	EventSlug       string `json:"event_slug"`
+// errZPNotRegistered means no zeropool participant is linked to this discord id
+// for the event — the person must register at the registration site first.
+var errZPNotRegistered = fmt.Errorf("not registered")
+
+type zpLookupRequest struct {
+	DiscordID string `json:"discord_id"`
+	EventSlug string `json:"event_slug"`
+	Create    bool   `json:"create"` // always false: anvil never registers
 }
 
-type zpProvisionResponse struct {
+type zpParticipant struct {
 	ParticipantID string `json:"participant_id"`
 	Email         string `json:"email"`
 	Username      string `json:"username"`
 	EmailVerified bool   `json:"email_verified"`
-	Created       bool   `json:"created"`
 }
 
-// zpProvision upserts a zeropool participant for a verified identity and returns
-// its id, which anvil stores as sso_subject to keep the two accounts linked.
-func (h *AuthHandler) zpProvision(ctx context.Context, req zpProvisionRequest) (*zpProvisionResponse, error) {
+// zpLookup finds the zeropool participant linked to a discord id (create:false).
+// a 404 => errZPNotRegistered; the id it returns is stored as anvil's sso_subject.
+func (h *AuthHandler) zpLookup(ctx context.Context, discordID string) (*zpParticipant, error) {
 	base := strings.TrimRight(h.config.ZeroPool.BaseURL, "/")
 	if base == "" || h.config.ZeroPool.APIKey == "" {
 		return nil, fmt.Errorf("zeropool link not configured")
 	}
-	if req.EventSlug == "" {
-		req.EventSlug = h.config.ZeroPool.EventSlug
-	}
-	body, _ := json.Marshal(req)
+	body, _ := json.Marshal(zpLookupRequest{DiscordID: discordID, EventSlug: h.config.ZeroPool.EventSlug, Create: false})
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/identity/provision", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -61,15 +61,18 @@ func (h *AuthHandler) zpProvision(ctx context.Context, req zpProvisionRequest) (
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("zeropool provision %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, errZPNotRegistered
 	}
-	var out zpProvisionResponse
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("zeropool lookup %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out zpParticipant
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("zeropool provision: bad response")
+		return nil, fmt.Errorf("zeropool lookup: bad response")
 	}
 	if out.ParticipantID == "" {
-		return nil, fmt.Errorf("zeropool provision: no participant id")
+		return nil, fmt.Errorf("zeropool lookup: no participant id")
 	}
 	return &out, nil
 }
@@ -102,9 +105,10 @@ type discordCallbackRequest struct {
 	State string `json:"state" binding:"required"`
 }
 
-// DiscordCallback exchanges the oauth code for the discord profile, requires a
-// verified discord email, provisions the zeropool participant, then issues an
-// anvil session through the shared provisioning path.
+// DiscordCallback exchanges the oauth code for the discord profile, looks up an
+// existing (create:false) zeropool participant by discord id, and issues an anvil
+// session. it never registers: an unknown discord => not_registered (go register
+// at the registration site); an unverified account => verify_email.
 func (h *AuthHandler) DiscordCallback(c *gin.Context) {
 	if !h.config.Discord.Enabled {
 		c.JSON(http.StatusNotFound, gin.H{"error": "discord sign-in is not available"})
@@ -127,32 +131,42 @@ func (h *AuthHandler) DiscordCallback(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "could not reach Discord, please try again"})
 		return
 	}
-	if profile.Email == "" || !profile.Verified {
-		c.JSON(http.StatusForbidden, gin.H{"error": "your Discord email is not verified; verify it on Discord or use email sign-in"})
+
+	participant, err := h.zpLookup(ctx, profile.ID)
+	if errors.Is(err, errZPNotRegistered) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":         "not_registered",
+			"error":        "you're not registered yet — sign up first, then come back",
+			"register_url": h.config.Platform.RegisterURL,
+		})
 		return
 	}
-
-	participant, err := h.zpProvision(ctx, zpProvisionRequest{
-		Email:           strings.ToLower(profile.Email),
-		EmailVerified:   true,
-		DiscordID:       profile.ID,
-		DiscordUsername: profile.Username,
-		EventSlug:       h.config.ZeroPool.EventSlug,
-	})
 	if err != nil {
-		h.logger.Error("zeropool provision failed", zap.Error(err))
-		c.JSON(http.StatusBadGateway, gin.H{"error": "registration is temporarily unavailable"})
+		h.logger.Error("zeropool lookup failed", zap.Error(err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "sign-in is temporarily unavailable"})
+		return
+	}
+	if !participant.EmailVerified {
+		c.JSON(http.StatusForbidden, gin.H{
+			"code":         "verify_email",
+			"error":        "verify your email at the registration site, then sign in",
+			"register_url": h.config.Platform.RegisterURL,
+		})
 		return
 	}
 
 	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
-		h.logger.Error("failed to begin walk-in tx", zap.Error(err))
+		h.logger.Error("failed to begin discord login tx", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
 		return
 	}
 	defer tx.Rollback(ctx)
-	h.provisionAndRespond(c, ctx, tx, participant.ParticipantID, strings.ToLower(profile.Email), profile.Username)
+	email := participant.Email
+	if email == "" {
+		email = strings.ToLower(profile.Email)
+	}
+	h.provisionAndRespond(c, ctx, tx, participant.ParticipantID, email, profile.Username)
 }
 
 type discordProfileResult struct {
@@ -232,7 +246,3 @@ func (h *AuthHandler) verifyOAuthState(state string) bool {
 	claims, ok := tok.Claims.(*jwt.RegisteredClaims)
 	return ok && claims.Subject == "discord_oauth"
 }
-
-// the email fallback posts browser-direct to zeropool's public registration
-// (which carries the turnstile token and is rate-limited per client ip); anvil
-// only advertises the target via /info. see reg-anvil-handoff-contract.md.

@@ -6,6 +6,7 @@
 	import { auth } from '$stores/auth';
 
 	let error = '';
+	let registerUrl = '';
 
 	onMount(async () => {
 		const params = new URLSearchParams(window.location.search);
@@ -23,6 +24,9 @@
 			goto('/challenges');
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Sign-in failed.';
+			// not_registered / verify_email carry a register_url to send them to
+			const u = (e as { register_url?: string })?.register_url;
+			if (typeof u === 'string') registerUrl = u;
 		}
 	});
 </script>
@@ -33,7 +37,11 @@
 	{#if error}
 		<div class="text-center">
 			<p class="text-sm text-danger mb-4">{error}</p>
-			<a href="/login" class="inline-block rounded-md bg-stone-100 px-4 py-2.5 text-sm font-medium text-stone-950 transition-colors hover:bg-stone-50">Back to sign in</a>
+			{#if registerUrl}
+				<a href={registerUrl} class="inline-block rounded-md bg-stone-100 px-4 py-2.5 text-sm font-medium text-stone-950 transition-colors hover:bg-stone-50">Register</a>
+			{:else}
+				<a href="/login" class="inline-block rounded-md bg-stone-100 px-4 py-2.5 text-sm font-medium text-stone-950 transition-colors hover:bg-stone-50">Back to sign in</a>
+			{/if}
 		</div>
 	{:else}
 		<div class="flex items-center gap-2 text-sm text-stone-500">

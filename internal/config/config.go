@@ -64,15 +64,13 @@ type SSOConfig struct {
 	Audience     string `mapstructure:"audience"`      // expected token aud (e.g. "anvil")
 }
 
-// ZeroPoolConfig is the server-to-server link to ZeroPool (the identity store)
-// for native walk-in onboarding: Discord provisions via api_key, email walk-ins
-// proxy to ZeroPool's public event registration.
+// ZeroPoolConfig is the server-to-server link to ZeroPool (the identity store):
+// discord sign-in looks up a participant by discord id (api_key auth) to sign an
+// already-registered member in. anvil never registers through it.
 type ZeroPoolConfig struct {
 	BaseURL   string `mapstructure:"base_url"`
 	APIKey    string `mapstructure:"api_key"`
 	EventSlug string `mapstructure:"event_slug"`
-	// public turnstile site key for the browser-direct email registration widget
-	TurnstileSiteKey string `mapstructure:"turnstile_site_key"`
 }
 
 // DiscordConfig configures Anvil-side Discord OAuth for instant walk-in login.
@@ -177,6 +175,7 @@ type PlatformConfig struct {
 	Description string `mapstructure:"description"`
 
 	RegistrationMode string `mapstructure:"registration_mode"` // open, invite, token, disabled
+	RegisterURL      string `mapstructure:"register_url"`      // external registration site; when set, "register" links point here instead of anvil's own signup
 
 	ScoringEnabled    bool `mapstructure:"scoring_enabled"`
 	ScoreboardEnabled bool `mapstructure:"scoreboard_enabled"`
@@ -318,7 +317,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("zeropool.base_url", "")
 	v.SetDefault("zeropool.api_key", "")
 	v.SetDefault("zeropool.event_slug", "h7ctf-2026")
-	v.SetDefault("zeropool.turnstile_site_key", "")
 	v.SetDefault("discord.enabled", false)
 	v.SetDefault("discord.client_id", "")
 	v.SetDefault("discord.client_secret", "")
@@ -356,6 +354,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("platform.name", "Anvil")
 	v.SetDefault("platform.description", "Forge your skills")
 	v.SetDefault("platform.registration_mode", "open")
+	v.SetDefault("platform.register_url", "")
 	v.SetDefault("platform.scoring_enabled", true)
 	v.SetDefault("platform.scoreboard_enabled", true)
 	v.SetDefault("platform.scoreboard_public", true)
