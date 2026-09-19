@@ -120,9 +120,13 @@
 
 				<div class="col-start-3 row-start-1 flex min-w-0 shrink-0 items-center justify-self-end gap-1 lg:gap-2 xl:gap-3">
 					{#if credits !== null}
-						<span class="hidden h-6 items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2.5 text-xs font-medium leading-none text-amber-500 tabular-nums sm:inline-flex" title="Team credits">
+						<span class="group relative hidden h-6 items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2.5 text-xs font-medium leading-none text-amber-500 tabular-nums sm:inline-flex">
 							<OpticalIcon icon="mdi:diamond-stone" size={13} box={14} />
 							<span class="optical-label">{Math.round(credits)}</span>
+							<span class="pointer-events-none absolute right-0 top-full z-50 mt-2 hidden w-64 rounded-md border border-stone-800 bg-stone-950 p-3 text-left text-xs font-normal leading-relaxed text-stone-400 shadow-lg group-hover:block">
+								<span class="mb-1 block font-medium text-stone-200">Credits</span>
+								Your team's spendable budget. Opening a challenge costs credits, and a clean solve refunds half. Convert points to credits on the Team page, or claim a one-time bailout if you run out.
+							</span>
 						</span>
 					{/if}
 					<EventClock className="mr-1 shrink-0 lg:mr-0" />
