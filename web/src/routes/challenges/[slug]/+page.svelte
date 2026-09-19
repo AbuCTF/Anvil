@@ -616,7 +616,7 @@
 									</span>
 								{/if}
 
-								{#if challenge.has_instance}
+								{#if challenge.resource_type}
 									<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
 										<OpticalIcon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} size={12} box={12} />
 										<span class="optical-label">{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}</span>
@@ -696,11 +696,11 @@
 					{#if locked}
 						<Card title="Locked">
 							<div class="space-y-3">
-								<p class="text-sm text-stone-400 leading-relaxed">Open this challenge to reveal the brief, download the files, and start solving.</p>
-								<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-amber-500 text-amber-950 text-sm font-medium rounded-md hover:bg-amber-400 transition-colors disabled:opacity-50">
-									{ecoBusy ? 'Opening…' : `Open for ${challenge.economy.launch_cost} credits`}
+								<p class="text-sm text-stone-400 leading-relaxed">Launching unlocks the full brief, files, and instance, and starts your solve timer.</p>
+								<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+									{ecoBusy ? 'Launching…' : 'Launch challenge'}
 								</button>
-								<p class="text-xs text-stone-600">balance: {Math.round(challenge.economy.credits)} credits</p>
+								<p class="text-xs text-stone-500">Costs <span class="font-medium text-amber-500 tabular-nums">{challenge.economy.launch_cost}</span> credits · balance <span class="tabular-nums">{Math.round(challenge.economy.credits)}</span></p>
 								{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
 							</div>
 						</Card>
@@ -1182,7 +1182,7 @@
 								<span class="metadata-label text-stone-500">Flags</span>
 								<span class="text-stone-300 tabular-nums">{challenge.total_flags}</span>
 							</div>
-							{#if challenge.has_instance}
+							{#if challenge.resource_type}
 								<div class="flex items-center justify-between">
 									<span class="metadata-label text-stone-500">Type</span>
 									<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'}</span>

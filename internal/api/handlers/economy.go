@@ -371,7 +371,7 @@ func convertPointsToCredits(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, po
 		return 0, &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to read balance"}
 	}
 	if points > have {
-		return 0, &EconomyOpError{Status: http.StatusBadRequest, Message: "not enough points to convert"}
+		return 0, &EconomyOpError{Status: http.StatusBadRequest, Message: "you do not have enough points to convert"}
 	}
 	remaining := points
 	credits := 0.0
@@ -420,7 +420,7 @@ func bailoutEconomy(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, cfg config
 		return &EconomyOpError{Status: http.StatusConflict, Message: "bailout already used"}
 	}
 	if credits > 0 {
-		return &EconomyOpError{Status: http.StatusBadRequest, Message: "bailout is only available when broke"}
+		return &EconomyOpError{Status: http.StatusBadRequest, Message: "bailout is available only when your balance reaches zero"}
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE economy_team_score SET bailout_used = TRUE WHERE team_id = $1`, teamID); err != nil {

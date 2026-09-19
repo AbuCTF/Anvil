@@ -120,9 +120,9 @@
 
 				<div class="col-start-3 row-start-1 flex min-w-0 shrink-0 items-center justify-self-end gap-1 lg:gap-2 xl:gap-3">
 					{#if credits !== null}
-						<span class="hidden items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2.5 py-1 text-xs font-medium leading-none text-amber-500 tabular-nums sm:inline-flex" title="Team credits">
-							<Icon icon="mdi:diamond-stone" class="h-3.5 w-3.5" />
-							{Math.round(credits)}
+						<span class="hidden h-6 items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/[0.07] px-2.5 text-xs font-medium leading-none text-amber-500 tabular-nums sm:inline-flex" title="Team credits">
+							<OpticalIcon icon="mdi:diamond-stone" size={13} box={14} />
+							<span class="optical-label">{Math.round(credits)}</span>
 						</span>
 					{/if}
 					<EventClock className="mr-1 shrink-0 lg:mr-0" />

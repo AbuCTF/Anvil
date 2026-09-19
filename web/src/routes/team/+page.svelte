@@ -222,12 +222,13 @@
 						<input class={inputClass} type="number" min="1" bind:value={convertAmt} placeholder="Convert points → credits" />
 						<button type="submit" disabled={busy || !convertAmt} class="{primaryBtn} whitespace-nowrap">Convert</button>
 					</form>
-					<p class="text-xs text-stone-600 mt-1">diminishing rate — round-trips lose value.</p>
+					<p class="text-xs text-stone-600 mt-1">The conversion rate falls with each block, so converting back and forth loses value.</p>
 
 					{#if eco.credits === 0 && !eco.bailout_used}
 						<button on:click={bailout} disabled={busy} class="mt-3 w-full rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-500 py-2 text-sm hover:bg-amber-500/20 disabled:opacity-40 transition-colors">
-							Request bailout (once, when broke)
+							Request bailout
 						</button>
+						<p class="text-xs text-stone-600 mt-1">A one-time top-up, available while your balance is zero.</p>
 					{/if}
 				</Card>
 			{/if}
