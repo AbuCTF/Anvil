@@ -47,6 +47,7 @@
 <div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12">
 	<div class="w-full max-w-sm">
 		<div class="text-center mb-6">
+			<img src="/logo.png" alt="Anvil" class="h-9 w-auto mx-auto mb-4" />
 			<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">Welcome Back</h1>
 			<p class="text-sm text-stone-500 mt-1.5">
 				Don't have an account?
