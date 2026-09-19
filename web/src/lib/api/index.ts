@@ -31,6 +31,8 @@ export interface PlatformInfoResponse {
 	registration_mode: string;
 	scoring_enabled: boolean;
 	scoreboard_enabled: boolean;
+	discord_walkin: boolean;
+	email_walkin: boolean;
 	server_time: string;
 	event?: {
 		start_at: string;
@@ -256,6 +258,28 @@ class ApiClient {
 		}>('/auth/sso', {
 			method: 'POST',
 			body: JSON.stringify({ token })
+		}, false);
+	}
+
+	async discordAuthorizeUrl() {
+		return this.request<{ authorize_url: string }>('/auth/discord', { cache: 'no-store' }, false);
+	}
+
+	async discordCallback(code: string, state: string) {
+		return this.request<{
+			access_token: string;
+			refresh_token: string;
+			user: any;
+		}>('/auth/discord/callback', {
+			method: 'POST',
+			body: JSON.stringify({ code, state })
+		}, false);
+	}
+
+	async emailWalkin(email: string) {
+		return this.request<{ message: string }>('/auth/walkin/email', {
+			method: 'POST',
+			body: JSON.stringify({ email })
 		}, false);
 	}
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
@@ -7,6 +8,50 @@
 	let password = '';
 	let loading = false;
 	let error = '';
+
+	let discordWalkin = false;
+	let emailWalkin = false;
+	let discordLoading = false;
+	let walkinEmail = '';
+	let walkinLoading = false;
+	let walkinMsg = '';
+
+	onMount(async () => {
+		try {
+			const info = await api.getPlatformInfo();
+			discordWalkin = info.discord_walkin;
+			emailWalkin = info.email_walkin;
+		} catch {
+			// walk-in options stay hidden if platform info is unavailable
+		}
+	});
+
+	async function discordSignIn() {
+		discordLoading = true;
+		error = '';
+		try {
+			const { authorize_url } = await api.discordAuthorizeUrl();
+			window.location.href = authorize_url;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Discord sign-in is unavailable';
+			discordLoading = false;
+		}
+	}
+
+	async function emailSignIn() {
+		if (!walkinEmail) return;
+		walkinLoading = true;
+		walkinMsg = '';
+		error = '';
+		try {
+			const r = await api.emailWalkin(walkinEmail);
+			walkinMsg = r.message;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not send the sign-in email';
+		} finally {
+			walkinLoading = false;
+		}
+	}
 
 	async function handleSubmit() {
 		if (!username || !password) {
@@ -103,6 +148,52 @@
 					{/if}
 				</button>
 			</form>
+
+			{#if discordWalkin || emailWalkin}
+				<div class="flex items-center gap-3 my-5">
+					<div class="h-px flex-1 bg-stone-800"></div>
+					<span class="text-xs uppercase tracking-wide text-stone-600">at the event</span>
+					<div class="h-px flex-1 bg-stone-800"></div>
+				</div>
+
+				{#if discordWalkin}
+					<button
+						type="button"
+						on:click={discordSignIn}
+						disabled={discordLoading}
+						class="w-full flex items-center justify-center gap-2 rounded-md bg-[#5865F2] text-white font-medium py-2.5 text-sm hover:bg-[#4752c4] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+					>
+						<Icon icon={discordLoading ? 'mdi:loading' : 'ic:baseline-discord'} class="w-4 h-4 shrink-0 {discordLoading ? 'animate-spin' : ''}" />
+						Continue with Discord
+					</button>
+				{/if}
+
+				{#if emailWalkin}
+					{#if walkinMsg}
+						<p class="flex items-start gap-1.5 text-stone-400 text-sm mt-3">
+							<Icon icon="mdi:email-check-outline" class="w-4 h-4 shrink-0 mt-0.5" />
+							<span>{walkinMsg}</span>
+						</p>
+					{:else}
+						<form on:submit|preventDefault={emailSignIn} class="mt-3 flex gap-2">
+							<input
+								type="email"
+								autocomplete="email"
+								bind:value={walkinEmail}
+								placeholder="you@email.com"
+								class="flex-1 min-w-0 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
+							/>
+							<button
+								type="submit"
+								disabled={walkinLoading}
+								class="shrink-0 rounded-md border border-stone-700 text-stone-200 font-medium px-3 py-2.5 text-sm hover:bg-stone-800/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+							>
+								{walkinLoading ? 'Sending…' : 'Email link'}
+							</button>
+						</form>
+					{/if}
+				{/if}
+			{/if}
 		</div>
 	</div>
 </div>
