@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# one-command terraform: handles gcloud auth, then runs terraform with your args.
+#   ./tf plan      # preview
+#   ./tf apply     # spin it all up
+#   ./tf destroy   # tear it all down
+set -euo pipefail
+export GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+exec terraform "$@"
