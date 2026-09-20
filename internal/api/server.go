@@ -420,14 +420,15 @@ func (s *Server) healthCheck(c *gin.Context) {
 	containerStatus := s.containerSvc.Status()
 	vpnStatus := s.vpnSvc.Status()
 
+	// health gates on the database (the hard dependency). the container runtime is
+	// optional (absent on kubernetes, where the k8s instancer handles challenges),
+	// so its status is reported but does not fail the check.
 	status := "healthy"
 	httpStatus := http.StatusOK
 	dbStatus := "connected"
-	if err != nil || containerStatus != "connected" {
+	if err != nil {
 		status = "degraded"
 		httpStatus = http.StatusServiceUnavailable
-	}
-	if err != nil {
 		dbStatus = "disconnected"
 	}
 
