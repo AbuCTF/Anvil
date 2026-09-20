@@ -32,6 +32,7 @@ resource "google_sql_database_instance" "anvil" {
   depends_on = [google_service_networking_connection.psa]
 
   settings {
+    edition           = "ENTERPRISE" # standard edition; ENTERPRISE_PLUS forces perf-optimized tiers
     tier              = "db-custom-1-3840" # 1 vCPU / 3.75 GB — small, stoppable when idle
     availability_type = "ZONAL"
     disk_size         = 20
