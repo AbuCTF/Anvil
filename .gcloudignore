@@ -1,0 +1,10 @@
+# keep the Cloud Build upload lean (source only).
+.git/
+infra/.terraform/
+infra/**/.terraform/
+infra/**/*.tfstate*
+infra/gke/tfplan
+web/node_modules/
+web/build/
+web/.svelte-kit/
+*.log
