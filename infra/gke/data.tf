@@ -18,6 +18,15 @@ resource "google_service_networking_connection" "psa" {
   depends_on              = [google_project_service.enabled]
 }
 
+# without this, GKE pods (secondary range) can't route to Cloud SQL's private IP
+# across the service-networking peering — the api pings the DB and times out.
+resource "google_compute_network_peering_routes_config" "psa" {
+  peering              = google_service_networking_connection.psa.peering
+  network              = google_compute_network.vpc.name
+  export_custom_routes = true
+  import_custom_routes = true
+}
+
 # --- Postgres (Cloud SQL) --------------------------------------------------
 resource "random_password" "db" {
   length  = 32
