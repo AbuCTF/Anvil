@@ -40,15 +40,17 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true})
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to Docker: %w", err)
-	}
-
 	s := &Service{
 		config: cfg,
 		client: cli,
 		logger: logger,
+	}
+
+	// docker is optional: on kubernetes (no docker.sock) the platform still runs;
+	// container-challenge ops degrade to errors until the k8s instancer handles them.
+	if _, err = cli.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		logger.Warn("Docker not available; container-challenge features disabled", zap.Error(err))
+		return s, nil
 	}
 
 	if err := s.ensureNetwork(context.Background()); err != nil {
