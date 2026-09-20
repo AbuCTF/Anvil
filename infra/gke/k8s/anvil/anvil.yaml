@@ -1,0 +1,138 @@
+# Anvil platform on GKE — api + web + ingress. Fresh instance (Cloud SQL +
+# Memorystore, wired via the anvil-config ConfigMap + anvil-secrets Secret which
+# are created at deploy time from Terraform outputs). Images from Artifact Registry.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anvil
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: anvil-storage
+  namespace: anvil
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anvil-api
+  namespace: anvil
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: anvil-api }
+  template:
+    metadata:
+      labels: { app: anvil-api }
+    spec:
+      nodeSelector: { pool: platform }
+      containers:
+        - name: anvil-api
+          image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-api:latest
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: anvil-config }
+            - secretRef: { name: anvil-secrets }
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 768Mi }
+          volumeMounts:
+            - { name: storage, mountPath: /var/lib/anvil }
+      volumes:
+        - name: storage
+          persistentVolumeClaim: { claimName: anvil-storage }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anvil-api
+  namespace: anvil
+spec:
+  selector: { app: anvil-api }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anvil-web
+  namespace: anvil
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: anvil-web }
+  template:
+    metadata:
+      labels: { app: anvil-web }
+    spec:
+      nodeSelector: { pool: platform }
+      containers:
+        - name: anvil-web
+          image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-web:latest
+          ports: [{ containerPort: 3000 }]
+          env:
+            - { name: PUBLIC_API_URL, value: "https://ctf.h7tex.com" }
+            - { name: PORT, value: "3000" }
+            - { name: HOST, value: "0.0.0.0" }
+          readinessProbe:
+            httpGet: { path: /, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anvil-web
+  namespace: anvil
+spec:
+  selector: { app: anvil-web }
+  ports: [{ port: 3000, targetPort: 3000 }]
+---
+# TLS cert for the platform host via the Cloudflare DNS-01 issuer.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ctf-h7tex
+  namespace: anvil
+spec:
+  secretName: ctf-h7tex-tls
+  issuerRef: { name: letsencrypt-cf, kind: ClusterIssuer }
+  dnsNames: ["ctf.h7tex.com"]
+---
+# Traefik routing: /api -> api, everything else -> web.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: anvil
+  namespace: anvil
+spec:
+  entryPoints: ["websecure"]
+  routes:
+    - match: Host(`ctf.h7tex.com`) && PathPrefix(`/api`)
+      kind: Rule
+      services:
+        - name: anvil-api
+          port: 8080
+    - match: Host(`ctf.h7tex.com`)
+      kind: Rule
+      services:
+        - name: anvil-web
+          port: 3000
+  tls:
+    secretName: ctf-h7tex-tls
