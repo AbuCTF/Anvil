@@ -1,0 +1,128 @@
+package controller
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	instv1 "github.com/anvil-lab/anvil/instancer/api/v1alpha1"
+)
+
+// Raw-TCP challenge instances (pwn/web3) are reached over PLAIN TCP on a
+// per-instance port from a shared pool, so `nc host port` works and TCP
+// half-close (which interactive solves rely on) is preserved end to end.
+// Terminating TLS on a shared SNI port breaks half-close, so it is not used
+// for raw TCP. Each pool port maps 1:1 to a Traefik TCP entrypoint named
+// "t<port>" carried by the tcppool LoadBalancer.
+
+const (
+	portPoolLabel     = "instancer.anvil.dev/port-pool"
+	portInstanceLabel = "instancer.anvil.dev/instance"
+)
+
+// PortPool is the contiguous pool of plain-TCP ports (inclusive) allocated to
+// raw-TCP instances, plus the namespace holding the atomic lock objects.
+type PortPool struct {
+	Start     int
+	End       int
+	Namespace string
+}
+
+func (p PortPool) enabled() bool { return p.Start > 0 && p.End >= p.Start && p.Namespace != "" }
+
+// entryPointName is the Traefik entrypoint for a pool port (see traefik-values.yaml).
+func entryPointName(port int) string { return fmt.Sprintf("t%d", port) }
+
+func portLockName(port int) string { return fmt.Sprintf("portlock-%d", port) }
+
+// errPoolExhausted signals no free pool port; the reconciler surfaces it as a
+// clean instance error + retries so a freed port is picked up.
+type errPoolExhausted struct{ start, end int }
+
+func (e errPoolExhausted) Error() string {
+	return fmt.Sprintf("tcp port pool exhausted (%d-%d)", e.start, e.end)
+}
+
+// allocatePort returns the pool port already claimed by this instance, or
+// atomically claims a free one. Idempotent: re-reconciles get the same port.
+// The lock ConfigMap is the source of truth; released in finalize, with a
+// cluster-scoped owner reference as a GC backstop if the finalizer is skipped.
+func (r *ChallengeInstanceReconciler) allocatePort(ctx context.Context, inst *instv1.ChallengeInstance) (int, error) {
+	pool := r.Cfg.Pool
+	instName := inst.Name
+
+	// already claimed by this instance? (idempotent across reconciles)
+	held := &corev1.ConfigMapList{}
+	if err := r.List(ctx, held, client.InNamespace(pool.Namespace),
+		client.MatchingLabels{portPoolLabel: "true", portInstanceLabel: instName}); err != nil {
+		return 0, err
+	}
+	for i := range held.Items {
+		if p, err := strconv.Atoi(held.Items[i].Data["port"]); err == nil && p >= pool.Start && p <= pool.End {
+			return p, nil
+		}
+	}
+
+	// build the set of ports currently locked by any instance
+	all := &corev1.ConfigMapList{}
+	if err := r.List(ctx, all, client.InNamespace(pool.Namespace),
+		client.MatchingLabels{portPoolLabel: "true"}); err != nil {
+		return 0, err
+	}
+	used := make(map[int]bool, len(all.Items))
+	for i := range all.Items {
+		if p, err := strconv.Atoi(all.Items[i].Data["port"]); err == nil {
+			used[p] = true
+		}
+	}
+
+	// claim the lowest free port; Create is atomic so a race just tries the next
+	for port := pool.Start; port <= pool.End; port++ {
+		if used[port] {
+			continue
+		}
+		lock := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      portLockName(port),
+				Namespace: pool.Namespace,
+				Labels:    map[string]string{portPoolLabel: "true", portInstanceLabel: instName},
+			},
+			Data: map[string]string{"port": strconv.Itoa(port), "instance": instName},
+		}
+		// GC backstop: a cluster-scoped ChallengeInstance may own a namespaced
+		// dependent, so the lock is reclaimed if the CR is deleted without finalize.
+		if err := controllerutil.SetOwnerReference(inst, lock, r.Scheme); err != nil {
+			return 0, err
+		}
+		err := r.Create(ctx, lock)
+		if err == nil {
+			return port, nil
+		}
+		if !apierrors.IsAlreadyExists(err) {
+			return 0, err
+		}
+		// lost the race for this port; try the next
+	}
+	return 0, errPoolExhausted{pool.Start, pool.End}
+}
+
+// releasePorts frees every pool port held by an instance (called on finalize).
+func (r *ChallengeInstanceReconciler) releasePorts(ctx context.Context, instName string) error {
+	locks := &corev1.ConfigMapList{}
+	if err := r.List(ctx, locks, client.InNamespace(r.Cfg.Pool.Namespace),
+		client.MatchingLabels{portPoolLabel: "true", portInstanceLabel: instName}); err != nil {
+		return err
+	}
+	for i := range locks.Items {
+		if err := r.Delete(ctx, &locks.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}

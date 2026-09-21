@@ -61,9 +61,16 @@ spec:
               value: traefik
             - name: INSTANCER_RESYNC
               value: 30s
-            # web3 (blockchain) shares the pwn :1337 raw-TLS entrypoint, its own subdomain
+            # legacy SNI+TLS fallback (used only if the pool below is unset)
             - name: INSTANCER_TCP_ROUTES
               value: "pwn=pwn:1337,web3=pwn:1337"
+            # plain-TCP per-instance port pool: each raw-TCP instance gets a
+            # dedicated port on the tcppool LB so `nc host port` + half-close work.
+            # Matches the t30000-t30063 entrypoints in traefik-values.yaml.
+            - name: INSTANCER_TCP_POOL_RANGE
+              value: "30000-30063"
+            - name: INSTANCER_TCP_POOL_NAMESPACE
+              value: anvil-instancer
           ports:
             - name: metrics
               containerPort: 8080

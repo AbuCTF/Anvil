@@ -33,7 +33,8 @@ type Config struct {
 	TraefikNamespace string              // namespace Traefik runs in
 	HTTPEntryPoint   string              // Traefik entrypoint for http/https (e.g. websecure)
 	HTTPPort         int32               // external port players reach http/https on (443)
-	TCPRoutes        map[string]TCPRoute // category -> raw-TLS entrypoint
+	TCPRoutes        map[string]TCPRoute // category -> raw-TLS entrypoint (legacy SNI fallback)
+	Pool             PortPool            // plain-TCP per-instance port pool (preferred for raw TCP)
 	ResyncInterval   time.Duration       // status refresh cadence while an instance lives
 }
 
@@ -56,7 +57,7 @@ type ChallengeInstanceReconciler struct {
 // +kubebuilder:rbac:groups=instancer.anvil.dev,resources=challengeinstances,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=instancer.anvil.dev,resources=challengeinstances/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=instancer.anvil.dev,resources=challengeinstances/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=namespaces;services;pods;resourcequotas;limitranges,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces;services;pods;resourcequotas;limitranges;configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=traefik.io,resources=ingressroutes;ingressroutetcps,verbs=get;list;watch;create;update;patch;delete
 
@@ -108,7 +109,19 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 		objs = append(objs, buildPod(inst, p, r.Cfg.RuntimeClass, exposedPods))
 	}
-	routes, endpoints := r.routesAndEndpoints(inst, ns)
+	routes, endpoints, err := r.routesAndEndpoints(ctx, inst, ns)
+	if err != nil {
+		// pool exhausted: don't crash-loop. Mark Pending with a clear reason and
+		// retry so a port freed by a reaped instance is picked up automatically.
+		if _, exhausted := err.(errPoolExhausted); exhausted {
+			lg.Info("tcp port pool exhausted, instance waiting for capacity", "instance", inst.Name)
+			if serr := r.setStatus(ctx, inst, "Pending", ns, nil, "waiting for an available port (challenge servers at capacity, retrying)"); serr != nil {
+				return ctrl.Result{}, serr
+			}
+			return ctrl.Result{RequeueAfter: 15 * time.Second}, nil
+		}
+		return ctrl.Result{}, err
+	}
 	objs = append(objs, routes...)
 
 	for _, o := range objs {
@@ -121,7 +134,7 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.setStatus(ctx, inst, phase, ns, endpoints); err != nil {
+	if err := r.setStatus(ctx, inst, phase, ns, endpoints, ""); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -142,6 +155,11 @@ func (r *ChallengeInstanceReconciler) finalize(ctx context.Context, inst *instv1
 		return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
 	}
 	if !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, err
+	}
+	// free the instance's pooled TCP port(s) — the lock objects live in the
+	// operator namespace, so they are not GC'd with the instance namespace.
+	if err := r.releasePorts(ctx, inst.Name); err != nil {
 		return ctrl.Result{}, err
 	}
 	patch := client.MergeFrom(inst.DeepCopy())
@@ -167,7 +185,7 @@ func (r *ChallengeInstanceReconciler) createIfAbsent(ctx context.Context, o clie
 	return err
 }
 
-func (r *ChallengeInstanceReconciler) routesAndEndpoints(inst *instv1.ChallengeInstance, ns string) ([]client.Object, []instv1.InstanceEndpoint) {
+func (r *ChallengeInstanceReconciler) routesAndEndpoints(ctx context.Context, inst *instv1.ChallengeInstance, ns string) ([]client.Object, []instv1.InstanceEndpoint, error) {
 	var objs []client.Object
 	var eps []instv1.InstanceEndpoint
 	httpEP := r.Cfg.HTTPEntryPoint
@@ -184,12 +202,28 @@ func (r *ChallengeInstanceReconciler) routesAndEndpoints(inst *instv1.ChallengeI
 		svc := serviceName(e.ContainerName)
 		switch e.Kind {
 		case instv1.ExposeTCPSSL:
-			tr := r.Cfg.tcpRouteFor(e.Category)
-			objs = append(objs, ingressRouteTCP(inst, ns, name, hostname, svc, e.ContainerPort, tr.EntryPoint))
-			eps = append(eps, instv1.InstanceEndpoint{
-				Kind: e.Kind, Host: hostname, Port: tr.Port, Title: e.Title,
-				Connect: fmt.Sprintf("ncat --ssl %s %d", hostname, tr.Port),
-			})
+			// raw TCP: plain per-instance port from the pool so `nc host port`
+			// works and half-close survives. Falls back to the legacy SNI+TLS
+			// route only if the pool is unconfigured.
+			if r.Cfg.Pool.enabled() {
+				port, err := r.allocatePort(ctx, inst)
+				if err != nil {
+					return nil, nil, err
+				}
+				h := e.Category + "." + r.Cfg.BaseDomain // web3.h7tex.com / pwn.h7tex.com
+				objs = append(objs, plainTCPRoute(inst, ns, name, svc, e.ContainerPort, entryPointName(port)))
+				eps = append(eps, instv1.InstanceEndpoint{
+					Kind: e.Kind, Host: h, Port: int32(port), Title: e.Title,
+					Connect: fmt.Sprintf("nc %s %d", h, port),
+				})
+			} else {
+				tr := r.Cfg.tcpRouteFor(e.Category)
+				objs = append(objs, ingressRouteTCP(inst, ns, name, hostname, svc, e.ContainerPort, tr.EntryPoint))
+				eps = append(eps, instv1.InstanceEndpoint{
+					Kind: e.Kind, Host: hostname, Port: tr.Port, Title: e.Title,
+					Connect: fmt.Sprintf("ncat --ssl %s %d", hostname, tr.Port),
+				})
+			}
 		default: // http / https
 			objs = append(objs, ingressRoute(inst, ns, name, hostname, svc, httpEP, e.ContainerPort))
 			eps = append(eps, instv1.InstanceEndpoint{
@@ -198,7 +232,7 @@ func (r *ChallengeInstanceReconciler) routesAndEndpoints(inst *instv1.ChallengeI
 			})
 		}
 	}
-	return objs, eps
+	return objs, eps, nil
 }
 
 func (r *ChallengeInstanceReconciler) instancePhase(ctx context.Context, ns string, inst *instv1.ChallengeInstance) (string, error) {
@@ -226,17 +260,20 @@ func (r *ChallengeInstanceReconciler) instancePhase(ctx context.Context, ns stri
 	return "Ready", nil
 }
 
-func (r *ChallengeInstanceReconciler) setStatus(ctx context.Context, inst *instv1.ChallengeInstance, phase, ns string, eps []instv1.InstanceEndpoint) error {
+func (r *ChallengeInstanceReconciler) setStatus(ctx context.Context, inst *instv1.ChallengeInstance, phase, ns string, eps []instv1.InstanceEndpoint, msg string) error {
 	orig := inst.DeepCopy()
 	inst.Status.Phase = phase
 	inst.Status.Namespace = ns
 	inst.Status.Endpoints = eps
 	inst.Status.ObservedGeneration = inst.Generation
+	if msg == "" {
+		msg = "instance " + phase
+	}
 	meta := metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
 		Reason:             phase,
-		Message:            "instance " + phase,
+		Message:            msg,
 		ObservedGeneration: inst.Generation,
 	}
 	if phase == "Ready" {

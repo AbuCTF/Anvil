@@ -1,0 +1,725 @@
+# Traefik values (reconciled into repo). Main LB keeps web/api (:443) + pwn SNI (:1337).
+# tcppool: a SEPARATE LoadBalancer exposing a contiguous plain-TCP port range for
+# raw-TCP challenge instances (nc host port, half-close works). generous entrypoint
+# timeouts so interactive challenge connections are not idle-dropped mid-solve.
+# The t30000-t30063 range must stay in sync with INSTANCER_TCP_POOL_RANGE in operator.yaml.
+# Apply (from a box with kubectl/helm pointed at the cluster):
+#   helm upgrade traefik traefik/traefik --version 41.6.0 -n traefik -f traefik-values.yaml
+deployment:
+  replicas: 2
+service:
+  type: LoadBalancer
+  additionalServices:
+    tcppool:
+      spec:
+        type: LoadBalancer
+ports:
+  pwn:
+    port: 1337
+    protocol: TCP
+    expose:
+      default: true
+  t30000:
+    port: 30000
+    exposedPort: 30000
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30001:
+    port: 30001
+    exposedPort: 30001
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30002:
+    port: 30002
+    exposedPort: 30002
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30003:
+    port: 30003
+    exposedPort: 30003
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30004:
+    port: 30004
+    exposedPort: 30004
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30005:
+    port: 30005
+    exposedPort: 30005
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30006:
+    port: 30006
+    exposedPort: 30006
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30007:
+    port: 30007
+    exposedPort: 30007
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30008:
+    port: 30008
+    exposedPort: 30008
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30009:
+    port: 30009
+    exposedPort: 30009
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30010:
+    port: 30010
+    exposedPort: 30010
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30011:
+    port: 30011
+    exposedPort: 30011
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30012:
+    port: 30012
+    exposedPort: 30012
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30013:
+    port: 30013
+    exposedPort: 30013
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30014:
+    port: 30014
+    exposedPort: 30014
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30015:
+    port: 30015
+    exposedPort: 30015
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30016:
+    port: 30016
+    exposedPort: 30016
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30017:
+    port: 30017
+    exposedPort: 30017
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30018:
+    port: 30018
+    exposedPort: 30018
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30019:
+    port: 30019
+    exposedPort: 30019
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30020:
+    port: 30020
+    exposedPort: 30020
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30021:
+    port: 30021
+    exposedPort: 30021
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30022:
+    port: 30022
+    exposedPort: 30022
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30023:
+    port: 30023
+    exposedPort: 30023
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30024:
+    port: 30024
+    exposedPort: 30024
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30025:
+    port: 30025
+    exposedPort: 30025
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30026:
+    port: 30026
+    exposedPort: 30026
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30027:
+    port: 30027
+    exposedPort: 30027
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30028:
+    port: 30028
+    exposedPort: 30028
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30029:
+    port: 30029
+    exposedPort: 30029
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30030:
+    port: 30030
+    exposedPort: 30030
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30031:
+    port: 30031
+    exposedPort: 30031
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30032:
+    port: 30032
+    exposedPort: 30032
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30033:
+    port: 30033
+    exposedPort: 30033
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30034:
+    port: 30034
+    exposedPort: 30034
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30035:
+    port: 30035
+    exposedPort: 30035
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30036:
+    port: 30036
+    exposedPort: 30036
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30037:
+    port: 30037
+    exposedPort: 30037
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30038:
+    port: 30038
+    exposedPort: 30038
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30039:
+    port: 30039
+    exposedPort: 30039
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30040:
+    port: 30040
+    exposedPort: 30040
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30041:
+    port: 30041
+    exposedPort: 30041
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30042:
+    port: 30042
+    exposedPort: 30042
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30043:
+    port: 30043
+    exposedPort: 30043
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30044:
+    port: 30044
+    exposedPort: 30044
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30045:
+    port: 30045
+    exposedPort: 30045
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30046:
+    port: 30046
+    exposedPort: 30046
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30047:
+    port: 30047
+    exposedPort: 30047
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30048:
+    port: 30048
+    exposedPort: 30048
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30049:
+    port: 30049
+    exposedPort: 30049
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30050:
+    port: 30050
+    exposedPort: 30050
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30051:
+    port: 30051
+    exposedPort: 30051
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30052:
+    port: 30052
+    exposedPort: 30052
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30053:
+    port: 30053
+    exposedPort: 30053
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30054:
+    port: 30054
+    exposedPort: 30054
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30055:
+    port: 30055
+    exposedPort: 30055
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30056:
+    port: 30056
+    exposedPort: 30056
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30057:
+    port: 30057
+    exposedPort: 30057
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30058:
+    port: 30058
+    exposedPort: 30058
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30059:
+    port: 30059
+    exposedPort: 30059
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30060:
+    port: 30060
+    exposedPort: 30060
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30061:
+    port: 30061
+    exposedPort: 30061
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30062:
+    port: 30062
+    exposedPort: 30062
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"
+  t30063:
+    port: 30063
+    exposedPort: 30063
+    protocol: TCP
+    expose:
+      tcppool: true
+    transport:
+      respondingTimeouts:
+        readTimeout: "0s"
+        writeTimeout: "0s"
+        idleTimeout: "600s"

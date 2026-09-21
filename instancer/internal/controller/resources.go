@@ -282,6 +282,28 @@ func ingressRouteTCP(inst *instv1.ChallengeInstance, ns, name, hostname, svc str
 	return u
 }
 
+// plainTCPRoute forwards a raw TCP connection to the pod with NO TLS, on a
+// dedicated per-instance entrypoint (port) from the pool. HostSNI(`*`) is the
+// non-TLS catch-all: the entrypoint alone selects the instance, so plain
+// `nc host port` reaches it and TCP half-close is preserved end to end.
+func plainTCPRoute(inst *instv1.ChallengeInstance, ns, name, svc string, port int32, entryPoint string) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetUnstructuredContent(map[string]any{
+		"apiVersion": "traefik.io/v1alpha1",
+		"kind":       "IngressRouteTCP",
+		"metadata":   map[string]any{"name": name, "namespace": ns, "labels": toAny(baseLabels(inst))},
+		"spec": map[string]any{
+			"entryPoints": []any{entryPoint},
+			"routes": []any{map[string]any{
+				"match":    "HostSNI(`*`)",
+				"services": []any{map[string]any{"name": svc, "port": int64(port)}},
+			}},
+			// no tls block: plain TCP, so half-close reaches the pod
+		},
+	})
+	return u
+}
+
 func toAny(m map[string]string) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {

@@ -32,6 +32,22 @@ func env(key, def string) string {
 	return def
 }
 
+// parsePool reads "start-end" (e.g. "30000-30063") into a PortPool. An empty or
+// malformed range yields a disabled pool (Start==0), so the controller falls
+// back to the legacy SNI route.
+func parsePool(rng, ns string) controller.PortPool {
+	start, endStr, ok := strings.Cut(strings.TrimSpace(rng), "-")
+	if !ok {
+		return controller.PortPool{}
+	}
+	s, err1 := strconv.Atoi(strings.TrimSpace(start))
+	e, err2 := strconv.Atoi(strings.TrimSpace(endStr))
+	if err1 != nil || err2 != nil {
+		return controller.PortPool{}
+	}
+	return controller.PortPool{Start: s, End: e, Namespace: ns}
+}
+
 // parseTCPRoutes reads "cat=entrypoint:port,cat2=ep2:port2" into the config map.
 func parseTCPRoutes(s string) map[string]controller.TCPRoute {
 	out := map[string]controller.TCPRoute{}
@@ -70,6 +86,7 @@ func main() {
 		HTTPEntryPoint:   env("INSTANCER_HTTP_ENTRYPOINT", "websecure"),
 		HTTPPort:         int32(httpPort),
 		TCPRoutes:        parseTCPRoutes(env("INSTANCER_TCP_ROUTES", "pwn=pwn:1337")),
+		Pool:             parsePool(env("INSTANCER_TCP_POOL_RANGE", ""), env("INSTANCER_TCP_POOL_NAMESPACE", "anvil-instancer")),
 		ResyncInterval:   resync,
 	}
 
