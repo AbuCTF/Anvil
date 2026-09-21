@@ -22,7 +22,10 @@ import (
 // zeropool account — it only looks one up by discord id and mirrors it locally.
 // see CTF26/reg-anvil-handoff-contract.md.
 
-var walkinHTTP = &http.Client{Timeout: 10 * time.Second}
+// 30s so a transient ZeroPool provision stall (e.g. a burst at event start) is a
+// slow request, not a failed sign-in. ZeroPool sustains ~67 req/s; the realistic
+// login pattern is a few req/s, so this is belt-and-suspenders headroom.
+var walkinHTTP = &http.Client{Timeout: 30 * time.Second}
 
 // errZPNotRegistered means no zeropool participant is linked to this discord id
 // for the event — the person must register at the registration site first.
