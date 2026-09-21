@@ -44,6 +44,12 @@ func TestAPIError_BrowserGetsHTML_ClientGetsJSON(t *testing.T) {
 			if tc.wantHTML && !strings.Contains(w.Body.String(), "Back to the platform") {
 				t.Fatalf("browser body missing landing page")
 			}
+			// the html page carries inline style + fonts, so it must relax the
+			// global default-src 'self' or it renders unstyled.
+			csp := w.Header().Get("Content-Security-Policy")
+			if tc.wantHTML && !strings.Contains(csp, "'unsafe-inline'") {
+				t.Fatalf("browser response CSP too strict for inline style: %q", csp)
+			}
 			if !tc.wantHTML && !strings.Contains(w.Body.String(), `"error"`) {
 				t.Fatalf("api body should be json error, got %q", w.Body.String())
 			}
