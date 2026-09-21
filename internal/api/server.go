@@ -87,6 +87,9 @@ func (s *Server) setupRouter() {
 	r.GET("/health", s.healthCheck)
 	r.GET("/api/health", s.healthCheck)
 
+	// unknown paths: friendly page for a browser, json 404 for api clients.
+	r.NoRoute(middleware.NoRoute)
+
 	if s.config.RateLimit.Enabled {
 		r.Use(middleware.RateLimiter(s.config.RateLimit))
 	}

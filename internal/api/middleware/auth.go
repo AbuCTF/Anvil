@@ -135,17 +135,13 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Authorization header required",
-			})
+			APIError(c, http.StatusUnauthorized, "Authorization header required")
 			return
 		}
 
 		parts := strings.SplitN(authHeader, " ", 2)
 		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Invalid authorization header format",
-			})
+			APIError(c, http.StatusUnauthorized, "Invalid authorization header format")
 			return
 		}
 
@@ -153,9 +149,7 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 
 		claims, err := parseAccessToken(tokenString, cfg)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-				"error": "Invalid or expired token",
-			})
+			APIError(c, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
 
@@ -169,16 +163,12 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			).Scan(&username, &role, &status)
 
 			if err != nil {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"error": "User not found",
-				})
+				APIError(c, http.StatusUnauthorized, "User not found")
 				return
 			}
 
 			if status != "active" {
-				c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
-					"error": "Account is " + status,
-				})
+				APIError(c, http.StatusForbidden, "Account is "+status)
 				return
 			}
 
@@ -198,16 +188,12 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 			).Scan(&expiresAt, &teamName)
 
 			if err != nil {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"error": "Session not found",
-				})
+				APIError(c, http.StatusUnauthorized, "Session not found")
 				return
 			}
 
 			if time.Now().After(expiresAt) {
-				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
-					"error": "Session expired",
-				})
+				APIError(c, http.StatusUnauthorized, "Session expired")
 				return
 			}
 
