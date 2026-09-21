@@ -15,6 +15,7 @@ spec:
   dnsNames:
     - "*.web.h7tex.com"
     - "*.pwn.h7tex.com"
+    - "*.web3.h7tex.com"
 ---
 apiVersion: traefik.io/v1alpha1
 kind: TLSStore

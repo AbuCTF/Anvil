@@ -255,11 +255,14 @@ def parse_deploy(doc: dict, src_dir: Path, ch: Challenge, where: str) -> None:
             proto = str(p.get("protocol", "tcp")).lower()
             if proto not in PROTOCOLS:
                 raise ValidationError(f"{where}: exposed_ports protocol must be tcp|http")
-            # derive the instancer routing service from protocol: http -> web
-            # route, tcp -> raw-tls/pwn route. keeps challenge.yml protocol-only
-            # (frozen schema) while giving the instancer an explicit service.
+            # derive the instancer routing service. http -> web route; tcp ->
+            # raw-tls: web3 category gets its own web3 subdomain, everything else
+            # is pwn. keeps challenge.yml protocol-only (frozen schema).
+            svc = proto
+            if proto == "tcp" and ch.category.strip().lower() == "web3":
+                svc = "web3"
             ch.exposed_ports.append({"port": int(_req(p, "port", where)),
-                                     "protocol": proto, "service": proto})
+                                     "protocol": proto, "service": svc})
         if dep.get("instance_timeout") is not None:
             ch.instance_timeout = int(dep["instance_timeout"])
         if dep.get("max_extensions") is not None:
@@ -317,6 +320,10 @@ def load_challenge(yml_path: Path) -> Challenge:
         category=str(_req(doc, "category", where)), difficulty=difficulty,
         description=description, points=points, status=status, sub_description=sub_description,
     )
+    # blockchain challenges present under the "web3" category + web3 raw-tls route
+    # (its own subdomain, not "pwn"). challenge.yml keeps category: blockchain.
+    if ch.category.strip().lower() == "blockchain":
+        ch.category = "web3"
     if sub_description and ("{" in sub_description or len(sub_description) > 200):
         ch.warnings.append("sub_description is long or contains '{' — keep it a short, plain, non-spoiler blurb "
                           "(it's always visible pre-launch; must not leak the flag)")

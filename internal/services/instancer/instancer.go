@@ -147,7 +147,7 @@ func (s *Service) mapPorts(id string, ports []PortSpec) ([]map[string]any, []End
 	seen := map[string]int{}
 	for _, p := range ports {
 		kind := exposeKind(p.Service)
-		class := routingClass(kind) // web (http/https) | pwn (tcp)
+		class := routingClass(p.Service, kind) // web (http/https) | web3 | pwn (tcp)
 		prefix := class
 		if n := seen[class]; n > 0 {
 			prefix = fmt.Sprintf("%s%d", class, n)
@@ -245,9 +245,13 @@ func exposeKind(service string) string {
 	}
 }
 
-// routingClass maps an expose kind to its shared subdomain + entrypoint: web
-// (http/https on :443) or pwn (raw TLS on the :1337 SNI entrypoint).
-func routingClass(kind string) string {
+// routingClass maps a service to its shared subdomain + entrypoint: web
+// (http/https on :443), web3 (blockchain, raw TLS on the :1337 SNI entrypoint,
+// its own subdomain so hosts don't read "pwn"), or pwn (other raw TLS on :1337).
+func routingClass(service, kind string) string {
+	if strings.ToLower(strings.TrimSpace(service)) == "web3" {
+		return "web3"
+	}
 	if kind == "tcp-ssl" {
 		return "pwn"
 	}

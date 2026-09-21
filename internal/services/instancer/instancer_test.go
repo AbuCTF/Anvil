@@ -53,6 +53,22 @@ func TestMapPortsTCP(t *testing.T) {
 	}
 }
 
+func TestMapPortsWeb3(t *testing.T) {
+	s := newTestSvc()
+	id := "abcdef0123456789"
+	expose, eps := s.mapPorts(id, []PortSpec{{Port: 1337, Service: "web3"}})
+	want := "web3-" + id + ".web3.h7tex.com"
+	if eps[0].Kind != "tcp-ssl" || eps[0].Host != want || eps[0].Port != 1337 {
+		t.Fatalf("bad web3 endpoint: %+v", eps[0])
+	}
+	if eps[0].Connect != "ncat --ssl "+want+" 1337" {
+		t.Fatalf("bad web3 connect: %q", eps[0].Connect)
+	}
+	if expose[0]["category"] != "web3" {
+		t.Fatalf("web3 expose category should be web3, got %v", expose[0]["category"])
+	}
+}
+
 func TestMapPortsUniqueHostsSameClass(t *testing.T) {
 	s := newTestSvc()
 	_, eps := s.mapPorts("id", []PortSpec{{Port: 80, Service: "http"}, {Port: 8080, Service: "http"}})
@@ -66,7 +82,14 @@ func TestExposeKindDefaultsTCP(t *testing.T) {
 	if exposeKind("") != "tcp-ssl" || exposeKind("weird") != "tcp-ssl" {
 		t.Fatal("unknown service must default to tcp-ssl")
 	}
-	if exposeKind("https") != "https" || routingClass("https") != "web" {
+	if exposeKind("https") != "https" || routingClass("https", "https") != "web" {
 		t.Fatal("https must route as web")
+	}
+	// web3 is raw TLS like pwn but gets its own subdomain, not "pwn".
+	if routingClass("web3", exposeKind("web3")) != "web3" {
+		t.Fatal("web3 service must route as web3")
+	}
+	if routingClass("tcp", "tcp-ssl") != "pwn" {
+		t.Fatal("plain tcp must stay pwn")
 	}
 }

@@ -61,6 +61,9 @@ spec:
               value: traefik
             - name: INSTANCER_RESYNC
               value: 30s
+            # web3 (blockchain) shares the pwn :1337 raw-TLS entrypoint, its own subdomain
+            - name: INSTANCER_TCP_ROUTES
+              value: "pwn=pwn:1337,web3=pwn:1337"
           ports:
             - name: metrics
               containerPort: 8080
