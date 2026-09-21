@@ -70,8 +70,9 @@ func buildLimitRange(ns string) *corev1.LimitRange {
 }
 
 // networkPolicies isolate the instance: deny everything, then re-open only DNS,
-// intra-namespace traffic, and ingress from the Traefik namespace.
-func networkPolicies(inst *instv1.ChallengeInstance, ns, traefikNamespace string) []*netv1.NetworkPolicy {
+// intra-namespace traffic, and ingress from the ingress front ends — Traefik
+// (web/HTTP) and the tcpproxy namespace (raw TCP).
+func networkPolicies(inst *instv1.ChallengeInstance, ns, traefikNamespace, proxyNamespace string) []*netv1.NetworkPolicy {
 	all := []netv1.PolicyType{netv1.PolicyTypeIngress, netv1.PolicyTypeEgress}
 	proto := func(p corev1.Protocol) *corev1.Protocol { return &p }
 	dns := intstr.FromInt32(53)
@@ -104,17 +105,24 @@ func networkPolicies(inst *instv1.ChallengeInstance, ns, traefikNamespace string
 		},
 	}
 
-	// Traefik reaches only the pods that expose a port to players.
-	fromTraefik := &netv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: "allow-traefik", Namespace: ns},
+	// The ingress front ends reach only the pods that expose a port to players:
+	// Traefik (web/HTTP :443) and the tcpproxy namespace (raw TCP pool ports).
+	from := []netv1.NetworkPolicyPeer{
+		{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": traefikNamespace}}},
+	}
+	if proxyNamespace != "" && proxyNamespace != traefikNamespace {
+		from = append(from, netv1.NetworkPolicyPeer{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": proxyNamespace}}})
+	}
+	fromIngress := &netv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "allow-ingress", Namespace: ns},
 		Spec: netv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"instancer.anvil.dev/exposed": "true"}},
 			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeIngress},
-			Ingress:     []netv1.NetworkPolicyIngressRule{{From: []netv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": traefikNamespace}}}}}},
+			Ingress:     []netv1.NetworkPolicyIngressRule{{From: from}},
 		},
 	}
 
-	return []*netv1.NetworkPolicy{denyAll, allowDNS, intra, fromTraefik}
+	return []*netv1.NetworkPolicy{denyAll, allowDNS, intra, fromIngress}
 }
 
 // egressPolicy opts one pod into outbound internet while still blocking the

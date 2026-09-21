@@ -97,7 +97,7 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	objs := []client.Object{buildQuota(ns), buildLimitRange(ns)}
-	for _, np := range networkPolicies(inst, ns, r.Cfg.TraefikNamespace) {
+	for _, np := range networkPolicies(inst, ns, r.Cfg.TraefikNamespace, r.Cfg.Pool.Namespace) {
 		objs = append(objs, np)
 	}
 	for _, p := range inst.Spec.Pods {
