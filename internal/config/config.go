@@ -23,6 +23,17 @@ type Config struct {
 	Economy     EconomyConfig   `mapstructure:"economy"`
 	ZeroPool    ZeroPoolConfig  `mapstructure:"zeropool"`
 	Discord     DiscordConfig   `mapstructure:"discord"`
+	Instancer   InstancerConfig `mapstructure:"instancer"`
+}
+
+// InstancerConfig selects how docker challenges are launched. Backend "docker"
+// (default) uses the local Docker daemon; "k8s" drives the GKE ChallengeInstance
+// operator instead — same challenge, the platform picks the runtime.
+type InstancerConfig struct {
+	Backend    string        `mapstructure:"backend"`     // docker | k8s
+	HMACSecret string        `mapstructure:"hmac_secret"` // derives the per-team instance id/hostname
+	BaseDomain string        `mapstructure:"base_domain"` // e.g. h7tex.com
+	Timeout    time.Duration `mapstructure:"timeout"`     // instance TTL when the challenge sets none
 }
 
 // ledger economy parameters (player 0-1000 anchor, ×10 of
@@ -338,6 +349,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("container.max_per_user", 2)
 	v.SetDefault("container.cleanup_interval", "5m")
 	v.SetDefault("container.labels", map[string]string{})
+
+	v.SetDefault("instancer.backend", "docker")
+	v.SetDefault("instancer.hmac_secret", "")
+	v.SetDefault("instancer.base_domain", "h7tex.com")
+	v.SetDefault("instancer.timeout", "1h")
 
 	v.SetDefault("vpn.enabled", true)
 	v.SetDefault("vpn.interface", "wg0")

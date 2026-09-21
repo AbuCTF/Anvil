@@ -4,9 +4,37 @@
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
 	import { categoryColor } from '$lib/rank';
+	import { onDestroy } from 'svelte';
 	import ChallengeTile from '$lib/components/ChallengeTile.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
+	import { platformInfo } from '$lib/stores/platform';
+
+	// challenge access follows the event phase: scheduled => locked + countdown,
+	// ended => practice (playable, unscored). Backend enforces it; this is the UX.
+	$: eventPhase = $platformInfo?.event?.phase ?? null;
+	// staff preview the board (incl. drafts) even before the event starts.
+	$: isStaff = $auth.user?.role === 'admin' || $auth.user?.role === 'author';
+
+	// pre-event countdown, ticked off a server-corrected clock (matches EventClock's
+	// approach) so it's right regardless of the viewer's local clock skew.
+	let clockNow = Date.now();
+	const clockTimer = setInterval(() => (clockNow = Date.now()), 1000);
+	onDestroy(() => clearInterval(clockTimer));
+	$: serverOffset = $platformInfo?.server_time ? Date.parse($platformInfo.server_time) - Date.now() : 0;
+	$: startMs = $platformInfo?.event?.start_at ? Date.parse($platformInfo.event.start_at) : null;
+	$: countdownUnits = countdownUnitsFrom(startMs ? startMs - (clockNow + serverOffset) : 0);
+	function countdownUnitsFrom(ms: number): { value: string; unit: string }[] {
+		const t = Math.max(0, Math.floor(ms / 1000));
+		const parts = [
+			{ value: String(Math.floor(t / 86_400)), unit: 'd' },
+			{ value: String(Math.floor((t % 86_400) / 3_600)).padStart(2, '0'), unit: 'h' },
+			{ value: String(Math.floor((t % 3_600) / 60)).padStart(2, '0'), unit: 'm' },
+			{ value: String(t % 60).padStart(2, '0'), unit: 's' }
+		];
+		// drop a leading 0d so it reads cleanly close to kickoff
+		return parts[0].value === '0' ? parts.slice(1) : parts;
+	}
 
 	interface Challenge {
 		id: string;
@@ -152,6 +180,32 @@
 			</svelte:fragment>
 		</PageHeader>
 
+		{#if eventPhase === 'scheduled' && !isStaff}
+			<div class="mx-auto mt-20 flex max-w-md flex-col items-center text-center">
+				<div class="relative mb-5">
+					<span class="absolute inset-0 rounded-full bg-amber-500/10 blur-xl"></span>
+					<Icon icon="mdi:lock-clock" class="relative h-10 w-10 text-stone-500" />
+				</div>
+				<h2 class="text-xl font-semibold tracking-tight text-stone-100">The competition hasn't started yet</h2>
+				<p class="mt-2 text-sm text-stone-500">Challenges unlock the moment the CTF begins.</p>
+				<div class="mt-9 inline-flex items-center gap-3 rounded-full border border-stone-800 bg-stone-900/50 py-3 px-6">
+					<span class="h-2 w-2 shrink-0 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse"></span>
+					<span class="whitespace-nowrap font-mono text-2xl font-medium tabular-nums text-stone-100">{#each countdownUnits as u, i}{u.value}<span class="text-base text-stone-500">{u.unit}</span>{#if i < countdownUnits.length - 1}<span class="px-1.5 text-stone-700">:</span>{/if}{/each}</span>
+				</div>
+			</div>
+		{:else}
+		{#if eventPhase === 'ended'}
+			<div class="mb-6 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 text-sm text-amber-500">
+				The event has ended. Challenges stay open for practice, but solves are no longer scored and the scoreboard is final.
+			</div>
+		{/if}
+			{#if isStaff && eventPhase === 'scheduled'}
+				<div class="mb-6 inline-flex items-center gap-1.5 rounded-full border border-info/25 bg-info/[0.06] px-3 py-1 text-xs font-medium text-info">
+						<Icon icon="mdi:eye-outline" class="h-3.5 w-3.5" />
+						Admin preview
+					</div>
+			{/if}
+
 		<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4 mb-8">
 			<div class="grid grid-cols-1 md:grid-cols-4 gap-3">
 				<div class="relative md:col-span-2">
@@ -283,6 +337,7 @@
 					</section>
 				{/each}
 			</div>
+		{/if}
 		{/if}
 	</div>
 </div>

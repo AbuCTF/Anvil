@@ -361,7 +361,7 @@ type FlagInput struct {
 	Name              string `json:"name" binding:"required"`
 	Description       string `json:"description"`
 	Flag              string `json:"flag"` // required for static; leave empty for dynamic
-	Points            int    `json:"points" binding:"required"`
+	Points            int    `json:"points"` // 0 is valid (e.g. survey/free flags)
 	SortOrder         int    `json:"sort_order"`
 	FlagType          string `json:"flag_type"`           // "static" (default) | "dynamic"
 	DynamicFlagPrefix string `json:"dynamic_flag_prefix"` // e.g. "H7CTF" → "H7CTF{uuid}"

@@ -1,0 +1,27 @@
+# Lets the Anvil API (running as the default SA in the anvil namespace) manage
+# ChallengeInstance CRs. Scoped to just that CRD — the API never touches pods,
+# services, or namespaces directly; the operator does all of that.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: anvil-api-instancer
+rules:
+  - apiGroups: ["instancer.anvil.dev"]
+    resources: ["challengeinstances"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["instancer.anvil.dev"]
+    resources: ["challengeinstances/status"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: anvil-api-instancer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: anvil-api-instancer
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: anvil

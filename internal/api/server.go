@@ -9,6 +9,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/instancer"
 	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/upload"
 	"github.com/anvil-lab/anvil/internal/services/vm"
@@ -21,6 +22,7 @@ type Server struct {
 	config       *config.Config
 	db           *database.DB
 	containerSvc *container.Service
+	instancerSvc *instancer.Service
 	vmSvc        *vm.Service
 	uploadSvc    *upload.Service
 	storageSvc   storage.StorageBackend
@@ -33,6 +35,7 @@ func NewServer(
 	cfg *config.Config,
 	db *database.DB,
 	containerSvc *container.Service,
+	instancerSvc *instancer.Service,
 	vmSvc *vm.Service,
 	uploadSvc *upload.Service,
 	storageSvc storage.StorageBackend,
@@ -47,6 +50,7 @@ func NewServer(
 		config:       cfg,
 		db:           db,
 		containerSvc: containerSvc,
+		instancerSvc: instancerSvc,
 		vmSvc:        vmSvc,
 		uploadSvc:    uploadSvc,
 		storageSvc:   storageSvc,
@@ -118,7 +122,7 @@ func (s *Server) setupRouter() {
 			challengesPublic.Use(middleware.OptionalAuth(s.config, s.db))
 			{
 				attachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger)
-				challengeHandler := handlers.NewChallengeHandlerWithAttachments(s.config, s.db, s.containerSvc, s.vmSvc, s.logger, attachmentHandler)
+				challengeHandler := handlers.NewChallengeHandlerWithAttachments(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger, attachmentHandler)
 				challengesPublic.GET("/challenges", challengeHandler.List)
 				challengesPublic.GET("/challenges/:slug", challengeHandler.Get)
 				challengesPublic.GET("/challenges/:slug/attachments/:attachment_id/download", attachmentHandler.Download)
@@ -172,7 +176,7 @@ func (s *Server) setupRouter() {
 
 			challenges := protected.Group("/challenges")
 			{
-				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
+				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger)
 				challenges.GET("/:slug/flags", challengeHandler.GetFlags)
 				challenges.POST("/:slug/open", challengeHandler.OpenChallenge)       // economy launch/open gate
 				challenges.POST("/:slug/abandon", challengeHandler.AbandonChallenge) // economy early release (partial refund)
@@ -204,7 +208,7 @@ func (s *Server) setupRouter() {
 
 			instances := protected.Group("/instances")
 			{
-				instanceHandler := handlers.NewInstanceHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
+				instanceHandler := handlers.NewInstanceHandler(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger)
 				instances.GET("", instanceHandler.List)
 				instances.POST("", middleware.RateLimitEndpoint(
 					s.config.RateLimit.InstanceStart,

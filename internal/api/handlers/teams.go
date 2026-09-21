@@ -38,6 +38,19 @@ func isTeamsMode(ctx context.Context, db *database.DB) (bool, error) {
 	return enabled, nil
 }
 
+// boolSettingOrDefault reads a boolean platform_settings value, returning def when
+// the key is absent. On a query error it returns def plus the error.
+func boolSettingOrDefault(ctx context.Context, db *database.DB, key string, def bool) (bool, error) {
+	var enabled bool
+	err := db.Pool.QueryRow(ctx,
+		`SELECT COALESCE((SELECT value = 'true'::jsonb FROM platform_settings WHERE key = $1), $2)`,
+		key, def).Scan(&enabled)
+	if err != nil {
+		return def, err
+	}
+	return enabled, nil
+}
+
 func resolveTeamID(ctx context.Context, db *database.DB, userID uuid.UUID) (*uuid.UUID, error) {
 	var teamID *uuid.UUID
 	err := db.Pool.QueryRow(ctx,

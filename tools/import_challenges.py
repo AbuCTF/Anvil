@@ -87,6 +87,12 @@ class Flag:
 
 
 @dataclass
+class Hint:
+    content: str
+    cost: int = 0
+
+
+@dataclass
 class Attachment:
     src: Path
     as_name: str
@@ -106,6 +112,7 @@ class Challenge:
     status: str
     sub_description: str = ""
     flags: list[Flag] = field(default_factory=list)
+    hints: list[Hint] = field(default_factory=list)
     attachments: list[Attachment] = field(default_factory=list)
     resource_type: str | None = None   # docker | vm | None (static-download)
     instancing: str = "on_demand"
@@ -183,6 +190,29 @@ def parse_flags(doc: dict, chal_points: int, where: str) -> list[Flag]:
                 raise ValidationError(f"{where}: flags[{i}] type dynamic requires 'dynamic_flag_prefix'")
             out.append(Flag(name, "dynamic", dynamic_prefix=strip_flag_prefix(str(prefix)),
                             points=pts, case_sensitive=cs, is_regex=rgx))
+    return out
+
+
+def parse_hints(doc: dict, where: str) -> list[Hint]:
+    # accepts: hints: ["text", ...]  (free, cost 0)
+    #      or: hints: [{content|text: "...", cost: N}, ...]
+    raw = doc.get("hints") or []
+    if not isinstance(raw, list):
+        raise ValidationError(f"{where}: 'hints' must be a list")
+    out: list[Hint] = []
+    for i, item in enumerate(raw):
+        if isinstance(item, str):
+            content, cost = item, 0
+        elif isinstance(item, dict):
+            content = str(item.get("content") or item.get("text") or "").strip()
+            cost = int(item.get("cost") or 0)
+        else:
+            raise ValidationError(f"{where}: hints[{i}] must be a string or a mapping")
+        if not content:
+            raise ValidationError(f"{where}: hints[{i}] has no content")
+        if cost < 0:
+            raise ValidationError(f"{where}: hints[{i}] cost must be >= 0")
+        out.append(Hint(content=content, cost=cost))
     return out
 
 
@@ -283,6 +313,7 @@ def load_challenge(yml_path: Path) -> Challenge:
         ch.warnings.append("sub_description is long or contains '{' — keep it a short, plain, non-spoiler blurb "
                           "(it's always visible pre-launch; must not leak the flag)")
     ch.flags = parse_flags(doc, points, where)
+    ch.hints = parse_hints(doc, where)
     parse_deploy(doc, src_dir, ch, where)
 
     for i, item in enumerate(doc.get("provide", []) or []):
@@ -435,6 +466,12 @@ class Anvil:
         if r.status_code not in (200, 201):
             raise RuntimeError(f"flag '{f.name}' failed ({r.status_code}): {r.text[:300]}")
 
+    def create_hint(self, chal_id: str, h: Hint) -> None:
+        r = self.s.post(self._url(f"/admin/challenges/{chal_id}/hints"),
+                        headers=self._hdr(), json={"content": h.content, "cost": h.cost}, timeout=30)
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"hint failed ({r.status_code}): {r.text[:300]}")
+
     def upload_attachment(self, chal_id: str, a: Attachment, order: int) -> None:
         if not a.src.exists():
             raise RuntimeError(f"attachment missing: {a.src}")
@@ -482,6 +519,8 @@ def print_plan(ch: Challenge) -> None:
         size = f" ({ch.ova_path.stat().st_size/1e9:.2f} GB)" if exists else ""
         print(f"      {dim('ova')} {ch.ova_path}{size} {'' if exists else red('[MISSING]')}")
     print(f"      {dim('flags')} {len(ch.flags)}: {flag_summary(ch.flags)}")
+    if ch.hints:
+        print(f"      {dim('hints')} {len(ch.hints)}: " + ", ".join(f"{h.cost}pts" for h in ch.hints))
     if ch.attachments:
         att = ", ".join(f"{a.as_name}{'' if a.src.exists() else red('[MISSING]')}" for a in ch.attachments)
         print(f"      {dim('handouts')} {att}")
@@ -505,6 +544,10 @@ def import_one(api: Anvil, ch: Challenge, publish: bool) -> None:
             api.create_flag(cid, f)
         if api_flags:
             print(green(f"      + {len(api_flags)} case-insensitive flag(s) via API"))
+    for h in ch.hints:
+        api.create_hint(cid, h)
+    if ch.hints:
+        print(green(f"      + {len(ch.hints)} hint(s)"))
     for i, a in enumerate(ch.attachments):
         api.upload_attachment(cid, a, i)
     if ch.attachments:

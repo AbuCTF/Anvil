@@ -66,3 +66,7 @@ postgres_data/
 *.pem
 *.key
 secrets/
+
+# python bytecode
+tools/__pycache__/
+*.pyc

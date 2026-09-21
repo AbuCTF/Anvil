@@ -558,6 +558,20 @@
 		}
 	}
 
+	async function toggleBan(user: any) {
+		const banned = user.is_banned;
+		if (!confirm(banned ? `Unban ${user.username}?` : `Ban ${user.username}? They won't be able to sign in.`)) return;
+		actionLoading = user.id;
+		try {
+			await (banned ? api.unbanUser(user.id) : api.banUser(user.id));
+			await loadDashboard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to update ban status');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
 	function formatDate(timestamp: number): string {
 		return formatLocalDateLong(timestamp, 'seconds');
 	}
@@ -591,6 +605,8 @@
 			let createdChallengeId: string | undefined;
 
 			if (newChallenge.type === 'ova') {
+				// OVA challenges must reference an already-converted template (Infrastructure →
+				// Templates). Direct-in-modal OVA upload is gone: it produced dead challenges.
 				if (newChallenge.vm_source === 'template' && newChallenge.vm_template_id) {
 					const result = await api.createAdminChallenge({
 						name: newChallenge.name,
@@ -606,25 +622,13 @@
 						flags: newChallenge.flags
 					});
 					createdChallengeId = result?.id;
-				} else if (ovaFile) {
-					const formData = new FormData();
-					formData.append('file', ovaFile);
-					formData.append('name', newChallenge.name);
-					formData.append('description', newChallenge.description);
-					formData.append('difficulty', newChallenge.difficulty);
-					formData.append('base_points', String(newChallenge.base_points));
-					if (categoryId) formData.append('category_id', categoryId);
-					else if (categoryName) formData.append('category', categoryName);
-					formData.append('flags', JSON.stringify(newChallenge.flags));
-
-					const result = await api.uploadOvaChallenge(formData, (progress) => {
-						uploadProgress = progress;
-					});
-					createdChallengeId = result?.id;
 				} else {
-					throw new Error('Please select a template or upload an OVA file');
+					throw new Error('Select an existing VM template. To use a new OVA, upload it under Infrastructure → Templates first, then create the challenge here.');
 				}
 			} else {
+				// container and download-only are both resource_type "docker"; a download-only
+				// challenge has no image + no ports (files are added as attachments).
+				const isDownload = newChallenge.type === 'download';
 				const result = await api.createAdminChallenge({
 					name: newChallenge.name,
 					description: newChallenge.description,
@@ -633,9 +637,9 @@
 					...(categoryId ? { category_id: categoryId } : {}),
 					...(categoryName ? { category: categoryName } : {}),
 					challenge_type: 'docker',
-					container_image: newChallenge.docker_image,
-					container_platform: newChallenge.container_platform,
-					exposed_ports: newChallenge.exposed_ports.filter(p => p.port > 0),
+					container_image: isDownload ? '' : newChallenge.docker_image,
+					container_platform: isDownload ? '' : newChallenge.container_platform,
+					exposed_ports: isDownload ? [] : newChallenge.exposed_ports.filter(p => p.port > 0),
 					flags: newChallenge.flags.map((f, i) => ({
 						name: f.name,
 						flag: f.flag,
@@ -644,9 +648,11 @@
 						flag_type: f.flag_type || 'static',
 						dynamic_flag_prefix: f.dynamic_flag_prefix || ''
 					})),
-					instance_timeout: newChallenge.instance_timeout,
-					max_extensions: newChallenge.max_extensions,
-					cooldown_minutes: newChallenge.cooldown_minutes
+					...(isDownload ? {} : {
+						instance_timeout: newChallenge.instance_timeout,
+						max_extensions: newChallenge.max_extensions,
+						cooldown_minutes: newChallenge.cooldown_minutes
+					})
 				});
 				createdChallengeId = result?.id;
 			}
@@ -1044,6 +1050,14 @@
 										<option value="admin">Admin</option>
 									</select>
 									<button
+										on:click={() => toggleBan(user)}
+										disabled={actionLoading === user.id}
+										class="text-xs {user.is_banned ? 'text-up' : 'text-warn'} hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+										title={user.is_banned ? 'Unban user' : 'Ban user'}
+									>
+										{user.is_banned ? 'Unban' : 'Ban'}
+									</button>
+									<button
 										on:click={() => deleteUser(user.id)}
 										disabled={actionLoading === user.id}
 										class="text-xs text-down hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1099,6 +1113,14 @@
 															<option value="user">User</option>
 															<option value="admin">Admin</option>
 														</select>
+														<button
+															on:click={() => toggleBan(user)}
+															disabled={actionLoading === user.id}
+															class="text-xs {user.is_banned ? 'text-up' : 'text-warn'} hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+															title={user.is_banned ? 'Unban user' : 'Ban user'}
+														>
+															{user.is_banned ? 'Unban' : 'Ban'}
+														</button>
 														<button
 															on:click={() => deleteUser(user.id)}
 															disabled={actionLoading === user.id}
@@ -1551,7 +1573,7 @@
 									class="w-full {fieldCls}"
 								>
 									<option value="open">Open</option>
-									<option value="invite">Invite only</option>
+									<!-- invite-only removed: no invite-code mint UI, and registration is at ZeroPool -->
 									<option value="disabled">Closed</option>
 								</select>
 							</label>
@@ -1564,6 +1586,39 @@
 								>
 									<option value="true">Public</option>
 									<option value="false">Hidden</option>
+								</select>
+							</label>
+							<label class="block">
+								<span class={labelCls}>Arena (A/D · KotH)</span>
+								<select
+									value={String(platformSettings.arena_enabled ?? false)}
+									on:change={(e) => handleSelectChange(e, 'arena_enabled')}
+									class="w-full {fieldCls}"
+								>
+									<option value="true">Enabled</option>
+									<option value="false">Disabled</option>
+								</select>
+							</label>
+							<label class="block">
+								<span class={labelCls}>Teams</span>
+								<select
+									value={String(platformSettings.teams_mode ?? false)}
+									on:change={(e) => handleSelectChange(e, 'teams_mode')}
+									class="w-full {fieldCls}"
+								>
+									<option value="true">Team-based</option>
+									<option value="false">Individual</option>
+								</select>
+							</label>
+							<label class="block">
+								<span class={labelCls}>Economy</span>
+								<select
+									value={String(platformSettings.economy_mode ?? false)}
+									on:change={(e) => handleSelectChange(e, 'economy_mode')}
+									class="w-full {fieldCls}"
+								>
+									<option value="true">Enabled (credits + dynamic scoring)</option>
+									<option value="false">Off (standard scoring)</option>
 								</select>
 							</label>
 							<div class="md:col-span-2 mt-1 border-t border-stone-800/70 pt-4">
@@ -1740,6 +1795,14 @@
 					</button>
 					<button
 						type="button"
+						on:click={() => newChallenge.type = 'download'}
+						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'download' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
+					>
+						<Icon icon="mdi:file-download-outline" class="w-3.5 h-3.5 shrink-0" />
+						Download only
+					</button>
+					<button
+						type="button"
 						on:click={() => newChallenge.type = 'ova'}
 						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'ova' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 					>
@@ -1849,8 +1912,15 @@
 						</label>
 					</div>
 
-					{#if newChallenge.type === 'container'}
+					{#if newChallenge.type === 'container' || newChallenge.type === 'download'}
 						<div class="pt-4 border-t border-stone-800 space-y-5">
+							{#if newChallenge.type === 'download'}
+								<div class="flex items-start gap-2 py-2.5 px-3 bg-stone-900/40 border border-stone-800 rounded-md text-stone-400 text-xs">
+									<Icon icon="mdi:information-outline" class="w-4 h-4 shrink-0 mt-0.5" />
+									A download-only challenge has no container — add the challenge files as attachments below, and a flag.
+								</div>
+							{/if}
+							{#if newChallenge.type === 'container'}
 							<label class="block">
 								<span class={labelCls}>Docker Image *</span>
 								<input
@@ -1911,6 +1981,7 @@
 									Choose <strong class="text-stone-400">TCP</strong> for netcat-style services or <strong class="text-stone-400">HTTP</strong> for web challenges (shows a clickable URL).
 								</p>
 							</div>
+							{/if}
 
 							<div>
 								<div class="flex items-center justify-between mb-2">
@@ -1951,6 +2022,7 @@
 								</div>
 							</div>
 
+							{#if newChallenge.type === 'container'}
 							<div>
 								<span class="metadata-label block text-stone-400 mb-3">Instance Settings</span>
 								<div class="grid grid-cols-3 gap-3">
@@ -1969,8 +2041,9 @@
 								</div>
 								<p class="text-stone-500 text-xs mt-1.5">How long the instance runs, how many extensions, and cooldown between resets</p>
 							</div>
+							{/if}
 						</div>
-					{:else}
+					{:else if newChallenge.type === 'ova'}
 						<div class="pt-4 border-t border-stone-800 space-y-5">
 							<div>
 								<span class={labelCls}>VM Source</span>
@@ -1983,15 +2056,8 @@
 										<Icon icon="mdi:harddisk" class="w-3.5 h-3.5 shrink-0 mr-1" />
 										Use Existing Template
 									</button>
-									<button
-										type="button"
-										on:click={() => newChallenge.vm_source = 'upload'}
-										class="flex-1 inline-flex items-center justify-center py-2 px-3 rounded text-sm leading-none font-medium transition-colors {newChallenge.vm_source === 'upload' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
-									>
-										<Icon icon="mdi:cloud-upload" class="w-3.5 h-3.5 shrink-0 mr-1" />
-										Upload New OVA
-									</button>
 								</div>
+								<p class="text-stone-500 text-xs mt-2">Upload OVA/qcow2/vmdk images under Infrastructure → Templates; they're converted there, then selected here.</p>
 							</div>
 
 							{#if newChallenge.vm_source === 'template'}

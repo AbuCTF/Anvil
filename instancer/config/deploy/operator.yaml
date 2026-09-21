@@ -1,0 +1,92 @@
+# Anvil instancer operator: namespace, service account, RBAC binding, deployment.
+# The CRD (config/crd) and ClusterRole (config/rbac/role.yaml) are applied first.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: anvil-instancer
+  labels:
+    app.kubernetes.io/part-of: anvil
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: instancer
+  namespace: anvil-instancer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: instancer-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: instancer-manager
+subjects:
+  - kind: ServiceAccount
+    name: instancer
+    namespace: anvil-instancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: instancer
+  namespace: anvil-instancer
+  labels:
+    app: instancer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: instancer
+  template:
+    metadata:
+      labels:
+        app: instancer
+    spec:
+      serviceAccountName: instancer
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-instancer:latest
+          args: []
+          env:
+            - name: INSTANCER_BASE_DOMAIN
+              value: h7tex.com
+            - name: INSTANCER_RUNTIME_CLASS
+              value: gvisor
+            - name: INSTANCER_TRAEFIK_NAMESPACE
+              value: traefik
+            - name: INSTANCER_RESYNC
+              value: 30s
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: probes
+              containerPort: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probes
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

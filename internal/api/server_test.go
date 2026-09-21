@@ -105,5 +105,5 @@ func TestRevertRouteRequiresAuthentication(t *testing.T) {
 func newTestServer(t *testing.T, cfg *config.Config) *Server {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	return NewServer(cfg, nil, nil, nil, nil, nil, nil, zap.NewNop())
+	return NewServer(cfg, nil, nil, nil, nil, nil, nil, nil, zap.NewNop())
 }

@@ -20,6 +20,10 @@
 	let flagInput = '';
 	let submitting = false;
 	let submitResult: { correct: boolean; message: string } | null = null;
+	let submitAttempt = 0;
+	let showCelebration = false;
+	let celebrationPoints: number | null = null;
+	let celebrationPractice = false;
 
 	let creatingInstance = false;
 	let instanceAction = '';
@@ -222,12 +226,17 @@
 		if (!slug || !flagInput.trim()) return;
 		submitting = true;
 		submitResult = null;
+		submitAttempt++;
 
 		try {
 			const result = await api.submitFlag(slug, flagInput.trim());
 			submitResult = { correct: result.correct, message: result.message };
 			if (result.correct) {
 				flagInput = '';
+				celebrationPoints = typeof result.points === 'number' ? result.points : null;
+				celebrationPractice = result.practice === true;
+				showCelebration = true;
+				setTimeout(() => (showCelebration = false), 2600);
 				await Promise.all([loadChallenge(), auth.checkAuth(true)]);
 			}
 		} catch (e: unknown) {
@@ -307,7 +316,9 @@
 				name: editForm.name,
 				description: editForm.description,
 				difficulty: editForm.difficulty,
-				base_points: parseInt(String(editForm.base_points))
+				base_points: parseInt(String(editForm.base_points)),
+				// backend requires resource_type on update; carry the challenge's own.
+				resource_type: challenge.resource_type
 			});
 			await loadChallenge();
 			isEditing = false;
@@ -545,11 +556,88 @@
 			savingFlag = false;
 		}
 	}
+
+	let unlockingHint: string | null = null;
+	async function unlockHint(hintId: string) {
+		if (!challenge) return;
+		unlockingHint = hintId;
+		try {
+			await api.unlockHint(challenge.slug, hintId);
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to unlock hint');
+		} finally {
+			unlockingHint = null;
+		}
+	}
+
+	// admin hint editor
+	let editingHints: any[] = [];
+	let savingHint = false;
+	let newHint = { content: '', cost: 0 };
+	async function addHint() {
+		if (!challenge || !newHint.content.trim()) return;
+		savingHint = true;
+		try {
+			await api.createHint(challenge.id, { content: newHint.content.trim(), cost: newHint.cost || 0 });
+			newHint = { content: '', cost: 0 };
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to add hint');
+		} finally {
+			savingHint = false;
+		}
+	}
+	async function saveHint(hint: any) {
+		if (!challenge) return;
+		savingHint = true;
+		try {
+			await api.updateHint(challenge.id, hint.id, { content: hint.content, cost: hint.cost || 0 });
+			hint.editing = false;
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to save hint');
+		} finally {
+			savingHint = false;
+		}
+	}
+	async function deleteHint(hintId: string) {
+		if (!challenge || !confirm('Delete this hint?')) return;
+		savingHint = true;
+		try {
+			await api.deleteHint(challenge.id, hintId);
+			await loadChallenge();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to delete hint');
+		} finally {
+			savingHint = false;
+		}
+	}
+	$: if (challenge?.hints && isEditing) editingHints = challenge.hints.map((h: any) => ({ ...h, editing: false }));
 </script>
 
 <svelte:head>
 	<title>{challenge?.name || 'Challenge'} - Anvil</title>
 </svelte:head>
+
+{#if showCelebration}
+	<div class="cel-backdrop fixed inset-0 z-[100] flex items-center justify-center bg-stone-950/70 backdrop-blur-sm" aria-hidden="true">
+		<div class="cel-card flex flex-col items-center">
+			<div class="relative">
+				<span class="cel-ring absolute inset-0 rounded-full border border-up/40"></span>
+				<div class="flex h-20 w-20 items-center justify-center rounded-full border border-up/30 bg-up/10">
+					<svg class="h-9 w-9 text-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+						<path class="cel-check" d="M5 13l4 4L19 7" />
+					</svg>
+				</div>
+			</div>
+			<p class="cel-text mt-5 text-lg font-semibold tracking-tight text-stone-100">{celebrationPractice ? 'Correct' : 'Flag captured'}</p>
+			{#if !celebrationPractice && celebrationPoints}
+				<p class="cel-text cel-text-2 mt-1 font-mono text-sm tabular-nums text-up">+{celebrationPoints} pts</p>
+			{/if}
+		</div>
+	</div>
+{/if}
 
 <div class="min-h-screen bg-stone-950">
 	{#if loading}
@@ -843,8 +931,29 @@
 						</Card>
 					{/if}
 
-					{#if challenge.hints && challenge.hints.length > 0}
+					{#if (challenge.hints && challenge.hints.length > 0) || (isEditing && isAdmin)}
 						<Card title="Hints">
+							{#if isEditing && isAdmin}
+								<div class="space-y-3">
+									{#each editingHints as hint}
+										<div class="p-3 bg-stone-950 border border-stone-800 rounded-md space-y-2">
+											<textarea bind:value={hint.content} rows="2" class="w-full bg-stone-950 border border-stone-800 rounded-md px-3 py-2 text-sm text-stone-100 focus:outline-none focus:border-stone-600" placeholder="Hint text"></textarea>
+											<div class="flex items-center gap-2">
+												<input type="number" bind:value={hint.cost} min="0" class="w-28 bg-stone-950 border border-stone-800 rounded-md px-3 py-2 text-sm text-stone-100 tabular-nums focus:outline-none focus:border-stone-600" placeholder="cost (pts)" />
+												<button type="button" on:click={() => saveHint(hint)} disabled={savingHint} class="text-xs px-3 py-1.5 rounded border border-stone-700 text-stone-300 hover:bg-stone-800 transition-colors disabled:opacity-50">Save</button>
+												<button type="button" on:click={() => deleteHint(hint.id)} class="text-xs text-down hover:text-down/80 transition-colors">Delete</button>
+											</div>
+										</div>
+									{/each}
+									<div class="p-3 bg-stone-950 border border-dashed border-stone-800 rounded-md space-y-2">
+										<textarea bind:value={newHint.content} rows="2" class="w-full bg-stone-950 border border-stone-800 rounded-md px-3 py-2 text-sm text-stone-100 focus:outline-none focus:border-stone-600" placeholder="New hint text"></textarea>
+										<div class="flex items-center gap-2">
+											<input type="number" bind:value={newHint.cost} min="0" class="w-28 bg-stone-950 border border-stone-800 rounded-md px-3 py-2 text-sm text-stone-100 tabular-nums focus:outline-none focus:border-stone-600" placeholder="cost (pts)" />
+											<button type="button" on:click={addHint} disabled={savingHint || !newHint.content.trim()} class="text-xs px-3 py-1.5 rounded bg-amber-600/80 text-white hover:bg-amber-600 transition-colors disabled:opacity-50">Add hint</button>
+										</div>
+									</div>
+								</div>
+							{:else}
 							<div class="space-y-2">
 								{#each challenge.hints as hint, i}
 									<div class="py-3 px-4 bg-stone-950 border border-stone-800 rounded-lg">
@@ -853,14 +962,19 @@
 										{:else}
 											<div class="flex items-center justify-between">
 												<span class="text-stone-500 text-sm tabular-nums">Hint #{i + 1}</span>
-										<button disabled title="Hint unlocking is temporarily unavailable" class="text-xs text-stone-600 cursor-not-allowed tabular-nums">
-											Unlock unavailable
+												<button
+													on:click={() => unlockHint(hint.id)}
+													disabled={unlockingHint === hint.id}
+													class="text-xs text-amber-500 hover:text-amber-400 disabled:text-stone-600 disabled:cursor-not-allowed tabular-nums transition-colors"
+												>
+													{#if unlockingHint === hint.id}Unlocking…{:else}Unlock{hint.cost > 0 ? ` (−${hint.cost} pts)` : ''}{/if}
 												</button>
 											</div>
 										{/if}
 									</div>
 								{/each}
 							</div>
+							{/if}
 						</Card>
 					{/if}
 
@@ -1108,10 +1222,12 @@
 							</form>
 
 							{#if submitResult}
-								<div class="mt-3 flex items-start gap-2 py-2.5 px-3 rounded-lg text-sm border {submitResult.correct ? 'bg-up/10 border-up/20 text-up' : 'bg-down/10 border-down/20 text-down'}">
-									<Icon icon={submitResult.correct ? 'mdi:check-circle' : 'mdi:alert-circle'} class="w-4 h-4 mt-0.5 shrink-0" />
-									<span>{submitResult.message}</span>
-								</div>
+								{#key submitAttempt}
+									<div class="mt-3 flex items-start gap-2 py-2.5 px-3 rounded-lg text-sm border {submitResult.correct ? 'bg-up/10 border-up/20 text-up' : 'bg-down/10 border-down/20 text-down wrong-shake'}">
+										<Icon icon={submitResult.correct ? 'mdi:check-circle' : 'mdi:alert-circle'} class="w-4 h-4 mt-0.5 shrink-0" />
+										<span>{submitResult.message}</span>
+									</div>
+								{/key}
 							{/if}
 						</Card>
 					{:else if !$auth.isAuthenticated}
@@ -1160,10 +1276,18 @@
 									<span class="text-stone-200 tabular-nums font-medium">{challenge.total_solves}</span>
 								</div>
 							{:else if challenge.total_solves === 0}
-								<div class="flex items-center gap-2 py-2 px-3 rounded-lg bg-blood/10 border border-blood/20 text-blood text-xs leading-none">
-									<OpticalIcon icon="mdi:water" size={12} box={12} />
-									<span class="optical-label">Unsolved — first blood available</span>
-								</div>
+								<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-stone-950 border border-stone-800">
+								<span class="text-stone-500 leading-none flex items-center gap-1.5">
+									<OpticalIcon icon="mdi:account-group" size={13.5} box={14} />
+									<span class="optical-label metadata-label">Solves</span>
+								</span>
+								<span class="inline-flex items-center gap-2">
+									<span class="text-lg font-semibold text-stone-100 tabular-nums">0</span>
+									<span class="inline-flex items-center gap-1 rounded-full bg-blood/10 px-2 py-0.5 text-[0.65rem] font-medium leading-none text-blood/90" title="No one has solved this yet">
+										<OpticalIcon icon="mdi:water" size={10} box={10} /><span class="optical-label">First blood</span>
+									</span>
+								</span>
+							</div>
 							{:else}
 								<div class="flex items-center justify-between py-2 px-3 rounded-lg bg-stone-950 border border-stone-800">
 									<span class="text-stone-500 leading-none flex items-center gap-1.5">
@@ -1291,3 +1415,62 @@
 		</div>
 	</div>
 {/if}
+
+<style>
+	.cel-backdrop {
+		animation: cel-fade 0.2s ease-out;
+	}
+	.cel-card {
+		animation: cel-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+	}
+	.cel-check {
+		stroke-dasharray: 30;
+		stroke-dashoffset: 30;
+		animation: cel-draw 0.45s ease-out 0.15s forwards;
+	}
+	.cel-ring {
+		animation: cel-ring 0.9s ease-out 0.1s;
+	}
+	.cel-text {
+		opacity: 0;
+		animation: cel-rise 0.4s ease-out 0.25s forwards;
+	}
+	.cel-text-2 {
+		animation-delay: 0.35s;
+	}
+	@keyframes cel-fade {
+		from { opacity: 0; }
+	}
+	@keyframes cel-pop {
+		0% { opacity: 0; transform: scale(0.85); }
+		100% { opacity: 1; transform: scale(1); }
+	}
+	@keyframes cel-draw {
+		to { stroke-dashoffset: 0; }
+	}
+	@keyframes cel-ring {
+		0% { opacity: 0.9; transform: scale(1); }
+		100% { opacity: 0; transform: scale(1.7); }
+	}
+	@keyframes cel-rise {
+		from { opacity: 0; transform: translateY(6px); }
+		to { opacity: 1; transform: translateY(0); }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.cel-card, .cel-check, .cel-ring, .cel-text { animation: none; }
+		.cel-check { stroke-dashoffset: 0; }
+		.cel-text { opacity: 1; }
+	}
+	.wrong-shake {
+		animation: wrong-shake 0.4s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+	}
+	@keyframes wrong-shake {
+		10%, 90% { transform: translateX(-1px); }
+		20%, 80% { transform: translateX(2px); }
+		30%, 50%, 70% { transform: translateX(-4px); }
+		40%, 60% { transform: translateX(4px); }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.wrong-shake { animation: none; }
+	}
+</style>

@@ -1,0 +1,33 @@
+# e2e smoke test: a single-pod http challenge (traefik/whoami). The API normally
+# sets metadata.name to the HMAC instance id and expiresAt to now+timeout; here
+# they are fixed for a manual test.
+apiVersion: instancer.anvil.dev/v1alpha1
+kind: ChallengeInstance
+metadata:
+  name: "000000000000test"
+spec:
+  teamId: team-smoke
+  challengeId: whoami
+  expiresAt: "2027-01-01T00:00:00Z"
+  maxLifetime: 24h
+  pods:
+    - name: app
+      ports:
+        - port: 80
+          targetPort: 80
+      spec:
+        containers:
+          - name: web
+            image: traefik/whoami:v1.10.3
+            ports:
+              - containerPort: 80
+            resources:
+              requests: { cpu: 50m, memory: 32Mi }
+              limits: { cpu: 200m, memory: 64Mi }
+  expose:
+    - kind: http
+      hostPrefix: web
+      containerName: app
+      containerPort: 80
+      category: web
+      title: whoami

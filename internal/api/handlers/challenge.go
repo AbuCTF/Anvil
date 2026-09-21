@@ -97,13 +97,27 @@ type HintResponse struct {
 }
 
 func (h *ChallengeHandler) List(c *gin.Context) {
+	phase, staff := eventPlayState(c, h.db)
+	// before the CTF starts, non-staff see no challenges (the /challenges page
+	// shows a countdown off /info instead). staff preview everything.
+	if phase == "scheduled" && !staff {
+		c.JSON(http.StatusOK, gin.H{"challenges": []ChallengeListResponse{}, "total": 0})
+		return
+	}
+
 	var userID *uuid.UUID
 	if uid, ok := contextUserID(c); ok {
 		userID = &uid
 	}
 
+	// staff (admin/author) preview draft challenges on the board too; everyone
+	// else sees only published + released.
+	statusFilter := "c.status = 'published' AND (c.release_date IS NULL OR c.release_date <= NOW())"
+	if staff {
+		statusFilter = "c.status IN ('published', 'draft')"
+	}
 	query := `
-		SELECT 
+		SELECT
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
 			c.resource_type, c.sub_description, cat.id as category_id, cat.name as category_name,
@@ -114,8 +128,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 			), 0) AS user_solves
 		FROM challenges c
 		LEFT JOIN categories cat ON c.category_id = cat.id
-		WHERE c.status = 'published'
-		  AND (c.release_date IS NULL OR c.release_date <= NOW())
+		WHERE ` + statusFilter + `
 		ORDER BY c.created_at DESC
 	`
 
@@ -167,6 +180,12 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 
 func (h *ChallengeHandler) Get(c *gin.Context) {
 	slug := c.Param("slug")
+
+	// pre-event: challenge detail is hidden from non-staff (matches the empty list).
+	if phase, staff := eventPlayState(c, h.db); phase == "scheduled" && !staff {
+		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	}
 
 	var userID *uuid.UUID
 	var userRole string
@@ -435,6 +454,10 @@ const maxSubmittedFlagLength = 4096
 
 // economy launch/open gate: charge launch cost, take a concurrency slot, start the band timer, and mark the challenge open for the team (enables submission, reveals the full challenge). container challenges also open via start-instance; this covers opening in general, incl. static-download challenges with no instance.
 func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
+	if phase, staff := eventPlayState(c, h.db); !staff && phase == "scheduled" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "the competition hasn't started yet"})
+		return
+	}
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -543,15 +566,120 @@ func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID u
 	return *tid, chalID, difficulty, true
 }
 
-// releases an open challenge early for a partial refund.
+// releases an open challenge early for a partial refund, and — since abandon
+// means "I'm done with this" — reaps the team's running instance immediately
+// rather than letting it ride out its TTL (option A).
 func (h *ChallengeHandler) AbandonChallenge(c *gin.Context) {
 	teamID, chalID, difficulty, ok := h.economyChallengeCtx(c)
 	if !ok {
 		return
 	}
-	h.economyTx(c, func(tx pgx.Tx) *EconomyOpError {
-		return abandonChallengeEconomy(c.Request.Context(), tx, teamID, chalID, difficulty, h.config.Economy)
-	})
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "abandon failed"})
+		return
+	}
+	defer tx.Rollback(ctx)
+	if opErr := abandonChallengeEconomy(ctx, tx, teamID, chalID, difficulty, h.config.Economy); opErr != nil {
+		c.JSON(opErr.Status, gin.H{"error": opErr.Message})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "abandon failed"})
+		return
+	}
+	// best-effort: never fail the abandon response if teardown hiccups (the
+	// operator's TTL reaper is the backstop).
+	h.reapTeamInstance(ctx, chalID, teamID)
+	c.JSON(http.StatusOK, gin.H{"status": "abandoned"})
+}
+
+// reapTeamInstance destroys a team's active instance for one challenge (used on
+// abandon). Team-scoped because abandon only exists in economy mode, which is
+// team-based. ponytail: the vm/docker destroy switch mirrors cleanupSolvedInstance
+// + destroyInstanceRuntime; kept separate to avoid disturbing the proven solve path.
+func (h *ChallengeHandler) reapTeamInstance(ctx context.Context, challengeID, teamID uuid.UUID) {
+	var instanceID, containerID, resourceType string
+	var vmNodeID *uuid.UUID
+	var reservedVCPU, reservedMemoryMB int
+	err := h.db.Pool.QueryRow(ctx,
+		`SELECT id, COALESCE(container_id, ''), resource_type, vm_node_id,
+		        COALESCE(reserved_vcpu, 0), COALESCE(reserved_memory_mb, 0)
+		 FROM instances
+		 WHERE team_id = $1 AND challenge_id = $2
+		   AND status NOT IN ('stopped', 'failed', 'expired') AND expires_at > NOW()
+		 ORDER BY created_at DESC LIMIT 1`,
+		teamID, challengeID).Scan(&instanceID, &containerID, &resourceType, &vmNodeID, &reservedVCPU, &reservedMemoryMB)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return // static challenge, or nothing running — nothing to reap
+	}
+	if err != nil {
+		h.logger.Error("abandon-reap: failed to query instance", zap.Error(err), zap.String("challenge_id", challengeID.String()))
+		return
+	}
+	if containerID == "" {
+		return
+	}
+
+	switch resourceType {
+	case "vm":
+		if h.vmSvc == nil {
+			h.logger.Error("abandon-reap: VM service unavailable", zap.String("instance_id", instanceID))
+			return
+		}
+		var destroyErr error
+		if vmNodeID != nil {
+			node, nodeErr := loadAssignedVMNode(ctx, h.db.Pool, *vmNodeID)
+			if nodeErr != nil {
+				h.logger.Error("abandon-reap: failed to load VM node", zap.Error(nodeErr), zap.String("instance_id", instanceID))
+				return
+			}
+			destroyErr = h.vmSvc.DestroyInstanceByNameOnNode(ctx, containerID, node)
+		} else {
+			destroyErr = h.vmSvc.DestroyInstanceByName(ctx, containerID)
+		}
+		if destroyErr != nil {
+			h.logger.Error("abandon-reap: failed to destroy VM", zap.Error(destroyErr), zap.String("instance_id", instanceID))
+			return
+		}
+	case "docker":
+		if h.config != nil && h.config.Instancer.Backend == "k8s" && h.instancerSvc != nil {
+			if err := h.instancerSvc.Destroy(ctx, containerID); err != nil {
+				h.logger.Error("abandon-reap: failed to destroy k8s instance", zap.Error(err), zap.String("instance_id", instanceID))
+				return
+			}
+		} else if h.containerSvc != nil {
+			if err := h.containerSvc.StopInstance(ctx, containerID); err != nil {
+				h.logger.Error("abandon-reap: failed to stop container", zap.Error(err), zap.String("instance_id", instanceID))
+				return
+			}
+		}
+	default:
+		return
+	}
+
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("abandon-reap: begin tx failed", zap.Error(err), zap.String("instance_id", instanceID))
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `DELETE FROM instances WHERE id = $1`, instanceID); err != nil {
+		h.logger.Error("abandon-reap: delete instance row failed", zap.Error(err), zap.String("instance_id", instanceID))
+		return
+	}
+	if resourceType == "vm" {
+		if err := releaseVMNodeCapacity(ctx, tx, vmNodeID, reservedVCPU, reservedMemoryMB); err != nil {
+			h.logger.Error("abandon-reap: release VM capacity failed", zap.Error(err), zap.String("instance_id", instanceID))
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("abandon-reap: commit failed", zap.Error(err), zap.String("instance_id", instanceID))
+		return
+	}
+	h.logger.Info("abandon-reap: instance released", zap.String("instance_id", instanceID), zap.String("challenge_id", challengeID.String()))
 }
 
 // extends an open challenge's timer at an escalating credit cost.
@@ -622,17 +750,28 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
+	// staff can test-submit against draft challenges (preview).
+	submitStatusCond := "status = 'published' AND (release_date IS NULL OR release_date <= NOW())"
+	if isStaff(c) {
+		submitStatusCond = "status IN ('published', 'draft')"
+	}
 	var challengeID string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id FROM challenges
-		 WHERE slug = $1 AND status = 'published'
-		   AND (release_date IS NULL OR release_date <= NOW())`, slug).Scan(&challengeID)
+		`SELECT id FROM challenges WHERE slug = $1 AND `+submitStatusCond, slug).Scan(&challengeID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
 	} else if err != nil {
 		h.logger.Error("failed to query challenge for flag submission", zap.String("slug", slug), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+		return
+	}
+
+	// event gate: before the CTF starts nobody submits; after it ends submissions
+	// still validate but don't score (practice). staff bypass to test scoring.
+	submitPhase, submitStaff := eventPlayState(c, h.db)
+	if !submitStaff && submitPhase == "scheduled" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "the competition hasn't started yet"})
 		return
 	}
 
@@ -1007,6 +1146,20 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
+	// practice mode: the event is over and the flag is correct, but the scoreboard
+	// is final — give feedback without recording a scoring solve. staff are past
+	// this (submitStaff) so they can still verify scoring after the event.
+	if submitPhase == "ended" && !submitStaff {
+		c.JSON(http.StatusOK, gin.H{
+			"correct":   true,
+			"practice":  true,
+			"flag_name": matchedFlag.Name,
+			"points":    0,
+			"message":   "Correct! The event has ended, so this is practice and isn't scored.",
+		})
+		return
+	}
+
 	ctx := c.Request.Context()
 	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
@@ -1283,13 +1436,20 @@ func (h *ChallengeHandler) cleanupSolvedInstance(challengeID string, userID uuid
 			return
 		}
 	case "docker":
-		if h.containerSvc == nil {
-			h.logger.Error("auto-stop: container service unavailable", zap.String("instance_id", instanceID))
-			return
-		}
-		if err := h.containerSvc.StopInstance(ctx, containerID); err != nil {
-			h.logger.Error("auto-stop: failed to stop container", zap.Error(err), zap.String("container_id", containerID))
-			return
+		if h.config != nil && h.config.Instancer.Backend == "k8s" && h.instancerSvc != nil {
+			if err := h.instancerSvc.Destroy(ctx, containerID); err != nil {
+				h.logger.Error("auto-stop: failed to destroy k8s instance", zap.Error(err), zap.String("instance_id", instanceID))
+				return
+			}
+		} else {
+			if h.containerSvc == nil {
+				h.logger.Error("auto-stop: container service unavailable", zap.String("instance_id", instanceID))
+				return
+			}
+			if err := h.containerSvc.StopInstance(ctx, containerID); err != nil {
+				h.logger.Error("auto-stop: failed to stop container", zap.Error(err), zap.String("container_id", containerID))
+				return
+			}
 		}
 	default:
 		h.logger.Error("auto-stop: unsupported resource type", zap.String("resource_type", resourceType), zap.String("instance_id", instanceID))

@@ -1,0 +1,12 @@
+# Builds just the Anvil web image (amd64) on Cloud Build — for web-only redeploys.
+#   gcloud builds submit --config cloudbuild-web.yaml \
+#     --substitutions=_AR=asia-south1-docker.pkg.dev/<project>/anvil .
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    env: ['DOCKER_BUILDKIT=1']
+    args: ['build', '-f', 'deployments/docker/Dockerfile.web', '--target', 'production', '-t', '${_AR}/anvil-web:latest', './web']
+images:
+  - '${_AR}/anvil-web:latest'
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY

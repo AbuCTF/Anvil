@@ -1,0 +1,13 @@
+# Builds just the Anvil api image (amd64) on Cloud Build — for api-only redeploys
+# where the web bundle hasn't changed.
+#   gcloud builds submit --config cloudbuild-api.yaml \
+#     --substitutions=_AR=asia-south1-docker.pkg.dev/<project>/anvil .
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    env: ['DOCKER_BUILDKIT=1']
+    args: ['build', '-f', 'deployments/docker/Dockerfile.api', '-t', '${_AR}/anvil-api:latest', '.']
+images:
+  - '${_AR}/anvil-api:latest'
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY

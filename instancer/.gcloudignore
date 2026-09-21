@@ -1,0 +1,4 @@
+.git
+.gitignore
+config/
+*_test.go

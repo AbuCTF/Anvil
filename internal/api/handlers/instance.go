@@ -13,6 +13,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/instancer"
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -52,6 +53,9 @@ type InstanceResponse struct {
 	MaxExtensions  int            `json:"max_extensions"`
 	ResetCount     int            `json:"reset_count"`
 	MaxResets      int            `json:"max_resets"`
+	// Endpoints is set for k8s-instanced challenges: the player-facing URLs /
+	// connect strings. IPAddress/Ports stay empty in that mode.
+	Endpoints []instancer.Endpoint `json:"endpoints,omitempty"`
 }
 
 type CreateInstanceRequest struct {
@@ -227,7 +231,13 @@ func (h *InstanceHandler) loadPublishedChallenge(
 	ctx context.Context,
 	querier instanceRowQuerier,
 	slug string,
+	staff bool,
 ) (instanceChallenge, error) {
+	// staff (admin/author) can launch draft challenges to preview them pre-release.
+	statusCond := "status = 'published' AND (release_date IS NULL OR release_date <= NOW())"
+	if staff {
+		statusCond = "status IN ('published', 'draft')"
+	}
 	var challenge instanceChallenge
 	err := querier.QueryRow(ctx,
 		`SELECT id, name, slug, resource_type, COALESCE(container_image, ''),
@@ -236,8 +246,7 @@ func (h *InstanceHandler) loadPublishedChallenge(
 		        COALESCE(exposed_ports, '[]'::jsonb), instance_timeout,
 		        max_extensions, COALESCE(max_resets, 3)
 		 FROM challenges
-		 WHERE slug = $1 AND status = 'published'
-		   AND (release_date IS NULL OR release_date <= NOW())`, slug).Scan(
+		 WHERE slug = $1 AND `+statusCond, slug).Scan(
 		&challenge.ID, &challenge.Name, &challenge.Slug, &challenge.ResourceType,
 		&challenge.ContainerImage, &challenge.ContainerTag, &challenge.ContainerPlatform,
 		&challenge.CPULimit, &challenge.MemoryLimit, &challenge.ExposedPorts,
@@ -290,7 +299,11 @@ func (h *InstanceHandler) prepareProvisionPlan(
 	}
 	switch challenge.ResourceType {
 	case "docker":
-		if h.containerSvc == nil {
+		if h.usingK8s() {
+			if !h.instancerSvc.Enabled() {
+				return plan, newInstanceOperationError(http.StatusServiceUnavailable, "instancer service is not configured on this server", nil)
+			}
+		} else if h.containerSvc == nil {
 			return plan, newInstanceOperationError(http.StatusServiceUnavailable, "container service is not configured on this server", nil)
 		}
 		if challenge.ContainerImage == "" {
@@ -364,6 +377,12 @@ func (h *InstanceHandler) writeInstanceOperationError(c *gin.Context, logMessage
 }
 
 func (h *InstanceHandler) Create(c *gin.Context) {
+	// no launching challenge instances before the CTF starts (staff excepted, for testing).
+	instPhase, instStaff := eventPlayState(c, h.db)
+	if !instStaff && instPhase == "scheduled" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "the competition hasn't started yet"})
+		return
+	}
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -396,7 +415,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	challenge, err := h.loadPublishedChallenge(ctx, tx, req.ChallengeSlug)
+	challenge, err := h.loadPublishedChallenge(ctx, tx, req.ChallengeSlug, instStaff)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
@@ -580,6 +599,42 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	})
 }
 
+// usingK8s reports whether docker challenges route to the GKE instancer.
+func (h *InstanceHandler) usingK8s() bool {
+	return h.config != nil && h.config.Instancer.Backend == "k8s" && h.instancerSvc != nil
+}
+
+// k8sOwnerID is the stable id the per-team instance is keyed on (team in teams
+// mode, else the user) — so all members share one instance.
+func (h *InstanceHandler) k8sOwnerID(ctx context.Context, uid uuid.UUID) (string, error) {
+	_, id, err := h.instanceOwnerScope(ctx, uid)
+	if err != nil {
+		return "", err
+	}
+	if u, ok := id.(uuid.UUID); ok {
+		return u.String(), nil
+	}
+	return fmt.Sprintf("%v", id), nil
+}
+
+func envMap(env []string) map[string]string {
+	m := make(map[string]string, len(env))
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			m[k] = v
+		}
+	}
+	return m
+}
+
+func toPortSpecs(pc []instancePortConfig) []instancer.PortSpec {
+	out := make([]instancer.PortSpec, 0, len(pc))
+	for _, p := range pc {
+		out = append(out, instancer.PortSpec{Port: p.Port, Protocol: p.Protocol, Service: p.Service})
+	}
+	return out
+}
+
 func (h *InstanceHandler) provisionInstance(
 	ctx context.Context,
 	uid uuid.UUID,
@@ -595,11 +650,12 @@ func (h *InstanceHandler) provisionInstance(
 		maxExts = *challenge.MaxExtensions
 	}
 	var instanceIP string
-	var resourceID string // container_id or vm_id
+	var resourceID string // container_id, vm_id, or k8s instance id
 	var portMappings map[string]int
 	var reservedNodeID string
 	var reservedVCPU int
 	var reservedMemoryMB int
+	var k8sEndpoints []instancer.Endpoint
 
 	if challenge.ResourceType == "vm" {
 		// no IsAvailable() check: nodes are remote over ssh; availability is
@@ -636,6 +692,44 @@ func (h *InstanceHandler) provisionInstance(
 
 		instanceIP = vmInfo.IPAddress
 		resourceID = vmInfo.VMID
+	} else if h.usingK8s() {
+		ownerID, err := h.k8sOwnerID(ctx, uid)
+		if err != nil {
+			h.persistCreateFailure(ctx, instanceID, fmt.Errorf("resolve instance owner: %w", err))
+			return nil, newInstanceOperationError(http.StatusInternalServerError, "failed to resolve instance owner", err)
+		}
+		envVars, err := h.generateAndStoreDynamicFlags(ctx, instanceID, uid, challenge.ID)
+		if err != nil {
+			h.logger.Error("dynamic flag generation failed", zap.Error(err), zap.String("challenge_id", challenge.ID))
+			h.persistCreateFailure(ctx, instanceID, fmt.Errorf("generate dynamic flags: %w", err))
+			return nil, newInstanceOperationError(http.StatusInternalServerError, "failed to prepare instance flags", err)
+		}
+		res, err := h.instancerSvc.Launch(ctx, instancer.LaunchSpec{
+			TeamID:      ownerID,
+			ChallengeID: challenge.ID,
+			Slug:        challenge.Slug,
+			Image:       challenge.ContainerImage,
+			Tag:         challenge.ContainerTag,
+			CPULimit:    challenge.CPULimit,
+			MemoryLimit: challenge.MemoryLimit,
+			Ports:       toPortSpecs(plan.portConfig),
+			Flags:       envMap(envVars),
+			Timeout:     h.instanceTimeout(challenge),
+		})
+		if err != nil {
+			h.logger.Error("failed to launch k8s instance", zap.Error(err))
+			h.persistCreateFailure(ctx, instanceID, fmt.Errorf("launch instance: %w", err))
+			return nil, newInstanceOperationError(http.StatusInternalServerError, "failed to start instance", err)
+		}
+		resourceID = res.InstanceID
+		k8sEndpoints = res.Endpoints
+		portMappings = make(map[string]int)
+		if len(res.Endpoints) > 0 {
+			instanceIP = res.Endpoints[0].Connect
+			for _, ep := range res.Endpoints {
+				portMappings[ep.Host] = ep.Port
+			}
+		}
 	} else {
 		containerReq := container.CreateInstanceRequest{
 			InstanceID:    instanceID,
@@ -737,6 +831,7 @@ func (h *InstanceHandler) provisionInstance(
 		MaxExtensions: maxExts,
 		ResetCount:    resetCount,
 		MaxResets:     challenge.MaxResets,
+		Endpoints:     k8sEndpoints,
 	}, nil
 }
 
@@ -982,7 +1077,11 @@ func (h *InstanceHandler) cleanupUnpublishedResource(
 			}
 		}
 	case "docker":
-		if h.containerSvc == nil {
+		if h.usingK8s() {
+			if resourceID != "" {
+				cleanupErr = h.instancerSvc.Destroy(cleanupCtx, resourceID)
+			}
+		} else if h.containerSvc == nil {
 			cleanupErr = errors.New("container service unavailable during cleanup")
 		} else if resourceID != "" {
 			cleanupErr = h.containerSvc.StopInstance(cleanupCtx, resourceID)
@@ -1223,6 +1322,9 @@ func (h *InstanceHandler) destroyInstanceRuntime(ctx context.Context, inst insta
 		}
 		return h.vmSvc.DestroyInstanceByName(ctx, runtimeID)
 	case "docker":
+		if h.usingK8s() {
+			return h.instancerSvc.Destroy(ctx, runtimeID)
+		}
 		if h.containerSvc == nil {
 			return errors.New("container service unavailable")
 		}
@@ -1310,7 +1412,7 @@ func (h *InstanceHandler) Revert(c *gin.Context) {
 		return
 	}
 
-	challenge, err := h.loadPublishedChallenge(ctx, tx, challengeSlug)
+	challenge, err := h.loadPublishedChallenge(ctx, tx, challengeSlug, isStaff(c))
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusConflict, gin.H{"error": "challenge is no longer available"})
 		return

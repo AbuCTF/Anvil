@@ -1,0 +1,13 @@
+# builds the Anvil instancer operator image (amd64, for GKE) on Cloud Build.
+# atom is arm64, so Cloud Build compiles natively for the x86 nodes.
+#   gcloud builds submit --config cloudbuild.yaml \
+#     --substitutions=_AR=asia-south1-docker.pkg.dev/<project>/anvil .
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    env: ['DOCKER_BUILDKIT=1']
+    args: ['build', '-t', '${_AR}/anvil-instancer:latest', '.']
+images:
+  - '${_AR}/anvil-instancer:latest'
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY

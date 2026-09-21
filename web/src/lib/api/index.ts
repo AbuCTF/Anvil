@@ -31,6 +31,9 @@ export interface PlatformInfoResponse {
 	registration_mode: string;
 	scoring_enabled: boolean;
 	scoreboard_enabled: boolean;
+	arena_enabled: boolean;
+	teams_mode: boolean;
+	vpn_enabled: boolean;
 	discord_walkin: boolean;
 	register_url?: string;
 	server_time: string;
@@ -313,7 +316,9 @@ class ApiClient {
 		return this.request<{
 			correct: boolean;
 			message: string;
-			points_awarded: number;
+			points?: number;
+			practice?: boolean;
+			fully_solved?: boolean;
 		}>(`/challenges/${slug}/submit`, {
 			method: 'POST',
 			body: JSON.stringify({ flag })
@@ -504,6 +509,25 @@ class ApiClient {
 		});
 	}
 
+	async banUser(userId: string) {
+		return this.request<any>(`/admin/users/${userId}/ban`, { method: 'POST' });
+	}
+
+	async unbanUser(userId: string) {
+		return this.request<any>(`/admin/users/${userId}/unban`, { method: 'POST' });
+	}
+
+	async updateAdminCategory(id: string, data: { name?: string; description?: string; color?: string }) {
+		return this.request<any>(`/admin/categories/${id}`, {
+			method: 'PUT',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async deleteAdminCategory(id: string) {
+		return this.request<any>(`/admin/categories/${id}`, { method: 'DELETE' });
+	}
+
 	async createAdminChallenge(data: any) {
 		return this.request<any>('/admin/challenges', {
 			method: 'POST',
@@ -567,6 +591,38 @@ class ApiClient {
 	async deleteFlag(challengeId: string, flagId: string) {
 		return this.request<any>(`/admin/challenges/${challengeId}/flags/${flagId}`, {
 			method: 'DELETE'
+		});
+	}
+
+	// challenge hints (admin)
+	async getAdminHints(challengeId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}/hints`);
+	}
+
+	async createHint(challengeId: string, data: { content: string; cost: number }) {
+		return this.request<any>(`/admin/challenges/${challengeId}/hints`, {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async updateHint(challengeId: string, hintId: string, data: { content: string; cost: number }) {
+		return this.request<any>(`/admin/challenges/${challengeId}/hints/${hintId}`, {
+			method: 'PUT',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async deleteHint(challengeId: string, hintId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}/hints/${hintId}`, {
+			method: 'DELETE'
+		});
+	}
+
+	// hint unlock (player)
+	async unlockHint(slug: string, hintId: string) {
+		return this.request<any>(`/challenges/${slug}/hints/${hintId}/unlock`, {
+			method: 'POST'
 		});
 	}
 

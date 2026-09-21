@@ -3,31 +3,47 @@
 	import '@fontsource-variable/inter/wght.css';
 	import '../app.css';
 	import { onMount } from 'svelte';
-	import { page } from '$app/stores';
+	import { page, navigating } from '$app/stores';
+	import { goto } from '$app/navigation';
+	import { browser } from '$app/environment';
 	import { auth } from '$stores/auth';
 	import { api } from '$api';
 	import Icon from '@iconify/svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import EventClock from '$lib/components/EventClock.svelte';
-	import { loadPlatformInfo, registerHref } from '$lib/stores/platform';
+	import { loadPlatformInfo, registerHref, platformInfo } from '$lib/stores/platform';
 	import RankBadge from '$lib/components/RankBadge.svelte';
 
 	let mobileMenuOpen = false;
 	let userMenuOpen = false;
 
-	const navigation = [
+	// nav is feature-flag-driven off /info: the admin panel decides the event's
+	// shape (Arena, Teams, VPN, Scoreboard) and both the tabs and the routes follow.
+	$: navigation = [
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
-		{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' },
-		{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' },
+		...($platformInfo?.scoreboard_enabled !== false ? [{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' }] : []),
+		...($platformInfo?.arena_enabled ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
 
-	const userMenu = [
+	// "My Instances" dropped here — the top-nav Instances tab already covers it.
+	$: userMenu = [
+		...($auth.user?.role === 'admin' ? [{ name: 'Admin', href: '/admin', icon: 'mdi:shield-crown' }] : []),
 		{ name: 'Profile', href: '/profile', icon: 'mdi:account' },
-		{ name: 'Team', href: '/team', icon: 'mdi:account-group' },
-		{ name: 'My Instances', href: '/instances', icon: 'mdi:server' },
-		{ name: 'VPN', href: '/vpn', icon: 'mdi:vpn' }
+		...($platformInfo?.teams_mode ? [{ name: 'Team', href: '/team', icon: 'mdi:account-group' }] : []),
+		...($platformInfo?.vpn_enabled ? [{ name: 'VPN', href: '/vpn', icon: 'mdi:vpn' }] : [])
 	];
+
+	// route guard: a disabled feature's URL redirects home, so hidden != reachable.
+	$: if (browser && $platformInfo) {
+		const p = $page.url.pathname;
+		const blocked =
+			(p.startsWith('/arena') && !$platformInfo.arena_enabled) ||
+			(p.startsWith('/team') && !$platformInfo.teams_mode) ||
+			(p.startsWith('/vpn') && !$platformInfo.vpn_enabled) ||
+			(p.startsWith('/scoreboard') && $platformInfo.scoreboard_enabled === false);
+		if (blocked) goto('/challenges');
+	}
 
 	const iconMetrics: Record<string, { size: number }> = {
 		'mdi:flag': { size: 15.5 },
@@ -92,6 +108,10 @@
 		userMenuOpen = false;
 	}
 </script>
+
+{#if $navigating}
+	<div class="navbar-progress" aria-hidden="true"></div>
+{/if}
 
 <div class="min-h-screen bg-stone-950 text-stone-100 flex flex-col">
 	<nav class="border-b border-stone-800 bg-stone-950/95 backdrop-blur-sm sticky top-0 z-50">
@@ -171,10 +191,10 @@
 							</button>
 
 							{#if userMenuOpen}
-								<div class="absolute right-0 mt-2 w-52 bg-stone-950 backdrop-blur-md border border-stone-800 rounded-lg z-50 overflow-hidden">
+								<div class="absolute right-0 mt-2 w-64 bg-stone-950 backdrop-blur-md border border-stone-800 rounded-lg z-50 overflow-hidden">
 									<div class="px-4 py-3 border-b border-stone-800">
-										<p class="text-sm font-medium text-stone-100">{$auth.user?.username}</p>
-										<p class="text-xs text-stone-500">{$auth.user?.email || 'No email'}</p>
+										<p class="truncate text-sm font-medium text-stone-100">{$auth.user?.username}</p>
+										<p class="truncate text-xs text-stone-500" title={$auth.user?.email || undefined}>{$auth.user?.email || 'No email'}</p>
 									</div>
 									{#each userMenu as item}
 										<a
@@ -289,3 +309,26 @@
 		<slot />
 	</main>
 </div>
+
+<style>
+	/* indeterminate top progress bar during route navigation */
+	.navbar-progress {
+		position: fixed;
+		top: 0;
+		left: 0;
+		height: 2px;
+		width: 100%;
+		z-index: 200;
+		background: linear-gradient(90deg, transparent, rgb(245 158 11 / 0.9), transparent);
+		transform-origin: left;
+		animation: navbar-progress 1.1s ease-in-out infinite;
+	}
+	@keyframes navbar-progress {
+		0% { transform: translateX(-100%) scaleX(0.4); }
+		50% { transform: translateX(0) scaleX(0.6); }
+		100% { transform: translateX(100%) scaleX(0.4); }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.navbar-progress { animation: none; opacity: 0.6; }
+	}
+</style>

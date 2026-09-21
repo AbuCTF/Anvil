@@ -15,6 +15,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/game"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/instancer"
 	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/upload"
 	"github.com/anvil-lab/anvil/internal/services/vm"
@@ -59,6 +60,11 @@ func main() {
 	containerSvc, err := container.NewService(cfg.Container, logger)
 	if err != nil {
 		sugar.Fatalf("Failed to initialize container service: %v", err)
+	}
+
+	instancerSvc, err := instancer.NewService(cfg.Instancer, logger)
+	if err != nil {
+		sugar.Fatalf("Failed to initialize instancer service: %v", err)
 	}
 
 	vpnSvc, err := vpn.NewService(cfg.VPN, db, logger)
@@ -347,7 +353,7 @@ func main() {
 	gameCtx, gameCancel := context.WithCancel(context.Background())
 	go game.NewController(cfg.Game, db, logger).Run(gameCtx)
 
-	server := api.NewServer(cfg, db, containerSvc, vmSvc, uploadSvc, storageSvc, vpnSvc, logger)
+	server := api.NewServer(cfg, db, containerSvc, instancerSvc, vmSvc, uploadSvc, storageSvc, vpnSvc, logger)
 
 	// extended timeouts for large file uploads
 	httpServer := &http.Server{

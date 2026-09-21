@@ -30,6 +30,7 @@ resource "google_container_node_pool" "platform" {
 # challenge pool: Spot + high-memory (challenges are RAM-bound, CPU-overcommitted),
 # scale-to-zero when idle so it costs nothing between test runs.
 resource "google_container_node_pool" "challenges" {
+  provider = google-beta # sandbox_config (GKE Sandbox / gVisor) is beta-gated
   name     = "challenges"
   cluster  = google_container_cluster.anvil.id
   location = var.zone
@@ -55,11 +56,14 @@ resource "google_container_node_pool" "challenges" {
     }
     labels = { pool = "challenges" }
 
-    # only pods that tolerate this taint (challenge instances) land here.
-    taint {
-      key    = "pool"
-      value  = "challenges"
-      effect = "NO_SCHEDULE"
+    # gVisor sandbox: untrusted challenge code runs in a userspace kernel, never
+    # the host kernel. GKE auto-labels these nodes sandbox.gke.io/runtime=gvisor
+    # and taints them sandbox.gke.io/runtime=gvisor:NoSchedule — that taint is the
+    # isolation boundary (only runtimeClassName=gvisor pods tolerate it), so no
+    # separate custom taint is needed. The RuntimeClass injects the matching
+    # nodeSelector + toleration, and the autoscaler grows this pool from zero.
+    sandbox_config {
+      sandbox_type = "gvisor"
     }
   }
 

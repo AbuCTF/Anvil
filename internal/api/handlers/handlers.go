@@ -17,6 +17,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/anvil-lab/anvil/internal/services/instancer"
 	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
@@ -41,17 +42,18 @@ type ChallengeHandler struct {
 	config         *config.Config
 	db             *database.DB
 	containerSvc   *container.Service
+	instancerSvc   *instancer.Service
 	vmSvc          *vm.Service
 	logger         *zap.Logger
 	attachmentHdlr *AttachmentHandler
 }
 
-func NewChallengeHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, vmSvc *vm.Service, logger *zap.Logger) *ChallengeHandler {
-	return &ChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger}
+func NewChallengeHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, instancerSvc *instancer.Service, vmSvc *vm.Service, logger *zap.Logger) *ChallengeHandler {
+	return &ChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, instancerSvc: instancerSvc, vmSvc: vmSvc, logger: logger}
 }
 
-func NewChallengeHandlerWithAttachments(cfg *config.Config, db *database.DB, containerSvc *container.Service, vmSvc *vm.Service, logger *zap.Logger, ah *AttachmentHandler) *ChallengeHandler {
-	return &ChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger, attachmentHdlr: ah}
+func NewChallengeHandlerWithAttachments(cfg *config.Config, db *database.DB, containerSvc *container.Service, instancerSvc *instancer.Service, vmSvc *vm.Service, logger *zap.Logger, ah *AttachmentHandler) *ChallengeHandler {
+	return &ChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, instancerSvc: instancerSvc, vmSvc: vmSvc, logger: logger, attachmentHdlr: ah}
 }
 
 type ScoreboardHandler struct {
@@ -92,12 +94,13 @@ type InstanceHandler struct {
 	config       *config.Config
 	db           *database.DB
 	containerSvc *container.Service
+	instancerSvc *instancer.Service
 	vmSvc        *vm.Service
 	logger       *zap.Logger
 }
 
-func NewInstanceHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, vmSvc *vm.Service, logger *zap.Logger) *InstanceHandler {
-	return &InstanceHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger}
+func NewInstanceHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, instancerSvc *instancer.Service, vmSvc *vm.Service, logger *zap.Logger) *InstanceHandler {
+	return &InstanceHandler{config: cfg, db: db, containerSvc: containerSvc, instancerSvc: instancerSvc, vmSvc: vmSvc, logger: logger}
 }
 
 type VPNHandler struct {
@@ -1122,7 +1125,7 @@ func validatePlatformSetting(key string, value interface{}) error {
 		return intRange(30, 480)
 	case "cooldown.easy_minutes", "cooldown.medium_minutes", "cooldown.hard_minutes", "cooldown.insane_minutes":
 		return intRange(0, 120)
-	case "platform.require_vpn", "scoreboard_enabled", "teams_mode":
+	case "platform.require_vpn", "scoreboard_enabled", "teams_mode", "economy_mode", "arena_enabled":
 		return boolValue()
 	case "registration_mode":
 		mode, ok := value.(string)
