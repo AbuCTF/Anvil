@@ -255,8 +255,11 @@ def parse_deploy(doc: dict, src_dir: Path, ch: Challenge, where: str) -> None:
             proto = str(p.get("protocol", "tcp")).lower()
             if proto not in PROTOCOLS:
                 raise ValidationError(f"{where}: exposed_ports protocol must be tcp|http")
+            # derive the instancer routing service from protocol: http -> web
+            # route, tcp -> raw-tls/pwn route. keeps challenge.yml protocol-only
+            # (frozen schema) while giving the instancer an explicit service.
             ch.exposed_ports.append({"port": int(_req(p, "port", where)),
-                                     "protocol": proto, "service": ""})
+                                     "protocol": proto, "service": proto})
         if dep.get("instance_timeout") is not None:
             ch.instance_timeout = int(dep["instance_timeout"])
         if dep.get("max_extensions") is not None:

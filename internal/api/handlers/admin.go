@@ -721,11 +721,18 @@ func (h *AdminChallengeHandler) resolveOrCreateCategory(ctx context.Context, cat
 		return &id, nil
 	}
 
+	// store a display-cased name (first letter upper) so categories read as
+	// "Blockchain" not "blockchain"; admins can rename freely afterwards. lookup
+	// stays case-insensitive so re-imports reuse the same category.
+	displayName := trimmed
+	if len(displayName) > 0 {
+		displayName = strings.ToUpper(displayName[:1]) + displayName[1:]
+	}
 	newID := uuid.New().String()
 	categorySlug := slug.Make(trimmed)
 	_, err = h.db.Pool.Exec(ctx,
 		`INSERT INTO categories (id, name, slug) VALUES ($1, $2, $3)`,
-		newID, trimmed, categorySlug)
+		newID, displayName, categorySlug)
 	if err != nil {
 		// another request may have created it concurrently; retry the lookup
 		if retryErr := h.db.Pool.QueryRow(ctx,
