@@ -1,0 +1,305 @@
+# Raw-TCP half-close-preserving proxy for pwn/web3 challenge instances.
+# Bypasses Traefik (whose TCP proxy drops the reply on a client half-close, so it
+# can never deliver a flag). A GKE L4 passthrough NLB fronts these pods on the
+# pool ports 30000-30063; the proxy routes each port to its instance's ClusterIP
+# service (read from the port-lock ConfigMaps) preserving half-close end to end.
+# Keep the port range in sync with INSTANCER_TCP_POOL_RANGE (operator.yaml) and
+# PROXY_POOL_RANGE below.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tcpproxy
+  namespace: anvil-instancer
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: tcpproxy }
+  template:
+    metadata:
+      labels: { app: tcpproxy }
+    spec:
+      serviceAccountName: instancer
+      containers:
+        - name: tcpproxy
+          image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-tcpproxy:latest
+          env:
+            - { name: PROXY_POOL_RANGE, value: "30000-30063" }
+            - { name: PROXY_POOL_NAMESPACE, value: anvil-instancer }
+            - { name: PROXY_REFRESH, value: "3s" }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: "1", memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tcpproxy
+  namespace: anvil-instancer
+  annotations:
+    # external passthrough L4 NLB (preserves TCP half-close)
+    cloud.google.com/l4-rbs: "enabled"
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
+  selector: { app: tcpproxy }
+  ports:
+    - name: t30000
+      port: 30000
+      targetPort: 30000
+      protocol: TCP
+    - name: t30001
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+    - name: t30002
+      port: 30002
+      targetPort: 30002
+      protocol: TCP
+    - name: t30003
+      port: 30003
+      targetPort: 30003
+      protocol: TCP
+    - name: t30004
+      port: 30004
+      targetPort: 30004
+      protocol: TCP
+    - name: t30005
+      port: 30005
+      targetPort: 30005
+      protocol: TCP
+    - name: t30006
+      port: 30006
+      targetPort: 30006
+      protocol: TCP
+    - name: t30007
+      port: 30007
+      targetPort: 30007
+      protocol: TCP
+    - name: t30008
+      port: 30008
+      targetPort: 30008
+      protocol: TCP
+    - name: t30009
+      port: 30009
+      targetPort: 30009
+      protocol: TCP
+    - name: t30010
+      port: 30010
+      targetPort: 30010
+      protocol: TCP
+    - name: t30011
+      port: 30011
+      targetPort: 30011
+      protocol: TCP
+    - name: t30012
+      port: 30012
+      targetPort: 30012
+      protocol: TCP
+    - name: t30013
+      port: 30013
+      targetPort: 30013
+      protocol: TCP
+    - name: t30014
+      port: 30014
+      targetPort: 30014
+      protocol: TCP
+    - name: t30015
+      port: 30015
+      targetPort: 30015
+      protocol: TCP
+    - name: t30016
+      port: 30016
+      targetPort: 30016
+      protocol: TCP
+    - name: t30017
+      port: 30017
+      targetPort: 30017
+      protocol: TCP
+    - name: t30018
+      port: 30018
+      targetPort: 30018
+      protocol: TCP
+    - name: t30019
+      port: 30019
+      targetPort: 30019
+      protocol: TCP
+    - name: t30020
+      port: 30020
+      targetPort: 30020
+      protocol: TCP
+    - name: t30021
+      port: 30021
+      targetPort: 30021
+      protocol: TCP
+    - name: t30022
+      port: 30022
+      targetPort: 30022
+      protocol: TCP
+    - name: t30023
+      port: 30023
+      targetPort: 30023
+      protocol: TCP
+    - name: t30024
+      port: 30024
+      targetPort: 30024
+      protocol: TCP
+    - name: t30025
+      port: 30025
+      targetPort: 30025
+      protocol: TCP
+    - name: t30026
+      port: 30026
+      targetPort: 30026
+      protocol: TCP
+    - name: t30027
+      port: 30027
+      targetPort: 30027
+      protocol: TCP
+    - name: t30028
+      port: 30028
+      targetPort: 30028
+      protocol: TCP
+    - name: t30029
+      port: 30029
+      targetPort: 30029
+      protocol: TCP
+    - name: t30030
+      port: 30030
+      targetPort: 30030
+      protocol: TCP
+    - name: t30031
+      port: 30031
+      targetPort: 30031
+      protocol: TCP
+    - name: t30032
+      port: 30032
+      targetPort: 30032
+      protocol: TCP
+    - name: t30033
+      port: 30033
+      targetPort: 30033
+      protocol: TCP
+    - name: t30034
+      port: 30034
+      targetPort: 30034
+      protocol: TCP
+    - name: t30035
+      port: 30035
+      targetPort: 30035
+      protocol: TCP
+    - name: t30036
+      port: 30036
+      targetPort: 30036
+      protocol: TCP
+    - name: t30037
+      port: 30037
+      targetPort: 30037
+      protocol: TCP
+    - name: t30038
+      port: 30038
+      targetPort: 30038
+      protocol: TCP
+    - name: t30039
+      port: 30039
+      targetPort: 30039
+      protocol: TCP
+    - name: t30040
+      port: 30040
+      targetPort: 30040
+      protocol: TCP
+    - name: t30041
+      port: 30041
+      targetPort: 30041
+      protocol: TCP
+    - name: t30042
+      port: 30042
+      targetPort: 30042
+      protocol: TCP
+    - name: t30043
+      port: 30043
+      targetPort: 30043
+      protocol: TCP
+    - name: t30044
+      port: 30044
+      targetPort: 30044
+      protocol: TCP
+    - name: t30045
+      port: 30045
+      targetPort: 30045
+      protocol: TCP
+    - name: t30046
+      port: 30046
+      targetPort: 30046
+      protocol: TCP
+    - name: t30047
+      port: 30047
+      targetPort: 30047
+      protocol: TCP
+    - name: t30048
+      port: 30048
+      targetPort: 30048
+      protocol: TCP
+    - name: t30049
+      port: 30049
+      targetPort: 30049
+      protocol: TCP
+    - name: t30050
+      port: 30050
+      targetPort: 30050
+      protocol: TCP
+    - name: t30051
+      port: 30051
+      targetPort: 30051
+      protocol: TCP
+    - name: t30052
+      port: 30052
+      targetPort: 30052
+      protocol: TCP
+    - name: t30053
+      port: 30053
+      targetPort: 30053
+      protocol: TCP
+    - name: t30054
+      port: 30054
+      targetPort: 30054
+      protocol: TCP
+    - name: t30055
+      port: 30055
+      targetPort: 30055
+      protocol: TCP
+    - name: t30056
+      port: 30056
+      targetPort: 30056
+      protocol: TCP
+    - name: t30057
+      port: 30057
+      targetPort: 30057
+      protocol: TCP
+    - name: t30058
+      port: 30058
+      targetPort: 30058
+      protocol: TCP
+    - name: t30059
+      port: 30059
+      targetPort: 30059
+      protocol: TCP
+    - name: t30060
+      port: 30060
+      targetPort: 30060
+      protocol: TCP
+    - name: t30061
+      port: 30061
+      targetPort: 30061
+      protocol: TCP
+    - name: t30062
+      port: 30062
+      targetPort: 30062
+      protocol: TCP
+    - name: t30063
+      port: 30063
+      targetPort: 30063
+      protocol: TCP

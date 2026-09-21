@@ -1,0 +1,12 @@
+# builds the Anvil raw-TCP half-close proxy image (amd64, for GKE) on Cloud Build.
+#   gcloud builds submit --config cloudbuild-tcpproxy.yaml \
+#     --substitutions=_AR=asia-south1-docker.pkg.dev/<project>/anvil .
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    env: ['DOCKER_BUILDKIT=1']
+    args: ['build', '-f', 'Dockerfile.tcpproxy', '-t', '${_AR}/anvil-tcpproxy:latest', '.']
+images:
+  - '${_AR}/anvil-tcpproxy:latest'
+options:
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY

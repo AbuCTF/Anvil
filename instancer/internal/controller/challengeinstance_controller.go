@@ -202,16 +202,19 @@ func (r *ChallengeInstanceReconciler) routesAndEndpoints(ctx context.Context, in
 		svc := serviceName(e.ContainerName)
 		switch e.Kind {
 		case instv1.ExposeTCPSSL:
-			// raw TCP: plain per-instance port from the pool so `nc host port`
-			// works and half-close survives. Falls back to the legacy SNI+TLS
-			// route only if the pool is unconfigured.
+			// raw TCP: a plain per-instance port from the pool, served by the
+			// tcpproxy (NOT Traefik, whose TCP proxy drops the reply on a client
+			// half-close and so can never deliver a flag). We allocate the port +
+			// record the backend in the lock ConfigMap; the proxy routes on it.
+			// Falls back to the legacy Traefik SNI+TLS route only if the pool is
+			// unconfigured (dev / pre-migration).
 			if r.Cfg.Pool.enabled() {
-				port, err := r.allocatePort(ctx, inst)
+				backend := fmt.Sprintf("%s.%s.svc.cluster.local:%d", svc, ns, e.ContainerPort)
+				port, err := r.allocatePort(ctx, inst, backend)
 				if err != nil {
 					return nil, nil, err
 				}
 				h := e.Category + "." + r.Cfg.BaseDomain // web3.h7tex.com / pwn.h7tex.com
-				objs = append(objs, plainTCPRoute(inst, ns, name, svc, e.ContainerPort, entryPointName(port)))
 				eps = append(eps, instv1.InstanceEndpoint{
 					Kind: e.Kind, Host: h, Port: int32(port), Title: e.Title,
 					Connect: fmt.Sprintf("nc %s %d", h, port),

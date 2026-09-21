@@ -17,9 +17,9 @@ import (
 // Raw-TCP challenge instances (pwn/web3) are reached over PLAIN TCP on a
 // per-instance port from a shared pool, so `nc host port` works and TCP
 // half-close (which interactive solves rely on) is preserved end to end.
-// Terminating TLS on a shared SNI port breaks half-close, so it is not used
-// for raw TCP. Each pool port maps 1:1 to a Traefik TCP entrypoint named
-// "t<port>" carried by the tcppool LoadBalancer.
+// Each pool port maps 1:1 to a challenge instance; the tcpproxy reads the lock
+// ConfigMaps ({port, instance, backend}) to route, preserving TCP half-close
+// (which Traefik's TCP proxy does not, so it can never deliver a flag).
 
 const (
 	portPoolLabel     = "instancer.anvil.dev/port-pool"
@@ -36,9 +36,6 @@ type PortPool struct {
 
 func (p PortPool) enabled() bool { return p.Start > 0 && p.End >= p.Start && p.Namespace != "" }
 
-// entryPointName is the Traefik entrypoint for a pool port (see traefik-values.yaml).
-func entryPointName(port int) string { return fmt.Sprintf("t%d", port) }
-
 func portLockName(port int) string { return fmt.Sprintf("portlock-%d", port) }
 
 // errPoolExhausted signals no free pool port; the reconciler surfaces it as a
@@ -49,21 +46,26 @@ func (e errPoolExhausted) Error() string {
 	return fmt.Sprintf("tcp port pool exhausted (%d-%d)", e.start, e.end)
 }
 
-// allocatePort returns the pool port already claimed by this instance, or
-// atomically claims a free one. Idempotent: re-reconciles get the same port.
-// The lock ConfigMap is the source of truth; released in finalize, with a
-// cluster-scoped owner reference as a GC backstop if the finalizer is skipped.
-func (r *ChallengeInstanceReconciler) allocatePort(ctx context.Context, inst *instv1.ChallengeInstance) (int, error) {
+// allocatePort returns the pool port already claimed by this instance for this
+// backend, or atomically claims a free one. Idempotent: re-reconciles get the
+// same port, and an instance exposing several raw-TCP ports gets a distinct port
+// per backend. The lock ConfigMap (data {port, instance, backend}) is the source
+// of truth: the tcpproxy reads it to route, and finalize releases it. A
+// cluster-scoped owner reference is a GC backstop if the finalizer is skipped.
+func (r *ChallengeInstanceReconciler) allocatePort(ctx context.Context, inst *instv1.ChallengeInstance, backend string) (int, error) {
 	pool := r.Cfg.Pool
 	instName := inst.Name
 
-	// already claimed by this instance? (idempotent across reconciles)
+	// already claimed by this instance for this backend? (idempotent per port)
 	held := &corev1.ConfigMapList{}
 	if err := r.List(ctx, held, client.InNamespace(pool.Namespace),
 		client.MatchingLabels{portPoolLabel: "true", portInstanceLabel: instName}); err != nil {
 		return 0, err
 	}
 	for i := range held.Items {
+		if held.Items[i].Data["backend"] != backend {
+			continue
+		}
 		if p, err := strconv.Atoi(held.Items[i].Data["port"]); err == nil && p >= pool.Start && p <= pool.End {
 			return p, nil
 		}
@@ -93,7 +95,7 @@ func (r *ChallengeInstanceReconciler) allocatePort(ctx context.Context, inst *in
 				Namespace: pool.Namespace,
 				Labels:    map[string]string{portPoolLabel: "true", portInstanceLabel: instName},
 			},
-			Data: map[string]string{"port": strconv.Itoa(port), "instance": instName},
+			Data: map[string]string{"port": strconv.Itoa(port), "instance": instName, "backend": backend},
 		}
 		// GC backstop: a cluster-scoped ChallengeInstance may own a namespaced
 		// dependent, so the lock is reclaimed if the CR is deleted without finalize.
