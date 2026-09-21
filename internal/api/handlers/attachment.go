@@ -52,6 +52,13 @@ var allowedAttachmentExtensions = map[string]bool{
 	".iso": true, ".img": true,
 	".json": true, ".xml": true, ".yaml": true, ".yml": true, ".toml": true,
 	".sql": true,
+	// challenge source handouts: blockchain (rust/move/solidity/vyper),
+	// systems (asm/c++), web, and other language sources are text and download-only.
+	".rs": true, ".move": true, ".sol": true, ".vy": true, ".lock": true,
+	".asm": true, ".s": true, ".hpp": true, ".cc": true, ".cxx": true, ".hxx": true,
+	".html": true, ".htm": true, ".css": true, ".php": true,
+	".lua": true, ".pl": true, ".kt": true, ".swift": true, ".cs": true, ".sage": true,
+	".cfg": true, ".conf": true, ".ini": true, ".csv": true, ".env": true,
 	"":     true, // no extension (binaries named without extension)
 }
 

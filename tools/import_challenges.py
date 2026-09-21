@@ -43,6 +43,11 @@ ALLOWED_ATTACH_EXT = {
     ".bin", ".exe", ".elf", ".out",
     ".iso", ".img",
     ".json", ".xml", ".yaml", ".yml", ".toml", ".sql",
+    ".rs", ".move", ".sol", ".vy", ".lock",
+    ".asm", ".s", ".hpp", ".cc", ".cxx", ".hxx",
+    ".html", ".htm", ".css", ".php",
+    ".lua", ".pl", ".kt", ".swift", ".cs", ".sage",
+    ".cfg", ".conf", ".ini", ".csv", ".env",
     "",  # no extension
 }
 
@@ -563,11 +568,16 @@ def main() -> int:
     ap.add_argument("--api", default=os.environ.get("ANVIL_API", "http://localhost:8080"))
     ap.add_argument("--user", default=os.environ.get("ANVIL_ADMIN_USER", "admin"))
     ap.add_argument("--password", default=os.environ.get("ANVIL_ADMIN_PASSWORD"))
+    ap.add_argument("--token", default=os.environ.get("ANVIL_ACCESS_TOKEN"),
+                    help="use a pre-minted admin access token instead of username/password login")
     ap.add_argument("--dry-run", action="store_true", help="parse + validate + show the plan; no writes")
     ap.add_argument("--publish", action="store_true", help="publish every imported challenge (overrides status)")
     ap.add_argument("--only", help="comma-separated slugs/dir-names to import")
     ap.add_argument("--skip-existing", action="store_true", help="skip challenges whose slug already exists")
     ap.add_argument("--continue-on-error", action="store_true")
+    ap.add_argument("--registry", default=os.environ.get("ANVIL_IMPORT_REGISTRY"),
+                    help="prepend this registry/repo to each bare docker image ref "
+                         "(e.g. an Artifact Registry path) so instances pull a real image")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -597,6 +607,20 @@ def main() -> int:
     if not challenges:
         print(yellow("nothing to import (after filtering).")); return 0
 
+    # --registry turns a bare logical image ref (e.g. "h7ctf26/perp_guard") into a
+    # pullable registry path. Skip refs that already look qualified (host has a
+    # dot/port, or already under this registry) so a full path is left untouched.
+    if args.registry:
+        reg = args.registry.rstrip("/")
+        for ch in challenges:
+            img = ch.container_image
+            if not img:
+                continue
+            first = img.split("/", 1)[0]
+            if "." in first or ":" in first or img.startswith(reg + "/"):
+                continue
+            ch.container_image = f"{reg}/{img}"
+
     print(bold(f"\n=== Plan ({len(challenges)} challenge(s)) ==="))
     for ch in challenges:
         print_plan(ch)
@@ -607,13 +631,17 @@ def main() -> int:
                    f"{errors} invalid, {n_warn} warning(s)."))
         return 0
 
-    password = args.password or getpass.getpass(f"admin password for {args.user}@{args.api}: ")
     api = Anvil(args.api, verbose=args.verbose)
-    try:
-        api.login(args.user, password)
-    except Exception as e:
-        print(red(f"auth: {e}")); return 1
-    print(green(f"\nAuthenticated as {args.user}."))
+    if args.token:
+        api.token = args.token
+        print(green("\nUsing provided access token."))
+    else:
+        password = args.password or getpass.getpass(f"admin password for {args.user}@{args.api}: ")
+        try:
+            api.login(args.user, password)
+        except Exception as e:
+            print(red(f"auth: {e}")); return 1
+        print(green(f"\nAuthenticated as {args.user}."))
 
     existing = api.existing_slugs() if args.skip_existing else set()
 
