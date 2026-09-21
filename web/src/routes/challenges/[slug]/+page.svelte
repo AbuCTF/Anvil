@@ -1089,7 +1089,7 @@
 												{#each Object.entries(instance.ports) as [portKey]}
 													{@const [port, svc] = portKey.split('/')}
 													{@const isHttp = svc === 'http' || svc === 'https'}
-													{@const connStr = isHttp ? `${svc}://${instance.ip_address}:${port}` : `nc ${instance.ip_address} ${port}`}
+													{@const connStr = isHttp ? (port === '443' ? `https://${instance.ip_address}` : `${svc}://${instance.ip_address}:${port}`) : `nc ${instance.ip_address} ${port}`}
 													<div class="bg-stone-950 border border-stone-800 rounded-lg overflow-hidden">
 														<div class="flex items-center gap-2 px-3 py-1.5 border-b border-stone-800/60 bg-stone-900/40">
 															<OpticalIcon
@@ -1284,7 +1284,7 @@
 								<span class="inline-flex items-center gap-2">
 									<span class="text-lg font-semibold text-stone-100 tabular-nums">0</span>
 									<span class="inline-flex items-center gap-1 rounded-full bg-blood/10 px-2 py-0.5 text-[0.65rem] font-medium leading-none text-blood/90" title="No one has solved this yet">
-										<OpticalIcon icon="mdi:water" size={10} box={10} /><span class="optical-label">First blood</span>
+										<OpticalIcon icon="mdi:water" size={10} box={10} /><span class="optical-label">First Blood</span>
 									</span>
 								</span>
 							</div>

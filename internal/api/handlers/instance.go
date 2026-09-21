@@ -635,6 +635,20 @@ func toPortSpecs(pc []instancePortConfig) []instancer.PortSpec {
 	return out
 }
 
+// endpointService maps a CR endpoint kind to the ports-map service segment the
+// UI splits on ("<port>/<svc>"): tcp-ssl -> tcp (rendered `nc host port`),
+// http/https rendered as a URL.
+func endpointService(kind string) string {
+	switch kind {
+	case "http":
+		return "http"
+	case "https":
+		return "https"
+	default:
+		return "tcp"
+	}
+}
+
 func (h *InstanceHandler) provisionInstance(
 	ctx context.Context,
 	uid uuid.UUID,
@@ -725,9 +739,12 @@ func (h *InstanceHandler) provisionInstance(
 		k8sEndpoints = res.Endpoints
 		portMappings = make(map[string]int)
 		if len(res.Endpoints) > 0 {
-			instanceIP = res.Endpoints[0].Connect
+			// ip_address holds the bare host; the ports map is keyed "<port>/<svc>"
+			// so the UI reconstructs the exact connect string the operator chose
+			// (e.g. `nc web3.h7tex.com 30000`). Source of truth is the CR status.
+			instanceIP = res.Endpoints[0].Host
 			for _, ep := range res.Endpoints {
-				portMappings[ep.Host] = ep.Port
+				portMappings[fmt.Sprintf("%d/%s", ep.Port, endpointService(ep.Kind))] = ep.Port
 			}
 		}
 	} else {

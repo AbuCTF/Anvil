@@ -151,7 +151,8 @@
 	function getConnectionCmd(ip: string, portKey: string): string {
 		const [port, svc] = portKey.split('/');
 		if (svc === 'http' || svc === 'https') {
-			return `${svc}://${ip}:${port}`;
+			// web challenges are served over TLS on :443; drop the redundant port
+			return port === '443' ? `https://${ip}` : `${svc}://${ip}:${port}`;
 		}
 		return `nc ${ip} ${port}`;
 	}

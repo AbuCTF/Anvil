@@ -1,8 +1,8 @@
 // Package instancer drives the GKE ChallengeInstance operator from the Anvil
 // API. It creates/deletes cluster-scoped ChallengeInstance CRs via the dynamic
 // client, so the main binary never imports controller-runtime. The per-team
-// instance id (and thus its hostname) is HMAC-derived, so the URL is known the
-// instant the CR is created — before the pod is even scheduled.
+// instance id is HMAC-derived; the operator allocates the plain-TCP port and
+// publishes the connect endpoints in the CR status, which the API reads back.
 package instancer
 
 import (
@@ -108,22 +108,111 @@ func (s *Service) InstanceID(teamID, challengeID string) string {
 	return hex.EncodeToString(m.Sum(nil))[:16]
 }
 
-// Launch creates (idempotently) the ChallengeInstance CR and returns the
-// deterministic endpoints. Endpoints are known immediately; the pod becomes
-// reachable a few seconds later once the operator schedules it.
+// Launch creates (idempotently) the ChallengeInstance CR, then waits for the
+// operator to allocate the instance's port(s) and publish endpoints in the CR
+// status. Raw-TCP challenges get a port from the plain-TCP pool, chosen by the
+// controller, so the connect string is NOT known until the first reconcile: we
+// read it back from the status rather than guess, keeping the API and the
+// operator from drifting.
 func (s *Service) Launch(ctx context.Context, spec LaunchSpec) (*LaunchResult, error) {
 	if !s.Enabled() {
 		return nil, fmt.Errorf("instancer k8s backend not available")
 	}
 	id := s.InstanceID(spec.TeamID, spec.ChallengeID)
-	exposeSpec, endpoints := s.mapPorts(id, spec.Ports)
-	cr := s.buildCR(id, spec, exposeSpec)
+	cr := s.buildCR(id, spec, s.buildExpose(spec.Ports))
 
 	_, err := s.dyn.Resource(gvr).Create(ctx, cr, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		return nil, fmt.Errorf("create ChallengeInstance: %w", err)
 	}
-	return &LaunchResult{InstanceID: id, Namespace: "inst-" + id, Endpoints: endpoints}, nil
+
+	eps, err := s.waitForEndpoints(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &LaunchResult{InstanceID: id, Namespace: "inst-" + id, Endpoints: eps}, nil
+}
+
+// waitForEndpoints polls the CR status until the operator publishes endpoints
+// (port allocated + routes programmed, within ~1-2s and independent of pod
+// readiness) or the instance errors / the wait times out. A timeout means the
+// instance never came up (pool at capacity, image pull stuck, controller down),
+// surfaced to the caller as a clean, retryable error.
+func (s *Service) waitForEndpoints(ctx context.Context, id string) ([]Endpoint, error) {
+	deadline := time.Now().Add(30 * time.Second)
+	lastPhase := ""
+	for {
+		st, err := s.Status(ctx, id)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("read instance status: %w", err)
+		}
+		if st != nil {
+			lastPhase = st.Phase
+			if len(st.Endpoints) > 0 {
+				return st.Endpoints, nil
+			}
+			if st.Phase == "Errored" {
+				return nil, fmt.Errorf("instance failed to provision")
+			}
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("instance did not become reachable in time (phase %q): it may be at capacity, please try again shortly", lastPhase)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
+// InstanceStatus is a snapshot of the operator-published CR status.
+type InstanceStatus struct {
+	Phase     string
+	Namespace string
+	Endpoints []Endpoint
+}
+
+// Status reads the operator-published status (phase + endpoints) for an instance.
+func (s *Service) Status(ctx context.Context, id string) (*InstanceStatus, error) {
+	if !s.Enabled() {
+		return nil, fmt.Errorf("instancer k8s backend not available")
+	}
+	obj, err := s.dyn.Resource(gvr).Get(ctx, id, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	out := &InstanceStatus{}
+	out.Phase, _, _ = unstructured.NestedString(obj.Object, "status", "phase")
+	out.Namespace, _, _ = unstructured.NestedString(obj.Object, "status", "namespace")
+	if raw, found, _ := unstructured.NestedSlice(obj.Object, "status", "endpoints"); found {
+		for _, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			ep := Endpoint{Port: coerceInt(m, "port")}
+			ep.Kind, _, _ = unstructured.NestedString(m, "kind")
+			ep.Host, _, _ = unstructured.NestedString(m, "host")
+			ep.Connect, _, _ = unstructured.NestedString(m, "connect")
+			out.Endpoints = append(out.Endpoints, ep)
+		}
+	}
+	return out, nil
+}
+
+// coerceInt reads a numeric map value regardless of how the dynamic client
+// decoded it (int64 from the apiserver, float64 from a JSON round-trip).
+func coerceInt(m map[string]any, key string) int {
+	switch v := m[key].(type) {
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return 0
 }
 
 // Destroy deletes the instance CR; the operator's finalizer tears down the rest.
@@ -138,12 +227,12 @@ func (s *Service) Destroy(ctx context.Context, instanceID string) error {
 	return err
 }
 
-// mapPorts turns exposed ports into CRD expose entries + player endpoints,
-// keeping the hostPrefix identical on both sides so the returned URL matches
-// what the operator programs into Traefik.
-func (s *Service) mapPorts(id string, ports []PortSpec) ([]map[string]any, []Endpoint) {
+// buildExpose turns exposed ports into CRD expose entries. The player-facing
+// endpoints (host + port + connect string) are NOT computed here: the operator
+// owns them (it allocates the pool port and programs Traefik), so the API reads
+// them back from the CR status instead of duplicating the logic.
+func (s *Service) buildExpose(ports []PortSpec) []map[string]any {
 	var expose []map[string]any
-	var eps []Endpoint
 	seen := map[string]int{}
 	for _, p := range ports {
 		kind := exposeKind(p.Service)
@@ -153,7 +242,6 @@ func (s *Service) mapPorts(id string, ports []PortSpec) ([]map[string]any, []End
 			prefix = fmt.Sprintf("%s%d", class, n)
 		}
 		seen[class]++
-		host := fmt.Sprintf("%s-%s.%s.%s", prefix, id, class, s.cfg.BaseDomain)
 
 		expose = append(expose, map[string]any{
 			"kind":          kind,
@@ -162,13 +250,8 @@ func (s *Service) mapPorts(id string, ports []PortSpec) ([]map[string]any, []End
 			"containerPort": int64(p.Port),
 			"category":      class,
 		})
-		if kind == "tcp-ssl" {
-			eps = append(eps, Endpoint{Kind: kind, Host: host, Port: 1337, Connect: fmt.Sprintf("ncat --ssl %s 1337", host)})
-		} else {
-			eps = append(eps, Endpoint{Kind: kind, Host: host, Port: 443, Connect: "https://" + host})
-		}
 	}
-	return expose, eps
+	return expose
 }
 
 func (s *Service) buildCR(id string, spec LaunchSpec, expose []map[string]any) *unstructured.Unstructured {
