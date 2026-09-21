@@ -1146,6 +1146,21 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
+	// admins test-submit to confirm a flag is wired up, but their activity must
+	// never show or count publicly (scoreboard, stats, per-challenge solve
+	// counts). give correct feedback without recording a scoring solve — full
+	// scoring is verified with a normal test account, not an admin one.
+	if c.GetString("role") == "admin" {
+		c.JSON(http.StatusOK, gin.H{
+			"correct":   true,
+			"practice":  true,
+			"flag_name": matchedFlag.Name,
+			"points":    0,
+			"message":   "Correct. Admin submissions aren't scored or counted.",
+		})
+		return
+	}
+
 	// practice mode: the event is over and the flag is correct, but the scoreboard
 	// is final — give feedback without recording a scoring solve. staff are past
 	// this (submitStaff) so they can still verify scoring after the event.

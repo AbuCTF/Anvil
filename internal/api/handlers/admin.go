@@ -1914,7 +1914,8 @@ func (h *StatsHandler) Get(c *gin.Context) {
 			(SELECT COUNT(*) FROM challenges) as total_challenges,
 			(SELECT COUNT(*) FROM challenges WHERE status = 'published') as published_challenges,
 			(SELECT COUNT(*) FROM challenges WHERE status = 'draft') as draft_challenges,
-			(SELECT COUNT(*) FROM solves) as total_solves,
+			(SELECT COUNT(*) FROM solves s WHERE NOT EXISTS (
+				SELECT 1 FROM users u WHERE u.id = s.user_id AND u.role = 'admin')) as total_solves,
 			(SELECT COUNT(*) FROM instances) as total_instances,
 			(SELECT COUNT(*) FROM instances WHERE status = 'running') as active_instances
 	`
