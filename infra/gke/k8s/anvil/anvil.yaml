@@ -24,7 +24,7 @@ metadata:
   name: anvil-api
   namespace: anvil
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels: { app: anvil-api }
   template:
@@ -71,7 +71,7 @@ metadata:
   name: anvil-web
   namespace: anvil
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels: { app: anvil-web }
   template:
@@ -136,3 +136,61 @@ spec:
           port: 3000
   tls:
     secretName: ctf-h7tex-tls
+---
+# autoscaling: hold 2 for HA, burst on CPU during the login/challenge spike.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: anvil-api
+  namespace: anvil
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: anvil-api
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: anvil-web
+  namespace: anvil
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: anvil-web
+  minReplicas: 2
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+---
+# keep at least one pod up through node drains / spot reclaims.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: anvil-api
+  namespace: anvil
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: anvil-api }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: anvil-web
+  namespace: anvil
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: anvil-web }
