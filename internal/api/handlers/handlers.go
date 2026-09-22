@@ -315,12 +315,19 @@ type AdminInstanceHandler struct {
 	config       *config.Config
 	db           *database.DB
 	containerSvc interface{}
+	instancerSvc *instancer.Service
 	vmSvc        interface{}
 	logger       *zap.Logger
 }
 
-func NewAdminInstanceHandler(cfg *config.Config, db *database.DB, containerSvc interface{}, vmSvc interface{}, logger *zap.Logger) *AdminInstanceHandler {
-	return &AdminInstanceHandler{config: cfg, db: db, containerSvc: containerSvc, vmSvc: vmSvc, logger: logger}
+func NewAdminInstanceHandler(cfg *config.Config, db *database.DB, containerSvc interface{}, instancerSvc *instancer.Service, vmSvc interface{}, logger *zap.Logger) *AdminInstanceHandler {
+	return &AdminInstanceHandler{config: cfg, db: db, containerSvc: containerSvc, instancerSvc: instancerSvc, vmSvc: vmSvc, logger: logger}
+}
+
+// usingK8s reports whether raw instances live on the k8s instancer (so a
+// "docker" resource_type is actually a ChallengeInstance CR, not a container).
+func (h *AdminInstanceHandler) usingK8s() bool {
+	return h.config != nil && h.config.Instancer.Backend == "k8s" && h.instancerSvc != nil
 }
 
 func (h *AdminInstanceHandler) List(c *gin.Context) {
@@ -560,6 +567,12 @@ func (h *AdminInstanceHandler) stopInstanceRuntime(
 		}
 		return service.DestroyInstanceByName(ctx, runtimeID)
 	case "docker":
+		// on the k8s backend a "docker" instance is a ChallengeInstance CR
+		// (this is what the web3/pwn challenges run as), destroyed via the
+		// instancer — NOT the local container daemon.
+		if h.usingK8s() {
+			return h.instancerSvc.Destroy(ctx, runtimeID)
+		}
 		service, ok := h.containerSvc.(interface {
 			StopInstance(context.Context, string) error
 		})

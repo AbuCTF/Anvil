@@ -350,7 +350,7 @@ func (s *Server) setupRouter() {
 
 			instances := admin.Group("/instances")
 			{
-				adminInstanceHandler := handlers.NewAdminInstanceHandler(s.config, s.db, s.containerSvc, s.vmSvc, s.logger)
+				adminInstanceHandler := handlers.NewAdminInstanceHandler(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger)
 				instances.GET("", adminInstanceHandler.List)
 				instances.GET("/stats", adminInstanceHandler.Stats)
 				instances.POST("/cleanup", adminInstanceHandler.Cleanup)
