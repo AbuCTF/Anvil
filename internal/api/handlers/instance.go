@@ -327,7 +327,10 @@ func (h *InstanceHandler) prepareProvisionPlan(
 		} else if h.containerSvc == nil {
 			return plan, newInstanceOperationError(http.StatusServiceUnavailable, "container service is not configured on this server", nil)
 		}
-		if challenge.ContainerImage == "" {
+		// multi-container challenges carry their images per-role in container_spec,
+		// so an empty top-level container_image is fine when a spec is present.
+		hasContainerSpec := len(challenge.ContainerSpec) > 0 && string(challenge.ContainerSpec) != "null"
+		if challenge.ContainerImage == "" && !hasContainerSpec {
 			return plan, newInstanceOperationError(http.StatusInternalServerError, "no container image configured for this challenge", nil)
 		}
 		if err := json.Unmarshal(challenge.ExposedPorts, &plan.portConfig); err != nil {
@@ -339,7 +342,7 @@ func (h *InstanceHandler) prepareProvisionPlan(
 			}
 		}
 		// optional multi-container roles (compose-style); absent => single image
-		if len(challenge.ContainerSpec) > 0 && string(challenge.ContainerSpec) != "null" {
+		if hasContainerSpec {
 			if err := json.Unmarshal(challenge.ContainerSpec, &plan.services); err != nil {
 				return plan, newInstanceOperationError(http.StatusInternalServerError, "challenge has invalid container spec", err)
 			}
@@ -471,8 +474,10 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	}
 
 	// static/download-only challenges have nothing to spawn; reject cleanly
-	// instead of 500ing from the provision plan.
-	if challenge.ResourceType == "docker" && challenge.ContainerImage == "" {
+	// instead of 500ing from the provision plan. multi-container challenges carry
+	// their images in container_spec, so a non-null spec is instanceable too.
+	hasContainerSpec := len(challenge.ContainerSpec) > 0 && string(challenge.ContainerSpec) != "null"
+	if challenge.ResourceType == "docker" && challenge.ContainerImage == "" && !hasContainerSpec {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "this challenge has no instance to start"})
 		return
 	}
