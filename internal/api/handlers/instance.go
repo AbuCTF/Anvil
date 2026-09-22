@@ -2,10 +2,13 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +76,7 @@ type instanceChallenge struct {
 	CPULimit          string
 	MemoryLimit       string
 	ExposedPorts      []byte
+	ContainerSpec     []byte // multi-container roles; NULL/empty => single-image
 	InstanceTimeout   *int
 	MaxExtensions     *int
 	MaxResets         int
@@ -84,9 +88,24 @@ type instancePortConfig struct {
 	Service  string `json:"service"`
 }
 
+// serviceConfig mirrors the admin ContainerService JSON stored in container_spec.
+type serviceConfig struct {
+	Name        string               `json:"name"`
+	Image       string               `json:"image"`
+	Tag         string               `json:"tag"`
+	Command     []string             `json:"command"`
+	Public      bool                 `json:"public"`
+	Egress      bool                 `json:"egress"`
+	Ports       []instancePortConfig `json:"ports"`
+	Env         map[string]string    `json:"env"`
+	CPULimit    string               `json:"cpu_limit"`
+	MemoryLimit string               `json:"memory_limit"`
+}
+
 type instanceProvisionPlan struct {
 	challenge  instanceChallenge
 	portConfig []instancePortConfig
+	services   []serviceConfig
 	vmTemplate *vm.VMTemplate
 }
 
@@ -244,13 +263,15 @@ func (h *InstanceHandler) loadPublishedChallenge(
 		        COALESCE(container_tag, 'latest'), COALESCE(container_platform, ''),
 		        COALESCE(cpu_limit, '1'), COALESCE(memory_limit, '512m'),
 		        COALESCE(exposed_ports, '[]'::jsonb), instance_timeout,
-		        max_extensions, COALESCE(max_resets, 3)
+		        max_extensions, COALESCE(max_resets, 3),
+		        COALESCE(container_spec, 'null'::jsonb)
 		 FROM challenges
 		 WHERE slug = $1 AND `+statusCond, slug).Scan(
 		&challenge.ID, &challenge.Name, &challenge.Slug, &challenge.ResourceType,
 		&challenge.ContainerImage, &challenge.ContainerTag, &challenge.ContainerPlatform,
 		&challenge.CPULimit, &challenge.MemoryLimit, &challenge.ExposedPorts,
 		&challenge.InstanceTimeout, &challenge.MaxExtensions, &challenge.MaxResets,
+		&challenge.ContainerSpec,
 	)
 	return challenge, err
 }
@@ -315,6 +336,29 @@ func (h *InstanceHandler) prepareProvisionPlan(
 		for _, port := range plan.portConfig {
 			if port.Port < 1 || port.Port > 65535 {
 				return plan, newInstanceOperationError(http.StatusInternalServerError, "challenge has invalid port configuration", fmt.Errorf("port %d is out of range", port.Port))
+			}
+		}
+		// optional multi-container roles (compose-style); absent => single image
+		if len(challenge.ContainerSpec) > 0 && string(challenge.ContainerSpec) != "null" {
+			if err := json.Unmarshal(challenge.ContainerSpec, &plan.services); err != nil {
+				return plan, newInstanceOperationError(http.StatusInternalServerError, "challenge has invalid container spec", err)
+			}
+			publicCount := 0
+			for _, svc := range plan.services {
+				if svc.Name == "" {
+					return plan, newInstanceOperationError(http.StatusInternalServerError, "challenge container spec has an unnamed service", nil)
+				}
+				if svc.Public {
+					publicCount++
+				}
+				for _, port := range svc.Ports {
+					if port.Port < 1 || port.Port > 65535 {
+						return plan, newInstanceOperationError(http.StatusInternalServerError, "challenge has invalid port configuration", fmt.Errorf("service %s port %d out of range", svc.Name, port.Port))
+					}
+				}
+			}
+			if len(plan.services) > 0 && publicCount == 0 {
+				return plan, newInstanceOperationError(http.StatusInternalServerError, "challenge container spec has no public service", nil)
 			}
 		}
 	case "vm":
@@ -635,6 +679,38 @@ func toPortSpecs(pc []instancePortConfig) []instancer.PortSpec {
 	return out
 }
 
+func randHex(n int) string {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
+}
+
+// envPlaceholder matches ${VAR}, ${VAR:-default}, ${VAR:?err} (compose style).
+var envPlaceholder = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::[-?][^}]*)?\}`)
+
+// resolveEnvPlaceholders substitutes per-instance values (INSTANCE_ID, FLAG, …)
+// into a service's env. Unknown placeholders are left as-is; literals (e.g.
+// http://scanner:8081) pass through untouched. Only keys present in subst are
+// substituted, so FLAG lands only where the challenge author placed ${FLAG}.
+func resolveEnvPlaceholders(env, subst map[string]string) map[string]string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		out[k] = envPlaceholder.ReplaceAllStringFunc(v, func(m string) string {
+			name := envPlaceholder.FindStringSubmatch(m)[1]
+			if val, ok := subst[name]; ok {
+				return val
+			}
+			return m
+		})
+	}
+	return out
+}
+
 // endpointService maps a CR endpoint kind to the ports-map service segment the
 // UI splits on ("<port>/<svc>"): tcp-ssl -> tcp (rendered `nc host port`),
 // http/https rendered as a URL.
@@ -718,7 +794,7 @@ func (h *InstanceHandler) provisionInstance(
 			h.persistCreateFailure(ctx, instanceID, fmt.Errorf("generate dynamic flags: %w", err))
 			return nil, newInstanceOperationError(http.StatusInternalServerError, "failed to prepare instance flags", err)
 		}
-		res, err := h.instancerSvc.Launch(ctx, instancer.LaunchSpec{
+		launchSpec := instancer.LaunchSpec{
 			TeamID:      ownerID,
 			ChallengeID: challenge.ID,
 			Slug:        challenge.Slug,
@@ -726,10 +802,38 @@ func (h *InstanceHandler) provisionInstance(
 			Tag:         challenge.ContainerTag,
 			CPULimit:    challenge.CPULimit,
 			MemoryLimit: challenge.MemoryLimit,
-			Ports:       toPortSpecs(plan.portConfig),
-			Flags:       envMap(envVars),
 			Timeout:     h.instanceTimeout(challenge),
-		})
+		}
+		if len(plan.services) > 0 {
+			// multi-container: resolve per-instance placeholders per role. FLAG is
+			// substituted only into the role that declares ${FLAG} in its env, so
+			// it never reaches player-facing roles; Flags is left nil so the
+			// operator broadcasts nothing.
+			subst := map[string]string{
+				"INSTANCE_ID":    h.instancerSvc.InstanceID(ownerID, challenge.ID),
+				"INTERNAL_TOKEN": randHex(24),
+				"FLAG":           envMap(envVars)["FLAG"],
+				"PUBLIC_PORT":    "", // resolved post-launch if referenced; unused by current challenges
+			}
+			for _, svc := range plan.services {
+				launchSpec.Containers = append(launchSpec.Containers, instancer.ContainerSpec{
+					Name:        svc.Name,
+					Image:       svc.Image,
+					Tag:         svc.Tag,
+					Command:     svc.Command,
+					Env:         resolveEnvPlaceholders(svc.Env, subst),
+					Ports:       toPortSpecs(svc.Ports),
+					Public:      svc.Public,
+					Egress:      svc.Egress,
+					CPULimit:    svc.CPULimit,
+					MemoryLimit: svc.MemoryLimit,
+				})
+			}
+		} else {
+			launchSpec.Ports = toPortSpecs(plan.portConfig)
+			launchSpec.Flags = envMap(envVars)
+		}
+		res, err := h.instancerSvc.Launch(ctx, launchSpec)
 		if err != nil {
 			h.logger.Error("failed to launch k8s instance", zap.Error(err))
 			h.persistCreateFailure(ctx, instanceID, fmt.Errorf("launch instance: %w", err))

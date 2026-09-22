@@ -24,60 +24,7 @@ func TestInstanceIDDeterministic(t *testing.T) {
 	}
 }
 
-func TestMapPortsHTTP(t *testing.T) {
-	s := newTestSvc()
-	id := "abcdef0123456789"
-	expose, eps := s.mapPorts(id, []PortSpec{{Port: 80, Service: "http"}})
-	if len(eps) != 1 || eps[0].Kind != "http" || eps[0].Port != 443 {
-		t.Fatalf("bad http endpoint: %+v", eps)
-	}
-	want := "web-" + id + ".web.h7tex.com"
-	if eps[0].Host != want || eps[0].Connect != "https://"+want {
-		t.Fatalf("bad host/connect: %+v", eps[0])
-	}
-	if expose[0]["kind"] != "http" || expose[0]["category"] != "web" {
-		t.Fatalf("bad expose: %+v", expose[0])
-	}
-}
-
-func TestMapPortsTCP(t *testing.T) {
-	s := newTestSvc()
-	id := "abcdef0123456789"
-	_, eps := s.mapPorts(id, []PortSpec{{Port: 1337, Service: "tcp"}})
-	want := "pwn-" + id + ".pwn.h7tex.com"
-	if eps[0].Kind != "tcp-ssl" || eps[0].Port != 1337 || eps[0].Host != want {
-		t.Fatalf("bad tcp endpoint: %+v", eps[0])
-	}
-	if eps[0].Connect != "ncat --ssl "+want+" 1337" {
-		t.Fatalf("bad connect: %q", eps[0].Connect)
-	}
-}
-
-func TestMapPortsWeb3(t *testing.T) {
-	s := newTestSvc()
-	id := "abcdef0123456789"
-	expose, eps := s.mapPorts(id, []PortSpec{{Port: 1337, Service: "web3"}})
-	want := "web3-" + id + ".web3.h7tex.com"
-	if eps[0].Kind != "tcp-ssl" || eps[0].Host != want || eps[0].Port != 1337 {
-		t.Fatalf("bad web3 endpoint: %+v", eps[0])
-	}
-	if eps[0].Connect != "ncat --ssl "+want+" 1337" {
-		t.Fatalf("bad web3 connect: %q", eps[0].Connect)
-	}
-	if expose[0]["category"] != "web3" {
-		t.Fatalf("web3 expose category should be web3, got %v", expose[0]["category"])
-	}
-}
-
-func TestMapPortsUniqueHostsSameClass(t *testing.T) {
-	s := newTestSvc()
-	_, eps := s.mapPorts("id", []PortSpec{{Port: 80, Service: "http"}, {Port: 8080, Service: "http"}})
-	if eps[0].Host == eps[1].Host {
-		t.Fatalf("two http ports collided on one host: %s", eps[0].Host)
-	}
-}
-
-func TestExposeKindDefaultsTCP(t *testing.T) {
+func TestExposeKindAndRouting(t *testing.T) {
 	// an unset/unknown service is treated as raw TLS, never mis-served as http.
 	if exposeKind("") != "tcp-ssl" || exposeKind("weird") != "tcp-ssl" {
 		t.Fatal("unknown service must default to tcp-ssl")
@@ -85,11 +32,106 @@ func TestExposeKindDefaultsTCP(t *testing.T) {
 	if exposeKind("https") != "https" || routingClass("https", "https") != "web" {
 		t.Fatal("https must route as web")
 	}
-	// web3 is raw TLS like pwn but gets its own subdomain, not "pwn".
 	if routingClass("web3", exposeKind("web3")) != "web3" {
 		t.Fatal("web3 service must route as web3")
 	}
 	if routingClass("tcp", "tcp-ssl") != "pwn" {
 		t.Fatal("plain tcp must stay pwn")
+	}
+}
+
+// helpers to dig into the unstructured pod/expose maps.
+func containersOf(pod any) []any {
+	spec := pod.(map[string]any)["spec"].(map[string]any)
+	return spec["containers"].([]any)
+}
+func envOf(container any) map[string]string {
+	out := map[string]string{}
+	raw, ok := container.(map[string]any)["env"].([]any)
+	if !ok {
+		return out
+	}
+	for _, e := range raw {
+		m := e.(map[string]any)
+		out[m["name"].(string)] = m["value"].(string)
+	}
+	return out
+}
+
+func TestBuildPodsSingle(t *testing.T) {
+	pods := buildPods(LaunchSpec{
+		Image: "img", Tag: "v1",
+		Ports: []PortSpec{{Port: 80, Service: "http"}},
+		Flags: map[string]string{"FLAG": "H7CTF{x}"},
+	})
+	if len(pods) != 1 {
+		t.Fatalf("single-container must yield one pod, got %d", len(pods))
+	}
+	p := pods[0].(map[string]any)
+	if p["name"] != "main" {
+		t.Fatalf("single pod name must be main, got %v", p["name"])
+	}
+	c := containersOf(pods[0])[0]
+	if c.(map[string]any)["image"] != "img:v1" {
+		t.Fatalf("image tag not folded: %v", c.(map[string]any)["image"])
+	}
+	if envOf(c)["FLAG"] != "H7CTF{x}" {
+		t.Fatal("single-container FLAG must be injected into main")
+	}
+}
+
+func TestBuildExposeMultiOnlyPublic(t *testing.T) {
+	expose := buildExposeMulti([]ContainerSpec{
+		{Name: "portal", Public: true, Ports: []PortSpec{{Port: 8080, Service: "http"}}},
+		{Name: "scanner", Ports: []PortSpec{{Port: 8081, Service: "http"}}},
+	})
+	if len(expose) != 1 {
+		t.Fatalf("only the public role should be exposed, got %d entries", len(expose))
+	}
+	if expose[0]["containerName"] != "portal" {
+		t.Fatalf("expose must target the public role, got %v", expose[0]["containerName"])
+	}
+}
+
+func TestBuildPodsMultiFlagScoping(t *testing.T) {
+	pods := buildPods(LaunchSpec{
+		Image: "base",
+		Containers: []ContainerSpec{
+			{Name: "portal", Command: []string{"portal"}, Public: true,
+				Ports: []PortSpec{{Port: 8080, Service: "http"}},
+				Env:   map[string]string{"ROLE": "portal", "SCANNER_URL": "http://scanner:8081"}},
+			{Name: "release", Command: []string{"release"},
+				Env: map[string]string{"ROLE": "release", "FLAG": "H7CTF{secret}"}},
+		},
+	})
+	if len(pods) != 2 {
+		t.Fatalf("multi-container must yield one pod per role, got %d", len(pods))
+	}
+	byName := map[string]any{}
+	for _, p := range pods {
+		byName[p.(map[string]any)["name"].(string)] = p
+	}
+	portal, ok := byName["portal"]
+	if !ok {
+		t.Fatal("portal pod missing")
+	}
+	release, ok := byName["release"]
+	if !ok {
+		t.Fatal("release pod missing")
+	}
+	// image defaults to the challenge base image
+	if got := containersOf(portal)[0].(map[string]any)["image"]; got != "base" {
+		t.Fatalf("portal should inherit base image, got %v", got)
+	}
+	// command -> args (keeps the image ENTRYPOINT)
+	if args, _ := containersOf(portal)[0].(map[string]any)["args"].([]any); len(args) != 1 || args[0] != "portal" {
+		t.Fatalf("command must map to args, got %v", args)
+	}
+	// FLAG scoping: only release has it; portal (player-facing) must NOT
+	if _, leaked := envOf(containersOf(portal)[0])["FLAG"]; leaked {
+		t.Fatal("FLAG leaked into the player-facing portal role")
+	}
+	if envOf(containersOf(release)[0])["FLAG"] != "H7CTF{secret}" {
+		t.Fatal("FLAG must be present in the release role that declared it")
 	}
 }

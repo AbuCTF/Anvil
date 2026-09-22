@@ -45,7 +45,9 @@ type PortSpec struct {
 	Service  string
 }
 
-// LaunchSpec is one instance to spawn.
+// LaunchSpec is one instance to spawn. Single-container challenges set
+// Image/Tag/Ports/Flags; multi-container (compose-style) challenges set
+// Containers instead — one pod per role, each with its own already-resolved env.
 type LaunchSpec struct {
 	TeamID      string
 	ChallengeID string
@@ -56,7 +58,26 @@ type LaunchSpec struct {
 	MemoryLimit string
 	Ports       []PortSpec
 	Flags       map[string]string
+	Containers  []ContainerSpec // non-empty => multi-container; supersedes Image/Ports/Flags
 	Timeout     time.Duration
+}
+
+// ContainerSpec is one role in a multi-container challenge. It becomes one pod
+// (named Name) with a ClusterIP service named Name, so peers resolve it by that
+// name (e.g. http://scanner:8081). Env is fully resolved by the API (per-instance
+// placeholders already substituted), so secrets like FLAG are scoped to the
+// single role that declared them — never broadcast.
+type ContainerSpec struct {
+	Name        string
+	Image       string // defaults to LaunchSpec.Image when empty
+	Tag         string
+	Command     []string // compose command -> k8s container args (keeps the image ENTRYPOINT)
+	Env         map[string]string
+	Ports       []PortSpec // internal listen ports; each role with ports gets a ClusterIP service
+	Public      bool       // only public roles get a route/expose entry
+	Egress      bool
+	CPULimit    string
+	MemoryLimit string
 }
 
 // Endpoint is a player-facing connection to a launched instance.
@@ -119,7 +140,13 @@ func (s *Service) Launch(ctx context.Context, spec LaunchSpec) (*LaunchResult, e
 		return nil, fmt.Errorf("instancer k8s backend not available")
 	}
 	id := s.InstanceID(spec.TeamID, spec.ChallengeID)
-	cr := s.buildCR(id, spec, s.buildExpose(spec.Ports))
+	var expose []map[string]any
+	if len(spec.Containers) > 0 {
+		expose = buildExposeMulti(spec.Containers)
+	} else {
+		expose = s.buildExpose(spec.Ports)
+	}
+	cr := s.buildCR(id, spec, expose)
 
 	_, err := s.dyn.Resource(gvr).Create(ctx, cr, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
@@ -254,42 +281,116 @@ func (s *Service) buildExpose(ports []PortSpec) []map[string]any {
 	return expose
 }
 
-func (s *Service) buildCR(id string, spec LaunchSpec, expose []map[string]any) *unstructured.Unstructured {
-	image := spec.Image
-	if spec.Tag != "" {
-		image = image + ":" + spec.Tag
+// buildExposeMulti emits expose entries only for the public roles of a
+// multi-container challenge; containerName is the role/pod name so the operator
+// routes to that pod's service. Internal-only roles (no Public) get no route.
+func buildExposeMulti(containers []ContainerSpec) []map[string]any {
+	var expose []map[string]any
+	seen := map[string]int{}
+	for _, c := range containers {
+		if !c.Public {
+			continue
+		}
+		for _, p := range c.Ports {
+			kind := exposeKind(p.Service)
+			class := routingClass(p.Service, kind)
+			prefix := class
+			if n := seen[class]; n > 0 {
+				prefix = fmt.Sprintf("%s%d", class, n)
+			}
+			seen[class]++
+			expose = append(expose, map[string]any{
+				"kind":          kind,
+				"hostPrefix":    prefix,
+				"containerName": c.Name,
+				"containerPort": int64(p.Port),
+				"category":      class,
+			})
+		}
 	}
+	return expose
+}
 
-	var containerPorts []any
-	var svcPorts []any
-	for _, p := range spec.Ports {
+// containerPod builds one CRD pod (a single container + its ClusterIP service).
+// The service is named after the pod, so peers resolve it by that name.
+func containerPod(name, image string, args []string, ports []PortSpec, env map[string]string, cpu, mem string, egress bool) map[string]any {
+	var containerPorts, svcPorts []any
+	for _, p := range ports {
 		containerPorts = append(containerPorts, map[string]any{"containerPort": int64(p.Port)})
 		svcPorts = append(svcPorts, map[string]any{"port": int64(p.Port), "targetPort": int64(p.Port)})
 	}
-
-	var env []any
-	for k, v := range spec.Flags {
-		env = append(env, map[string]any{"name": k, "value": v})
+	var envList []any
+	for k, v := range env {
+		envList = append(envList, map[string]any{"name": k, "value": v})
 	}
-
-	container := map[string]any{"name": "main", "image": image}
+	container := map[string]any{"name": name, "image": image}
+	if len(args) > 0 {
+		as := make([]any, len(args))
+		for i, a := range args {
+			as[i] = a
+		}
+		container["args"] = as // compose command -> k8s args (keeps the image ENTRYPOINT)
+	}
 	if len(containerPorts) > 0 {
 		container["ports"] = containerPorts
 	}
-	if len(env) > 0 {
-		container["env"] = env
+	if len(envList) > 0 {
+		container["env"] = envList
 	}
-	if lim := resourceLimits(spec.CPULimit, spec.MemoryLimit); lim != nil {
+	if lim := resourceLimits(cpu, mem); lim != nil {
 		container["resources"] = map[string]any{"limits": lim}
 	}
-
 	pod := map[string]any{
-		"name": "main",
+		"name": name,
 		"spec": map[string]any{"containers": []any{container}},
 	}
 	if len(svcPorts) > 0 {
 		pod["ports"] = svcPorts
 	}
+	if egress {
+		pod["egress"] = true
+	}
+	return pod
+}
+
+// buildPods returns the CRD pod list for either a single-container challenge
+// (one "main" pod) or a multi-container one (one pod per role).
+func buildPods(spec LaunchSpec) []any {
+	if len(spec.Containers) == 0 {
+		image := spec.Image
+		if spec.Tag != "" {
+			image += ":" + spec.Tag
+		}
+		return []any{containerPod("main", image, nil, spec.Ports, spec.Flags, spec.CPULimit, spec.MemoryLimit, false)}
+	}
+	var pods []any
+	for _, c := range spec.Containers {
+		image := c.Image
+		if image == "" {
+			image = spec.Image
+		}
+		tag := c.Tag
+		if tag == "" {
+			tag = spec.Tag
+		}
+		if tag != "" {
+			image += ":" + tag
+		}
+		cpu := c.CPULimit
+		if cpu == "" {
+			cpu = spec.CPULimit
+		}
+		mem := c.MemoryLimit
+		if mem == "" {
+			mem = spec.MemoryLimit
+		}
+		pods = append(pods, containerPod(c.Name, image, c.Command, c.Ports, c.Env, cpu, mem, c.Egress))
+	}
+	return pods
+}
+
+func (s *Service) buildCR(id string, spec LaunchSpec, expose []map[string]any) *unstructured.Unstructured {
+	pods := buildPods(spec)
 
 	timeout := spec.Timeout
 	if timeout <= 0 {
@@ -310,7 +411,7 @@ func (s *Service) buildCR(id string, spec LaunchSpec, expose []map[string]any) *
 			"teamId":      spec.TeamID,
 			"challengeId": spec.ChallengeID,
 			"expiresAt":   time.Now().Add(timeout).UTC().Format(time.RFC3339),
-			"pods":        []any{pod},
+			"pods":        pods,
 			"expose":      toAnySlice(expose),
 		},
 	})

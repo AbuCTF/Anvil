@@ -389,6 +389,10 @@ type CreateChallengeRequest struct {
 		Service  string `json:"service"`
 	} `json:"exposed_ports"`
 
+	// Optional multi-container (compose-style) roles. Empty => single-image
+	// challenge (uses ContainerImage/ExposedPorts as before).
+	Services []ContainerService `json:"services"`
+
 	VMTemplateID *string `json:"vm_template_id"`
 	VCPU         int     `json:"vcpu"`
 	MemoryMB     int     `json:"memory_mb"`
@@ -408,6 +412,25 @@ type CreateChallengeRequest struct {
 
 	// legacy single flag support, kept for backward compatibility
 	Flag string `json:"flag"`
+}
+
+// ContainerService is one role of a multi-container (compose-style) challenge.
+// Stored verbatim as challenges.container_spec (JSONB) and consumed at launch.
+type ContainerService struct {
+	Name    string   `json:"name"`
+	Image   string   `json:"image"`   // optional; defaults to the challenge's container_image
+	Tag     string   `json:"tag"`     // optional; defaults to container_tag
+	Command []string `json:"command"` // compose command -> k8s container args
+	Public  bool     `json:"public"`  // only public roles get a route
+	Egress  bool     `json:"egress"`  // opt into outbound internet
+	Ports   []struct {
+		Port     int    `json:"port"`
+		Protocol string `json:"protocol"`
+		Service  string `json:"service"`
+	} `json:"ports"`
+	Env         map[string]string `json:"env"`
+	CPULimit    string            `json:"cpu_limit"`
+	MemoryLimit string            `json:"memory_limit"`
 }
 
 func (h *AdminChallengeHandler) List(c *gin.Context) {
@@ -568,6 +591,10 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	}
 
 	portsJSON, _ := json.Marshal(req.ExposedPorts)
+	var containerSpec []byte
+	if len(req.Services) > 0 {
+		containerSpec, _ = json.Marshal(req.Services)
+	}
 
 	tx, err := h.db.Pool.Begin(c.Request.Context())
 	if err != nil {
@@ -586,13 +613,14 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 			exposed_ports, base_points, instance_timeout, max_extensions,
 			vm_timeout_minutes, vm_max_extensions, vm_extension_minutes, cooldown_minutes,
 			author_name, resource_type, supports_docker, supports_vm,
-			total_flags, sub_description, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, NOW(), NOW())`,
+			total_flags, sub_description, container_spec, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW(), NOW())`,
 		challengeID, req.Name, challengeSlug, req.Description, req.Difficulty, req.CategoryID,
 		req.ContainerImage, req.ContainerTag, req.ContainerPlatform, req.CPULimit, req.MemoryLimit,
 		portsJSON, req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 		req.VMTimeoutMinutes, req.VMMaxExtensions, req.VMExtensionMinutes, req.CooldownMinutes,
 		req.AuthorName, resourceType, supportsDocker, supportsVM, len(req.Flags), subDescriptionOrNil(req.SubDescription),
+		nilIfEmpty(containerSpec),
 	)
 	if err != nil {
 		h.logger.Error("failed to create challenge", zap.Error(err))
@@ -691,6 +719,15 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 }
 
 // normalizes an optional pre-launch sub_description: trims, caps to the column width (255 chars, rune-safe), and returns nil for an empty value so the column stores null rather than an empty string
+// nilIfEmpty returns nil (→ SQL NULL) for empty bytes, else the bytes — so an
+// absent multi-container spec stores NULL rather than invalid JSONB.
+func nilIfEmpty(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return b
+}
+
 func subDescriptionOrNil(s string) *string {
 	s = strings.TrimSpace(s)
 	if s == "" {

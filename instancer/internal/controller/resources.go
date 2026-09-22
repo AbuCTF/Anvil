@@ -147,7 +147,11 @@ func egressPolicy(ns, podName string) *netv1.NetworkPolicy {
 	}
 }
 
-func serviceName(pod string) string { return "svc-" + pod }
+// serviceName is the ClusterIP service for a pod. It is identity (not "svc-"+pod)
+// so multi-container peers resolve each other by role name (e.g. http://scanner:8081).
+// Internal-only, symmetric across the writer (buildService) and readers (routes +
+// tcpproxy backend), so single-container challenges are unaffected.
+func serviceName(pod string) string { return pod }
 
 func buildService(inst *instv1.ChallengeInstance, pod instv1.InstancePod) *corev1.Service {
 	ports := pod.Ports

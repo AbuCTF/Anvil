@@ -126,6 +126,7 @@ class Challenge:
     cpu_limit: str = ""
     memory_limit: str = ""
     exposed_ports: list[dict] = field(default_factory=list)
+    services: list[dict] = field(default_factory=list)  # multi-container roles; empty = single image
     instance_timeout: int | None = None
     max_extensions: int | None = None
     ova_path: Path | None = None
@@ -263,6 +264,50 @@ def parse_deploy(doc: dict, src_dir: Path, ch: Challenge, where: str) -> None:
                 svc = "web3"
             ch.exposed_ports.append({"port": int(_req(p, "port", where)),
                                      "protocol": proto, "service": svc})
+        # optional multi-container (compose-style) roles. when present, each role
+        # is one pod; only public roles get a route. single-image challenges omit
+        # this and behave exactly as before.
+        def _svc_of(proto: str) -> str:
+            if proto == "tcp" and ch.category.strip().lower() == "web3":
+                return "web3"
+            return proto
+        for s in dep.get("services", []) or []:
+            if not isinstance(s, dict):
+                raise ValidationError(f"{where}: each deploy.services entry must be a mapping")
+            name = str(_req(s, "name", where))
+            if not re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", name):
+                raise ValidationError(f"{where}: service name '{name}' must be lowercase DNS-safe (a-z0-9-)")
+            cmd = s.get("command") or []
+            if cmd and not isinstance(cmd, list):
+                raise ValidationError(f"{where}: service '{name}' command must be a list")
+            svc_ports = []
+            for p in s.get("ports", []) or []:
+                proto = str(p.get("protocol", "tcp")).lower()
+                if proto not in PROTOCOLS:
+                    raise ValidationError(f"{where}: service '{name}' port protocol must be tcp|http")
+                svc_ports.append({"port": int(_req(p, "port", where)),
+                                  "protocol": proto, "service": _svc_of(proto)})
+            env = s.get("env") or {}
+            if env and not isinstance(env, dict):
+                raise ValidationError(f"{where}: service '{name}' env must be a mapping")
+            ch.services.append({
+                "name": name,
+                "image": str(s.get("image") or ""),
+                "tag": str(s.get("tag") or ""),
+                "command": [str(x) for x in cmd],
+                "public": bool(s.get("public", False)),
+                "egress": bool(s.get("egress", False)),
+                "ports": svc_ports,
+                "env": {str(k): str(v) for k, v in env.items()},
+                "cpu_limit": str(s.get("cpu_limit") or ""),
+                "memory_limit": str(s.get("memory_limit") or ""),
+            })
+        if ch.services:
+            public = [s for s in ch.services if s["public"]]
+            if not public:
+                raise ValidationError(f"{where}: multi-container deploy needs at least one service with public: true")
+            # the exposed_ports column mirrors the public roles' ports (drives the UI/detail)
+            ch.exposed_ports = [dict(p) for s in public for p in s["ports"]]
         if dep.get("instance_timeout") is not None:
             ch.instance_timeout = int(dep["instance_timeout"])
         if dep.get("max_extensions") is not None:
@@ -424,6 +469,8 @@ class Anvil:
                 body["memory_limit"] = ch.memory_limit
             if ch.exposed_ports:
                 body["exposed_ports"] = ch.exposed_ports
+            if ch.services:
+                body["services"] = ch.services
             if ch.instance_timeout is not None:
                 body["instance_timeout"] = ch.instance_timeout
             if ch.max_extensions is not None:
@@ -529,6 +576,13 @@ def print_plan(ch: Challenge) -> None:
               f"   {dim('cpu')} {ch.cpu_limit or '-'}   {dim('mem')} {ch.memory_limit or '-'}")
         if ch.instance_timeout is not None:
             print(f"      {dim('timeout')} {ch.instance_timeout}s   {dim('max_ext')} {ch.max_extensions}")
+        if ch.services:
+            print(f"      {dim('services')} {len(ch.services)} (multi-container):")
+            for s in ch.services:
+                sp = ",".join(f"{p['port']}/{p['protocol']}" for p in s["ports"]) or "-"
+                tags = " ".join(t for t in [cyan("public") if s["public"] else "", "egress" if s["egress"] else ""] if t)
+                cmd = " ".join(s["command"]) if s["command"] else "-"
+                print(f"        - {bold(s['name'])}  {dim('ports')} {sp}  {dim('cmd')} {cmd}  {tags}")
     if ch.is_vm:
         exists = ch.ova_path and ch.ova_path.exists()
         size = f" ({ch.ova_path.stat().st_size/1e9:.2f} GB)" if exists else ""
@@ -622,14 +676,19 @@ def main() -> int:
     # dot/port, or already under this registry) so a full path is left untouched.
     if args.registry:
         reg = args.registry.rstrip("/")
-        for ch in challenges:
-            img = ch.container_image
+
+        def _rewrite(img: str) -> str:
             if not img:
-                continue
+                return img
             first = img.split("/", 1)[0]
             if "." in first or ":" in first or img.startswith(reg + "/"):
-                continue
-            ch.container_image = f"{reg}/{img}"
+                return img
+            return f"{reg}/{img}"
+
+        for ch in challenges:
+            ch.container_image = _rewrite(ch.container_image)
+            for s in ch.services:  # multi-container: rewrite per-service image overrides too
+                s["image"] = _rewrite(s["image"])
 
     print(bold(f"\n=== Plan ({len(challenges)} challenge(s)) ==="))
     for ch in challenges:
