@@ -58,34 +58,38 @@
 		{/if}
 	</div>
 
-	<div class="mt-4 pt-3 border-t border-stone-800/60 flex items-center justify-between text-xs leading-none">
-		<div class="flex items-center gap-3">
-			<span class="inline-flex items-center gap-1 text-amber-500 font-semibold tabular-nums" title="Points">
-				<OpticalIcon icon="mdi:star-outline" size={12} box={12} />
-				<span class="optical-label">{points}</span>
-			</span>
-			<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Flags">
-				<OpticalIcon icon="mdi:flag-outline" size={12} box={12} />
-				<span class="optical-label">{challenge.total_flags}</span>
+	<!-- footer pinned to the card bottom so every tile in a row aligns its stats,
+	     and a taller neighbour (e.g. a multi-flag progress bar) only adds breathing
+	     room above rather than dead space below shorter tiles -->
+	<div class="mt-auto pt-3 border-t border-stone-800/60">
+		{#if $auth.isAuthenticated && multiFlag}
+			<div class="mb-3">
+				<div class="flex items-baseline justify-between text-xs mb-1.5">
+					<span class="metadata-label text-stone-500">Progress</span>
+					<span class="optical-label text-stone-400 tabular-nums">{challenge.user_solves || 0}/{challenge.total_flags}</span>
+				</div>
+				<div class="w-full bg-stone-800 rounded-full h-1 overflow-hidden">
+					<div class="h-full bg-up rounded-full transition-all duration-500" style="width: {progress}%"></div>
+				</div>
+			</div>
+		{/if}
+		<div class="flex items-center justify-between text-xs leading-none">
+			<div class="flex items-center gap-3">
+				<span class="inline-flex items-center gap-1 text-amber-500 font-semibold tabular-nums" title="Points">
+					<OpticalIcon icon="mdi:star-outline" size={12} box={12} />
+					<span class="optical-label">{points}</span>
+				</span>
+				<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Flags">
+					<OpticalIcon icon="mdi:flag-outline" size={12} box={12} />
+					<span class="optical-label">{challenge.total_flags}</span>
+				</span>
+			</div>
+			<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Solves">
+				<OpticalIcon icon="mdi:account-group" size={12} box={12} />
+				<span class="optical-label">{challenge.total_solves}</span>
 			</span>
 		</div>
-		<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Solves">
-			<OpticalIcon icon="mdi:account-group" size={12} box={12} />
-			<span class="optical-label">{challenge.total_solves}</span>
-		</span>
 	</div>
-
-	{#if $auth.isAuthenticated && multiFlag}
-		<div class="mt-3 pt-3 border-t border-stone-800/60">
-			<div class="flex items-baseline justify-between text-xs mb-1.5">
-				<span class="metadata-label text-stone-500">Progress</span>
-				<span class="optical-label text-stone-400 tabular-nums">{challenge.user_solves || 0}/{challenge.total_flags}</span>
-			</div>
-			<div class="w-full bg-stone-800 rounded-full h-1 overflow-hidden">
-				<div class="h-full bg-up rounded-full transition-all duration-500" style="width: {progress}%"></div>
-			</div>
-		</div>
-	{/if}
 </a>
 
 <style>
