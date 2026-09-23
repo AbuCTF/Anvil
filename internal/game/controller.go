@@ -111,6 +111,15 @@ func (c *Controller) runTick(parent context.Context, tick int) error {
 		return nil
 	}
 
+	// quals shared-arena KotH: mirror bought-in real teams into game_teams so the
+	// engine scores them (migration 030). No-op when koth_native_enabled is off.
+	native := c.kothNativeEnabled(ctx)
+	if native {
+		if err := c.syncNativeTeams(ctx); err != nil {
+			return fmt.Errorf("sync native teams: %w", err)
+		}
+	}
+
 	if err := c.dispatcher.dispatch(ctx, tick); err != nil {
 		return fmt.Errorf("dispatch: %w", err)
 	}
@@ -119,6 +128,11 @@ func (c *Controller) runTick(parent context.Context, tick int) error {
 	}
 	if err := c.recomputeStandings(ctx); err != nil {
 		return fmt.Errorf("recompute standings: %w", err)
+	}
+	if native {
+		if err := c.foldNativeScore(ctx); err != nil {
+			return fmt.Errorf("fold native koth score: %w", err)
+		}
 	}
 	if err := c.snapshotStandings(ctx, tick); err != nil {
 		return fmt.Errorf("snapshot standings: %w", err)

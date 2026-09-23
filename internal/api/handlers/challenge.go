@@ -951,32 +951,40 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		if found {
 			// flag share detection: same exact value previously submitted by another user.
 			var priorUserID string
+			var priorTeamID *uuid.UUID
 			shareErr := h.db.Pool.QueryRow(c.Request.Context(),
-				`SELECT user_id FROM flag_attempts
-				 WHERE submitted_flag = $1 AND challenge_id = $2 AND flag_id = $4
-				   AND is_correct = true AND user_id != $3
+				`SELECT fa.user_id, u.team_id FROM flag_attempts fa
+				 JOIN users u ON u.id = fa.user_id
+				 WHERE fa.submitted_flag = $1 AND fa.challenge_id = $2 AND fa.flag_id = $4
+				   AND fa.is_correct = true AND fa.user_id != $3
 				 LIMIT 1`,
 				submittedFlag, challengeID, uid, matchedFlag.ID,
-			).Scan(&priorUserID)
+			).Scan(&priorUserID, &priorTeamID)
 			switch {
 			case shareErr == nil:
-				if _, err := h.db.Pool.Exec(c.Request.Context(),
-					`INSERT INTO flag_share_events
-						(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
-						 submitter_user_id, flag_value, submitter_ip, created_at)
-					 VALUES
-						(uuid_generate_v4(), $1, $2, $3, NULL, $4, $5, $6, NOW())`,
-					challengeID, matchedFlag.ID, priorUserID, uid, submittedFlag, c.ClientIP(),
-				); err != nil {
-					h.logger.Error("failed to log regex flag share event", zap.Error(err))
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
-					return
+				// teammates legitimately submit the same team flag; only a DIFFERENT
+				// team reusing the exact value is a real share.
+				submitterTeamID, _ := resolveTeamID(c.Request.Context(), h.db, uid)
+				sameTeam := submitterTeamID != nil && priorTeamID != nil && *submitterTeamID == *priorTeamID
+				if !sameTeam {
+					if _, err := h.db.Pool.Exec(c.Request.Context(),
+						`INSERT INTO flag_share_events
+							(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
+							 submitter_user_id, flag_value, submitter_ip, created_at)
+						 VALUES
+							(uuid_generate_v4(), $1, $2, $3, NULL, $4, $5, $6, NOW())`,
+						challengeID, matchedFlag.ID, priorUserID, uid, submittedFlag, c.ClientIP(),
+					); err != nil {
+						h.logger.Error("failed to log regex flag share event", zap.Error(err))
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+						return
+					}
+					h.logger.Warn("FLAG SHARE DETECTED (regex)",
+						zap.String("submitter", uid.String()),
+						zap.String("prior_user", priorUserID),
+						zap.String("challenge_id", challengeID),
+					)
 				}
-				h.logger.Warn("FLAG SHARE DETECTED (regex)",
-					zap.String("submitter", uid.String()),
-					zap.String("prior_user", priorUserID),
-					zap.String("challenge_id", challengeID),
-				)
 			case errors.Is(shareErr, pgx.ErrNoRows):
 			default:
 				h.logger.Error("failed to check regex flag sharing", zap.String("challenge_id", challengeID), zap.Error(shareErr))
@@ -1027,19 +1035,27 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 				matchedFlag.Points = sharedPoints
 				found = true
 
-				_, logErr := h.db.Pool.Exec(c.Request.Context(),
-					`INSERT INTO flag_share_events
-						(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
-						 submitter_user_id, flag_value, submitter_ip, created_at)
-					VALUES
-						(uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, NOW())`,
-					challengeID, sharedFlagID, ownerUserID, ownerInstanceID,
-					uid, submittedFlag, c.ClientIP())
-				if logErr != nil {
-					h.logger.Error("failed to log flag share event", zap.Error(logErr))
-					c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
-					return
-				} else {
+				// teammates legitimately submit the TEAM's shared-instance flag; only a
+				// DIFFERENT team reusing the value is a real share worth logging.
+				submitterTeamID, _ := resolveTeamID(c.Request.Context(), h.db, uid)
+				var ownerTeamID *uuid.UUID
+				if ownerUUID, perr := uuid.Parse(ownerUserID); perr == nil {
+					ownerTeamID, _ = resolveTeamID(c.Request.Context(), h.db, ownerUUID)
+				}
+				if submitterTeamID == nil || ownerTeamID == nil || *submitterTeamID != *ownerTeamID {
+					_, logErr := h.db.Pool.Exec(c.Request.Context(),
+						`INSERT INTO flag_share_events
+							(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
+							 submitter_user_id, flag_value, submitter_ip, created_at)
+						VALUES
+							(uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, NOW())`,
+						challengeID, sharedFlagID, ownerUserID, ownerInstanceID,
+						uid, submittedFlag, c.ClientIP())
+					if logErr != nil {
+						h.logger.Error("failed to log flag share event", zap.Error(logErr))
+						c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+						return
+					}
 					h.logger.Warn("FLAG SHARE DETECTED",
 						zap.String("submitter", uid.String()),
 						zap.String("owner", ownerUserID),

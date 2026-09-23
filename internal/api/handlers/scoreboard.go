@@ -310,9 +310,11 @@ const teamScoreboardQuery = `
 		FROM solves s JOIN users u ON u.id = s.user_id
 		WHERE u.team_id IS NOT NULL GROUP BY u.team_id
 	), ranked AS (
-		SELECT t.id, t.name, t.total_score, ls.last_solve,
+		-- unified board: jeopardy total_score + capped KotH hold-time (koth_score is
+		-- 0 unless the shared-arena engine is active, so this is a no-op otherwise)
+		SELECT t.id, t.name, (t.total_score + t.koth_score)::int AS total_score, ls.last_solve,
 			ROW_NUMBER() OVER (
-				ORDER BY t.total_score DESC, ls.last_solve ASC NULLS LAST,
+				ORDER BY (t.total_score + t.koth_score) DESC, ls.last_solve ASC NULLS LAST,
 				         t.created_at ASC, t.id ASC
 			) AS rank
 		FROM teams t
