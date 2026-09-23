@@ -4,11 +4,13 @@
 -- challenge + the instancer-launched shared instance backing it. Foundation for the
 -- buy-in gate and the shared-target launch.
 
--- Instancing mode: 'per_team' (default, one instance per team) or 'shared' (one
--- contested KotH target). A 'shared' challenge is the KotH-arena marker used by the
--- buy-in gate and the shared launcher.
-ALTER TABLE challenges ADD COLUMN IF NOT EXISTS instancing TEXT NOT NULL DEFAULT 'per_team'
-    CHECK (instancing IN ('per_team', 'shared'));
+-- Arena mode: 'per_team' (default, one instance per team) or 'shared' (one
+-- contested KotH target the whole field attacks). A 'shared' challenge is the
+-- KotH-arena marker used by the buy-in gate and the shared launcher. Named
+-- arena_mode (not "instancing") to avoid clashing with the challenge.yml
+-- deploy.instancing field (static|on_demand), a different axis.
+ALTER TABLE challenges ADD COLUMN IF NOT EXISTS arena_mode TEXT NOT NULL DEFAULT 'per_team'
+    CHECK (arena_mode IN ('per_team', 'shared'));
 
 -- Back a hill by a real challenge + the shared instance the instancer launched, so
 -- the engine's host/port come from a running pod instead of a hand-typed IP.

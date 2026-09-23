@@ -542,7 +542,7 @@ func kothBuyinCost(ctx context.Context, db *database.DB) float64 {
 }
 
 // EnterKoth is the KotH buy-in gate: a team pays a one-time credit cost to enter the
-// shared arena (a challenge with instancing='shared') and receives its opaque team
+// shared arena (a challenge with arena_mode='shared') and receives its opaque team
 // token to plant on the contested target. Holding the target with that token accrues
 // capped, points-only hold-time to the unified board. Idempotent — a team that
 // already entered gets its token back, no re-charge.
@@ -573,7 +573,7 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 	var chalID uuid.UUID
 	err = h.db.Pool.QueryRow(ctx,
 		`SELECT id FROM challenges
-		 WHERE slug = $1 AND instancing = 'shared' AND status = 'published'
+		 WHERE slug = $1 AND arena_mode = 'shared' AND status = 'published'
 		   AND (release_date IS NULL OR release_date <= NOW())`,
 		slug).Scan(&chalID)
 	if errors.Is(err, pgx.ErrNoRows) {
