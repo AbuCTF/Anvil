@@ -493,11 +493,15 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// admins test freely: they skip the team requirement, economy gate, concurrency
+	// limit, and cooldown so any challenge can be previewed without setup.
+	isAdmin := c.GetString("role") == "admin"
+
 	var cooldownUntil time.Time
 	err = tx.QueryRow(ctx,
 		`SELECT cooldown_until FROM user_cooldowns WHERE user_id = $1 AND challenge_id = $2`,
 		uid, challenge.ID).Scan(&cooldownUntil)
-	if err == nil && time.Now().Before(cooldownUntil) {
+	if err == nil && time.Now().Before(cooldownUntil) && !isAdmin {
 		remainingSeconds := max(0, int(time.Until(cooldownUntil).Seconds()))
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error":             "cooldown period active",
@@ -523,7 +527,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	}
 	ownerCol, ownerArg := "user_id", interface{}(uid)
 	var teamID *uuid.UUID
-	if teamsMode {
+	if teamsMode && !isAdmin {
 		tid, tErr := resolveTeamID(ctx, h.db, uid)
 		if tErr != nil {
 			h.logger.Error("failed to resolve team", zap.Error(tErr))
@@ -577,35 +581,37 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	configuredMax := 2
-	if h.config != nil && h.config.Container.MaxPerUser > 0 && h.config.Container.MaxPerUser <= 100 {
-		configuredMax = h.config.Container.MaxPerUser
-	}
-	maxInstances, err := h.boundedIntSetting(ctx, tx, "instance.max_per_user", configuredMax, 1, 100)
-	if err != nil {
-		h.logger.Error("failed to load instance limit setting", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check instance limit"})
-		return
-	}
+	if !isAdmin {
+		configuredMax := 2
+		if h.config != nil && h.config.Container.MaxPerUser > 0 && h.config.Container.MaxPerUser <= 100 {
+			configuredMax = h.config.Container.MaxPerUser
+		}
+		maxInstances, err := h.boundedIntSetting(ctx, tx, "instance.max_per_user", configuredMax, 1, 100)
+		if err != nil {
+			h.logger.Error("failed to load instance limit setting", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check instance limit"})
+			return
+		}
 
-	var activeCount int
-	err = tx.QueryRow(ctx,
-		fmt.Sprintf(`SELECT COUNT(*) FROM instances
-		 WHERE %s = $1
-		   AND status IN ('running', 'creating', 'pending', 'stopping')
-		   AND (status = 'stopping' OR expires_at IS NULL OR expires_at > NOW())`, ownerCol), ownerArg).Scan(&activeCount)
-	if err != nil {
-		h.logger.Error("failed to count active instances", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check instance limit"})
-		return
-	}
-	if activeCount >= maxInstances {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error":       "instance limit reached",
-			"max_allowed": maxInstances,
-			"active":      activeCount,
-		})
-		return
+		var activeCount int
+		err = tx.QueryRow(ctx,
+			fmt.Sprintf(`SELECT COUNT(*) FROM instances
+			 WHERE %s = $1
+			   AND status IN ('running', 'creating', 'pending', 'stopping')
+			   AND (status = 'stopping' OR expires_at IS NULL OR expires_at > NOW())`, ownerCol), ownerArg).Scan(&activeCount)
+		if err != nil {
+			h.logger.Error("failed to count active instances", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check instance limit"})
+			return
+		}
+		if activeCount >= maxInstances {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":       "instance limit reached",
+				"max_allowed": maxInstances,
+				"active":      activeCount,
+			})
+			return
+		}
 	}
 
 	// instance_timeout is stored in minutes
