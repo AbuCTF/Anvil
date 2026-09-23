@@ -11,7 +11,8 @@ server:
   write_timeout: 30m
   shutdown_timeout: 25s
   trusted_proxies:
-    - "172.16.0.0/12"
+    - "100.64.0.0/24"   # GKE pod CIDR — Traefik runs here; needed so ClientIP resolves the real client behind the LB
+    - "172.16.0.0/12"   # docker-compose dev bridge
     - "127.0.0.1"
 
 database:
