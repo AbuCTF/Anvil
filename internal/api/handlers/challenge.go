@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -523,6 +524,127 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "open", "credits": credits, "message": "challenge launched"})
+}
+
+// kothBuyinCost reads the one-time KotH arena entry cost in credits (migration 031).
+func kothBuyinCost(ctx context.Context, db *database.DB) float64 {
+	const fallback = 500
+	var v string
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT value FROM platform_settings WHERE key = 'koth_buyin_cost'`).Scan(&v); err != nil {
+		return fallback
+	}
+	cost, err := strconv.ParseFloat(v, 64)
+	if err != nil || cost < 0 {
+		return fallback
+	}
+	return cost
+}
+
+// EnterKoth is the KotH buy-in gate: a team pays a one-time credit cost to enter the
+// shared arena (a challenge with instancing='shared') and receives its opaque team
+// token to plant on the contested target. Holding the target with that token accrues
+// capped, points-only hold-time to the unified board. Idempotent — a team that
+// already entered gets its token back, no re-charge.
+func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
+	if phase, staff := eventPlayState(c, h.db); !staff && phase == "scheduled" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "the competition hasn't started yet"})
+		return
+	}
+	uid, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	ctx := c.Request.Context()
+	slug := c.Param("slug")
+
+	teamID, err := resolveTeamID(ctx, h.db, uid)
+	if err != nil {
+		h.logger.Error("koth enter: resolve team", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+	if teamID == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "join a team before entering the arena"})
+		return
+	}
+
+	var chalID uuid.UUID
+	err = h.db.Pool.QueryRow(ctx,
+		`SELECT id FROM challenges
+		 WHERE slug = $1 AND instancing = 'shared' AND status = 'published'
+		   AND (release_date IS NULL OR release_date <= NOW())`,
+		slug).Scan(&chalID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "arena not found"})
+		return
+	}
+	if err != nil {
+		h.logger.Error("koth enter: load challenge", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// already entered? hand back the existing token without charging again.
+	var existing *string
+	if err := tx.QueryRow(ctx, `SELECT koth_token FROM teams WHERE id = $1 FOR UPDATE`, *teamID).Scan(&existing); err != nil {
+		h.logger.Error("koth enter: lock team", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+	if existing != nil && *existing != "" {
+		var credits float64
+		_ = tx.QueryRow(ctx, `SELECT credits FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&credits)
+		if err := tx.Commit(ctx); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": *existing, "credits": credits, "message": "already in the arena"})
+		return
+	}
+
+	// charge the buy-in when the economy is on (402 if short); free entry otherwise.
+	if on, _ := isEconomyMode(ctx, h.db); on {
+		if _, aerr := applyCredit(ctx, tx, *teamID, "koth_buyin", -kothBuyinCost(ctx, h.db), &chalID, nil); aerr != nil {
+			var opErr *EconomyOpError
+			if errors.As(aerr, &opErr) {
+				c.JSON(opErr.Status, gin.H{"error": opErr.Message})
+				return
+			}
+			h.logger.Error("koth enter: charge buy-in", zap.Error(aerr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+			return
+		}
+	}
+
+	token, err := generateOpaqueToken("koth_")
+	if err != nil {
+		h.logger.Error("koth enter: token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE teams SET koth_token = $2 WHERE id = $1`, *teamID, token); err != nil {
+		h.logger.Error("koth enter: set token", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+	var credits float64
+	_ = tx.QueryRow(ctx, `SELECT credits FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&credits)
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("koth enter: commit", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": token, "credits": credits,
+		"message": "you're in the arena — plant this token on the target to hold it"})
 }
 
 // resolves the economy context for a challenge action (economy on, caller's team, challenge id + difficulty). writes the error response and returns ok=false on any failure.

@@ -182,6 +182,7 @@ func (s *Server) setupRouter() {
 				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger)
 				challenges.GET("/:slug/flags", challengeHandler.GetFlags)
 				challenges.POST("/:slug/open", challengeHandler.OpenChallenge)       // economy launch/open gate
+				challenges.POST("/:slug/koth-enter", challengeHandler.EnterKoth)     // KotH arena buy-in (shared target)
 				challenges.POST("/:slug/abandon", challengeHandler.AbandonChallenge) // economy early release (partial refund)
 				challenges.POST("/:slug/extend", challengeHandler.ExtendChallenge)   // economy timer extension
 
