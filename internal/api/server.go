@@ -286,6 +286,18 @@ func (s *Server) setupRouter() {
 				users.DELETE("/:id", adminUserHandler.Delete)
 			}
 
+			teamsAdmin := admin.Group("/teams")
+			{
+				adminTeamsHandler := handlers.NewAdminTeamsHandler(s.config, s.db, s.logger)
+				teamsAdmin.GET("", adminTeamsHandler.List)
+				teamsAdmin.GET("/:id", adminTeamsHandler.Get)
+				teamsAdmin.PATCH("/:id", adminTeamsHandler.Update)
+				teamsAdmin.DELETE("/:id", adminTeamsHandler.Delete)
+				teamsAdmin.POST("/:id/members", adminTeamsHandler.AddMember)
+				teamsAdmin.DELETE("/:id/members/:userId", adminTeamsHandler.RemoveMember)
+				teamsAdmin.POST("/:id/rotate-code", adminTeamsHandler.RotateCode)
+			}
+
 			gameAdmin := admin.Group("/arena")
 			{
 				gameAdminHandler := handlers.NewGameAdminHandler(s.config, s.db, s.logger)

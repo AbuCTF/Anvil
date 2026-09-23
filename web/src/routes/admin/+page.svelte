@@ -33,6 +33,14 @@
 	let instanceFlags: any[] = [];
 	let intelError = '';
 
+	let teams: any[] = [];
+	let teamsLoading = false;
+	let teamsError = '';
+	let teamsQuery = '';
+	let teamsSort = 'score';
+	let expandedTeams: Record<string, boolean> = {};
+	let addMemberInput: Record<string, string> = {};
+
 	let showNodeModal = false;
 	let showTemplateUploadModal = false;
 
@@ -347,6 +355,9 @@
 		if (id === 'intel' && flagShares.length === 0 && instanceFlags.length === 0) {
 			loadIntel();
 		}
+		if (id === 'teams' && teams.length === 0) {
+			loadTeams();
+		}
 	}
 
 	async function savePlatformSettings() {
@@ -572,6 +583,120 @@
 		}
 	}
 
+	async function loadTeams() {
+		teamsLoading = true;
+		teamsError = '';
+		try {
+			const res = await api.getAdminTeams({ q: teamsQuery, sort: teamsSort });
+			teams = res.teams || [];
+		} catch (e) {
+			teamsError = e instanceof Error ? e.message : 'Failed to load teams';
+			teams = [];
+		} finally {
+			teamsLoading = false;
+		}
+	}
+
+	async function teamUpdate(id: string, data: any) {
+		actionLoading = id;
+		try {
+			await api.updateAdminTeam(id, data);
+			await loadTeams();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to update team');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
+	async function renameTeam(team: any) {
+		const name = prompt('New team name:', team.name);
+		if (name === null || name.trim() === team.name) return;
+		await teamUpdate(team.id, { name: name.trim() });
+	}
+
+	async function editTeamScore(team: any) {
+		const raw = prompt('Total score:', String(team.total_score ?? 0));
+		if (raw === null) return;
+		const score = parseInt(raw.trim(), 10);
+		if (Number.isNaN(score)) {
+			alert('Score must be an integer');
+			return;
+		}
+		await teamUpdate(team.id, { total_score: score });
+	}
+
+	async function editTeamMax(team: any) {
+		const raw = prompt('Max members (blank = unlimited):', team.max_members == null ? '' : String(team.max_members));
+		if (raw === null) return;
+		const trimmed = raw.trim();
+		const max = trimmed === '' ? null : parseInt(trimmed, 10);
+		if (max !== null && (Number.isNaN(max) || max < 1)) {
+			alert('Max members must be a positive integer or blank');
+			return;
+		}
+		await teamUpdate(team.id, { max_members: max });
+	}
+
+	async function rotateTeamCode(team: any) {
+		if (!confirm(`Regenerate the join code for ${team.name}? The current code stops working.`)) return;
+		actionLoading = team.id;
+		try {
+			await api.rotateAdminTeamCode(team.id);
+			await loadTeams();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to rotate join code');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
+	async function disbandTeam(team: any) {
+		if (!confirm(`Disband ${team.name}? Its ${team.member_count} member(s) will be removed. This cannot be undone.`)) return;
+		actionLoading = team.id;
+		try {
+			await api.deleteAdminTeam(team.id);
+			await loadTeams();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to disband team');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
+	async function kickMember(team: any, member: any) {
+		if (!confirm(`Remove ${member.username} from ${team.name}?`)) return;
+		actionLoading = team.id;
+		try {
+			await api.removeAdminTeamMember(team.id, member.id);
+			await loadTeams();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to remove member');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
+	async function addTeamMember(team: any) {
+		const username = (addMemberInput[team.id] || '').trim();
+		if (!username) return;
+		actionLoading = team.id;
+		try {
+			await api.addAdminTeamMember(team.id, { username });
+			addMemberInput[team.id] = '';
+			await loadTeams();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : 'Failed to add member');
+		} finally {
+			actionLoading = '';
+		}
+	}
+
+	function toggleTeamExpand(id: string) {
+		expandedTeams[id] = !expandedTeams[id];
+		expandedTeams = expandedTeams;
+	}
+
 	function formatDate(timestamp: number): string {
 		return formatLocalDateLong(timestamp, 'seconds');
 	}
@@ -727,6 +852,7 @@
 		{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard-outline' },
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
 		{ id: 'users', label: 'Users', icon: 'mdi:account-group-outline' },
+		{ id: 'teams', label: 'Teams', icon: 'mdi:account-multiple-outline' },
 		{ id: 'infrastructure', label: 'System', icon: 'mdi:server-network' },
 		{ id: 'settings', label: 'Settings', icon: 'mdi:cog-outline' },
 		{ id: 'intel', label: 'Audit', icon: 'mdi:shield-search' }
@@ -1138,6 +1264,117 @@
 							</div>
 						</Card>
 					</div>
+				{/if}
+			{/if}
+
+			{#if activeTab === 'teams'}
+				<div class="flex items-center gap-2 mb-4">
+					<input
+						type="text"
+						bind:value={teamsQuery}
+						on:input={() => loadTeams()}
+						placeholder="Search teams by name..."
+						class="flex-1 text-sm bg-stone-950 border border-stone-800 rounded-md px-3 py-2 text-stone-200 focus:outline-none focus:border-stone-500"
+					/>
+					<select
+						bind:value={teamsSort}
+						on:change={() => loadTeams()}
+						class="text-xs bg-stone-950 border border-stone-800 rounded-md px-2 py-2 text-stone-200 focus:outline-none focus:border-stone-500"
+					>
+						<option value="score">Sort: Score</option>
+						<option value="created">Sort: Newest</option>
+						<option value="name">Sort: Name</option>
+					</select>
+				</div>
+
+				{#if teamsError}
+					<Card hasHeader={false}><p class="text-sm text-down p-4">{teamsError}</p></Card>
+				{:else if teamsLoading && teams.length === 0}
+					<Card hasHeader={false}><p class="text-sm text-stone-500 p-4">Loading teams...</p></Card>
+				{:else if teams.length === 0}
+					<Card hasHeader={false}>
+						<EmptyState icon="mdi:account-multiple-outline" text="No teams yet." />
+					</Card>
+				{:else}
+					<Card title="Teams" bodyClass="">
+						<span slot="meta" class="text-stone-500 text-xs tabular-nums">{teams.length}</span>
+						<div class="overflow-x-auto">
+							<table class="w-full min-w-[820px] text-sm">
+								<thead>
+									<tr class="metadata-label text-stone-500 border-b border-stone-800">
+										<th class="px-4 py-2.5 text-left">Team</th>
+										<th class="px-4 py-2.5 text-right">Members</th>
+										<th class="px-4 py-2.5 text-right">Score</th>
+										<th class="px-4 py-2.5 text-right hidden md:table-cell">Max</th>
+										<th class="px-4 py-2.5 text-left hidden md:table-cell">Join code</th>
+										<th class="px-4 py-2.5 text-right hidden lg:table-cell">Created</th>
+										<th class="px-4 py-2.5 text-right">Actions</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each teams as team}
+										<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
+											<td class="px-4 py-2.5">
+												<button class="text-stone-200 hover:underline text-left" on:click={() => renameTeam(team)} title="Rename team">{team.name}</button>
+											</td>
+											<td class="px-4 py-2.5 text-right tabular-nums">
+												<button class="text-stone-300 hover:underline" on:click={() => toggleTeamExpand(team.id)} title="Show members">
+													{team.member_count}{expandedTeams[team.id] ? ' ▾' : ' ▸'}
+												</button>
+											</td>
+											<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">
+												<button class="hover:underline" on:click={() => editTeamScore(team)} title="Edit score">{team.total_score ?? 0}</button>
+											</td>
+											<td class="px-4 py-2.5 text-right text-stone-400 tabular-nums hidden md:table-cell">
+												<button class="hover:underline" on:click={() => editTeamMax(team)} title="Edit max members">{team.max_members == null ? '∞' : team.max_members}</button>
+											</td>
+											<td class="px-4 py-2.5 hidden md:table-cell">
+												<span class="font-mono text-xs text-stone-400">{team.join_code}</span>
+												<button class="text-xs text-stone-500 hover:underline ml-2 disabled:opacity-50" on:click={() => rotateTeamCode(team)} disabled={actionLoading === team.id} title="Rotate join code">rotate</button>
+											</td>
+											<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden lg:table-cell" title={team.created_at ? instantTitle(team.created_at, 'seconds') : ''}>{team.created_at ? formatDate(team.created_at) : '—'}</td>
+											<td class="px-4 py-2.5">
+												<div class="flex items-center justify-end gap-3">
+													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleTeamExpand(team.id)}>Members</button>
+													<button class="text-xs text-down hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => disbandTeam(team)} disabled={actionLoading === team.id} title="Disband team">
+														{actionLoading === team.id ? '...' : 'Disband'}
+													</button>
+												</div>
+											</td>
+										</tr>
+										{#if expandedTeams[team.id]}
+											<tr class="border-b border-stone-800/60 bg-stone-900/30">
+												<td class="px-4 py-3" colspan="7">
+													<div class="space-y-2">
+														{#if team.members && team.members.length}
+															{#each team.members as member}
+																<div class="flex items-center justify-between text-sm">
+																	<span class="text-stone-300">{member.username}</span>
+																	<button class="text-xs text-warn hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => kickMember(team, member)} disabled={actionLoading === team.id}>Kick</button>
+																</div>
+															{/each}
+														{:else}
+															<p class="text-xs text-stone-500">No members.</p>
+														{/if}
+														<div class="flex items-center gap-2 pt-2 border-t border-stone-800">
+															<input
+																type="text"
+																bind:value={addMemberInput[team.id]}
+																on:keydown={(e) => e.key === 'Enter' && addTeamMember(team)}
+																placeholder="username to add / move..."
+																class="flex-1 text-xs bg-stone-950 border border-stone-800 rounded-md px-2 py-1.5 text-stone-200 focus:outline-none focus:border-stone-500"
+															/>
+															<button class="text-xs text-up hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => addTeamMember(team)} disabled={actionLoading === team.id}>Add member</button>
+														</div>
+													</div>
+												</td>
+											</tr>
+										{/if}
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</Card>
 				{/if}
 			{/if}
 

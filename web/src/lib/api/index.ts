@@ -517,6 +517,44 @@ class ApiClient {
 		return this.request<any>(`/admin/users/${userId}/unban`, { method: 'POST' });
 	}
 
+	async getAdminTeams(params?: { q?: string; sort?: string }) {
+		const qs = new URLSearchParams();
+		if (params?.q) qs.set('q', params.q);
+		if (params?.sort) qs.set('sort', params.sort);
+		const suffix = qs.toString() ? `?${qs.toString()}` : '';
+		return this.request<{ teams: any[]; total: number }>(`/admin/teams${suffix}`);
+	}
+
+	async getAdminTeam(id: string) {
+		return this.request<any>(`/admin/teams/${id}`);
+	}
+
+	async updateAdminTeam(id: string, data: any) {
+		return this.request<any>(`/admin/teams/${id}`, {
+			method: 'PATCH',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async deleteAdminTeam(id: string) {
+		return this.request<any>(`/admin/teams/${id}`, { method: 'DELETE' });
+	}
+
+	async addAdminTeamMember(id: string, data: { user_id?: string; username?: string }) {
+		return this.request<any>(`/admin/teams/${id}/members`, {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	}
+
+	async removeAdminTeamMember(id: string, userId: string) {
+		return this.request<any>(`/admin/teams/${id}/members/${userId}`, { method: 'DELETE' });
+	}
+
+	async rotateAdminTeamCode(id: string) {
+		return this.request<{ join_code: string }>(`/admin/teams/${id}/rotate-code`, { method: 'POST' });
+	}
+
 	async updateAdminCategory(id: string, data: { name?: string; description?: string; color?: string }) {
 		return this.request<any>(`/admin/categories/${id}`, {
 			method: 'PUT',
