@@ -218,11 +218,146 @@
 			container_tag: challenge.container_tag || 'latest',
 			container_platform: challenge.container_platform || '',
 			cpu_limit: challenge.cpu_limit || '1',
-			memory_limit: challenge.memory_limit || '512m',
+			memory_limit: challenge.memory_limit || '512Mi',
 			author_name: challenge.author_name || '',
 			category_id: challenge.category_id || '',
 		};
+		editTab = 'settings';
+		editFlags = []; editHints = []; editAttachments = [];
+		subError = ''; subNote = '';
 		showEditModal = true;
+		void loadEditSubdata(challenge.id);
+	}
+
+	// --- edit modal: flags / hints / files management (CTFd-parity, inline CRUD) ---
+	let editTab: 'settings' | 'flags' | 'hints' | 'files' = 'settings';
+	let editFlags: any[] = [];
+	let editHints: any[] = [];
+	let editAttachments: any[] = [];
+	let subLoading = false;
+	let subUploading = false;
+	let subError = '';
+	let subNote = '';
+	let savingSub = '';
+
+	async function loadEditSubdata(id: string) {
+		subLoading = true; subError = '';
+		try {
+			const [f, h, a] = await Promise.all([
+				api.getChallengeFlags(id),
+				api.getAdminHints(id),
+				api.listAttachments(id)
+			]);
+			editFlags = ((f?.flags ?? f ?? []) as any[]).map((x) => ({ ...x }));
+			editHints = ((h?.hints ?? h ?? []) as any[]).map((x) => ({ ...x }));
+			editAttachments = (a?.attachments ?? []) as any[];
+		} catch (e) {
+			subError = e instanceof Error ? e.message : 'Failed to load challenge data';
+		} finally {
+			subLoading = false;
+		}
+	}
+
+	function flash(msg: string) { subNote = msg; subError = ''; setTimeout(() => { if (subNote === msg) subNote = ''; }, 2500); }
+
+	function addEditFlag() {
+		editFlags = [...editFlags, { name: `Flag ${editFlags.length + 1}`, flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '', has_value: false }];
+	}
+	async function saveEditFlag(f: any, i: number) {
+		subError = ''; savingSub = 'flag' + i;
+		const body: any = { name: f.name, points: Number(f.points) || 0, flag_type: f.flag_type || 'static', dynamic_flag_prefix: f.dynamic_flag_prefix || '' };
+		// only send the value when one was typed — blank keeps the stored flag (update) and is required on create
+		if (f.flag) body.flag = f.flag;
+		try {
+			if (f.id) {
+				await api.updateFlag(editingChallenge.id, f.id, body);
+			} else {
+				if (f.flag_type !== 'dynamic' && !f.flag) { subError = 'Flag value is required'; savingSub = ''; return; }
+				const res = await api.createFlag(editingChallenge.id, { ...body, flag: f.flag || '' });
+				f.id = res?.id ?? res?.flag?.id;
+			}
+			f.flag = ''; f.has_value = f.flag_type === 'dynamic' ? false : true; editFlags = editFlags;
+			flash('Flag saved');
+		} catch (e) {
+			subError = e instanceof Error ? e.message : 'Failed to save flag';
+		} finally { savingSub = ''; }
+	}
+	async function deleteEditFlag(f: any, i: number) {
+		subError = '';
+		if (f.id) {
+			try { await api.deleteFlag(editingChallenge.id, f.id); }
+			catch (e) { subError = e instanceof Error ? e.message : 'Failed to delete flag'; return; }
+		}
+		editFlags = editFlags.filter((_, idx) => idx !== i);
+		flash('Flag removed');
+	}
+
+	function addEditHint() {
+		editHints = [...editHints, { content: '', cost: 0 }];
+	}
+	async function saveEditHint(hnt: any, i: number) {
+		subError = ''; savingSub = 'hint' + i;
+		const body = { content: hnt.content, cost: Number(hnt.cost) || 0 };
+		try {
+			if (!hnt.content?.trim()) { subError = 'Hint content is required'; savingSub = ''; return; }
+			if (hnt.id) {
+				await api.updateHint(editingChallenge.id, hnt.id, body);
+			} else {
+				const res = await api.createHint(editingChallenge.id, body);
+				hnt.id = res?.id ?? res?.hint?.id;
+			}
+			editHints = editHints;
+			flash('Hint saved');
+		} catch (e) {
+			subError = e instanceof Error ? e.message : 'Failed to save hint';
+		} finally { savingSub = ''; }
+	}
+	async function deleteEditHint(hnt: any, i: number) {
+		subError = '';
+		if (hnt.id) {
+			try { await api.deleteHint(editingChallenge.id, hnt.id); }
+			catch (e) { subError = e instanceof Error ? e.message : 'Failed to delete hint'; return; }
+		}
+		editHints = editHints.filter((_, idx) => idx !== i);
+		flash('Hint removed');
+	}
+
+	async function uploadEditAttachment(event: Event) {
+		const input = event.target as HTMLInputElement;
+		if (!input.files?.length) return;
+		subError = ''; subUploading = true;
+		try {
+			for (const file of Array.from(input.files)) {
+				const fd = new FormData();
+				fd.append('file', file);
+				await api.uploadAttachment(editingChallenge.id, fd);
+			}
+			const a = await api.listAttachments(editingChallenge.id);
+			editAttachments = (a?.attachments ?? []) as any[];
+			flash('File uploaded');
+		} catch (e) {
+			subError = e instanceof Error ? e.message : 'Failed to upload file';
+		} finally {
+			subUploading = false;
+			input.value = '';
+		}
+	}
+	async function deleteEditAttachment(a: any) {
+		subError = '';
+		try {
+			await api.deleteAttachment(editingChallenge.id, a.id);
+			editAttachments = editAttachments.filter((x) => x.id !== a.id);
+			flash('File removed');
+		} catch (e) {
+			subError = e instanceof Error ? e.message : 'Failed to delete file';
+		}
+	}
+
+	function humanSize(bytes: number): string {
+		if (!bytes) return '0 B';
+		const u = ['B', 'KB', 'MB', 'GB'];
+		const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), u.length - 1);
+		return `${(bytes / Math.pow(1024, i)).toFixed(i ? 1 : 0)} ${u[i]}`;
 	}
 
 	async function handleEditChallenge() {
@@ -2555,6 +2690,18 @@
 				</button>
 			</div>
 
+			<div class="px-6 border-b border-stone-800 flex gap-1 bg-stone-950">
+				{#each [{ id: 'settings', label: 'Settings', n: 0 }, { id: 'flags', label: 'Flags', n: editFlags.length }, { id: 'hints', label: 'Hints', n: editHints.length }, { id: 'files', label: 'Files', n: editAttachments.length }] as t}
+					<button type="button" on:click={() => (editTab = t.id as typeof editTab)} class="px-3.5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors {editTab === t.id ? 'border-amber-500 text-stone-100' : 'border-transparent text-stone-500 hover:text-stone-300'}">
+						{t.label}{#if t.n}<span class="ml-1.5 text-xs tabular-nums {editTab === t.id ? 'text-amber-500' : 'text-stone-600'}">{t.n}</span>{/if}
+					</button>
+				{/each}
+			</div>
+
+			{#if subError}<div class="mx-6 mt-4 px-3 py-2 rounded-md bg-down/10 border border-down/30 text-down text-xs">{subError}</div>{/if}
+			{#if subNote}<div class="mx-6 mt-4 px-3 py-2 rounded-md bg-up/10 border border-up/30 text-up text-xs">{subNote}</div>{/if}
+
+			{#if editTab === 'settings'}
 			<form on:submit|preventDefault={handleEditChallenge} class="p-6 space-y-5">
 
 				<label class="block">
@@ -2626,7 +2773,7 @@
 							</label>
 							<label class="block">
 								<span class={labelCls}>Memory Limit</span>
-								<input type="text" bind:value={editingChallenge.memory_limit} placeholder="512m" class="w-full {fieldCls}" />
+								<input type="text" bind:value={editingChallenge.memory_limit} placeholder="512Mi" class="w-full {fieldCls}" />
 							</label>
 						</div>
 
@@ -2708,6 +2855,84 @@
 					</button>
 				</div>
 			</form>
+			{/if}
+
+			{#if editTab === 'flags'}
+				<div class="p-6 space-y-3">
+					{#if subLoading}
+						<p class="text-stone-500 text-sm">Loading…</p>
+					{:else}
+						{#each editFlags as f, i (i)}
+							<div class="border border-stone-800 rounded-lg p-3 space-y-2">
+								<div class="flex items-center gap-2">
+									<input type="text" bind:value={f.name} placeholder="Flag name" class="flex-1 {fieldCls}" />
+									<input type="number" bind:value={f.points} min="1" placeholder="pts" title="Points" class="w-20 {fieldCls} tabular-nums" />
+									<button type="button" on:click={() => saveEditFlag(f, i)} disabled={savingSub === 'flag' + i} class="{btnPrimary} px-3">{savingSub === 'flag' + i ? '…' : 'Save'}</button>
+									<button type="button" on:click={() => deleteEditFlag(f, i)} title="Delete flag" class="p-1.5 text-stone-600 hover:text-down transition-colors"><Icon icon="mdi:trash-can-outline" class="w-4 h-4" /></button>
+								</div>
+								<div class="flex items-center gap-2">
+									<select bind:value={f.flag_type} class="w-32 {fieldCls}">
+										<option value="static">Static</option>
+										<option value="regex">Regex</option>
+										<option value="dynamic">Dynamic</option>
+									</select>
+									{#if f.flag_type === 'dynamic'}
+										<input type="text" bind:value={f.dynamic_flag_prefix} placeholder="Prefix e.g. H7CTF" class="flex-1 font-mono {fieldCls}" />
+									{:else}
+										<input type="text" bind:value={f.flag} placeholder={f.has_value ? '•••••••• (unchanged — type to replace)' : (f.flag_type === 'regex' ? 'regex pattern' : 'flag value')} class="flex-1 font-mono {fieldCls}" />
+									{/if}
+								</div>
+							</div>
+						{/each}
+						{#if !editFlags.length}<p class="text-stone-600 text-sm">No flags yet.</p>{/if}
+						<button type="button" on:click={addEditFlag} class="text-sm text-stone-400 hover:text-stone-200 transition-colors flex items-center gap-1.5"><Icon icon="mdi:plus" class="w-4 h-4" /> Add Flag</button>
+					{/if}
+				</div>
+			{/if}
+
+			{#if editTab === 'hints'}
+				<div class="p-6 space-y-3">
+					{#if subLoading}
+						<p class="text-stone-500 text-sm">Loading…</p>
+					{:else}
+						{#each editHints as hnt, i (i)}
+							<div class="border border-stone-800 rounded-lg p-3 space-y-2">
+								<textarea bind:value={hnt.content} rows="2" placeholder="Hint text — shown to players who unlock it" class="w-full {fieldCls} resize-none"></textarea>
+								<div class="flex items-center gap-2">
+									<label class="text-xs text-stone-500 flex items-center gap-1.5">Cost <input type="number" bind:value={hnt.cost} min="0" title="Point cost to unlock" class="w-20 {fieldCls} tabular-nums" /></label>
+									<span class="flex-1"></span>
+									<button type="button" on:click={() => saveEditHint(hnt, i)} disabled={savingSub === 'hint' + i} class="{btnPrimary} px-3">{savingSub === 'hint' + i ? '…' : 'Save'}</button>
+									<button type="button" on:click={() => deleteEditHint(hnt, i)} title="Delete hint" class="p-1.5 text-stone-600 hover:text-down transition-colors"><Icon icon="mdi:trash-can-outline" class="w-4 h-4" /></button>
+								</div>
+							</div>
+						{/each}
+						{#if !editHints.length}<p class="text-stone-600 text-sm">No hints yet.</p>{/if}
+						<button type="button" on:click={addEditHint} class="text-sm text-stone-400 hover:text-stone-200 transition-colors flex items-center gap-1.5"><Icon icon="mdi:plus" class="w-4 h-4" /> Add Hint</button>
+					{/if}
+				</div>
+			{/if}
+
+			{#if editTab === 'files'}
+				<div class="p-6 space-y-3">
+					{#if subLoading}
+						<p class="text-stone-500 text-sm">Loading…</p>
+					{:else}
+						{#each editAttachments as a (a.id)}
+							<div class="border border-stone-800 rounded-lg p-3 flex items-center gap-3">
+								<Icon icon="mdi:file-outline" class="w-4 h-4 text-stone-500 shrink-0" />
+								<span class="flex-1 text-sm text-stone-200 truncate">{a.filename}</span>
+								<span class="text-xs text-stone-500 tabular-nums">{humanSize(a.file_size)}</span>
+								<button type="button" on:click={() => deleteEditAttachment(a)} title="Delete file" class="p-1.5 text-stone-600 hover:text-down transition-colors"><Icon icon="mdi:trash-can-outline" class="w-4 h-4" /></button>
+							</div>
+						{/each}
+						{#if !editAttachments.length}<p class="text-stone-600 text-sm">No files attached.</p>{/if}
+						<label class="inline-flex items-center gap-1.5 text-sm text-stone-400 hover:text-stone-200 transition-colors cursor-pointer">
+							<Icon icon="mdi:upload" class="w-4 h-4" /> {subUploading ? 'Uploading…' : 'Upload file'}
+							<input type="file" multiple on:change={uploadEditAttachment} disabled={subUploading} class="hidden" />
+						</label>
+					{/if}
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}

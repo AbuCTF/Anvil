@@ -261,7 +261,7 @@ func (h *InstanceHandler) loadPublishedChallenge(
 	err := querier.QueryRow(ctx,
 		`SELECT id, name, slug, resource_type, COALESCE(container_image, ''),
 		        COALESCE(container_tag, 'latest'), COALESCE(container_platform, ''),
-		        COALESCE(cpu_limit, '1'), COALESCE(memory_limit, '512m'),
+		        COALESCE(cpu_limit, '1'), COALESCE(memory_limit, '512Mi'),
 		        COALESCE(exposed_ports, '[]'::jsonb), instance_timeout,
 		        max_extensions, COALESCE(max_resets, 3),
 		        COALESCE(container_spec, 'null'::jsonb)

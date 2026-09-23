@@ -535,6 +535,19 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"challenges": challenges, "total": len(challenges)})
 }
 
+var reMilliMemory = regexp.MustCompile(`^(\d+)m$`)
+
+// normalizeMemoryLimit guards the "512m" footgun: a bare "<n>m" suffix is
+// millibytes (~0 bytes), which silently bricks the gVisor sandbox at launch
+// ("failed to create systemd scope"). Nobody means millibytes for memory, so
+// treat it as the mebibytes that were intended.
+func normalizeMemoryLimit(mem string) string {
+	if m := reMilliMemory.FindStringSubmatch(mem); m != nil {
+		return m[1] + "Mi"
+	}
+	return mem
+}
+
 func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	var req CreateChallengeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -571,8 +584,9 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 			req.CPULimit = "1"
 		}
 		if req.MemoryLimit == "" {
-			req.MemoryLimit = "512m"
+			req.MemoryLimit = "512Mi"
 		}
+		req.MemoryLimit = normalizeMemoryLimit(req.MemoryLimit)
 	}
 
 	if req.BasePoints == 0 {
@@ -1087,6 +1101,7 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 			}
 		}
 	} else {
+		req.MemoryLimit = normalizeMemoryLimit(req.MemoryLimit)
 		portsJSON, marshalErr := json.Marshal(req.ExposedPorts)
 		if marshalErr != nil {
 			h.logger.Error("failed to marshal exposed ports", zap.Error(marshalErr))
@@ -1306,7 +1321,8 @@ func (h *AdminChallengeHandler) ListFlags(c *gin.Context) {
 	challengeID := c.Param("id")
 
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, name, flag_hash, points, sort_order, case_sensitive
+		`SELECT id, name, flag_hash, points, sort_order, case_sensitive,
+		        flag_type, COALESCE(dynamic_flag_prefix, '')
 		 FROM flags WHERE challenge_id = $1 ORDER BY sort_order`, challengeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
@@ -1316,21 +1332,23 @@ func (h *AdminChallengeHandler) ListFlags(c *gin.Context) {
 
 	var flags []gin.H
 	for rows.Next() {
-		var id, name, flag string
+		var id, name, flag, flagType, dynPrefix string
 		var points, order int
 		var caseSensitive bool
-		if err := rows.Scan(&id, &name, &flag, &points, &order, &caseSensitive); err != nil {
+		if err := rows.Scan(&id, &name, &flag, &points, &order, &caseSensitive, &flagType, &dynPrefix); err != nil {
 			h.logger.Error("failed to scan flag", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
 			return
 		}
 		flags = append(flags, gin.H{
-			"id":             id,
-			"name":           name,
-			"has_value":      flag != "",
-			"points":         points,
-			"order":          order,
-			"case_sensitive": caseSensitive,
+			"id":                  id,
+			"name":                name,
+			"has_value":           flag != "",
+			"points":              points,
+			"order":               order,
+			"case_sensitive":      caseSensitive,
+			"flag_type":           flagType,
+			"dynamic_flag_prefix": dynPrefix,
 		})
 	}
 	if err := rows.Err(); err != nil {

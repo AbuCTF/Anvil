@@ -32,6 +32,7 @@ export interface PlatformInfoResponse {
 	scoring_enabled: boolean;
 	scoreboard_enabled: boolean;
 	arena_enabled: boolean;
+	economy_enabled: boolean;
 	teams_mode: boolean;
 	vpn_enabled: boolean;
 	discord_walkin: boolean;

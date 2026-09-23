@@ -29,6 +29,7 @@ type platformInfoResponse struct {
 	ScoringEnabled    bool             `json:"scoring_enabled"`
 	ScoreboardEnabled bool             `json:"scoreboard_enabled"`
 	ArenaEnabled      bool             `json:"arena_enabled"`
+	EconomyEnabled    bool             `json:"economy_enabled"`
 	TeamsMode         bool             `json:"teams_mode"`
 	VPNEnabled        bool             `json:"vpn_enabled"`
 	DiscordWalkin     bool             `json:"discord_walkin"`
@@ -49,6 +50,11 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("failed to read teams_mode", zap.Error(err))
 	}
+	// economy_enabled gates the credits UI + the /economy/me poll; fail closed.
+	economy, err := boolSettingOrDefault(ctx, h.db, "economy_mode", false)
+	if err != nil {
+		h.logger.Warn("failed to read economy_mode", zap.Error(err))
+	}
 	response := platformInfoResponse{
 		Name:              h.config.Platform.Name,
 		Description:       h.config.Platform.Description,
@@ -56,6 +62,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		ScoringEnabled:    h.config.Platform.ScoringEnabled,
 		ScoreboardEnabled: h.config.Platform.ScoreboardEnabled,
 		ArenaEnabled:      arena,
+		EconomyEnabled:    economy,
 		TeamsMode:         teams,
 		VPNEnabled:        h.config.VPN.Enabled,
 		DiscordWalkin:     h.config.Discord.Enabled && h.config.Discord.ClientID != "",

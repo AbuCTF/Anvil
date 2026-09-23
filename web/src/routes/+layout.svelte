@@ -64,7 +64,8 @@
 	let credits: number | null = null;
 
 	async function loadCredits() {
-		if (!$auth.isAuthenticated) {
+		// only poll /economy/me when the economy is actually on — otherwise it 400s
+		if (!$auth.isAuthenticated || !$platformInfo?.economy_enabled) {
 			credits = null;
 			return;
 		}
@@ -75,7 +76,7 @@
 			credits = null;
 		}
 	}
-	$: if ($auth.isAuthenticated && $page.url.pathname) loadCredits();
+	$: if ($auth.isAuthenticated && $platformInfo?.economy_enabled && $page.url.pathname) loadCredits();
 
 	onMount(() => {
 		auth.checkAuth();
