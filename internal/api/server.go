@@ -296,6 +296,7 @@ func (s *Server) setupRouter() {
 				teamsAdmin.POST("/:id/members", adminTeamsHandler.AddMember)
 				teamsAdmin.DELETE("/:id/members/:userId", adminTeamsHandler.RemoveMember)
 				teamsAdmin.POST("/:id/rotate-code", adminTeamsHandler.RotateCode)
+				teamsAdmin.GET("/:id/solves", adminTeamsHandler.Solves)
 			}
 
 			gameAdmin := admin.Group("/arena")

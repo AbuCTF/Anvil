@@ -40,6 +40,9 @@
 	let teamsSort = 'score';
 	let expandedTeams: Record<string, boolean> = {};
 	let addMemberInput: Record<string, string> = {};
+	let expandedSolves: Record<string, boolean> = {};
+	let teamSolves: Record<string, any[]> = {};
+	let solvesLoading: Record<string, boolean> = {};
 
 	let showNodeModal = false;
 	let showTemplateUploadModal = false;
@@ -697,6 +700,25 @@
 		expandedTeams = expandedTeams;
 	}
 
+	async function toggleSolvesExpand(id: string) {
+		expandedSolves[id] = !expandedSolves[id];
+		expandedSolves = expandedSolves;
+		if (expandedSolves[id] && teamSolves[id] === undefined) {
+			solvesLoading[id] = true;
+			solvesLoading = solvesLoading;
+			try {
+				const res = await api.getAdminTeamSolves(id);
+				teamSolves[id] = res.solves || [];
+			} catch (e) {
+				teamSolves[id] = [];
+			} finally {
+				solvesLoading[id] = false;
+				solvesLoading = solvesLoading;
+				teamSolves = teamSolves;
+			}
+		}
+	}
+
 	function formatDate(timestamp: number): string {
 		return formatLocalDateLong(timestamp, 'seconds');
 	}
@@ -1336,6 +1358,7 @@
 											<td class="px-4 py-2.5">
 												<div class="flex items-center justify-end gap-3">
 													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleTeamExpand(team.id)}>Members</button>
+													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleSolvesExpand(team.id)}>Solves</button>
 													<button class="text-xs text-down hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => disbandTeam(team)} disabled={actionLoading === team.id} title="Disband team">
 														{actionLoading === team.id ? '...' : 'Disband'}
 													</button>
@@ -1367,6 +1390,40 @@
 															<button class="text-xs text-up hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => addTeamMember(team)} disabled={actionLoading === team.id}>Add member</button>
 														</div>
 													</div>
+												</td>
+											</tr>
+										{/if}
+										{#if expandedSolves[team.id]}
+											<tr class="border-b border-stone-800/60 bg-stone-900/30">
+												<td class="px-4 py-3" colspan="7">
+													{#if solvesLoading[team.id]}
+														<p class="text-xs text-stone-500">Loading solves...</p>
+													{:else if teamSolves[team.id] && teamSolves[team.id].length}
+														<div class="overflow-x-auto">
+															<table class="w-full min-w-[420px] text-xs">
+																<thead>
+																	<tr class="metadata-label text-stone-500 border-b border-stone-800">
+																		<th class="px-2 py-1.5 text-left">Challenge</th>
+																		<th class="px-2 py-1.5 text-left">Solver</th>
+																		<th class="px-2 py-1.5 text-right">Points</th>
+																		<th class="px-2 py-1.5 text-right">When</th>
+																	</tr>
+																</thead>
+																<tbody>
+																	{#each teamSolves[team.id] as solve}
+																		<tr class="border-b border-stone-800/40">
+																			<td class="px-2 py-1.5 text-stone-300">{solve.challenge_name}{solve.flag_name ? ` · ${solve.flag_name}` : ''}</td>
+																			<td class="px-2 py-1.5 text-stone-400">{solve.solver_username}</td>
+																			<td class="px-2 py-1.5 text-right text-stone-300 tabular-nums">{solve.points}</td>
+																			<td class="px-2 py-1.5 text-right text-stone-500 tabular-nums" title={instantTitle(solve.solved_at, 'seconds')}>{formatDate(solve.solved_at)}</td>
+																		</tr>
+																	{/each}
+																</tbody>
+															</table>
+														</div>
+													{:else}
+														<p class="text-xs text-stone-500">No solves yet.</p>
+													{/if}
 												</td>
 											</tr>
 										{/if}

@@ -518,3 +518,65 @@ func (h *AdminTeamsHandler) RotateCode(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"join_code": code})
 }
+
+// Solves lists every solve by a current member of the team, newest first.
+// Solves are per-flag (a multi-flag challenge yields one row per solved flag).
+// Read-only, so no audit.
+func (h *AdminTeamsHandler) Solves(c *gin.Context) {
+	teamID := c.Param("id")
+	if _, err := uuid.Parse(teamID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid team id"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	var exists bool
+	if err := h.db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM teams WHERE id = $1)`, teamID).Scan(&exists); err != nil {
+		h.logger.Error("failed to check team", zap.String("team_id", teamID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch solves"})
+		return
+	}
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "team not found"})
+		return
+	}
+
+	rows, err := h.db.Pool.Query(ctx, `
+		SELECT c.id, c.name, c.slug, f.name, s.user_id, u.username, s.points_awarded, s.solved_at
+		FROM solves s
+		JOIN users u ON u.id = s.user_id AND u.team_id = $1
+		JOIN challenges c ON c.id = s.challenge_id
+		LEFT JOIN flags f ON f.id = s.flag_id
+		ORDER BY s.solved_at DESC`, teamID)
+	if err != nil {
+		h.logger.Error("failed to list team solves", zap.String("team_id", teamID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch solves"})
+		return
+	}
+	defer rows.Close()
+
+	solves := []gin.H{}
+	for rows.Next() {
+		var challengeID, challengeName, challengeSlug, solverID, solverUsername string
+		var flagName *string
+		var points int
+		var solvedAt time.Time
+		if err := rows.Scan(&challengeID, &challengeName, &challengeSlug, &flagName,
+			&solverID, &solverUsername, &points, &solvedAt); err != nil {
+			h.logger.Error("failed to scan team solve", zap.Error(err))
+			continue
+		}
+		solves = append(solves, gin.H{
+			"challenge_id":    challengeID,
+			"challenge_name":  challengeName,
+			"challenge_slug":  challengeSlug,
+			"flag_name":       flagName,
+			"solver_id":       solverID,
+			"solver_username": solverUsername,
+			"points":          points,
+			"solved_at":       solvedAt.Unix(),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"solves": solves, "total": len(solves)})
+}

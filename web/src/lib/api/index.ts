@@ -555,6 +555,10 @@ class ApiClient {
 		return this.request<{ join_code: string }>(`/admin/teams/${id}/rotate-code`, { method: 'POST' });
 	}
 
+	async getAdminTeamSolves(id: string) {
+		return this.request<{ solves: any[]; total: number }>(`/admin/teams/${id}/solves`);
+	}
+
 	async updateAdminCategory(id: string, data: { name?: string; description?: string; color?: string }) {
 		return this.request<any>(`/admin/categories/${id}`, {
 			method: 'PUT',
