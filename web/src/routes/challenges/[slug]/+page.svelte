@@ -1084,10 +1084,6 @@
 
 									<div>
 										<p class="metadata-label text-stone-500 mb-2">Connect</p>
-									<div class="flex items-start gap-1.5 text-xs text-stone-500 mb-2 -mt-1">
-										<Icon icon="mdi:clock-outline" class="w-3 h-3 shrink-0 mt-0.5" />
-										<span>Just started? Give it up to ~2 min to become reachable.</span>
-									</div>
 										{#if instance.ports && Object.keys(instance.ports).length > 0}
 											<div class="space-y-2">
 												{#each Object.entries(instance.ports) as [portKey]}
