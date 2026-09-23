@@ -32,9 +32,12 @@ var walkinHTTP = &http.Client{Timeout: 30 * time.Second}
 var errZPNotRegistered = fmt.Errorf("not registered")
 
 type zpLookupRequest struct {
-	DiscordID string `json:"discord_id"`
-	EventSlug string `json:"event_slug"`
-	Create    bool   `json:"create"` // always false: anvil never registers
+	DiscordID       string `json:"discord_id"`
+	DiscordUsername string `json:"discord_username,omitempty"`
+	Email           string `json:"email,omitempty"`         // discord's verified email; lets zeropool link a
+	EmailVerified   bool   `json:"email_verified"`          // registered-by-email participant to this discord
+	EventSlug       string `json:"event_slug"`
+	Create          bool   `json:"create"` // always false: anvil never registers, only looks up / links
 }
 
 type zpParticipant struct {
@@ -44,14 +47,25 @@ type zpParticipant struct {
 	EmailVerified bool   `json:"email_verified"`
 }
 
-// zpLookup finds the zeropool participant linked to a discord id (create:false).
-// a 404 => errZPNotRegistered; the id it returns is stored as anvil's sso_subject.
-func (h *AuthHandler) zpLookup(ctx context.Context, discordID string) (*zpParticipant, error) {
+// zpLookup finds the zeropool participant for this discord sign-in (create:false).
+// It first matches by discord id; failing that, zeropool links this discord to a
+// participant who registered by email but never linked one — matched by the
+// discord VERIFIED email — so pre-existing email registrants can walk in. It
+// never creates a participant. A 404 => errZPNotRegistered; the id it returns is
+// stored as anvil's sso_subject.
+func (h *AuthHandler) zpLookup(ctx context.Context, discordID, discordUsername, email string, emailVerified bool) (*zpParticipant, error) {
 	base := strings.TrimRight(h.config.ZeroPool.BaseURL, "/")
 	if base == "" || h.config.ZeroPool.APIKey == "" {
 		return nil, fmt.Errorf("zeropool link not configured")
 	}
-	body, _ := json.Marshal(zpLookupRequest{DiscordID: discordID, EventSlug: h.config.ZeroPool.EventSlug, Create: false})
+	body, _ := json.Marshal(zpLookupRequest{
+		DiscordID:       discordID,
+		DiscordUsername: discordUsername,
+		Email:           email,
+		EmailVerified:   emailVerified,
+		EventSlug:       h.config.ZeroPool.EventSlug,
+		Create:          false,
+	})
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/identity/provision", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -135,11 +149,11 @@ func (h *AuthHandler) DiscordCallback(c *gin.Context) {
 		return
 	}
 
-	participant, err := h.zpLookup(ctx, profile.ID)
+	participant, err := h.zpLookup(ctx, profile.ID, profile.Username, strings.ToLower(profile.Email), profile.Verified)
 	if errors.Is(err, errZPNotRegistered) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"code":         "not_registered",
-			"error":        "you're not registered yet — sign up first, then come back",
+			"error":        "no registration is linked to this Discord. if you registered with a different email, sign in at the registration site and click through to the platform from there — otherwise register first.",
 			"register_url": h.config.Platform.RegisterURL,
 		})
 		return
