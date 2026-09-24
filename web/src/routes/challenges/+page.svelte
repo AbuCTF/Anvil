@@ -51,6 +51,7 @@
 		is_solved: boolean;
 		author_name?: string;
 		resource_type?: string;
+		arena_mode?: string;
 	}
 
 	let challenges: Challenge[] = [];
@@ -61,6 +62,7 @@
 	let selectedDifficulty = '';
 	let selectedCategory = '';
 	let showSolved = false;
+	let showKoth = false;
 
 	// icons only — the accent color always comes from the muted categoryColor palette.
 	const categoryIcons: Record<string, { icon: string; size: number }> = {
@@ -81,7 +83,8 @@
 
 	$: categories = [...new Set(challenges.map((c) => c.category).filter(Boolean))].sort() as string[];
 
-	$: hasFilters = !!(searchQuery || selectedDifficulty || selectedCategory || showSolved);
+	$: hasKoth = challenges.some((c) => c.arena_mode === 'shared');
+	$: hasFilters = !!(searchQuery || selectedDifficulty || selectedCategory || showSolved || showKoth);
 	$: solvedOnlyEmpty = showSolved && !searchQuery && !selectedDifficulty && !selectedCategory;
 
 	$: filteredChallenges = challenges.filter((c) => {
@@ -89,6 +92,7 @@
 		if (selectedDifficulty && c.difficulty !== selectedDifficulty) return false;
 		if (selectedCategory && c.category !== selectedCategory) return false;
 		if (showSolved && !c.is_solved) return false;
+		if (showKoth && c.arena_mode !== 'shared') return false;
 		return true;
 	});
 
@@ -117,6 +121,7 @@
 		selectedDifficulty = '';
 		selectedCategory = '';
 		showSolved = false;
+		showKoth = false;
 	}
 
 	onMount(async () => {
@@ -249,20 +254,30 @@
 				</select>
 			</div>
 
-			{#if $auth.isAuthenticated || hasFilters}
+			{#if $auth.isAuthenticated || hasFilters || hasKoth}
 				<div class="flex items-center justify-between gap-4 mt-3">
-					{#if $auth.isAuthenticated}
-						<label class="inline-flex items-center gap-2 cursor-pointer select-none">
-							<input
-								type="checkbox"
-								bind:checked={showSolved}
-								class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-stone-950 accent-amber-600 focus:ring-0 focus:ring-offset-0"
-							/>
-							<span class="relative top-px metadata-label text-stone-400">Solved only</span>
-						</label>
-					{:else}
-						<span></span>
-					{/if}
+					<div class="flex items-center gap-4">
+						{#if $auth.isAuthenticated}
+							<label class="inline-flex items-center gap-2 cursor-pointer select-none">
+								<input
+									type="checkbox"
+									bind:checked={showSolved}
+									class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-stone-950 accent-amber-600 focus:ring-0 focus:ring-offset-0"
+								/>
+								<span class="relative top-px metadata-label text-stone-400">Solved only</span>
+							</label>
+						{/if}
+						{#if hasKoth}
+							<label class="inline-flex items-center gap-2 cursor-pointer select-none">
+								<input
+									type="checkbox"
+									bind:checked={showKoth}
+									class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-stone-950 accent-amber-600 focus:ring-0 focus:ring-offset-0"
+								/>
+								<span class="relative top-px metadata-label text-amber-500/90 inline-flex items-center gap-1"><OpticalIcon icon="mdi:crown-outline" size={12} box={12} />King of the Hill</span>
+							</label>
+						{/if}
+					</div>
 					{#if hasFilters && filteredChallenges.length > 0}
 						<button on:click={resetFilters} class="text-xs leading-none text-stone-500 hover:text-stone-300 transition-colors inline-flex items-center gap-1">
 							<OpticalIcon icon="mdi:filter-remove-outline" size={12} box={12} />

@@ -18,6 +18,7 @@
 		is_solved: boolean;
 		author_name?: string;
 		sub_description?: string;
+		arena_mode?: string;
 	};
 
 	$: points = challenge.base_points ?? challenge.points ?? 0;
@@ -50,6 +51,12 @@
 		<span class="inline-flex items-center rounded border px-2 py-0.5 text-[0.68rem] leading-none font-medium capitalize {difficultyClass(challenge.difficulty)}">
 			<span class="badge-label">{challenge.difficulty}</span>
 		</span>
+		{#if challenge.arena_mode === 'shared'}
+			<span class="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[0.68rem] leading-none font-medium text-amber-500" title="King of the Hill — shared contested arena">
+				<OpticalIcon icon="mdi:crown-outline" size={12} box={12} />
+				<span class="badge-label">King of the Hill</span>
+			</span>
+		{/if}
 		{#if challenge.resource_type}
 			<span class="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[0.68rem] leading-none font-medium {resourceClass(challenge.resource_type)}">
 				<OpticalIcon icon={resourceIcon(challenge.resource_type)} size={12} box={12} />

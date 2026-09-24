@@ -54,6 +54,7 @@ type ChallengeListResponse struct {
 	UserSolves     int     `json:"user_solves"`
 	ResourceType   string  `json:"resource_type"`             // docker or vm
 	SubDescription *string `json:"sub_description,omitempty"` // short one-liner shown on the tile
+	ArenaMode      string  `json:"arena_mode"`                // per_team (default) or shared (KotH)
 }
 
 type ChallengeDetailResponse struct {
@@ -121,7 +122,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		SELECT
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
-			c.resource_type, c.sub_description, cat.id as category_id, cat.name as category_name,
+			c.resource_type, c.sub_description, c.arena_mode, cat.id as category_id, cat.name as category_name,
 			COALESCE((
 				SELECT COUNT(*) FROM solves s
 				JOIN flags f ON s.flag_id = f.id
@@ -149,7 +150,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		if err := rows.Scan(
 			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 			&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
-			&ch.ResourceType, &ch.SubDescription, &categoryID, &categoryName, &ch.UserSolves,
+			&ch.ResourceType, &ch.SubDescription, &ch.ArenaMode, &categoryID, &categoryName, &ch.UserSolves,
 		); err != nil {
 			h.logger.Error("failed to scan challenge", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
@@ -211,7 +212,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
 			c.exposed_ports, c.instance_timeout, c.max_extensions, c.release_date,
-			c.resource_type, c.status, c.sub_description,
+			c.resource_type, c.status, c.sub_description, c.arena_mode,
 			(
 				(c.resource_type = 'docker' AND COALESCE(c.container_image, '') <> '')
 				OR (c.resource_type = 'vm' AND EXISTS (
@@ -231,7 +232,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 		&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
 		&exposedPortsJSON, &ch.InstanceTimeout, &ch.MaxExtensions, &ch.ReleaseDate,
-		&ch.ResourceType, &ch.Status, &ch.SubDescription,
+		&ch.ResourceType, &ch.Status, &ch.SubDescription, &ch.ArenaMode,
 		&ch.HasInstance,
 		&categoryID, &categoryName,
 	)
