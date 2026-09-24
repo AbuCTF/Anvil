@@ -4,11 +4,15 @@
 	import { api } from '$api';
 	import { platformInfo, loadPlatformInfo } from '$lib/stores/platform';
 
+	// SSO login goes through the H7 portal (magic-link there → "Enter competition" → SSO back to Anvil).
+	// NOT the registration landing (2026.h7tex.com), which dead-ends a returning user.
+	const PORTAL_SSO_URL = 'https://app.h7tex.com/portal';
+
 	let error = '';
 	let discordLoading = false;
 
 	$: discordWalkin = $platformInfo?.discord_walkin ?? false;
-	$: portalUrl = $platformInfo?.register_url ?? '';
+	$: registerUrl = $platformInfo?.register_url || 'https://2026.h7tex.com';
 
 	onMount(() => loadPlatformInfo());
 
@@ -33,8 +37,8 @@
 	<div class="w-full max-w-sm">
 		<div class="text-center mb-6">
 			<img src="/logo.png" alt="Anvil" class="h-9 w-auto mx-auto mb-4" />
-			<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">Sign in</h1>
-			<p class="text-sm text-stone-500 mt-1.5">Use your H7 account or Discord to continue.</p>
+			<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">Sign in to H7CTF</h1>
+			<p class="text-sm text-stone-500 mt-1.5">Continue with Discord or SSO.</p>
 		</div>
 
 		<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-5 sm:p-6 space-y-3">
@@ -45,16 +49,6 @@
 				</p>
 			{/if}
 
-			{#if portalUrl}
-				<a
-					href={portalUrl}
-					class="w-full flex items-center justify-center gap-2 rounded-md bg-stone-100 text-stone-950 font-medium py-2.5 text-sm hover:bg-stone-50 transition-colors"
-				>
-					<Icon icon="mdi:shield-account-outline" class="w-4 h-4 shrink-0" />
-					Sign in with your H7 account
-				</a>
-			{/if}
-
 			{#if discordWalkin}
 				<button
 					type="button"
@@ -63,20 +57,22 @@
 					class="w-full flex items-center justify-center gap-2 rounded-md bg-[#5865F2] text-white font-medium py-2.5 text-sm hover:bg-[#4752c4] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 				>
 					<Icon icon={discordLoading ? 'mdi:loading' : 'ic:baseline-discord'} class="w-4 h-4 shrink-0 {discordLoading ? 'animate-spin' : ''}" />
-					Sign in with Discord
+					Continue with Discord
 				</button>
 			{/if}
 
-			{#if !portalUrl && !discordWalkin}
-				<p class="text-sm text-stone-500 text-center">Sign-in is temporarily unavailable.</p>
-			{/if}
+			<a
+				href={PORTAL_SSO_URL}
+				class="w-full flex items-center justify-center gap-2 rounded-md bg-stone-100 text-stone-950 font-medium py-2.5 text-sm hover:bg-stone-50 transition-colors"
+			>
+				<Icon icon="mdi:shield-account-outline" class="w-4 h-4 shrink-0" />
+				Continue with SSO
+			</a>
 		</div>
 
-		{#if portalUrl}
-			<p class="text-sm text-stone-500 mt-4 text-center">
-				New here?
-				<a href={portalUrl} class="text-stone-200 font-medium hover:text-stone-50 transition-colors">Register on the H7 portal</a>
-			</p>
-		{/if}
+		<p class="text-sm text-stone-500 mt-4 text-center">
+			New to H7CTF?
+			<a href={registerUrl} class="text-stone-200 font-medium hover:text-stone-50 transition-colors">Register</a>
+		</p>
 	</div>
 </div>

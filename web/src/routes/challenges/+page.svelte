@@ -274,7 +274,10 @@
 									bind:checked={showKoth}
 									class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-stone-950 accent-amber-600 focus:ring-0 focus:ring-offset-0"
 								/>
-								<span class="relative top-px metadata-label text-amber-500/90 inline-flex items-center gap-1"><OpticalIcon icon="mdi:crown-outline" size={12} box={12} />King of the Hill</span>
+								<span class="inline-flex items-center gap-1 text-amber-500/90">
+									<OpticalIcon icon="mdi:crown-outline" size={12} box={12} />
+									<span class="relative top-px metadata-label">King of the Hill</span>
+								</span>
 							</label>
 						{/if}
 					</div>

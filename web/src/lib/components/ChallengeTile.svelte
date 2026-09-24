@@ -54,7 +54,7 @@
 		{#if challenge.arena_mode === 'shared'}
 			<span class="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[0.68rem] leading-none font-medium text-amber-500" title="King of the Hill — shared contested arena">
 				<OpticalIcon icon="mdi:crown-outline" size={12} box={12} />
-				<span class="badge-label">King of the Hill</span>
+				<span class="badge-label">KotH</span>
 			</span>
 		{/if}
 		{#if challenge.resource_type}

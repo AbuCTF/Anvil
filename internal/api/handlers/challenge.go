@@ -559,6 +559,7 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	slug := c.Param("slug")
+	isAdmin := c.GetString("role") == "admin"
 
 	teamID, err := resolveTeamID(ctx, h.db, uid)
 	if err != nil {
@@ -566,16 +567,20 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 		return
 	}
-	if teamID == nil {
+	// admins preview without a team (like the instance-start bypass); players must join one.
+	if teamID == nil && !isAdmin {
 		c.JSON(http.StatusForbidden, gin.H{"error": "join a team before entering the arena"})
 		return
 	}
 
+	// admins can enter a draft arena in preview; players only a published one.
+	statusCond := "status = 'published' AND (release_date IS NULL OR release_date <= NOW())"
+	if isAdmin {
+		statusCond = "status IN ('published', 'draft')"
+	}
 	var chalID uuid.UUID
 	err = h.db.Pool.QueryRow(ctx,
-		`SELECT id FROM challenges
-		 WHERE slug = $1 AND arena_mode = 'shared' AND status = 'published'
-		   AND (release_date IS NULL OR release_date <= NOW())`,
+		`SELECT id FROM challenges WHERE slug = $1 AND arena_mode = 'shared' AND `+statusCond,
 		slug).Scan(&chalID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "arena not found"})
@@ -584,6 +589,18 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("koth enter: load challenge", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+
+	// admin with no team: hand back a preview token without charging or persisting an entry.
+	if teamID == nil {
+		token, terr := generateOpaqueToken("koth_")
+		if terr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": token, "credits": 0,
+			"message": "admin preview — you're in the arena (no team, not charged)"})
 		return
 	}
 
