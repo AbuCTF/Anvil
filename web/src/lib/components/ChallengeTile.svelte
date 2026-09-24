@@ -10,6 +10,7 @@
 		difficulty: string;
 		category?: string;
 		resource_type?: string;
+		has_instance?: boolean;
 		base_points?: number;
 		points?: number;
 		total_flags: number;
@@ -21,6 +22,8 @@
 		arena_mode?: string;
 	};
 
+	// resource_type is always 'docker' in data; the real signal is has_instance.
+	$: displayResource = challenge.resource_type === 'vm' ? 'vm' : challenge.has_instance ? 'docker' : 'static';
 	$: points = challenge.base_points ?? challenge.points ?? 0;
 	$: multiFlag = challenge.total_flags > 1;
 	$: progress = challenge.total_flags
@@ -58,9 +61,9 @@
 			</span>
 		{/if}
 		{#if challenge.resource_type}
-			<span class="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[0.68rem] leading-none font-medium {resourceClass(challenge.resource_type)}">
-				<OpticalIcon icon={resourceIcon(challenge.resource_type)} size={12} box={12} />
-				<span class="badge-label">{resourceLabel(challenge.resource_type)}</span>
+			<span class="inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[0.68rem] leading-none font-medium {resourceClass(displayResource)}">
+				<OpticalIcon icon={resourceIcon(displayResource)} size={12} box={12} />
+				<span class="badge-label">{resourceLabel(displayResource)}</span>
 			</span>
 		{/if}
 	</div>

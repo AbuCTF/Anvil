@@ -55,6 +55,7 @@ type ChallengeListResponse struct {
 	ResourceType   string  `json:"resource_type"`             // docker or vm
 	SubDescription *string `json:"sub_description,omitempty"` // short one-liner shown on the tile
 	ArenaMode      string  `json:"arena_mode"`                // per_team (default) or shared (KotH)
+	HasInstance    bool    `json:"has_instance"`              // docker w/ image, or active vm template; false = static download
 }
 
 type ChallengeDetailResponse struct {
@@ -66,8 +67,7 @@ type ChallengeDetailResponse struct {
 	ReleaseDate     *time.Time            `json:"release_date,omitempty"`
 	InstanceTimeout *int                  `json:"instance_timeout,omitempty"`
 	MaxExtensions   *int                  `json:"max_extensions,omitempty"`
-	Status          string                `json:"status"`       // draft, published, archived
-	HasInstance     bool                  `json:"has_instance"` // docker w/ image, or active vm template
+	Status          string                `json:"status"` // draft, published, archived
 	Economy         *ChallengeEconomyInfo `json:"economy,omitempty"`
 }
 
@@ -122,7 +122,14 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		SELECT
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
-			c.resource_type, c.sub_description, c.arena_mode, cat.id as category_id, cat.name as category_name,
+			c.resource_type, c.sub_description, c.arena_mode,
+			(
+				(c.resource_type = 'docker' AND COALESCE(c.container_image, '') <> '')
+				OR (c.resource_type = 'vm' AND EXISTS (
+					SELECT 1 FROM challenge_resources cr
+					WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active = TRUE))
+			) AS has_instance,
+			cat.id as category_id, cat.name as category_name,
 			COALESCE((
 				SELECT COUNT(*) FROM solves s
 				JOIN flags f ON s.flag_id = f.id
@@ -150,7 +157,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		if err := rows.Scan(
 			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 			&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
-			&ch.ResourceType, &ch.SubDescription, &ch.ArenaMode, &categoryID, &categoryName, &ch.UserSolves,
+			&ch.ResourceType, &ch.SubDescription, &ch.ArenaMode, &ch.HasInstance, &categoryID, &categoryName, &ch.UserSolves,
 		); err != nil {
 			h.logger.Error("failed to scan challenge", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})

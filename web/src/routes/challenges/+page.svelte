@@ -51,6 +51,7 @@
 		is_solved: boolean;
 		author_name?: string;
 		resource_type?: string;
+		has_instance?: boolean;
 		arena_mode?: string;
 	}
 

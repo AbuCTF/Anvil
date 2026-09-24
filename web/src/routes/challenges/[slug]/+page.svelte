@@ -726,8 +726,8 @@
 
 								{#if challenge.resource_type}
 									<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
-										<OpticalIcon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker'} size={12} box={12} />
-										<span class="optical-label">{challenge.resource_type === 'vm' ? 'VM' : 'Docker'}</span>
+										<OpticalIcon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : challenge.has_instance ? 'mdi:docker' : 'mdi:file-download-outline'} size={12} box={12} />
+										<span class="optical-label">{challenge.resource_type === 'vm' ? 'VM' : challenge.has_instance ? 'Docker' : 'Static'}</span>
 									</span>
 								{/if}
 
@@ -1349,7 +1349,7 @@
 							{#if challenge.resource_type}
 								<div class="flex items-center justify-between">
 									<span class="metadata-label text-stone-500">Type</span>
-									<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'}</span>
+									<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : challenge.has_instance ? 'Docker' : 'Static download'}</span>
 								</div>
 							{/if}
 							{#if challenge.category}

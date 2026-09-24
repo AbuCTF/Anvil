@@ -73,17 +73,24 @@ export function difficultyClass(d: string | null | undefined): string {
 	}
 }
 
-// resource-type pill: VM = purple, container = blue.
+// resource-type pill: VM = purple, container = blue, static download = stone.
 export function resourceClass(t: string | null | undefined): string {
-	return (t || '').toLowerCase() === 'vm'
-		? 'text-purple-500 border-purple-500/30 bg-purple-500/10'
-		: 'text-sky-500 border-sky-500/30 bg-sky-500/10';
+	const v = (t || '').toLowerCase();
+	if (v === 'vm') return 'text-purple-500 border-purple-500/30 bg-purple-500/10';
+	if (v === 'static') return 'text-stone-400 border-stone-600/40 bg-stone-500/10';
+	return 'text-sky-500 border-sky-500/30 bg-sky-500/10';
 }
 export function resourceIcon(t: string | null | undefined): string {
-	return (t || '').toLowerCase() === 'vm' ? 'mdi:desktop-classic' : 'mdi:docker';
+	const v = (t || '').toLowerCase();
+	if (v === 'vm') return 'mdi:desktop-classic';
+	if (v === 'static') return 'mdi:file-download-outline';
+	return 'mdi:docker';
 }
 export function resourceLabel(t: string | null | undefined): string {
-	return (t || '').toLowerCase() === 'vm' ? 'VM' : 'Docker';
+	const v = (t || '').toLowerCase();
+	if (v === 'vm') return 'VM';
+	if (v === 'static') return 'Static';
+	return 'Docker';
 }
 
 export function rankAccent(rank: number | null | undefined): string {
