@@ -219,6 +219,26 @@
 	}
 
 	const launchChallenge = () => ecoAction(() => api.openChallenge(slug!));
+
+	// KotH arena (shared-target challenges)
+	let kothToken = '';
+	let kothEntering = false;
+	let kothError = '';
+	$: isKoth = challenge?.arena_mode === 'shared';
+
+	async function enterArena() {
+		if (kothEntering) return;
+		kothEntering = true;
+		kothError = '';
+		try {
+			const r = await api.kothEnter(slug!);
+			kothToken = r.koth_token;
+		} catch (e) {
+			kothError = e instanceof Error ? e.message : 'Could not enter the arena';
+		} finally {
+			kothEntering = false;
+		}
+	}
 	const abandonChallenge = () => ecoAction(() => api.abandonChallenge(slug!));
 	const extendTimer = () => ecoAction(() => api.extendChallenge(slug!));
 
@@ -1050,7 +1070,7 @@
 				</div>
 
 				<div class="space-y-6">
-					{#if $auth.isAuthenticated && !locked && challenge.has_instance}
+					{#if $auth.isAuthenticated && !locked && challenge.has_instance && !isKoth}
 						<Card title="Instance">
 							{#if instanceError}
 								<div class="mb-4 flex items-start justify-between gap-3 rounded-md border border-down/20 bg-down/10 px-3 py-2 text-xs text-down" aria-live="polite">
@@ -1207,7 +1227,27 @@
 						</Card>
 					{/if}
 
-					{#if $auth.isAuthenticated && !locked}
+					{#if isKoth && $auth.isAuthenticated}
+						<Card title="King of the Hill Arena">
+							<div class="space-y-3">
+								<p class="text-sm text-stone-400 leading-relaxed">One shared target the whole field contests. Enter the arena, then plant your token on the target — you score for every tick you hold it.</p>
+								{#if kothToken}
+									<div>
+										<p class="metadata-label text-stone-500 mb-1.5">Your arena token</p>
+										<code class="block w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-amber-500 text-sm font-mono break-all">{kothToken}</code>
+										<p class="text-xs text-stone-500 mt-2">Plant this on the target to claim the hill. Track standings on the <a href="/arena" class="text-stone-300 hover:text-stone-100 underline">Arena</a>.</p>
+									</div>
+								{:else}
+									<button on:click={enterArena} disabled={kothEntering} class="w-full py-2.5 bg-amber-500/90 text-stone-950 text-sm font-medium rounded-md hover:bg-amber-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+										{kothEntering ? 'Entering…' : 'Enter Arena'}
+									</button>
+								{/if}
+								{#if kothError}<p class="text-xs text-down">{kothError}</p>{/if}
+							</div>
+						</Card>
+					{/if}
+
+					{#if $auth.isAuthenticated && !locked && !isKoth}
 						<Card title="Submit Flag">
 							<form on:submit|preventDefault={submitFlag} class="space-y-3">
 								<input

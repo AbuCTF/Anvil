@@ -449,6 +449,12 @@ class ApiClient {
 			`/challenges/${slug}/open`, { method: 'POST' });
 	}
 
+	// KotH arena buy-in: pay the one-time cost, receive the opaque token to plant on the target
+	async kothEnter(slug: string) {
+		return this.request<{ status: string; koth_token: string; credits: number; message: string }>(
+			`/challenges/${slug}/koth-enter`, { method: 'POST' });
+	}
+
 	async abandonChallenge(slug: string) {
 		return this.request<{ status: string }>(`/challenges/${slug}/abandon`, { method: 'POST' });
 	}
