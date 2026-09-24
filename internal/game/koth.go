@@ -45,9 +45,10 @@ func (h hillChecker) reset(ctx context.Context, t Target) error {
 }
 
 type hill struct {
-	id      uuid.UUID
-	target  Target
-	checker hillChecker
+	id          uuid.UUID
+	challengeID *uuid.UUID // nil = legacy manual hill (global game_teams tokens); set = per-challenge arena
+	target      Target
+	checker     hillChecker
 }
 
 func (c *Controller) ticksPerRound() int {
@@ -101,7 +102,7 @@ func (c *Controller) runKoth(ctx context.Context, tick int) error {
 
 func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
 	rows, err := c.db.Pool.Query(ctx,
-		`SELECT id, host(host), port, checker_ref FROM game_koth_hills
+		`SELECT id, host(host), port, checker_ref, challenge_id FROM game_koth_hills
 		 WHERE enabled = TRUE AND host IS NOT NULL AND port IS NOT NULL
 		   AND checker_ref IS NOT NULL AND checker_ref <> ''`)
 	if err != nil {
@@ -115,10 +116,11 @@ func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
 		var host string
 		var port int
 		var checker string
-		if err := rows.Scan(&id, &host, &port, &checker); err != nil {
+		var challengeID *uuid.UUID
+		if err := rows.Scan(&id, &host, &port, &checker, &challengeID); err != nil {
 			return nil, err
 		}
-		out = append(out, hill{id: id, target: Target{Host: host, Port: port}, checker: hillChecker{command: checker}})
+		out = append(out, hill{id: id, challengeID: challengeID, target: Target{Host: host, Port: port}, checker: hillChecker{command: checker}})
 	}
 	return out, rows.Err()
 }
@@ -131,11 +133,21 @@ func (c *Controller) ensureRound(ctx context.Context, round int) error {
 }
 
 func (c *Controller) pollHills(ctx context.Context, tick, round int, hills []hill) error {
-	tokens, err := c.teamTokens(ctx)
+	// legacy game_teams tokens, used only for manual hills not backed by a challenge.
+	legacy, err := c.teamTokens(ctx)
 	if err != nil {
 		return err
 	}
 	for _, h := range hills {
+		tokens := legacy
+		if h.challengeID != nil {
+			// per-arena: only tokens issued for THIS challenge's buy-in count, so a
+			// token planted on the wrong arena is never attributed.
+			tokens, err = c.entryTokens(ctx, *h.challengeID)
+			if err != nil {
+				return err
+			}
+		}
 		token := h.checker.controller(ctx, h.target)
 		var controller *uuid.UUID
 		if token != "" {

@@ -408,6 +408,10 @@ type CreateChallengeRequest struct {
 	AuthorName      string  `json:"author_name"`
 	ResourceType    *string `json:"resource_type"` // "docker" or "vm"
 
+	// arena_mode: "per_team" (default) or "shared" (one contested KotH target the
+	// whole field attacks). Empty = leave unchanged (update) / default (create).
+	ArenaMode string `json:"arena_mode"`
+
 	Flags []FlagInput `json:"flags"`
 
 	// legacy single flag support, kept for backward compatibility
@@ -640,6 +644,16 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		h.logger.Error("failed to create challenge", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create challenge: " + err.Error()})
 		return
+	}
+
+	// arena_mode defaults to 'per_team' in the schema; only flip a KotH challenge to 'shared'.
+	if req.ArenaMode == "shared" {
+		if _, err = tx.Exec(c.Request.Context(),
+			`UPDATE challenges SET arena_mode = 'shared' WHERE id = $1`, challengeID); err != nil {
+			h.logger.Error("failed to set arena_mode", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create challenge"})
+			return
+		}
 	}
 
 	flagsToCreate := req.Flags
@@ -1141,6 +1155,17 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
 		return
+	}
+	if req.ArenaMode != "" {
+		if req.ArenaMode != "shared" && req.ArenaMode != "per_team" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "arena_mode must be per_team or shared"})
+			return
+		}
+		if _, err = tx.Exec(ctx, `UPDATE challenges SET arena_mode = $1 WHERE id = $2`, req.ArenaMode, challengeID); err != nil {
+			h.logger.Error("failed to update arena_mode", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
+			return
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		h.logger.Error("failed to commit challenge update", zap.Error(err))

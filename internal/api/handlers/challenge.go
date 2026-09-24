@@ -593,21 +593,30 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
-	// already entered? hand back the existing token without charging again.
-	var existing *string
-	if err := tx.QueryRow(ctx, `SELECT koth_token FROM teams WHERE id = $1 FOR UPDATE`, *teamID).Scan(&existing); err != nil {
+	// serialize this team's arena entries so the buy-in charge + entry are atomic.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM teams WHERE id = $1 FOR UPDATE`, *teamID); err != nil {
 		h.logger.Error("koth enter: lock team", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 		return
 	}
-	if existing != nil && *existing != "" {
+
+	// already entered THIS arena? hand back the same token, no re-charge. Each KotH
+	// challenge is an independent arena (koth_entries is per team+challenge).
+	var existing string
+	err = tx.QueryRow(ctx, `SELECT token FROM koth_entries WHERE team_id = $1 AND challenge_id = $2`, *teamID, chalID).Scan(&existing)
+	if err == nil {
 		var credits float64
 		_ = tx.QueryRow(ctx, `SELECT credits FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&credits)
 		if err := tx.Commit(ctx); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": *existing, "credits": credits, "message": "already in the arena"})
+		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": existing, "credits": credits, "message": "already in this arena"})
+		return
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		h.logger.Error("koth enter: check entry", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 		return
 	}
 
@@ -631,8 +640,10 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 		return
 	}
-	if _, err := tx.Exec(ctx, `UPDATE teams SET koth_token = $2 WHERE id = $1`, *teamID, token); err != nil {
-		h.logger.Error("koth enter: set token", zap.Error(err))
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO koth_entries (team_id, challenge_id, token) VALUES ($1, $2, $3)`,
+		*teamID, chalID, token); err != nil {
+		h.logger.Error("koth enter: record entry", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 		return
 	}
