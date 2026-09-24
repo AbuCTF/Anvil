@@ -308,6 +308,11 @@
 	const upCount = (r: MatrixRow) => r.cells.filter((c) => c.status === 'OK').length;
 	$: leaderIdx = standings.length ? raceSeries.findIndex((s) => s.label === standings[0].team) : -1;
 	const bd = { attack: '#9e574f', defense: '#57748c', sla: '#57805f', koth: '#b0862f' };
+
+	// A/D-only panels (service status, captures, atk/def/sla) render only when there's
+	// actual attack-defense activity — i.e. services are registered. A KotH-only event
+	// has hills but no services, so it shows a clean KotH board (hills + koth + rounds).
+	$: hasAD = matrixServices.length > 0;
 </script>
 
 <svelte:head>
@@ -388,6 +393,7 @@
 			</div>
 		{/if}
 
+		{#if hasAD}
 		<div class="grid lg:grid-cols-3 gap-6 mb-6">
 			<div class="lg:col-span-2 bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
@@ -486,6 +492,7 @@
 				</div>
 			</div>
 		</div>
+		{/if}
 
 		{#if raceSeries.length}
 			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden mb-6">
@@ -508,10 +515,12 @@
 						<tr class="metadata-label text-stone-500">
 							<th class="px-4 py-2.5 text-left w-12">#</th>
 							<th class="px-4 py-2.5 text-left">Team</th>
+							{#if hasAD}
 							<th class="px-4 py-2.5 text-left hidden lg:table-cell w-36">Breakdown</th>
 							<th class="px-4 py-2.5 text-right">Atk</th>
 							<th class="px-4 py-2.5 text-right">Def</th>
 							<th class="px-4 py-2.5 text-right">SLA</th>
+							{/if}
 							<th class="px-4 py-2.5 text-right">KotH</th>
 							<th class="px-4 py-2.5 text-right">Total</th>
 						</tr>
@@ -528,6 +537,7 @@
 										<span class="optical-label text-stone-200 truncate max-w-[220px]">{team.team}</span>
 									</div>
 								</td>
+								{#if hasAD}
 								<td class="px-4 py-2.5 hidden lg:table-cell">
 									<div class="flex h-1.5 w-32 overflow-hidden rounded-full bg-stone-800/80">
 										<div style="width: {(team.attack / sum) * 100}%; background: {bd.attack};" title="Attack {fmt(team.attack)}"></div>
@@ -539,6 +549,7 @@
 								<td class="px-4 py-2.5 whitespace-nowrap text-right text-stone-400 tabular-nums">{fmt(team.attack)}</td>
 								<td class="px-4 py-2.5 whitespace-nowrap text-right tabular-nums {team.defense < 0 ? 'text-red-400/80' : 'text-stone-400'}">{fmt(team.defense)}</td>
 								<td class="px-4 py-2.5 whitespace-nowrap text-right text-stone-400 tabular-nums">{fmt(team.sla)}</td>
+								{/if}
 								<td class="px-4 py-2.5 whitespace-nowrap text-right text-stone-400 tabular-nums">{fmt(team.koth)}</td>
 								<td class="px-4 py-2.5 whitespace-nowrap text-right text-amber-500/90 font-semibold tabular-nums">{fmt(team.total)}</td>
 							</tr>
