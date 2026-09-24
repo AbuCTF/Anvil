@@ -861,9 +861,12 @@ func (h *AuthHandler) provisionAndRespond(c *gin.Context, ctx context.Context, t
 	).Scan(&userID, &username, &role, &displayName, &totalScore)
 
 	if errors.Is(err, pgx.ErrNoRows) {
+		// find-by-sub missed → LINK an existing account by verified email, re-linking even
+		// when it already carries a (stale) sub. The verified email is the trusted identity,
+		// so admins and pre-login-only accounts log in instead of colliding on a create.
 		err = tx.QueryRow(ctx,
 			`UPDATE users SET sso_subject = $1, email_verified = TRUE, updated_at = NOW()
-			 WHERE lower(email) = $2 AND sso_subject IS NULL
+			 WHERE lower(email) = $2
 			 RETURNING id, username, role, display_name, total_score`, subject, email,
 		).Scan(&userID, &username, &role, &displayName, &totalScore)
 	}
