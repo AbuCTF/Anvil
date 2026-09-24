@@ -592,15 +592,14 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		return
 	}
 
-	// admin with no team: hand back a preview token without charging or persisting an entry.
+	// admin with no team: hand back a DETERMINISTIC preview token (same on every click,
+	// unlike a random one) without charging or persisting an entry. It's UI-preview only —
+	// not in koth_entries, so it won't score; scoring is team-scoped.
 	if teamID == nil {
-		token, terr := generateOpaqueToken("koth_")
-		if terr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
-			return
-		}
+		sum := sha256.Sum256([]byte(fmt.Sprintf("koth-admin-preview:%v:%s", uid, chalID)))
+		token := "koth_" + hex.EncodeToString(sum[:])[:32]
 		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": token, "credits": 0,
-			"message": "admin preview — you're in the arena (no team, not charged)"})
+			"message": "admin preview — same token each time; not charged, and won't score (no team)"})
 		return
 	}
 
