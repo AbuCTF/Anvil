@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -14,6 +15,15 @@ import (
 type kothControlReply struct {
 	Controller string `json:"controller"`
 	Message    string `json:"message"`
+}
+
+// hillProbe reports which team-token currently holds a hill and resets it clean.
+// Two implementations: hillChecker (execs a local checker binary — legacy AD-style
+// hills) and httpProbe (polls the target's HTTP /koth endpoints — challenge-backed
+// arenas like GridWatch, the k8s-native path with no binary on the api pod).
+type hillProbe interface {
+	controller(ctx context.Context, t Target) string
+	reset(ctx context.Context, t Target) error
 }
 
 // hillChecker execs a hill's checker executable. It handles "control" (which
@@ -44,11 +54,65 @@ func (h hillChecker) reset(ctx context.Context, t Target) error {
 	return err
 }
 
+// httpProbe reads a challenge-backed arena's holder over HTTP and drives its reset.
+// The contract (GridWatch): GET /koth/status -> {"holder":"<token>","since":<unix>}
+// (holder null = unheld, never rate-limited so the poll always reads), and an
+// engine-authenticated POST /koth/reset (Bearer resetSecret) that clears the holder.
+type httpProbe struct {
+	client      *http.Client
+	resetSecret string
+}
+
+type kothStatusReply struct {
+	Holder *string `json:"holder"`
+}
+
+func (p httpProbe) controller(ctx context.Context, t Target) string {
+	url := fmt.Sprintf("http://%s:%d/koth/status", t.Host, t.Port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var reply kothStatusReply
+	if json.NewDecoder(resp.Body).Decode(&reply) != nil || reply.Holder == nil {
+		return ""
+	}
+	return *reply.Holder
+}
+
+func (p httpProbe) reset(ctx context.Context, t Target) error {
+	url := fmt.Sprintf("http://%s:%d/koth/reset", t.Host, t.Port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	if p.resetSecret != "" {
+		req.Header.Set("Authorization", "Bearer "+p.resetSecret)
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("koth reset: unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 type hill struct {
 	id          uuid.UUID
 	challengeID *uuid.UUID // nil = legacy manual hill (global game_teams tokens); set = per-challenge arena
 	target      Target
-	checker     hillChecker
+	checker     hillProbe
 }
 
 func (c *Controller) ticksPerRound() int {
@@ -101,10 +165,13 @@ func (c *Controller) runKoth(ctx context.Context, tick int) error {
 }
 
 func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
+	// A challenge-backed hill (challenge_id set) is probed over HTTP and needs no
+	// checker binary; a legacy manual hill needs a non-empty checker_ref.
 	rows, err := c.db.Pool.Query(ctx,
-		`SELECT id, host(host), port, checker_ref, challenge_id FROM game_koth_hills
+		`SELECT id, host(host), port, COALESCE(checker_ref, ''), challenge_id, COALESCE(reset_secret, '')
+		 FROM game_koth_hills
 		 WHERE enabled = TRUE AND host IS NOT NULL AND port IS NOT NULL
-		   AND checker_ref IS NOT NULL AND checker_ref <> ''`)
+		   AND (challenge_id IS NOT NULL OR (checker_ref IS NOT NULL AND checker_ref <> ''))`)
 	if err != nil {
 		return nil, err
 	}
@@ -117,10 +184,17 @@ func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
 		var port int
 		var checker string
 		var challengeID *uuid.UUID
-		if err := rows.Scan(&id, &host, &port, &checker, &challengeID); err != nil {
+		var resetSecret string
+		if err := rows.Scan(&id, &host, &port, &checker, &challengeID, &resetSecret); err != nil {
 			return nil, err
 		}
-		out = append(out, hill{id: id, challengeID: challengeID, target: Target{Host: host, Port: port}, checker: hillChecker{command: checker}})
+		var probe hillProbe
+		if challengeID != nil {
+			probe = httpProbe{client: c.emitClient, resetSecret: resetSecret}
+		} else {
+			probe = hillChecker{command: checker}
+		}
+		out = append(out, hill{id: id, challengeID: challengeID, target: Target{Host: host, Port: port}, checker: probe})
 	}
 	return out, rows.Err()
 }
