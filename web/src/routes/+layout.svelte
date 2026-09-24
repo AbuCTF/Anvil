@@ -17,12 +17,15 @@
 	let mobileMenuOpen = false;
 	let userMenuOpen = false;
 
+	// admins preview gated features (Arena) before they're switched on for players.
+	$: isAdmin = $auth.user?.role === 'admin';
+
 	// nav is feature-flag-driven off /info: the admin panel decides the event's
 	// shape (Arena, Teams, VPN, Scoreboard) and both the tabs and the routes follow.
 	$: navigation = [
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		...($platformInfo?.scoreboard_enabled !== false ? [{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' }] : []),
-		...($platformInfo?.arena_enabled ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
+		...(($platformInfo?.arena_enabled || isAdmin) ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
 
@@ -38,7 +41,7 @@
 	$: if (browser && $platformInfo) {
 		const p = $page.url.pathname;
 		const blocked =
-			(p.startsWith('/arena') && !$platformInfo.arena_enabled) ||
+			(p.startsWith('/arena') && !$platformInfo.arena_enabled && !isAdmin) ||
 			(p.startsWith('/team') && !$platformInfo.teams_mode) ||
 			(p.startsWith('/vpn') && !$platformInfo.vpn_enabled) ||
 			(p.startsWith('/scoreboard') && $platformInfo.scoreboard_enabled === false);
