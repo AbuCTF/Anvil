@@ -48,6 +48,7 @@ ALLOWED_ATTACH_EXT = {
     ".html", ".htm", ".css", ".php",
     ".lua", ".pl", ".kt", ".swift", ".cs", ".sage",
     ".cfg", ".conf", ".ini", ".csv", ".env",
+    ".db", ".sqlite", ".sqlite3", ".lime", ".mem", ".raw", ".vmem", ".dmp", ".dd", ".e01", ".plist", ".evtx", ".zst",
     "",  # no extension
 }
 
@@ -99,8 +100,10 @@ class Hint:
 
 @dataclass
 class Attachment:
-    src: Path
-    as_name: str
+    src: Path | None = None   # local file to upload; None for an external-url handout
+    as_name: str = ""
+    url: str = ""             # external handout (hosted off-platform, e.g. GCS bucket)
+    sha256: str = ""
 
 
 @dataclass
@@ -183,9 +186,9 @@ def parse_flags(doc: dict, chal_points: int, where: str) -> list[Flag]:
         cs = bool(f.get("case_sensitive", True))
         rgx = bool(f.get("is_regex", False))
         if ftype == "static":
-            val = f.get("value")
+            val = f.get("value") or f.get("flag")  # 'flag' accepted as an alias for 'value'
             if val in (None, ""):
-                raise ValidationError(f"{where}: flags[{i}] type static requires 'value'")
+                raise ValidationError(f"{where}: flags[{i}] type static requires 'value' (or 'flag')")
             out.append(Flag(name, "static", value=str(val), points=pts,
                             case_sensitive=cs, is_regex=rgx))
         else:  # dynamic
@@ -388,6 +391,35 @@ def load_challenge(yml_path: Path) -> Challenge:
             ch.warnings.append(f"handout '{as_name}' has ext '{ext}' not in Anvil's allowlist — upload will be rejected")
         ch.attachments.append(Attachment(src=src, as_name=as_name))
 
+    # handout: block — external URLs (hosted off-platform, e.g. GCS bucket) or local files.
+    for i, item in enumerate(doc.get("handout", []) or []):
+        if not isinstance(item, dict):
+            raise ValidationError(f"{where}: handout[{i}] must be a mapping")
+        name = str(item.get("name") or "").strip()
+        url = str(item.get("url") or "").strip()
+        sha = str(item.get("sha256") or "").strip()
+        if url:
+            if not name:
+                name = url.rsplit("/", 1)[-1]
+            ch.attachments.append(Attachment(src=None, as_name=name, url=url, sha256=sha))
+            continue
+        # local handout: look in the challenge dir, then a handout/ subdir
+        rel = str(item.get("path") or name)
+        if not rel:
+            raise ValidationError(f"{where}: handout[{i}] needs a url, path, or name")
+        src = (src_dir / rel).resolve()
+        if not src.exists():
+            alt = (src_dir / "handout" / rel).resolve()
+            if alt.exists():
+                src = alt
+        as_name = str(item.get("as") or name or src.name)
+        if not src.exists():
+            ch.warnings.append(f"handout not found: {src}")
+        ext = os.path.splitext(as_name)[1].lower()
+        if ext not in ALLOWED_ATTACH_EXT:
+            ch.warnings.append(f"handout '{as_name}' has ext '{ext}' not in Anvil's allowlist — upload will be rejected")
+        ch.attachments.append(Attachment(src=src, as_name=as_name))
+
     if "{{" in description:
         ch.warnings.append("description contains Jinja templating ({{ nc }}/{{ link }}); "
                            "Anvil does not substitute it — confirm the endpoint is written literally")
@@ -535,7 +567,16 @@ class Anvil:
             raise RuntimeError(f"hint failed ({r.status_code}): {r.text[:300]}")
 
     def upload_attachment(self, chal_id: str, a: Attachment, order: int) -> None:
-        if not a.src.exists():
+        # external handout: register the URL (download redirects to it), no upload
+        if a.url:
+            r = self.s.post(self._url(f"/admin/challenges/{chal_id}/attachments/link"),
+                            headers=self._hdr(),
+                            json={"name": a.as_name, "url": a.url, "sha256": a.sha256, "sort_order": order},
+                            timeout=60)
+            if r.status_code not in (200, 201):
+                raise RuntimeError(f"handout link '{a.as_name}' failed ({r.status_code}): {r.text[:300]}")
+            return
+        if not a.src or not a.src.exists():
             raise RuntimeError(f"attachment missing: {a.src}")
         with open(a.src, "rb") as fh:
             files = {"file": (a.as_name, fh, "application/octet-stream")}
@@ -591,7 +632,11 @@ def print_plan(ch: Challenge) -> None:
     if ch.hints:
         print(f"      {dim('hints')} {len(ch.hints)}: " + ", ".join(f"{h.cost}pts" for h in ch.hints))
     if ch.attachments:
-        att = ", ".join(f"{a.as_name}{'' if a.src.exists() else red('[MISSING]')}" for a in ch.attachments)
+        att = ", ".join(
+            (f"{a.as_name} {dim('(url)')}" if a.url
+             else f"{a.as_name}{'' if (a.src and a.src.exists()) else red('[MISSING]')}")
+            for a in ch.attachments
+        )
         print(f"      {dim('handouts')} {att}")
     for w in ch.warnings:
         print(f"      {yellow('! ' + w)}")

@@ -1,11 +1,13 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -26,6 +28,8 @@ type AttachmentResponse struct {
 	Description string `json:"description,omitempty"`
 	SortOrder   int    `json:"sort_order"`
 	CreatedAt   int64  `json:"created_at"`
+	URL         string `json:"url,omitempty"`    // set => external handout (download redirects here)
+	Sha256      string `json:"sha256,omitempty"` // optional integrity check for large external handouts
 }
 
 // upper limit for a single-request attachment upload (500 mb)
@@ -59,7 +63,12 @@ var allowedAttachmentExtensions = map[string]bool{
 	".html": true, ".htm": true, ".css": true, ".php": true,
 	".lua": true, ".pl": true, ".kt": true, ".swift": true, ".cs": true, ".sage": true,
 	".cfg": true, ".conf": true, ".ini": true, ".csv": true, ".env": true,
-	"":     true, // no extension (binaries named without extension)
+	// forensics/DFIR artifacts: memory + disk images, sqlite DBs, event logs.
+	// all data files, served download-only (Content-Disposition: attachment + nosniff).
+	".db": true, ".sqlite": true, ".sqlite3": true,
+	".lime": true, ".mem": true, ".raw": true, ".vmem": true, ".dmp": true, ".dd": true, ".e01": true,
+	".plist": true, ".evtx": true, ".zst": true,
+	"": true, // no extension (binaries named without extension)
 }
 
 // strips directory components and control characters so the returned name
@@ -225,6 +234,107 @@ func (h *AttachmentHandler) Upload(c *gin.Context) {
 	})
 }
 
+// CreateLinkRequest registers an EXTERNAL handout — a file hosted off-platform
+// (e.g. the public GCS bucket) that's too big for Anvil's storage backend.
+type CreateLinkRequest struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	Sha256      string `json:"sha256"`
+	Description string `json:"description"`
+	SortOrder   int    `json:"sort_order"`
+}
+
+// CreateLink adds an external-URL handout to a challenge. The public download
+// endpoint 302-redirects players to the URL; nothing is stored in the backend.
+func (h *AttachmentHandler) CreateLink(c *gin.Context) {
+	challengeID := c.Param("id")
+	if _, err := uuid.Parse(challengeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge ID"})
+		return
+	}
+	var req CreateLinkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.URL = strings.TrimSpace(req.URL)
+	if req.Name == "" || req.URL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name and url are required"})
+		return
+	}
+	if u, err := url.Parse(req.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "url must be an absolute http(s) URL"})
+		return
+	}
+
+	uploaderUID, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+
+	// best-effort HEAD to record size + type for the UI; never blocks the create.
+	var fileSize int64
+	contentType := ""
+	if ct, size, ok := headMeta(c.Request.Context(), req.URL); ok {
+		contentType, fileSize = ct, size
+	}
+	if contentType == "" {
+		if t := mime.TypeByExtension(strings.ToLower(filepath.Ext(req.Name))); t != "" {
+			contentType = t
+		} else {
+			contentType = "application/octet-stream"
+		}
+	}
+	if fileSize < 0 {
+		fileSize = 0
+	}
+
+	attachmentID := uuid.New()
+	var sha *string
+	if s := strings.TrimSpace(req.Sha256); s != "" {
+		sha = &s
+	}
+	_, err := h.db.Pool.Exec(c.Request.Context(),
+		`INSERT INTO challenge_attachments
+		 (id, challenge_id, uploaded_by, filename, file_size, content_type, url, sha256, description, sort_order, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
+		attachmentID, challengeID, uploaderUID, req.Name, fileSize, contentType, req.URL, sha, req.Description, req.SortOrder,
+	)
+	if err != nil {
+		h.logger.Error("failed to save external attachment", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save attachment"})
+		return
+	}
+	h.logger.Info("external attachment added",
+		zap.String("challenge_id", challengeID), zap.String("attachment_id", attachmentID.String()),
+		zap.String("filename", req.Name), zap.String("url", req.URL))
+	c.JSON(http.StatusCreated, gin.H{
+		"id": attachmentID.String(), "filename": req.Name, "file_size": fileSize,
+		"content_type": contentType, "url": req.URL, "sha256": req.Sha256, "sort_order": req.SortOrder,
+	})
+}
+
+// headMeta does a short HEAD to learn an external file's size + content-type.
+func headMeta(ctx context.Context, rawurl string) (contentType string, size int64, ok bool) {
+	reqctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqctx, http.MethodHead, rawurl, nil)
+	if err != nil {
+		return "", 0, false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, false
+	}
+	return resp.Header.Get("Content-Type"), resp.ContentLength, true
+}
+
 // GET /api/v1/admin/challenges/:id/attachments
 func (h *AttachmentHandler) List(c *gin.Context) {
 	challengeID := c.Param("id")
@@ -300,28 +410,35 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment ID"})
 		return
 	}
-	if h.storageSvc == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "attachment storage is unavailable"})
-		return
-	}
-
 	// look up attachment (join with challenge to validate slug ownership and published status)
-	var storageKey, filename, contentType string
+	var storageKey, filename, contentType, externalURL string
 	var fileSize int64
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT ca.storage_key, ca.filename, COALESCE(ca.content_type, 'application/octet-stream'), ca.file_size
+		`SELECT COALESCE(ca.storage_key, ''), ca.filename, COALESCE(ca.content_type, 'application/octet-stream'), ca.file_size, COALESCE(ca.url, '')
 		 FROM challenge_attachments ca
 		 JOIN challenges c ON c.id = ca.challenge_id
 		 WHERE ca.id = $1 AND c.slug = $2 AND c.status = 'published'
 		   AND (c.release_date IS NULL OR c.release_date <= NOW())`,
 		attachmentID, slug,
-	).Scan(&storageKey, &filename, &contentType, &fileSize)
+	).Scan(&storageKey, &filename, &contentType, &fileSize, &externalURL)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
 		return
 	} else if err != nil {
 		h.logger.Error("failed to query attachment for download", zap.String("attachment_id", attachmentID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "file unavailable"})
+		return
+	}
+
+	// external handout: the file lives on the public bucket, not our storage backend.
+	// redirect the player straight to it (no storage access needed).
+	if externalURL != "" {
+		c.Redirect(http.StatusFound, externalURL)
+		return
+	}
+
+	if h.storageSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "attachment storage is unavailable"})
 		return
 	}
 	if fileSize < 0 {
@@ -374,7 +491,8 @@ func (h *AttachmentHandler) ListPublic(c *gin.Context, challengeID string) ([]At
 
 func (h *AttachmentHandler) queryAttachments(c *gin.Context, challengeID string) ([]AttachmentResponse, error) {
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, filename, file_size, COALESCE(content_type, ''), COALESCE(description, ''), sort_order, created_at
+		`SELECT id, filename, file_size, COALESCE(content_type, ''), COALESCE(description, ''), sort_order, created_at,
+		        COALESCE(url, ''), COALESCE(sha256, '')
 		 FROM challenge_attachments
 		 WHERE challenge_id = $1
 		 ORDER BY sort_order, created_at`,
@@ -389,7 +507,7 @@ func (h *AttachmentHandler) queryAttachments(c *gin.Context, challengeID string)
 	for rows.Next() {
 		var a AttachmentResponse
 		var createdAt time.Time
-		if err := rows.Scan(&a.ID, &a.Filename, &a.FileSize, &a.ContentType, &a.Description, &a.SortOrder, &createdAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.Filename, &a.FileSize, &a.ContentType, &a.Description, &a.SortOrder, &createdAt, &a.URL, &a.Sha256); err != nil {
 			return nil, fmt.Errorf("scan attachment: %w", err)
 		}
 		if a.FileSize < 0 {

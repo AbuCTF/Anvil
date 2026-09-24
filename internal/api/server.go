@@ -346,6 +346,7 @@ func (s *Server) setupRouter() {
 				adminAttachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger)
 				challenges.GET("/:id/attachments", adminAttachmentHandler.List)
 				challenges.POST("/:id/attachments", adminAttachmentHandler.Upload)
+				challenges.POST("/:id/attachments/link", adminAttachmentHandler.CreateLink)
 				challenges.DELETE("/:id/attachments/:attachment_id", adminAttachmentHandler.Delete)
 			}
 
