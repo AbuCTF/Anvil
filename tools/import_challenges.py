@@ -48,8 +48,7 @@ ALLOWED_ATTACH_EXT = {
     ".html", ".htm", ".css", ".php",
     ".lua", ".pl", ".kt", ".swift", ".cs", ".sage",
     ".cfg", ".conf", ".ini", ".csv", ".env",
-    ".db", ".sqlite", ".sqlite3", ".lime", ".mem", ".raw", ".vmem", ".dmp", ".dd", ".e01", ".plist", ".evtx", ".zst",
-    "",  # no extension
+    "",  # no extension. big/exotic forensics artifacts go out zipped (.zip) or as an external-url handout.
 }
 
 _C = sys.stderr.isatty() and os.environ.get("NO_COLOR") is None

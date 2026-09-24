@@ -63,12 +63,10 @@ var allowedAttachmentExtensions = map[string]bool{
 	".html": true, ".htm": true, ".css": true, ".php": true,
 	".lua": true, ".pl": true, ".kt": true, ".swift": true, ".cs": true, ".sage": true,
 	".cfg": true, ".conf": true, ".ini": true, ".csv": true, ".env": true,
-	// forensics/DFIR artifacts: memory + disk images, sqlite DBs, event logs.
-	// all data files, served download-only (Content-Disposition: attachment + nosniff).
-	".db": true, ".sqlite": true, ".sqlite3": true,
-	".lime": true, ".mem": true, ".raw": true, ".vmem": true, ".dmp": true, ".dd": true, ".e01": true,
-	".plist": true, ".evtx": true, ".zst": true,
-	"": true, // no extension (binaries named without extension)
+	"":     true, // no extension (binaries named without extension)
+	// NB: big/exotic forensics artifacts (memory + disk images, sqlite DBs) are
+	// handed out ZIPPED (.zip, above) — compresses + saves space — or hosted on the
+	// GCS bucket as an external-url handout, so the allowlist stays lean.
 }
 
 // strips directory components and control characters so the returned name
