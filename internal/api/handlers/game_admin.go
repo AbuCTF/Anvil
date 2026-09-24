@@ -1,15 +1,20 @@
 package handlers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/anvil-lab/anvil/internal/services/instancer"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,13 +23,160 @@ import (
 )
 
 type GameAdminHandler struct {
-	config *config.Config
-	db     *database.DB
-	logger *zap.Logger
+	config       *config.Config
+	db           *database.DB
+	instancerSvc *instancer.Service
+	logger       *zap.Logger
 }
 
-func NewGameAdminHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *GameAdminHandler {
-	return &GameAdminHandler{config: cfg, db: db, logger: logger}
+func NewGameAdminHandler(cfg *config.Config, db *database.DB, instancerSvc *instancer.Service, logger *zap.Logger) *GameAdminHandler {
+	return &GameAdminHandler{config: cfg, db: db, instancerSvc: instancerSvc, logger: logger}
+}
+
+// LaunchArena spawns the ONE shared contested instance for a shared-arena (KotH)
+// challenge and registers/refreshes its hill: the engine then HTTP-polls the hill's
+// /koth/status and drives /koth/reset with the injected KOTH_ADMIN_TOKEN. Idempotent
+// per challenge (fixed "arena" owner => a deterministic single instance id); a
+// re-launch refreshes the endpoint + secret and bumps the hill generation.
+func (h *GameAdminHandler) LaunchArena(c *gin.Context) {
+	challengeID := c.Param("id")
+	if _, err := uuid.Parse(challengeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge ID"})
+		return
+	}
+	if h.instancerSvc == nil || !h.instancerSvc.Enabled() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "instancer backend is not available"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	var name, slug, image, tag, cpu, mem string
+	var portsJSON []byte
+	err := h.db.Pool.QueryRow(ctx,
+		`SELECT name, slug, COALESCE(container_image, ''), COALESCE(container_tag, 'latest'),
+		        COALESCE(cpu_limit, '2'), COALESCE(memory_limit, '1024Mi'), COALESCE(exposed_ports, '[]'::jsonb)
+		 FROM challenges
+		 WHERE id = $1 AND arena_mode = 'shared' AND resource_type = 'docker'`,
+		challengeID).Scan(&name, &slug, &image, &tag, &cpu, &mem, &portsJSON)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no shared-arena docker challenge with that id"})
+		return
+	}
+	if err != nil {
+		h.fail(c, "load arena challenge", err)
+		return
+	}
+	if image == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "challenge has no container_image"})
+		return
+	}
+
+	secret, err := arenaResetSecret()
+	if err != nil {
+		h.fail(c, "generate reset secret", err)
+		return
+	}
+
+	res, err := h.instancerSvc.Launch(ctx, instancer.LaunchSpec{
+		TeamID:      "arena", // fixed owner => one shared instance per challenge (InstanceID = HMAC(arena, id))
+		ChallengeID: challengeID,
+		Slug:        slug,
+		Image:       image,
+		Tag:         tag,
+		CPULimit:    cpu,
+		MemoryLimit: mem,
+		Ports:       []instancer.PortSpec{{Port: arenaHTTPPort(portsJSON), Protocol: "tcp", Service: "http"}},
+		Flags:       map[string]string{"KOTH_ADMIN_TOKEN": secret},
+		Timeout:     720 * time.Hour, // long-lived: the arena runs the whole event
+	})
+	if err != nil {
+		h.fail(c, "launch arena instance", err)
+		return
+	}
+
+	baseURL := arenaBaseURL(res.Endpoints)
+	if baseURL == "" {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "instance launched but no endpoint was published"})
+		return
+	}
+
+	if _, err := h.db.Pool.Exec(ctx,
+		`INSERT INTO game_koth_hills (name, slug, challenge_id, base_url, reset_secret, enabled, generation)
+		 VALUES ($1, $2, $3, $4, $5, TRUE, 0)
+		 ON CONFLICT (slug) DO UPDATE SET
+		   name = EXCLUDED.name, challenge_id = EXCLUDED.challenge_id,
+		   base_url = EXCLUDED.base_url, reset_secret = EXCLUDED.reset_secret,
+		   enabled = TRUE, generation = game_koth_hills.generation + 1`,
+		name, slug, challengeID, baseURL, secret); err != nil {
+		h.fail(c, "register arena hill", err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "launched", "slug": slug, "instance_id": res.InstanceID, "base_url": baseURL,
+		"message": "shared arena is up; enable the game engine to start scoring holds",
+	})
+}
+
+// StopArena tears down the shared instance and disables its hill.
+func (h *GameAdminHandler) StopArena(c *gin.Context) {
+	challengeID := c.Param("id")
+	if _, err := uuid.Parse(challengeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge ID"})
+		return
+	}
+	ctx := c.Request.Context()
+	if h.instancerSvc != nil && h.instancerSvc.Enabled() {
+		if err := h.instancerSvc.Destroy(ctx, h.instancerSvc.InstanceID("arena", challengeID)); err != nil {
+			h.logger.Warn("stop arena: destroy instance", zap.Error(err))
+		}
+	}
+	if _, err := h.db.Pool.Exec(ctx,
+		`UPDATE game_koth_hills SET enabled = FALSE WHERE challenge_id = $1`, challengeID); err != nil {
+		h.fail(c, "disable arena hill", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "stopped"})
+}
+
+// arenaResetSecret is the engine-only KOTH_ADMIN_TOKEN injected into the target's env.
+func arenaResetSecret() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// arenaHTTPPort reads the first declared exposed port, defaulting to 8080 (the KotH convention).
+func arenaHTTPPort(portsJSON []byte) int {
+	var ports []struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(portsJSON, &ports); err == nil {
+		for _, p := range ports {
+			if p.Port > 0 {
+				return p.Port
+			}
+		}
+	}
+	return 8080
+}
+
+// arenaBaseURL picks an engine-reachable base URL from the published endpoints:
+// a URL-shaped connect string if present, else https://<host>.
+func arenaBaseURL(eps []instancer.Endpoint) string {
+	for _, ep := range eps {
+		if strings.Contains(ep.Connect, "://") {
+			return strings.TrimRight(ep.Connect, "/")
+		}
+	}
+	for _, ep := range eps {
+		if ep.Host != "" {
+			return "https://" + ep.Host
+		}
+	}
+	return ""
 }
 
 var slugPattern = regexp.MustCompile(`[^a-z0-9]+`)

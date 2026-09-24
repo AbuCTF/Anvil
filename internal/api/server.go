@@ -302,7 +302,7 @@ func (s *Server) setupRouter() {
 
 			gameAdmin := admin.Group("/arena")
 			{
-				gameAdminHandler := handlers.NewGameAdminHandler(s.config, s.db, s.logger)
+				gameAdminHandler := handlers.NewGameAdminHandler(s.config, s.db, s.instancerSvc, s.logger)
 				gameAdmin.GET("/teams", gameAdminHandler.ListTeams)
 				gameAdmin.POST("/teams", gameAdminHandler.CreateTeam)
 				gameAdmin.DELETE("/teams/:id", gameAdminHandler.DeleteTeam)
@@ -317,6 +317,11 @@ func (s *Server) setupRouter() {
 				gameAdmin.POST("/hills", gameAdminHandler.CreateHill)
 				gameAdmin.PATCH("/hills/:id", gameAdminHandler.UpdateHill)
 				gameAdmin.DELETE("/hills/:id", gameAdminHandler.DeleteHill)
+
+				// shared-target launcher: spawn the one contested instance for a KotH
+				// challenge + register/refresh its hill (base_url + reset secret).
+				gameAdmin.POST("/challenges/:id/launch", gameAdminHandler.LaunchArena)
+				gameAdmin.POST("/challenges/:id/stop", gameAdminHandler.StopArena)
 			}
 
 			challenges := admin.Group("/challenges")

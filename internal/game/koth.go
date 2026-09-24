@@ -60,6 +60,7 @@ func (h hillChecker) reset(ctx context.Context, t Target) error {
 // engine-authenticated POST /koth/reset (Bearer resetSecret) that clears the holder.
 type httpProbe struct {
 	client      *http.Client
+	baseURL     string // e.g. https://web-<id>.web.h7tex.com — the shared instance's endpoint
 	resetSecret string
 }
 
@@ -67,9 +68,8 @@ type kothStatusReply struct {
 	Holder *string `json:"holder"`
 }
 
-func (p httpProbe) controller(ctx context.Context, t Target) string {
-	url := fmt.Sprintf("http://%s:%d/koth/status", t.Host, t.Port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func (p httpProbe) controller(ctx context.Context, _ Target) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/koth/status", nil)
 	if err != nil {
 		return ""
 	}
@@ -88,9 +88,8 @@ func (p httpProbe) controller(ctx context.Context, t Target) string {
 	return *reply.Holder
 }
 
-func (p httpProbe) reset(ctx context.Context, t Target) error {
-	url := fmt.Sprintf("http://%s:%d/koth/reset", t.Host, t.Port)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+func (p httpProbe) reset(ctx context.Context, _ Target) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/koth/reset", nil)
 	if err != nil {
 		return err
 	}
@@ -165,13 +164,15 @@ func (c *Controller) runKoth(ctx context.Context, tick int) error {
 }
 
 func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
-	// A challenge-backed hill (challenge_id set) is probed over HTTP and needs no
-	// checker binary; a legacy manual hill needs a non-empty checker_ref.
+	// A challenge-backed hill is probed over HTTP at base_url (no checker binary);
+	// a legacy manual hill needs host+port + a non-empty checker_ref.
 	rows, err := c.db.Pool.Query(ctx,
-		`SELECT id, host(host), port, COALESCE(checker_ref, ''), challenge_id, COALESCE(reset_secret, '')
+		`SELECT id, COALESCE(host(host), ''), COALESCE(port, 0), COALESCE(checker_ref, ''),
+		        challenge_id, COALESCE(reset_secret, ''), COALESCE(base_url, '')
 		 FROM game_koth_hills
-		 WHERE enabled = TRUE AND host IS NOT NULL AND port IS NOT NULL
-		   AND (challenge_id IS NOT NULL OR (checker_ref IS NOT NULL AND checker_ref <> ''))`)
+		 WHERE enabled = TRUE
+		   AND ( (challenge_id IS NOT NULL AND COALESCE(base_url, '') <> '')
+		      OR (host IS NOT NULL AND port IS NOT NULL AND COALESCE(checker_ref, '') <> '') )`)
 	if err != nil {
 		return nil, err
 	}
@@ -184,13 +185,13 @@ func (c *Controller) enabledHills(ctx context.Context) ([]hill, error) {
 		var port int
 		var checker string
 		var challengeID *uuid.UUID
-		var resetSecret string
-		if err := rows.Scan(&id, &host, &port, &checker, &challengeID, &resetSecret); err != nil {
+		var resetSecret, baseURL string
+		if err := rows.Scan(&id, &host, &port, &checker, &challengeID, &resetSecret, &baseURL); err != nil {
 			return nil, err
 		}
 		var probe hillProbe
 		if challengeID != nil {
-			probe = httpProbe{client: c.emitClient, resetSecret: resetSecret}
+			probe = httpProbe{client: c.emitClient, baseURL: baseURL, resetSecret: resetSecret}
 		} else {
 			probe = hillChecker{command: checker}
 		}
