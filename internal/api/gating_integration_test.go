@@ -289,7 +289,8 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 		e := raw.(map[string]any)
 		names = append(names, e["username"].(string)+":"+strconv.Itoa(int(e["total_score"].(float64))))
 	}
-	if strings.Join(names, ",") != "bravo:120,alpha:100,charlie:0,delta:0" || body["total_users"] != 4.0 {
+	// charlie and delta never scored, so they don't list yet
+	if strings.Join(names, ",") != "bravo:120,alpha:100" || body["total_users"] != 2.0 {
 		t.Errorf("economy board = %v total=%v", names, body["total_users"])
 	}
 	code, body, _ = call("GET", "/api/v1/user/me/rank", &p1, "")
