@@ -275,6 +275,13 @@ func (h *TeamsHandler) Leave(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	// membership is locked while the event is live: leaving to found a fresh team
+	// (new credit grant, clean wrong-sub slate) and rejoining gamed the economy.
+	// teamless players can still create or join.
+	if phase, staff := eventPlayState(c, h.db); !staff && phase == "live" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "teams are locked during the event; ask an organizer to move you"})
+		return
+	}
 	if _, err := h.db.Pool.Exec(c.Request.Context(),
 		`UPDATE users SET team_id = NULL WHERE id = $1`, uid,
 	); err != nil {

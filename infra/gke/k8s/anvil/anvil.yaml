@@ -32,6 +32,11 @@ spec:
       containers:
         - name: anvil-api
           image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-api:latest
+          # stay up a few seconds after endpoints drop so traefik stops routing here
+          # before the process exits (a rollout otherwise drops in-flight requests).
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "5"] }
           ports: [{ containerPort: 8080 }]
           envFrom:
             - configMapRef: { name: anvil-config }
@@ -83,6 +88,11 @@ spec:
       containers:
         - name: anvil-web
           image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-web:latest
+          # stay up a few seconds after endpoints drop so traefik stops routing here
+          # before the process exits (a rollout otherwise drops in-flight requests).
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "5"] }
           ports: [{ containerPort: 3000 }]
           env:
             - { name: PUBLIC_API_URL, value: "https://ctf.h7tex.com" }
