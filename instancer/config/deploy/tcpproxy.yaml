@@ -33,7 +33,7 @@ spec:
         - name: tcpproxy
           image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-tcpproxy:latest
           env:
-            - { name: PROXY_POOL_RANGE, value: "40000-49999" }
+            - { name: PROXY_POOL_RANGE, value: "40000-43999" }
             - { name: PROXY_POOL_NAMESPACE, value: anvil-instancer }
             - { name: PROXY_REFRESH, value: "3s" }
           resources:

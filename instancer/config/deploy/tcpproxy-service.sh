@@ -17,7 +17,9 @@ spec:
   type: LoadBalancer
   # reserved static address (anvil-tcpproxy-ip): pwn/web3.h7tex.com point here.
   loadBalancerIP: 34.180.1.168
-  externalTrafficPolicy: Cluster
+  # only nodes running a proxy take traffic: a node that just joined may still be
+  # programming the per-port service table (~1.5k ports/min) and would refuse.
+  externalTrafficPolicy: Local
   # the NLB delivers to node ips (GCE_VM_IP NEG), so no node ports are needed;
   # allocating them would cap the pool at the 2768-port NodePort range.
   allocateLoadBalancerNodePorts: false

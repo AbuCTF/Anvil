@@ -84,7 +84,7 @@ spec:
             # free port on the tcpproxy NLB so `nc host port` + half-close work.
             # Must equal PROXY_POOL_RANGE in tcpproxy.yaml (deploy script checks).
             - name: INSTANCER_TCP_POOL_RANGE
-              value: "40000-49999"
+              value: "40000-43999"
             - name: INSTANCER_TCP_POOL_NAMESPACE
               value: anvil-instancer
           ports:
