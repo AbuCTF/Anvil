@@ -59,3 +59,41 @@ func TestIntegrationScore(t *testing.T) {
 	final := realised + freeze + cfg.FreeFlagPoints
 	approx(t, "final score", final, 475.75)
 }
+
+func TestFractionalValue(t *testing.T) {
+	cfg := config.EconomyConfig{
+		Ceilings:       []float64{100, 250, 500, 1000},
+		CrowdFloors:    []float64{0.15, 0.15, 0.15, 0.15},
+		CrowdHalflives: []float64{20, 20, 20, 20},
+		WrongSubFloor:  1,
+	}
+	// 4 equal flags: one team holds all, one holds a quarter -> crowd 1.25
+	crowd := 1.0 + shareOf(100, 400, 1, 4)
+	full := challengeValue(cfg, "hard", crowd, 0) * 1.0
+	quarter := challengeValue(cfg, "hard", crowd, 0) * shareOf(100, 400, 1, 4)
+	if math.Abs(full-481.98) > 0.01 || math.Abs(quarter-120.50) > 0.01 {
+		t.Fatalf("got %.2f / %.2f, want 481.98 / 120.50", full, quarter)
+	}
+	// single-flag parity: three full solvers price exactly like the old integer count
+	if got, want := challengeValue(cfg, "hard", 3, 0), 500*(0.15+0.85*math.Pow(0.5, 3.0/20)); math.Abs(got-want) > 1e-9 {
+		t.Fatalf("single-flag parity: got %v want %v", got, want)
+	}
+}
+
+func TestShareOf(t *testing.T) {
+	cases := []struct {
+		held, total   float64
+		heldN, totalN int
+		want          float64
+	}{
+		{200, 800, 1, 4, 0.25}, // weighted by points
+		{0, 0, 1, 2, 0.5},      // all-zero points: equal weights
+		{800, 800, 4, 4, 1},
+		{0, 0, 0, 0, 1}, // flagless (graded): full share
+	}
+	for _, c := range cases {
+		if got := shareOf(c.held, c.total, c.heldN, c.totalN); math.Abs(got-c.want) > 1e-12 {
+			t.Errorf("shareOf(%v,%v,%v,%v) = %v, want %v", c.held, c.total, c.heldN, c.totalN, got, c.want)
+		}
+	}
+}
