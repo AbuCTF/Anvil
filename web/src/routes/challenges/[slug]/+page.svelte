@@ -7,6 +7,7 @@
 	import { categoryColor, difficultyClass } from '$lib/rank';
 	import { API_BASE } from '$lib/config';
 	import Card from '$lib/components/Card.svelte';
+	import DepthRace from '$lib/components/DepthRace.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { formatLocalDateTime, instantTitle } from '$lib/time';
 	import { confirmDialog, alertDialog } from '$lib/stores/dialog';
@@ -226,6 +227,8 @@
 	let kothEntering = false;
 	let kothError = '';
 	$: isKoth = challenge?.arena_mode === 'shared';
+	// graded: an in-instance grader scores each run; the best counts, no flag box
+	$: isGraded = challenge?.scoring_mode === 'graded';
 
 	async function enterArena() {
 		if (kothEntering) return;
@@ -725,6 +728,13 @@
 									</span>
 								{/if}
 
+								{#if isGraded}
+									<span class="inline-flex items-center gap-1 text-[0.68rem] leading-none font-medium px-2 py-0.5 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-500" title="Graded — scored by depth, your best run counts">
+										<OpticalIcon icon="mdi:gauge" size={12} box={12} />
+										<span class="badge-label">Graded</span>
+									</span>
+								{/if}
+
 								{#if challenge.resource_type}
 									<span class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500">
 										<OpticalIcon icon={challenge.resource_type === 'vm' ? 'mdi:desktop-classic' : challenge.has_instance ? 'mdi:docker' : 'mdi:file-download-outline'} size={12} box={12} />
@@ -764,7 +774,7 @@
 								<p class="metadata-label text-stone-500 mt-1">Points</p>
 							{:else}
 								<p class="text-2xl font-semibold text-amber-500 tabular-nums">{challenge.base_points}</p>
-								<p class="metadata-label text-stone-500">Points</p>
+								<p class="metadata-label text-stone-500">{isGraded ? 'Max points' : 'Points'}</p>
 							{/if}
 						</div>
 					</div>
@@ -1228,6 +1238,10 @@
 						</Card>
 					{/if}
 
+					{#if isGraded && $auth.isAuthenticated}
+						<DepthRace slug={challenge.slug} economy={!!challenge.economy?.enabled} />
+					{/if}
+
 					{#if isKoth && $auth.isAuthenticated}
 						<Card title="King of the Hill Arena">
 							<div class="space-y-3">
@@ -1248,7 +1262,7 @@
 						</Card>
 					{/if}
 
-					{#if $auth.isAuthenticated && !locked && !isKoth}
+					{#if $auth.isAuthenticated && !locked && !isKoth && !(isGraded && !challenge.total_flags)}
 						<Card title="Submit Flag">
 							<form on:submit|preventDefault={submitFlag} class="space-y-3">
 								<input
@@ -1288,6 +1302,7 @@
 						</Card>
 					{/if}
 
+					{#if !isGraded}
 					<Card title="Solves">
 						<svelte:fragment slot="meta">
 							<span class="text-xs text-stone-500 tabular-nums">{challenge.total_solves}</span>
@@ -1346,13 +1361,21 @@
 							{/if}
 						</div>
 					</Card>
+					{/if}
 
 					<Card title="Details">
 						<div class="space-y-2.5 text-sm">
-							<div class="flex items-center justify-between">
-								<span class="metadata-label text-stone-500">Flags</span>
-								<span class="text-stone-300 tabular-nums">{challenge.total_flags}</span>
-							</div>
+							{#if isGraded}
+								<div class="flex items-center justify-between">
+									<span class="metadata-label text-stone-500">Scoring</span>
+									<span class="text-stone-300 tabular-nums">best × {challenge.base_points}</span>
+								</div>
+							{:else}
+								<div class="flex items-center justify-between">
+									<span class="metadata-label text-stone-500">Flags</span>
+									<span class="text-stone-300 tabular-nums">{challenge.total_flags}</span>
+								</div>
+							{/if}
 							{#if challenge.resource_type}
 								<div class="flex items-center justify-between">
 									<span class="metadata-label text-stone-500">Type</span>

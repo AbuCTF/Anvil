@@ -416,6 +416,10 @@ type CreateChallengeRequest struct {
 	// no_new_privs off) for boot-to-root / SUID-privesc challenges. Caps stay dropped.
 	Privesc bool `json:"privesc"`
 
+	// scoring_mode: "flag" (default) or "graded" (an in-instance grader reports a
+	// score in [0,1]). Empty = leave unchanged (update) / default (create).
+	ScoringMode string `json:"scoring_mode"`
+
 	Flags []FlagInput `json:"flags"`
 
 	// legacy single flag support, kept for backward compatibility
@@ -449,7 +453,7 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 		       c.container_image, c.container_tag, c.container_platform,
 		       c.cpu_limit, c.memory_limit, c.exposed_ports,
 		       c.instance_timeout, c.max_extensions, c.cooldown_minutes,
-		       c.author_name
+		       c.author_name, c.scoring_mode
 		FROM challenges c
 		LEFT JOIN categories cat ON cat.id = c.category_id
 		ORDER BY c.created_at DESC
@@ -489,6 +493,7 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			MaxExtensions     *int
 			CooldownMinutes   *int
 			AuthorName        *string
+			ScoringMode       string
 		}
 
 		if err := rows.Scan(
@@ -498,7 +503,7 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			&ch.ContainerImage, &ch.ContainerTag, &ch.ContainerPlatform,
 			&ch.CPULimit, &ch.MemoryLimit, &ch.ExposedPorts,
 			&ch.InstanceTimeout, &ch.MaxExtensions, &ch.CooldownMinutes,
-			&ch.AuthorName,
+			&ch.AuthorName, &ch.ScoringMode,
 		); err != nil {
 			h.logger.Warn("failed to scan challenge row", zap.Error(err))
 			continue
@@ -533,6 +538,7 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			"max_extensions":     ch.MaxExtensions,
 			"cooldown_minutes":   ch.CooldownMinutes,
 			"author_name":        ch.AuthorName,
+			"scoring_mode":       ch.ScoringMode,
 		})
 	}
 
@@ -648,6 +654,19 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		h.logger.Error("failed to create challenge", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create challenge: " + err.Error()})
 		return
+	}
+
+	if req.ScoringMode != "" {
+		if req.ScoringMode != "flag" && req.ScoringMode != "graded" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scoring_mode must be flag or graded"})
+			return
+		}
+		if _, err = tx.Exec(c.Request.Context(),
+			`UPDATE challenges SET scoring_mode = $1 WHERE id = $2`, req.ScoringMode, challengeID); err != nil {
+			h.logger.Error("failed to set scoring_mode", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create challenge"})
+			return
+		}
 	}
 
 	// arena_mode defaults to 'per_team' in the schema; only flip a KotH challenge to 'shared'.
@@ -973,7 +992,7 @@ func (h *AdminChallengeHandler) Get(c *gin.Context) {
 		SELECT id, name, slug, description, difficulty, category_id, status,
 		       container_image, container_tag, cpu_limit, memory_limit,
 		       exposed_ports, base_points, instance_timeout, max_extensions,
-		       author_name, total_solves, total_flags, created_at
+		       author_name, total_solves, total_flags, created_at, scoring_mode
 		FROM challenges WHERE id = $1
 	`
 
@@ -997,13 +1016,14 @@ func (h *AdminChallengeHandler) Get(c *gin.Context) {
 		TotalSolves     int
 		TotalFlags      int
 		CreatedAt       time.Time
+		ScoringMode     string
 	}
 
 	err := h.db.Pool.QueryRow(c.Request.Context(), query, challengeID).Scan(
 		&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty, &ch.CategoryID, &ch.Status,
 		&ch.ContainerImage, &ch.ContainerTag, &ch.CPULimit, &ch.MemoryLimit,
 		&ch.ExposedPorts, &ch.BasePoints, &ch.InstanceTimeout, &ch.MaxExtensions,
-		&ch.AuthorName, &ch.TotalSolves, &ch.TotalFlags, &ch.CreatedAt,
+		&ch.AuthorName, &ch.TotalSolves, &ch.TotalFlags, &ch.CreatedAt, &ch.ScoringMode,
 	)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
@@ -1029,6 +1049,7 @@ func (h *AdminChallengeHandler) Get(c *gin.Context) {
 		"total_solves":     ch.TotalSolves,
 		"total_flags":      ch.TotalFlags,
 		"created_at":       ch.CreatedAt.Unix(),
+		"scoring_mode":     ch.ScoringMode,
 	})
 }
 
@@ -1160,6 +1181,17 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
 		return
 	}
+	if req.ScoringMode != "" {
+		if req.ScoringMode != "flag" && req.ScoringMode != "graded" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "scoring_mode must be flag or graded"})
+			return
+		}
+		if _, err = tx.Exec(ctx, `UPDATE challenges SET scoring_mode = $1 WHERE id = $2`, req.ScoringMode, challengeID); err != nil {
+			h.logger.Error("failed to update scoring_mode", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
+			return
+		}
+	}
 	if req.ArenaMode != "" {
 		if req.ArenaMode != "shared" && req.ArenaMode != "per_team" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "arena_mode must be per_team or shared"})
@@ -1272,13 +1304,18 @@ func (h *AdminChallengeHandler) Publish(c *gin.Context) {
 		return
 	}
 
+	// graded challenges score through their grader and need no flag.
 	var flagCount int
-	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM flags WHERE challenge_id = $1`, challengeID).Scan(&flagCount); err != nil {
+	var graded bool
+	if err := tx.QueryRow(ctx,
+		`SELECT (SELECT COUNT(*) FROM flags WHERE challenge_id = $1),
+		        (SELECT scoring_mode = 'graded' FROM challenges WHERE id = $1)`,
+		challengeID).Scan(&flagCount, &graded); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to publish challenge"})
 		return
 	}
 
-	if flagCount == 0 {
+	if flagCount == 0 && !graded {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "challenge must have at least one flag"})
 		return
 	}

@@ -16,6 +16,9 @@
 		resource_type?: string;
 		has_instance?: boolean;
 		arena_mode?: string;
+		scoring_mode?: string;
+		graded_best?: number | null;
+		graded_teams?: number;
 	}
 
 	// persist the loaded board across client-side navigations so returning from a
@@ -182,7 +185,10 @@
 			const mapped =
 				response.challenges?.map((c) => {
 					const userSolves = c.user_solves || 0;
-					const isSolved = userSolves >= c.total_flags && c.total_flags > 0;
+					// graded challenges count as solved only at full depth
+					const isSolved = c.scoring_mode === 'graded'
+						? (c.graded_best ?? 0) >= 1
+						: userSolves >= c.total_flags && c.total_flags > 0;
 					return { ...c, user_solves: userSolves, is_solved: isSolved };
 				}) || [];
 			challenges = mapped;

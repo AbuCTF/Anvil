@@ -24,6 +24,15 @@ type Config struct {
 	ZeroPool    ZeroPoolConfig  `mapstructure:"zeropool"`
 	Discord     DiscordConfig   `mapstructure:"discord"`
 	Instancer   InstancerConfig `mapstructure:"instancer"`
+	Graded      GradedConfig    `mapstructure:"graded"`
+}
+
+// GradedConfig wires graded (relative-score) challenges. ReportURL is what grader
+// roles receive as ${GRADER_URL}; ReportsPerMinute caps signed reports per
+// (challenge, team) on each api replica.
+type GradedConfig struct {
+	ReportURL        string `mapstructure:"report_url"`
+	ReportsPerMinute int    `mapstructure:"reports_per_minute"`
 }
 
 // InstancerConfig selects how docker challenges are launched. Backend "docker"
@@ -202,6 +211,7 @@ type RateLimitConfig struct {
 	FlagSubmission RateLimit `mapstructure:"flag_submission"`
 	InstanceStart  RateLimit `mapstructure:"instance_start"`
 	VPNConfigGen   RateLimit `mapstructure:"vpn_config_gen"`
+	GradedReport   RateLimit `mapstructure:"graded_report"`
 }
 
 type RateLimit struct {
@@ -355,6 +365,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("instancer.base_domain", "h7tex.com")
 	v.SetDefault("instancer.timeout", "1h")
 
+	v.SetDefault("graded.report_url", "https://ctf.h7tex.com/api/v1/graded/report")
+	v.SetDefault("graded.reports_per_minute", 60)
+
 	v.SetDefault("vpn.enabled", true)
 	v.SetDefault("vpn.interface", "wg0")
 	v.SetDefault("vpn.listen_port", 51820)
@@ -386,6 +399,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rate_limit.instance_start.window", "10m")
 	v.SetDefault("rate_limit.vpn_config_gen.requests", 2)
 	v.SetDefault("rate_limit.vpn_config_gen.window", "1h")
+	// per-ip backstop for the report route only: every grader egresses through
+	// the cluster's single cloud nat ip, so this must fit the whole field.
+	v.SetDefault("rate_limit.graded_report.requests", 3000)
+	v.SetDefault("rate_limit.graded_report.window", "1m")
 
 	v.SetDefault("game.enabled", false)
 	v.SetDefault("game.tick_interval", "2m")

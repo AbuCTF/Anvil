@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/api"
+	"github.com/anvil-lab/anvil/internal/api/handlers"
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/game"
@@ -354,6 +355,20 @@ func main() {
 			}
 		}()
 	}
+
+	// graded janitor: prune spent grader nonces, expire + refund evaluations
+	// whose grader never reported.
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := handlers.SweepGraded(ctx, db); err != nil {
+				sugar.Errorf("Graded sweep failed: %v", err)
+			}
+			cancel()
+		}
+	}()
 
 	// game engine (attack-defense + koth) — no-op unless game.enabled.
 	gameCtx, gameCancel := context.WithCancel(context.Background())
