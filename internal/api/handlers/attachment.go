@@ -433,7 +433,7 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "file unavailable"})
 		return
 	}
-	if !ticketed && rejectLocked(c, h.db, h.logger, challengeID) {
+	if !ticketed && rejectLocked(c, h.db, h.logger, challengeID, false) {
 		return
 	}
 

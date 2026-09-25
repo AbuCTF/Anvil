@@ -563,13 +563,13 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check instance eligibility"})
 			return
 		}
-		if economyOn {
-			var st string
+		if economyOn && !instStaff {
+			var st economyState
 			_ = tx.QueryRow(ctx,
-				`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
-				*teamID, challenge.ID).Scan(&st)
-			if economyLocked(true, instStaff, st) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "open this challenge first"})
+				`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+				*teamID, challenge.ID).Scan(&st.status, &st.expiresAt)
+			if !economyCanAct(st, time.Now()) {
+				c.JSON(http.StatusForbidden, gin.H{"error": economyDenied(st)})
 				return
 			}
 		}

@@ -9,43 +9,61 @@ import (
 	"github.com/anvil-lab/anvil/internal/models"
 )
 
-func TestEconomyLocked(t *testing.T) {
+func TestEconomyViewAndAct(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	live, gone := now.Add(time.Minute), now.Add(-time.Minute)
 	for _, tc := range []struct {
-		name   string
-		on     bool
-		staff  bool
-		status string
-		want   bool
+		name       string
+		st         economyState
+		view, act  bool
+		deniedText string
 	}{
-		{"economy off shows everything", false, false, "", false},
-		{"never opened", true, false, "", true},
-		{"unopened row", true, false, "unopened", true},
-		{"open", true, false, "open", false},
-		{"solved stays visible", true, false, "solved", false},
-		{"abandoned closes it again", true, false, "abandoned", true},
-		{"expired closes it again", true, false, "expired", true},
-		{"staff bypass", true, true, "", false},
-		{"staff bypass abandoned", true, true, "abandoned", false},
+		{"never opened", economyState{}, false, false, "open this challenge first"},
+		{"unopened row", economyState{status: "unopened"}, false, false, "open this challenge first"},
+		{"open, live timer", economyState{"open", &live}, true, true, ""},
+		{"open, timer ran out (not yet swept)", economyState{"open", &gone}, true, false, "your timer on this challenge ran out; open it again first"},
+		{"open, no timer", economyState{status: "open"}, true, false, "your timer on this challenge ran out; open it again first"},
+		{"expired: paid once, read-only", economyState{"expired", &gone}, true, false, "your timer on this challenge ran out; open it again first"},
+		{"solved", economyState{"solved", &gone}, true, true, ""},
+		{"abandoned", economyState{"abandoned", &live}, false, false, "open this challenge first"},
 	} {
-		if got := economyLocked(tc.on, tc.staff, tc.status); got != tc.want {
-			t.Errorf("%s: economyLocked(%v, %v, %q) = %v, want %v", tc.name, tc.on, tc.staff, tc.status, got, tc.want)
+		if got := economyCanView(tc.st); got != tc.view {
+			t.Errorf("%s: view = %v, want %v", tc.name, got, tc.view)
+		}
+		if got := economyCanAct(tc.st, now); got != tc.act {
+			t.Errorf("%s: act = %v, want %v", tc.name, got, tc.act)
+		}
+		if !tc.act {
+			if got := economyDenied(tc.st); got != tc.deniedText {
+				t.Errorf("%s: denied = %q, want %q", tc.name, got, tc.deniedText)
+			}
 		}
 	}
 }
 
-func TestEconomyGateByChallenge(t *testing.T) {
-	gate := economyGate{on: true, statuses: map[string]string{"a": "open", "b": "abandoned", "c": "solved"}}
-	for id, want := range map[string]bool{"a": false, "b": true, "c": false, "unknown": true} {
-		if got := gate.locked(id); got != want {
-			t.Errorf("locked(%q) = %v, want %v", id, got, want)
+func TestEconomyGateWhoSeesWhat(t *testing.T) {
+	now := time.Now()
+	gone := now.Add(-time.Minute)
+	states := map[string]economyState{"expired": {"open", &gone}, "abandoned": {status: "abandoned"}}
+	for _, tc := range []struct {
+		name      string
+		gate      economyGate
+		id        string
+		view, act bool
+	}{
+		{"economy off", economyGate{}, "anything", true, true},
+		{"player, never opened", economyGate{on: true, states: states}, "other", false, false},
+		{"player, timer ran out", economyGate{on: true, states: states}, "expired", true, false},
+		{"player, abandoned", economyGate{on: true, states: states}, "abandoned", false, false},
+		{"teamless or anonymous", economyGate{on: true}, "expired", false, false},
+		{"staff", economyGate{on: true, staff: true}, "other", true, true},
+	} {
+		if got := tc.gate.canView(tc.id); got != tc.view {
+			t.Errorf("%s: view = %v, want %v", tc.name, got, tc.view)
 		}
-	}
-	// teamless / anonymous: no statuses at all
-	if !(economyGate{on: true}).locked("a") {
-		t.Error("a caller with no team must see everything locked")
-	}
-	if (economyGate{}).locked("a") {
-		t.Error("economy off must not lock")
+		if got := tc.gate.canAct(tc.id, now); got != tc.act {
+			t.Errorf("%s: act = %v, want %v", tc.name, got, tc.act)
+		}
 	}
 }
 
@@ -54,8 +72,8 @@ func TestLoadEconomyGateStaffSkipsDatabase(t *testing.T) {
 		ctx, _ := testHandlerContext(http.MethodGet, "/api/v1/challenges")
 		ctx.Set("role", role)
 		gate, err := loadEconomyGate(ctx, nil) // nil db: staff must not query
-		if err != nil || gate.locked("anything") {
-			t.Errorf("%s: gate locked=%v err=%v, want open", role, gate.locked("anything"), err)
+		if err != nil || !gate.canView("anything") || !gate.canAct("anything", time.Now()) {
+			t.Errorf("%s: gate %+v err=%v, want open", role, gate, err)
 		}
 	}
 }

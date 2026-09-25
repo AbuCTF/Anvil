@@ -183,7 +183,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		return
 	}
 	for i := range challenges {
-		if gate.locked(challenges[i].ID) {
+		if !gate.canView(challenges[i].ID) {
 			challenges[i].Description = nil
 		}
 	}
@@ -384,20 +384,21 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	}
 	if on {
 		info := &ChallengeEconomyInfo{Enabled: true, LaunchCost: launchCost(h.config.Economy, ch.Difficulty)}
-		var status string
+		var st economyState
 		if uid, ok := contextUserID(c); ok {
 			if teamID, tErr := resolveTeamID(c.Request.Context(), h.db, uid); tErr == nil && teamID != nil {
 				_ = h.db.Pool.QueryRow(c.Request.Context(),
-					`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
-					*teamID, ch.ID).Scan(&status)
-				info.Launched = status == "open" || status == "solved"
-				info.Solved = status == "solved"
+					`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+					*teamID, ch.ID).Scan(&st.status, &st.expiresAt)
+				// launched = can act now; an expired team re-opens from the locked card
+				info.Launched = economyCanAct(st, time.Now())
+				info.Solved = st.status == "solved"
 				_ = h.db.Pool.QueryRow(c.Request.Context(),
 					`SELECT COALESCE(credits, 0) FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&info.Credits)
 			}
 		}
 		ch.Economy = info
-		if economyLocked(on, isStaff(c), status) {
+		if !isStaff(c) && !economyCanView(st) {
 			ch.redactLocked()
 		}
 	}
@@ -438,7 +439,7 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
 		return
 	}
-	if rejectLocked(c, h.db, h.logger, challengeID) {
+	if rejectLocked(c, h.db, h.logger, challengeID, false) {
 		return
 	}
 
@@ -680,6 +681,12 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 
 	// charge the buy-in when the economy is on (402 if short); free entry otherwise.
 	if on, _ := isEconomyMode(ctx, h.db); on {
+		// lazy grant, as on open: a team with no economy row yet would 500 in applyCredit
+		if err := ensureTeamEconomy(ctx, tx, *teamID, h.config.Economy); err != nil {
+			h.logger.Error("koth enter: prepare team economy", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+			return
+		}
 		if _, aerr := applyCredit(ctx, tx, *teamID, "koth_buyin", -kothBuyinCost(ctx, h.db), &chalID, nil); aerr != nil {
 			var opErr *EconomyOpError
 			if errors.As(aerr, &opErr) {
@@ -989,17 +996,18 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		}
 		if tid != nil {
 			ecoTeamID = tid
-			var st string
+			var st economyState
 			if sErr := h.db.Pool.QueryRow(c.Request.Context(),
 				`SELECT COALESCE((SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2), 'unopened'),
+				        (SELECT expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2),
 				        (SELECT difficulty FROM challenges WHERE id = $2)`,
-				*tid, challengeID).Scan(&st, &ecoDifficulty); sErr != nil {
+				*tid, challengeID).Scan(&st.status, &st.expiresAt, &ecoDifficulty); sErr != nil {
 				h.logger.Error("failed to read economy challenge state", zap.Error(sErr))
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
 				return
 			}
-			if economyLocked(true, submitStaff, st) {
-				c.JSON(http.StatusForbidden, gin.H{"error": "open this challenge first"})
+			if !submitStaff && !economyCanAct(st, time.Now()) {
+				c.JSON(http.StatusForbidden, gin.H{"error": economyDenied(st)})
 				return
 			}
 		}
@@ -1749,7 +1757,7 @@ func (h *ChallengeHandler) GetHints(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
 		return
 	}
-	if rejectLocked(c, h.db, h.logger, challengeID) {
+	if rejectLocked(c, h.db, h.logger, challengeID, false) {
 		return
 	}
 
@@ -1824,7 +1832,7 @@ func (h *ChallengeHandler) UnlockHint(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
 		return
 	}
-	if rejectLocked(c, h.db, h.logger, challengeID) {
+	if rejectLocked(c, h.db, h.logger, challengeID, true) {
 		return
 	}
 

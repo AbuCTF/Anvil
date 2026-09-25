@@ -155,13 +155,13 @@ func openChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID uu
 		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to prepare team economy"}
 	}
 
-	var status string
+	var st economyState
 	err := tx.QueryRow(ctx,
-		`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+		`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
 		teamID, challengeID,
-	).Scan(&status)
-	if err == nil && (status == "open" || status == "solved") {
-		return nil
+	).Scan(&st.status, &st.expiresAt)
+	if err == nil && economyCanAct(st, time.Now()) {
+		return nil // live timer or solved; an expired open re-opens (and pays) below
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to read challenge state"}
@@ -362,11 +362,11 @@ func applyEconomyFrac(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, 
 }
 
 func abandonChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID uuid.UUID, difficulty string, cfg config.EconomyConfig) *EconomyOpError {
-	var status string
+	var st economyState
 	err := tx.QueryRow(ctx,
-		`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2 FOR UPDATE`,
-		teamID, challengeID).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && status != "open") {
+		`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2 FOR UPDATE`,
+		teamID, challengeID).Scan(&st.status, &st.expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (st.status != "open" || !economyCanAct(st, time.Now()))) {
 		return &EconomyOpError{Status: http.StatusBadRequest, Message: "challenge is not open"}
 	}
 	if err != nil {
@@ -393,7 +393,7 @@ func extendChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID 
 	err := tx.QueryRow(ctx,
 		`SELECT status, extensions_used, COALESCE(expires_at, NOW()) FROM economy_challenge_state
 		 WHERE team_id = $1 AND challenge_id = $2 FOR UPDATE`, teamID, challengeID).Scan(&status, &used, &expires)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && status != "open") {
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (status != "open" || !expires.After(time.Now()))) {
 		return time.Time{}, &EconomyOpError{Status: http.StatusBadRequest, Message: "challenge is not open"}
 	}
 	if err != nil {

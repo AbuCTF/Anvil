@@ -14,24 +14,49 @@ import (
 	"go.uber.org/zap"
 )
 
-// economy gate: with the economy on, a non-staff caller sees only a challenge's
-// card until their team opens it. abandoned/expired count as closed again.
-func economyLocked(economyOn, staff bool, status string) bool {
-	return economyOn && !staff && status != "open" && status != "solved"
+// economyState is a team's economy_challenge_state row for one challenge
+// (zero value = never opened).
+type economyState struct {
+	status    string
+	expiresAt *time.Time
 }
 
-// economyGate is the economy gate as it applies to one caller.
+// VIEW: the team paid to open it once, so the card, brief, files and hints stay
+// readable even after the timer ran out. abandoned/unopened are locked.
+func economyCanView(st economyState) bool {
+	return st.status == "open" || st.status == "solved" || st.status == "expired"
+}
+
+// ACT (submit, instance, hint unlock, extend, abandon) needs a live timer or a solve.
+func economyCanAct(st economyState, now time.Time) bool {
+	return st.status == "solved" || (st.status == "open" && st.expiresAt != nil && st.expiresAt.After(now))
+}
+
+// economyDenied is the 403 text for a team that can't act on a challenge right now.
+func economyDenied(st economyState) string {
+	if economyCanView(st) {
+		return "your timer on this challenge ran out; open it again first"
+	}
+	return "open this challenge first"
+}
+
+// economyGate is the economy gate as it applies to one caller: economy off and
+// staff (admin/author) pass everything.
 type economyGate struct {
-	on       bool
-	staff    bool
-	statuses map[string]string // challenge id -> the caller's team status
+	on     bool
+	staff  bool
+	states map[string]economyState // challenge id -> the caller's team state
 }
 
-func (g economyGate) locked(challengeID string) bool {
-	return economyLocked(g.on, g.staff, g.statuses[challengeID])
+func (g economyGate) canView(challengeID string) bool {
+	return !g.on || g.staff || economyCanView(g.states[challengeID])
 }
 
-// anonymous and teamless callers get no statuses, so everything is locked.
+func (g economyGate) canAct(challengeID string, now time.Time) bool {
+	return !g.on || g.staff || economyCanAct(g.states[challengeID], now)
+}
+
+// anonymous and teamless callers get no states, so everything is locked.
 func loadEconomyGate(c *gin.Context, db *database.DB) (economyGate, error) {
 	g := economyGate{staff: isStaff(c)}
 	if g.staff {
@@ -48,33 +73,35 @@ func loadEconomyGate(c *gin.Context, db *database.DB) (economyGate, error) {
 		return g, nil
 	}
 	rows, err := db.Pool.Query(ctx,
-		`SELECT e.challenge_id::text, e.status FROM economy_challenge_state e
+		`SELECT e.challenge_id::text, e.status, e.expires_at FROM economy_challenge_state e
 		 JOIN users u ON u.team_id = e.team_id WHERE u.id = $1`, uid)
 	if err != nil {
 		return g, err
 	}
 	defer rows.Close()
-	g.statuses = map[string]string{}
+	g.states = map[string]economyState{}
 	for rows.Next() {
-		var id, status string
-		if err := rows.Scan(&id, &status); err != nil {
+		var id string
+		var st economyState
+		if err := rows.Scan(&id, &st.status, &st.expiresAt); err != nil {
 			return g, err
 		}
-		g.statuses[id] = status
+		g.states[id] = st
 	}
 	return g, rows.Err()
 }
 
-// rejectLocked writes the gate's response when the caller may not use the challenge yet.
-func rejectLocked(c *gin.Context, db *database.DB, logger *zap.Logger, challengeID string) bool {
+// rejectLocked writes the gate's 403 when the caller may not view (or, with act,
+// use) the challenge yet, and reports whether it did.
+func rejectLocked(c *gin.Context, db *database.DB, logger *zap.Logger, challengeID string, act bool) bool {
 	gate, err := loadEconomyGate(c, db)
 	if err != nil {
 		logger.Error("failed to load economy gate", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "economy unavailable"})
 		return true
 	}
-	if gate.locked(challengeID) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "open this challenge first"})
+	if !gate.canView(challengeID) || (act && !gate.canAct(challengeID, time.Now())) {
+		c.JSON(http.StatusForbidden, gin.H{"error": economyDenied(gate.states[challengeID])})
 		return true
 	}
 	return false
