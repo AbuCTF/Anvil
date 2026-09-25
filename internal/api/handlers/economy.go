@@ -241,18 +241,9 @@ func applyEconomySolve(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig,
 		return err
 	}
 
-	if wrongSubs == 0 {
-		if refund := cfg.CleanRefundFrac * launchCost(cfg, difficulty); refund > 0 {
-			cid := challengeID
-			if _, err := applyCredit(ctx, tx, teamID, "clean_refund", refund, &cid, nil); err != nil {
-				return err
-			}
-		}
-	}
-
 	rows, err := tx.Query(ctx,
 		`SELECT team_id, wrong_subs, current_value FROM economy_challenge_state
-		 WHERE challenge_id = $1 AND holds_solve = TRUE FOR UPDATE`, challengeID)
+		 WHERE challenge_id = $1 AND holds_solve = TRUE ORDER BY team_id FOR UPDATE`, challengeID)
 	if err != nil {
 		return err
 	}
@@ -291,6 +282,17 @@ func applyEconomySolve(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig,
 			`INSERT INTO economy_point_events (team_id, challenge_id, kind, value_after)
 			 VALUES ($1, $2, 'crowd_recompute', $3)`, hh.team, challengeID, newVal); err != nil {
 			return err
+		}
+	}
+	// the refund comes last: team score rows are taken in team_id order above, and
+	// the solver's is already among them, so two solves on different challenges
+	// can't each hold one team's row while waiting on the other's (deadlock -> 500).
+	if wrongSubs == 0 {
+		if refund := cfg.CleanRefundFrac * launchCost(cfg, difficulty); refund > 0 {
+			cid := challengeID
+			if _, err := applyCredit(ctx, tx, teamID, "clean_refund", refund, &cid, nil); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
