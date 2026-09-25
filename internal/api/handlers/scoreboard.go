@@ -738,7 +738,7 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
 		WITH leaders AS MATERIALIZED (
-			SELECT u.id, u.username
+			SELECT u.id, u.username, u.display_name
 			FROM users u
 			LEFT JOIN LATERAL (
 				SELECT solved_at AS last_solve
@@ -755,7 +755,7 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 			SELECT hu.user_id, hu.unlocked_at AS event_at, -hu.points_deducted AS points, hu.id
 			FROM hint_unlocks hu JOIN leaders l ON l.id = hu.user_id
 		)
-		SELECT l.id, l.username, e.event_at, e.points
+		SELECT l.id, COALESCE(NULLIF(l.display_name, ''), l.username), e.event_at, e.points
 		FROM leaders l
 		JOIN events e ON e.user_id = l.id
 		ORDER BY l.id, e.event_at, e.id

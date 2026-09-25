@@ -185,7 +185,7 @@
 								<span class="hidden 2xl:inline-flex">
 									<RankBadge rank={$auth.user?.rank ?? 0} />
 								</span>
-								<span class="optical-label max-w-[28vw] truncate whitespace-nowrap font-medium leading-[14px] 2xl:max-w-64">{$auth.user?.username}</span>
+								<span class="optical-label max-w-[28vw] truncate whitespace-nowrap font-medium leading-[14px] 2xl:max-w-64">{$auth.user?.display_name || $auth.user?.username}</span>
 								<OpticalIcon
 									icon="mdi:chevron-down"
 									{...iconMetric('mdi:chevron-down')}
@@ -197,7 +197,7 @@
 							{#if userMenuOpen}
 								<div class="absolute right-0 mt-2 w-64 bg-stone-950 backdrop-blur-md border border-stone-800 rounded-lg z-50 overflow-hidden">
 									<div class="px-4 py-3 border-b border-stone-800">
-										<p class="truncate text-sm font-medium text-stone-100">{$auth.user?.username}</p>
+										<p class="truncate text-sm font-medium text-stone-100">{$auth.user?.display_name || $auth.user?.username}</p>
 										<p class="truncate text-xs text-stone-500" title={$auth.user?.email || undefined}>{$auth.user?.email || 'No email'}</p>
 									</div>
 									{#each userMenu as item}
@@ -275,7 +275,7 @@
 						<div class="border-t border-stone-800 pt-3 mt-3">
 							<div class="flex items-center justify-between gap-3 px-3 pb-2.5">
 								<div class="min-w-0">
-									<p class="truncate text-sm font-medium text-stone-200">{$auth.user?.username}</p>
+									<p class="truncate text-sm font-medium text-stone-200">{$auth.user?.display_name || $auth.user?.username}</p>
 									<p class="truncate text-xs text-stone-600">{$auth.user?.email || 'Signed in'}</p>
 								</div>
 								<RankBadge rank={$auth.user?.rank ?? 0} />
