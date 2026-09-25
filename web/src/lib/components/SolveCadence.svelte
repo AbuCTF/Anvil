@@ -77,7 +77,7 @@
         fill-opacity={bin.count ? 0.72 : 0}
       >
         <title
-          >{formatDur(bin.start)}–{formatDur(bin.end)} · {bin.count} solve{bin.count ===
+          >{formatDur(bin.start)}-{formatDur(bin.end)} · {bin.count} solve{bin.count ===
           1
             ? ""
             : "s"}{bin.labels.length

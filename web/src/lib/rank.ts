@@ -1,5 +1,5 @@
 // stable per-team color + rank-tier accents. see DESIGN.md.
-// a muted, low-chroma categorical palette — distinguishable but never rainbow on
+// a muted, low-chroma categorical palette - distinguishable but never rainbow on
 // near-black. amber is deliberately absent; it is reserved for the accent/leader.
 const SERIES = [
 	'#6f9dc9', // steel blue
@@ -29,7 +29,7 @@ export function teamColor(key: string): string {
 	return SERIES[teamHue(key) % SERIES.length];
 }
 
-// muted category color — consistent across scoreboard/profile/challenges. prefer this
+// muted category color - consistent across scoreboard/profile/challenges. prefer this
 // over any vibrant category color stored in the database.
 const CATEGORY: Record<string, string> = {
 	pwn: '#cf7f83',

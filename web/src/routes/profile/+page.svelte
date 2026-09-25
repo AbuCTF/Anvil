@@ -98,11 +98,11 @@
   $: sortedSolves = [...solves].sort((a, b) => a.solved_at - b.solved_at);
   $: recentSolves = [...sortedSolves].reverse().slice(0, 10);
   $: firstSolve = sortedSolves[0]?.solved_at ?? 0;
-  $: firstSolveDate = firstSolve ? formatLocalDateLong(firstSolve) : "—";
+  $: firstSolveDate = firstSolve ? formatLocalDateLong(firstSolve) : "-";
   $: firstSolveTime = firstSolve ? formatLocalTimeWithZone(firstSolve) : "";
   $: joinedDate = profile?.joined_at
     ? formatLocalDateLong(profile.joined_at)
-    : "—";
+    : "-";
 
   $: difficultyRows = Object.entries(byDifficulty)
     .map(([name, data]) => ({
@@ -353,7 +353,7 @@
       />
       <StatTile
         label="Global rank"
-        value={stats.rank ? `#${stats.rank}` : "—"}
+        value={stats.rank ? `#${stats.rank}` : "-"}
       />
       <StatTile
         label="Completed"

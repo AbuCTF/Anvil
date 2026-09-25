@@ -100,7 +100,7 @@
 	let requestController: AbortController | null = null;
 	let disposed = false;
 
-	// muted status colors — only a genuine problem is meant to draw the eye.
+	// muted status colors - only a genuine problem is meant to draw the eye.
 	const SLA: Record<string, { color: string; label: string }> = {
 		OK: { color: '#4b7355', label: 'Up' },
 		DOWN: { color: '#b0453a', label: 'Down' },
@@ -296,9 +296,9 @@
 		const c = seriesColor(key);
 		return { dot: c, text: c };
 	}
-	const fmt = (n: number | null | undefined) => (typeof n === 'number' && Number.isFinite(n) ? n.toFixed(0) : '—');
+	const fmt = (n: number | null | undefined) => (typeof n === 'number' && Number.isFinite(n) ? n.toFixed(0) : '-');
 	function ago(at: number) {
-		if (!Number.isFinite(at) || at <= 0) return '—';
+		if (!Number.isFinite(at) || at <= 0) return '-';
 		const s = Math.max(0, Math.floor(now / 1000) - at);
 		if (s < 60) return `${s}s`;
 		const m = Math.floor(s / 60);
@@ -310,7 +310,7 @@
 	const bd = { attack: '#9e574f', defense: '#57748c', sla: '#57805f', koth: '#b0862f' };
 
 	// A/D-only panels (service status, captures, atk/def/sla) render only when there's
-	// actual attack-defense activity — i.e. services are registered. A KotH-only event
+	// actual attack-defense activity - i.e. services are registered. A KotH-only event
 	// has hills but no services, so it shows a clean KotH board (hills + koth + rounds).
 	$: hasAD = matrixServices.length > 0;
 </script>
@@ -336,11 +336,11 @@
 				{#if active}
 					<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
 						<span class="optical-label metadata-label text-stone-500">Tick</span>
-						<span class="optical-label text-stone-100 font-semibold tabular-nums">{status?.tick ?? '—'}</span>
+						<span class="optical-label text-stone-100 font-semibold tabular-nums">{status?.tick ?? '-'}</span>
 					</div>
 					<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
 						<span class="optical-label metadata-label text-stone-500">Round</span>
-						<span class="optical-label text-stone-100 font-semibold tabular-nums">{status?.round ?? '—'}</span>
+						<span class="optical-label text-stone-100 font-semibold tabular-nums">{status?.round ?? '-'}</span>
 					</div>
 					<span
 						class="hidden sm:inline-flex items-center gap-1.5 text-xs leading-none pl-1 {refreshError ? 'text-warn' : 'text-stone-600'}"
@@ -427,7 +427,7 @@
 									<tr>
 										<td class="sticky left-0 z-10 bg-stone-950/70 px-4 py-1.5 whitespace-nowrap border-t border-stone-800/60">
 											<div class="flex items-center gap-2 leading-none">
-												<span class="optical-label text-stone-600 text-xs tabular-nums w-5 text-right">{r.rank ?? '—'}</span>
+												<span class="optical-label text-stone-600 text-xs tabular-nums w-5 text-right">{r.rank ?? '-'}</span>
 												<span class="w-2 h-2 rounded-full shrink-0" style="background: {tc.dot};"></span>
 												<a href="/scoreboard" class="optical-label text-stone-300 text-sm truncate max-w-[140px] hover:text-amber-400 transition">{r.team}</a>
 											</div>
@@ -530,7 +530,7 @@
 							{@const c = teamColor(team.team_id || team.team)}
 							{@const sum = Math.max(1, team.attack + team.defense + team.sla + team.koth)}
 							<tr class="border-t border-stone-800/60 hover:bg-stone-800/20 transition-colors">
-								<td class="px-4 py-2.5 whitespace-nowrap text-stone-300 font-semibold tabular-nums">{team.rank ?? '—'}</td>
+								<td class="px-4 py-2.5 whitespace-nowrap text-stone-300 font-semibold tabular-nums">{team.rank ?? '-'}</td>
 								<td class="px-4 py-2.5 whitespace-nowrap">
 									<div class="flex items-center gap-2.5 leading-none">
 										<span class="w-2 h-2 rounded-full shrink-0" style="background: {c.dot};"></span>

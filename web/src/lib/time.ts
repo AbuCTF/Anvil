@@ -44,7 +44,7 @@ export function formatLocalDate(
   const date = parseInstant(value, unit);
   return date
     ? formatter({ month: "short", day: "numeric" }).format(date)
-    : "—";
+    : "-";
 }
 
 export function formatLocalDateLong(
@@ -56,7 +56,7 @@ export function formatLocalDateLong(
     ? formatter({ year: "numeric", month: "short", day: "numeric" }).format(
         date,
       )
-    : "—";
+    : "-";
 }
 
 export function formatLocalDateTime(
@@ -71,7 +71,7 @@ export function formatLocalDateTime(
         hour: "2-digit",
         minute: "2-digit",
       }).format(date)
-    : "—";
+    : "-";
 }
 
 export function formatLocalDateTimeWithZone(
@@ -88,7 +88,7 @@ export function formatLocalDateTimeWithZone(
         minute: "2-digit",
         timeZoneName: "short",
       }).format(date)
-    : "—";
+    : "-";
 }
 
 export function formatLocalTimeWithZone(

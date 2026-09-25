@@ -267,7 +267,7 @@
 	async function saveEditFlag(f: any, i: number) {
 		subError = ''; savingSub = 'flag' + i;
 		const body: any = { name: f.name, points: Number(f.points) || 0, flag_type: f.flag_type || 'static', dynamic_flag_prefix: f.dynamic_flag_prefix || '' };
-		// only send the value when one was typed — blank keeps the stored flag (update) and is required on create
+		// only send the value when one was typed - blank keeps the stored flag (update) and is required on create
 		if (f.flag) body.flag = f.flag;
 		try {
 			if (f.id) {
@@ -963,7 +963,7 @@
 				attachmentUploadStatus = '';
 			}
 
-			// challenge was created — close modal and reset form regardless of attachment failures
+			// challenge was created - close modal and reset form regardless of attachment failures
 			showCreateModal = false;
 			await loadDashboard();
 
@@ -1495,7 +1495,7 @@
 												<span class="font-mono text-xs text-stone-400">{team.join_code}</span>
 												<button class="text-xs text-stone-500 hover:underline ml-2 disabled:opacity-50" on:click={() => rotateTeamCode(team)} disabled={actionLoading === team.id} title="Rotate join code">rotate</button>
 											</td>
-											<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden lg:table-cell" title={team.created_at ? instantTitle(team.created_at, 'seconds') : ''}>{team.created_at ? formatDate(team.created_at) : '—'}</td>
+											<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden lg:table-cell" title={team.created_at ? instantTitle(team.created_at, 'seconds') : ''}>{team.created_at ? formatDate(team.created_at) : '-'}</td>
 											<td class="px-4 py-2.5">
 												<div class="flex items-center justify-end gap-3">
 													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleTeamExpand(team.id)}>Members</button>
@@ -1743,14 +1743,14 @@
 											<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
 												<td class="px-4 py-2.5 text-stone-200">{instance.username}</td>
 												<td class="px-4 py-2.5 text-stone-300">{instance.challenge_name}</td>
-												<td class="px-4 py-2.5 text-stone-400 font-mono text-xs">{instance.ip_address || '—'}</td>
+												<td class="px-4 py-2.5 text-stone-400 font-mono text-xs">{instance.ip_address || '-'}</td>
 												<td class="px-4 py-2.5">
 													<span class="text-xs {instance.status === 'running' ? 'text-up' : 'text-warn'}">{instance.status}</span>
 												</td>
 												<td class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums">
 													{instance.expires_at
 														? formatLocalDateTimeWithZone(instance.expires_at, 'seconds')
-														: '—'}
+														: '-'}
 												</td>
 												<td class="px-4 py-2.5 text-right">
 													<button
@@ -1793,14 +1793,14 @@
 										<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
 											<td class="px-4 py-2.5 text-stone-200">{instance.username}</td>
 											<td class="px-4 py-2.5 text-stone-300">{instance.challenge_name}</td>
-											<td class="px-4 py-2.5 text-stone-400 font-mono text-xs">{instance.ip_address || '—'}</td>
+											<td class="px-4 py-2.5 text-stone-400 font-mono text-xs">{instance.ip_address || '-'}</td>
 											<td class="px-4 py-2.5">
 												<span class="text-xs {instance.status === 'running' ? 'text-up' : 'text-warn'}">{instance.status}</span>
 											</td>
 											<td class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums">
 												{instance.expires_at
 													? formatLocalDateTimeWithZone(instance.expires_at, 'seconds')
-													: '—'}
+													: '-'}
 											</td>
 											<td class="px-4 py-2.5 text-right">
 												<button
@@ -2146,7 +2146,7 @@
 													<td class="px-4 py-2.5 text-stone-200">{ev.challenge_name ?? ev.challenge_id}</td>
 													<td class="px-4 py-2.5 text-amber-500/90">{ev.owner_username ?? ev.owner_user_id}</td>
 													<td class="px-4 py-2.5 text-down">{ev.submitter_username ?? ev.submitter_user_id}</td>
-													<td class="px-4 py-2.5 text-xs text-stone-400 font-mono">{ev.submitter_ip ?? '—'}</td>
+													<td class="px-4 py-2.5 text-xs text-stone-400 font-mono">{ev.submitter_ip ?? '-'}</td>
 													<td class="px-4 py-2.5 text-xs text-stone-300 font-mono max-w-xs truncate">{ev.flag_value}</td>
 												<td
 													class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums"
@@ -2352,7 +2352,7 @@
 							{#if newChallenge.type === 'download'}
 								<div class="flex items-start gap-2 py-2.5 px-3 bg-stone-900/40 border border-stone-800 rounded-md text-stone-400 text-xs">
 									<Icon icon="mdi:information-outline" class="w-4 h-4 shrink-0 mt-0.5" />
-									A download-only challenge has no container — add the challenge files as attachments below, and a flag.
+									A download-only challenge has no container - add the challenge files as attachments below, and a flag.
 								</div>
 							{/if}
 							{#if newChallenge.type === 'container'}
@@ -2400,8 +2400,8 @@
 												placeholder="1337"
 											/>
 											<select bind:value={ep.service} class="flex-1 {fieldCls}">
-												<option value="tcp">TCP — nc (netcat)</option>
-												<option value="http">HTTP — web browser</option>
+												<option value="tcp">TCP - nc (netcat)</option>
+												<option value="http">HTTP - web browser</option>
 											</select>
 											{#if newChallenge.exposed_ports.length > 1}
 												<button type="button" on:click={() => newChallenge.exposed_ports = newChallenge.exposed_ports.filter((_, idx) => idx !== i)} class="p-1.5 text-stone-500 hover:text-down transition-colors">
@@ -2447,10 +2447,10 @@
 											{#if fl.flag_type === 'static'}
 												<input type="text" bind:value={fl.flag} class="w-full font-mono {fieldCls}" placeholder="flag&#123;value&#125;" />
 											{:else if fl.flag_type === 'regex'}
-												<input type="text" bind:value={fl.flag} class="w-full font-mono {fieldCls}" placeholder="H7CTF&#123;[a-f0-9-]+&#125; — container generates flag, regex validates" />
+												<input type="text" bind:value={fl.flag} class="w-full font-mono {fieldCls}" placeholder="H7CTF&#123;[a-f0-9-]+&#125; - container generates flag, regex validates" />
 												<p class="text-stone-600 text-xs mt-1">Duplicate submissions across users trigger flag-share alerts in Audit</p>
 											{:else}
-												<input type="text" bind:value={fl.dynamic_flag_prefix} class="w-full font-mono {fieldCls}" placeholder="Prefix (e.g. H7CTF) — generates H7CTF&#123;uuid&#125; per user" />
+												<input type="text" bind:value={fl.dynamic_flag_prefix} class="w-full font-mono {fieldCls}" placeholder="Prefix (e.g. H7CTF) - generates H7CTF&#123;uuid&#125; per user" />
 											{/if}
 										</div>
 									{/each}
@@ -2798,8 +2798,8 @@
 								<div class="flex items-center gap-2 mb-2">
 									<input type="number" bind:value={ep.port} placeholder="Port" min="1" max="65535" class="w-20 font-mono tabular-nums {fieldCls}" />
 									<select bind:value={ep.service} class="flex-1 {fieldCls}">
-										<option value="tcp">TCP — nc (netcat)</option>
-										<option value="http">HTTP — web browser</option>
+										<option value="tcp">TCP - nc (netcat)</option>
+										<option value="http">HTTP - web browser</option>
 									</select>
 									<button
 										type="button"
@@ -2885,7 +2885,7 @@
 									{#if f.flag_type === 'dynamic'}
 										<input type="text" bind:value={f.dynamic_flag_prefix} placeholder="Prefix e.g. H7CTF" class="flex-1 font-mono {fieldCls}" />
 									{:else}
-										<input type="text" bind:value={f.flag} placeholder={f.has_value ? '•••••••• (unchanged — type to replace)' : (f.flag_type === 'regex' ? 'regex pattern' : 'flag value')} class="flex-1 font-mono {fieldCls}" />
+										<input type="text" bind:value={f.flag} placeholder={f.has_value ? '•••••••• (unchanged - type to replace)' : (f.flag_type === 'regex' ? 'regex pattern' : 'flag value')} class="flex-1 font-mono {fieldCls}" />
 									{/if}
 								</div>
 							</div>
@@ -2903,7 +2903,7 @@
 					{:else}
 						{#each editHints as hnt, i (i)}
 							<div class="border border-stone-800 rounded-lg p-3 space-y-2">
-								<textarea bind:value={hnt.content} rows="2" placeholder="Hint text — shown to players who unlock it" class="w-full {fieldCls} resize-none"></textarea>
+								<textarea bind:value={hnt.content} rows="2" placeholder="Hint text - shown to players who unlock it" class="w-full {fieldCls} resize-none"></textarea>
 								<div class="flex items-center gap-2">
 									<label class="text-xs text-stone-500 flex items-center gap-1.5">Cost <input type="number" bind:value={hnt.cost} min="0" title="Point cost to unlock" class="w-20 {fieldCls} tabular-nums" /></label>
 									<span class="flex-1"></span>

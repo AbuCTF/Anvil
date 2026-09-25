@@ -500,7 +500,7 @@ func getRegistryAuth(image string) string {
 	}
 
 	// Docker API expects base64-encoded JSON with username and password.
-	// The config.json "auth" field is base64(user:pass) — decode and split.
+	// The config.json "auth" field is base64(user:pass) - decode and split.
 	decoded, err := base64.StdEncoding.DecodeString(auth.Auth)
 	if err != nil {
 		return ""

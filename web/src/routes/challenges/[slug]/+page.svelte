@@ -116,10 +116,10 @@
 		instance = null;
 	}
 
-	// colored difficulty pill — shared with the challenge tiles. see DESIGN.md.
+	// colored difficulty pill - shared with the challenge tiles. see DESIGN.md.
 	$: diffClass = difficultyClass(challenge?.difficulty);
 
-	// solver podium — rendered only if the API supplies ordered solve data. first
+	// solver podium - rendered only if the API supplies ordered solve data. first
 	// blood is the one sanctioned saturated pop (blood token).
 	$: solvers = (() => {
 		const raw = challenge?.solvers ?? challenge?.solves ?? challenge?.first_bloods ?? [];
@@ -134,7 +134,7 @@
 	function formatSolvedAt(ts: string | number | null): string {
 		if (!ts) return '';
 		const formatted = formatLocalDateTime(ts, typeof ts === 'number' ? 'seconds' : 'auto');
-		return formatted === '—' ? '' : formatted;
+		return formatted === '-' ? '' : formatted;
 	}
 
 	const podiumRank: Record<number, { cls: string; label: string }> = {
@@ -421,7 +421,7 @@
 	}
 
 	function formatTimeRemaining(expiresAt: number): string {
-		if (!Number.isFinite(expiresAt) || expiresAt <= 0) return '—';
+		if (!Number.isFinite(expiresAt) || expiresAt <= 0) return '-';
 		const now = Math.floor(Date.now() / 1000);
 		const remaining = expiresAt - now;
 		if (remaining <= 0) return 'Expired';
@@ -485,7 +485,7 @@
 		return 'bg-up';
 	}
 
-	// muted callout tokens — reserved semantic color only, no neon.
+	// muted callout tokens - reserved semantic color only, no neon.
 	const calloutStyles: Record<string, { label: string; cls: string; icon: string }> = {
 		NOTE: { label: 'Note', cls: 'border-info/30 bg-info/10 text-info', icon: 'info' },
 		TIP: { label: 'Tip', cls: 'border-up/30 bg-up/10 text-up', icon: 'info' },
@@ -1289,7 +1289,7 @@
 					{#if isKoth && $auth.isAuthenticated}
 						<Card title="King of the Hill Arena">
 							<div class="space-y-3">
-								<p class="text-sm text-stone-400 leading-relaxed">One shared target the whole field contests. Enter the arena, then plant your token on the target — you score for every tick you hold it.</p>
+								<p class="text-sm text-stone-400 leading-relaxed">One shared target the whole field contests. Enter the arena, then plant your token on the target - you score for every tick you hold it.</p>
 								{#if kothToken}
 									<div>
 										<p class="metadata-label text-stone-500 mb-1.5">Your arena token</p>

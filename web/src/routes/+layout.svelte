@@ -27,14 +27,14 @@
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		...($platformInfo?.scoreboard_enabled !== false ? [{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' }] : []),
 		...(($platformInfo?.arena_enabled || isAdmin) ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
-		{ name: 'Instances', href: '/instances', icon: 'mdi:server' },
-		...($platformInfo?.teams_mode && $auth.isAuthenticated ? [{ name: 'Team', href: '/team', icon: 'mdi:account-group' }] : [])
+		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
 
-	// "My Instances" and "Team" dropped here — the top nav already covers them.
+	// Team lives in the user dropdown (where players expect it); teams mode only.
 	$: userMenu = [
 		...($auth.user?.role === 'admin' ? [{ name: 'Admin', href: '/admin', icon: 'mdi:shield-crown' }] : []),
 		{ name: 'Profile', href: '/profile', icon: 'mdi:account' },
+		...($platformInfo?.teams_mode && $auth.isAuthenticated ? [{ name: 'Team', href: '/team', icon: 'mdi:account-group' }] : []),
 		...($platformInfo?.vpn_enabled ? [{ name: 'VPN', href: '/vpn', icon: 'mdi:vpn' }] : [])
 	];
 
@@ -68,7 +68,7 @@
 	let credits: number | null = null;
 
 	async function loadCredits() {
-		// only poll /economy/me when the economy is actually on — otherwise it 400s
+		// only poll /economy/me when the economy is actually on - otherwise it 400s
 		if (!$auth.isAuthenticated || !$platformInfo?.economy_enabled) {
 			credits = null;
 			return;

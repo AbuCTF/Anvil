@@ -49,6 +49,6 @@ export const eventClock = derived([platformInfo, serverOffset, tick], ([$info, $
 	return { phase: phase as EventPhase | null, startMs: start as number | null, untilStart: Math.max(0, start - t) };
 });
 
-// go-live refetch delay: spread over 1–10 s (retries 5–15 s) so a few thousand
+// go-live refetch delay: spread over 1-10 s (retries 5-15 s) so a few thousand
 // open tabs don't hit the api in the same second.
 export const kickoffDelay = (retry = false) => (retry ? 5000 : 1000) + Math.random() * (retry ? 10_000 : 9000);

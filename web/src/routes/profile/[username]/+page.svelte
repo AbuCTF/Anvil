@@ -91,8 +91,8 @@
   $: lastAt = sorted.length ? sorted[sorted.length - 1].solved_at : 0;
   $: spanSec = lastAt - t0;
 
-  $: rankLabel = rank != null ? `#${rank}` : "—";
-  $: spanLabel = spanSec > 0 ? formatDur(spanSec) : "—";
+  $: rankLabel = rank != null ? `#${rank}` : "-";
+  $: spanLabel = spanSec > 0 ? formatDur(spanSec) : "-";
   $: firstDate = t0 ? parseInstant(t0, "seconds") : null;
   $: firstDateLabel = formatLocalDate(firstDate);
   $: firstTimeLabel = formatLocalTimeWithZone(firstDate);

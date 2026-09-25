@@ -63,15 +63,15 @@
 
 	<div class="mt-14 flex items-start justify-center gap-10 sm:gap-14">
 		<div>
-			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.challenges ?? '—'}</div>
+			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.challenges ?? '-'}</div>
 			<div class="metadata-label text-stone-500 mt-1">Challenges</div>
 		</div>
 		<div>
-			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.users ?? '—'}</div>
+			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.users ?? '-'}</div>
 			<div class="metadata-label text-stone-500 mt-1">Users</div>
 		</div>
 		<div>
-			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.solves ?? '—'}</div>
+			<div class="text-3xl font-semibold text-stone-100 tabular-nums">{stats.solves ?? '-'}</div>
 			<div class="metadata-label text-stone-500 mt-1">Solves</div>
 		</div>
 	</div>

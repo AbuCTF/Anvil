@@ -154,7 +154,7 @@ function createAuthStore() {
 			}
 		},
 
-		// initialize auth from stored token — call once on app load
+		// initialize auth from stored token - call once on app load
 		initialize: async () => {
 			if (!browser) return;
 			
@@ -216,13 +216,13 @@ function createAuthStore() {
 					localStorage.removeItem('user');
 					set(initialState);
 				} else {
-					// server error (5xx) — don't clear auth, keep trying
+					// server error (5xx) - don't clear auth, keep trying
 					console.error('Auth check failed with status:', response.status);
 					update(s => ({ ...s, isLoading: false }));
 				}
 			} catch (error) {
 				if (generation !== authGeneration) return;
-				// network error — don't clear auth, user might be offline
+				// network error - don't clear auth, user might be offline
 				console.error('Auth check network error:', error);
 				update(s => ({ 
 					...s, 
@@ -234,7 +234,7 @@ function createAuthStore() {
 			}
 		},
 
-		// check auth — debounced by default; score-changing actions can force a refresh
+		// check auth - debounced by default; score-changing actions can force a refresh
 		checkAuth: async (force = false) => {
 			if (!browser) return;
 
@@ -257,7 +257,7 @@ function createAuthStore() {
 				return;
 			}
 
-			// token exists but state doesn't reflect it — sync from storage
+			// token exists but state doesn't reflect it - sync from storage
 			if (!currentState.accessToken && token) {
 				update(s => ({ ...s, accessToken: token, isLoading: true }));
 			} else {
@@ -309,13 +309,13 @@ function createAuthStore() {
 					localStorage.removeItem('user');
 					set(initialState);
 				} else {
-					// server error — don't clear auth
+					// server error - don't clear auth
 					console.error('Auth check failed with status:', response.status);
 					update(s => ({ ...s, isLoading: false, lastChecked: now }));
 				}
 			} catch (error) {
 				if (generation !== authGeneration) return;
-				// network error — keep existing auth state
+				// network error - keep existing auth state
 				console.error('Auth check error:', error);
 				update(s => ({ ...s, isLoading: false }));
 			}

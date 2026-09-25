@@ -163,7 +163,7 @@
 	}
 
 	function formatTimeRemaining(expiresAt: number): string {
-		if (!Number.isFinite(expiresAt) || expiresAt <= 0) return '—';
+		if (!Number.isFinite(expiresAt) || expiresAt <= 0) return '-';
 		const now = Math.floor(Date.now() / 1000);
 		const remaining = expiresAt - now;
 
@@ -178,7 +178,7 @@
 		return `${minutes}m`;
 	}
 
-	// muted status dot — the semantic color lives on the dot, the label stays gray.
+	// muted status dot - the semantic color lives on the dot, the label stays gray.
 	function statusDot(status: string): string {
 		switch (status) {
 			case 'running':

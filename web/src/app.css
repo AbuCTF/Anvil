@@ -23,7 +23,7 @@
     --chart-dim-opacity: 0.5;
     color-scheme: dark;
   }
-  /* Light theme — the scale inverts, so every stone-* class flips automatically. */
+  /* Light theme - the scale inverts, so every stone-* class flips automatically. */
   :root[data-theme="light"] {
     --st-50: 28 25 23;
     --st-100: 28 25 23;
@@ -141,7 +141,7 @@
   }
 }
 
-/* Theme-aware hero highlight — cyan reads darker on a light ground. */
+/* Theme-aware hero highlight - cyan reads darker on a light ground. */
 .hero-accent {
   color: #22d3ee;
 }

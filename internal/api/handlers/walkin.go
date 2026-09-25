@@ -153,7 +153,7 @@ func (h *AuthHandler) DiscordCallback(c *gin.Context) {
 	if errors.Is(err, errZPNotRegistered) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"code":         "not_registered",
-			"error":        "no registration is linked to this Discord. if you registered with a different email, sign in at the registration site and click through to the platform from there — otherwise register first.",
+			"error":        "no registration is linked to this Discord. if you registered with a different email, sign in at the registration site and click through to the platform from there - otherwise register first.",
 			"register_url": h.config.Platform.RegisterURL,
 		})
 		return

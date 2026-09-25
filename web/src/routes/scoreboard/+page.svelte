@@ -415,7 +415,7 @@
   {#if frozen}
     <div class="mb-4 flex items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-sm text-amber-500">
       <Icon icon="mdi:snowflake" class="h-4 w-4 shrink-0" />
-      Scoreboard frozen — final standings are hidden until the results are published.
+      Scoreboard frozen - final standings are hidden until the results are published.
     </div>
   {/if}
   <PageHeader title="Scoreboard" {subtitle}>
@@ -539,7 +539,7 @@
     <Card title={view === "matrix" ? "Challenge matrix" : "Standings"}>
       <EmptyState
         icon="mdi:trophy-outline"
-        text="No solves yet — the board fills as {noun}s score."
+        text="No solves yet."
       />
     </Card>
   {:else}
@@ -788,7 +788,7 @@
                     <td
                       class="hidden whitespace-nowrap px-4 py-2.5 text-right text-xs tabular-nums text-stone-500 lg:table-cell"
                       title={instantTitle(entry.last_solve_at)}
-                      >{entry.last_solve_at ? formatDate(entry.last_solve_at) : "—"}</td
+                      >{entry.last_solve_at ? formatDate(entry.last_solve_at) : "-"}</td
                     >
                     <td class="hidden px-3 py-1.5 text-right sm:table-cell">
                       <button

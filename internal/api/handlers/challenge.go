@@ -676,7 +676,7 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		sum := sha256.Sum256([]byte(fmt.Sprintf("koth-admin-preview:%v:%s", uid, chalID)))
 		token := "koth_" + hex.EncodeToString(sum[:])[:32]
 		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": token, "credits": 0,
-			"message": "admin preview — same token each time; not charged, and won't score (no team)"})
+			"message": "admin preview - same token each time; not charged, and won't score (no team)"})
 		return
 	}
 
@@ -755,7 +755,7 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": token, "credits": credits,
-		"message": "you're in the arena — plant this token on the target to hold it"})
+		"message": "you're in the arena - plant this token on the target to hold it"})
 }
 
 // resolves the economy context for a challenge action (economy on, caller's team, challenge id + difficulty). writes the error response and returns ok=false on any failure.
@@ -800,7 +800,7 @@ func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID u
 }
 
 // releases an open challenge early for a partial refund, and — since abandon
-// means "I'm done with this" — reaps the team's running instance immediately
+// means "I'm done with this" - reaps the team's running instance immediately
 // rather than letting it ride out its TTL (option A).
 func (h *ChallengeHandler) AbandonChallenge(c *gin.Context) {
 	teamID, chalID, difficulty, ok := h.economyChallengeCtx(c)

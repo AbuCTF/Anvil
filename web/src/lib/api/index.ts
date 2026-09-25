@@ -163,7 +163,7 @@ class ApiClient {
 
 			return this.parseResponse<T>(response);
 		} catch (error) {
-			// network errors — don't clear auth
+			// network errors - don't clear auth
 			if (error instanceof TypeError && error.message.includes('fetch')) {
 				throw new Error('Network error. Please check your connection.', { cause: error });
 			}
@@ -301,7 +301,7 @@ class ApiClient {
 		}, false);
 	}
 
-	// challenges — public endpoint
+	// challenges - public endpoint
 	async getChallenges(params?: { category?: string; difficulty?: string }) {
 		const queryString = params
 			? '?' + new URLSearchParams(params as Record<string, string>).toString()
@@ -404,12 +404,12 @@ class ApiClient {
 		return this.request<{ solves: any[] }>('/user/me/solves');
 	}
 
-	// public stats — no auth required
+	// public stats - no auth required
 	async getStats() {
 		return this.request<any>('/stats', {}, false);
 	}
 
-	// scoreboard — public endpoint
+	// scoreboard - public endpoint
 	async getScoreboard() {
 		return this.request<{ leaderboard: any[]; total_users: number }>('/scoreboard', {}, false);
 	}

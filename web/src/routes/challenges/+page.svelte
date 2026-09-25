@@ -20,7 +20,7 @@
 	}
 
 	// persist the loaded board across client-side navigations so returning from a
-	// challenge detail restores the list instantly — no reload, no scroll reset.
+	// challenge detail restores the list instantly - no reload, no scroll reset.
 	let cachedChallenges: Challenge[] | null = null;
 </script>
 
@@ -70,7 +70,7 @@
 	let showSolved = false;
 	let showKoth = false;
 
-	// icons only — the accent color always comes from the muted categoryColor palette.
+	// icons only - the accent color always comes from the muted categoryColor palette.
 	// keyed by the lowercased category name; keep both the live H7 names and the
 	// generic aliases so this maps cleanly across events.
 	const categoryIcons: Record<string, { icon: string; size: number }> = {
@@ -142,8 +142,8 @@
 	}
 
 	// preserve the filter state across a challenge-detail round-trip: SvelteKit
-	// captures this before navigating away and restores it on back, which — with the
-	// cached list rendered synchronously — lets built-in scroll restoration land us
+	// captures this before navigating away and restores it on back, which - with the
+	// cached list rendered synchronously - lets built-in scroll restoration land us
 	// back on the same section instead of the top.
 	export const snapshot = {
 		capture: () => ({ searchQuery, selectedDifficulty, selectedCategory, showSolved, showKoth }),

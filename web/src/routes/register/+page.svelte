@@ -86,7 +86,7 @@
 						class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors"
 					/>
 					{#if username && !usernameValid}
-						<p class="mt-1.5 text-xs text-stone-500 tabular-nums">3–32 characters, letters, numbers, _ or -</p>
+						<p class="mt-1.5 text-xs text-stone-500 tabular-nums">3-32 characters, letters, numbers, _ or -</p>
 					{/if}
 				</div>
 
