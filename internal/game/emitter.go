@@ -36,7 +36,12 @@ func (c *Controller) emitStandings(ctx context.Context, tick int) {
 	rows, err := c.db.Pool.Query(ctx,
 		`SELECT t.id, t.name, s.attack, s.defense, s.sla, s.koth, s.total, s.rank
 		 FROM game_standings s JOIN game_teams t ON t.id = s.team_id
-		 WHERE t.is_nop = false ORDER BY s.rank ASC NULLS LAST`)
+		 WHERE t.is_nop = false
+		   -- skip mirrors of organizer test teams (no active non-staff member)
+		   AND NOT EXISTS (SELECT 1 FROM teams rt WHERE rt.id = t.id AND NOT EXISTS (
+		       SELECT 1 FROM users pm WHERE pm.team_id = rt.id
+		         AND pm.status = 'active' AND pm.role NOT IN ('admin', 'author')))
+		 ORDER BY s.rank ASC NULLS LAST`)
 	if err != nil {
 		c.logger.Warn("emit: query standings", zap.Error(err))
 		return

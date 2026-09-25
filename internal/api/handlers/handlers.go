@@ -1327,10 +1327,11 @@ type AttachmentHandler struct {
 	db         *database.DB
 	storageSvc storage.StorageBackend
 	logger     *zap.Logger
+	ticketKey  []byte // signs download tickets
 }
 
-func NewAttachmentHandler(db *database.DB, storageSvc storage.StorageBackend, logger *zap.Logger) *AttachmentHandler {
-	return &AttachmentHandler{db: db, storageSvc: storageSvc, logger: logger}
+func NewAttachmentHandler(db *database.DB, storageSvc storage.StorageBackend, logger *zap.Logger, ticketKey string) *AttachmentHandler {
+	return &AttachmentHandler{db: db, storageSvc: storageSvc, logger: logger, ticketKey: []byte(ticketKey)}
 }
 
 func logAdminAction(db *database.DB, c *gin.Context, userID, action, resourceType, resourceID string, metadata map[string]interface{}) error {

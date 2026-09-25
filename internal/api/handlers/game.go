@@ -167,7 +167,7 @@ func (h *GameHandler) standingsData(ctx context.Context, query gameStateQuerier)
 	rows, err := query.Query(ctx,
 		`SELECT t.id, t.name, s.attack, s.defense, s.sla, s.koth, s.total, s.rank
 		 FROM game_standings s JOIN game_teams t ON t.id = s.team_id
-		 WHERE t.is_nop = false AND t.status = 'active'
+		 WHERE t.is_nop = false AND t.status = 'active' AND `+publicGameTeamSQL("t")+`
 		 ORDER BY s.rank ASC NULLS LAST, t.id`)
 	if err != nil {
 		return nil, err
@@ -214,7 +214,7 @@ func (h *GameHandler) hillsData(ctx context.Context, query gameStateQuerier) ([]
 		   SELECT controller_team_id FROM game_koth_control
 		   WHERE hill_id = h.id ORDER BY tick_number DESC LIMIT 1
 		 ) kc ON true
-		 LEFT JOIN game_teams t ON t.id = kc.controller_team_id
+		 LEFT JOIN game_teams t ON t.id = kc.controller_team_id AND `+publicGameTeamSQL("t")+`
 		 WHERE h.enabled = true
 		 ORDER BY h.sort_order, h.name, h.id`)
 	if err != nil {
@@ -299,7 +299,7 @@ func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier) (
 	rows, err := query.Query(ctx,
 		`SELECT t.id, t.name, s.tick_number, s.total
 		 FROM game_score_snapshots s JOIN game_teams t ON t.id = s.team_id
-		 WHERE t.is_nop = false AND t.status = 'active'
+		 WHERE t.is_nop = false AND t.status = 'active' AND `+publicGameTeamSQL("t")+`
 		   AND s.tick_number > (SELECT COALESCE(MAX(tick_number), 0) - $1 FROM game_score_snapshots)
 		 ORDER BY t.name, t.id, s.tick_number`, arenaHistoryTickLimit)
 	if err != nil {
@@ -417,7 +417,8 @@ func (h *GameHandler) matrixData(ctx context.Context, query gameStateQuerier) ([
 	teamRows, err := query.Query(ctx,
 		`SELECT t.id, t.name, s.rank FROM game_teams t
 		 JOIN game_standings s ON s.team_id = t.id
-		 WHERE t.is_nop = false AND t.status = 'active' ORDER BY s.rank ASC NULLS LAST, t.id`)
+		 WHERE t.is_nop = false AND t.status = 'active' AND `+publicGameTeamSQL("t")+`
+		 ORDER BY s.rank ASC NULLS LAST, t.id`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -473,6 +474,7 @@ func (h *GameHandler) eventsData(ctx context.Context, query gameStateQuerier) ([
 		 JOIN game_teams a ON a.id = cp.attacker_team_id
 		 JOIN game_teams v ON v.id = cp.victim_team_id
 		 JOIN game_services s ON s.id = cp.service_id
+		 WHERE `+publicGameTeamSQL("a")+` AND `+publicGameTeamSQL("v")+`
 		 ORDER BY cp.submitted_at DESC, cp.id DESC LIMIT 40`)
 	if err != nil {
 		return nil, err

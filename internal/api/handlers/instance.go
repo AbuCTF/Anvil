@@ -568,8 +568,8 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			_ = tx.QueryRow(ctx,
 				`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
 				*teamID, challenge.ID).Scan(&st)
-			if st != "open" && st != "solved" {
-				c.JSON(http.StatusForbidden, gin.H{"error": "launch this challenge before starting an instance"})
+			if economyLocked(true, instStaff, st) {
+				c.JSON(http.StatusForbidden, gin.H{"error": "open this challenge first"})
 				return
 			}
 		}

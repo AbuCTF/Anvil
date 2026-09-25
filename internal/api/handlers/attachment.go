@@ -30,6 +30,7 @@ type AttachmentResponse struct {
 	CreatedAt   int64  `json:"created_at"`
 	URL         string `json:"url,omitempty"`    // set => external handout (download redirects here)
 	Sha256      string `json:"sha256,omitempty"` // optional integrity check for large external handouts
+	Ticket      string `json:"ticket,omitempty"` // signed download grant (?t=) for the plain-link download
 }
 
 // upper limit for a single-request attachment upload (500 mb)
@@ -408,23 +409,31 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment ID"})
 		return
 	}
+	// a ticket was minted for someone who could see this file (incl. staff on a draft)
+	ticketed := validAttachmentTicket(h.ticketKey, attachmentID, c.Query("t"), time.Now())
+	statusCond := "c.status = 'published' AND (c.release_date IS NULL OR c.release_date <= NOW())"
+	if ticketed || isStaff(c) {
+		statusCond = "c.status IN ('published', 'draft')"
+	}
 	// look up attachment (join with challenge to validate slug ownership and published status)
-	var storageKey, filename, contentType, externalURL string
+	var storageKey, filename, contentType, externalURL, challengeID string
 	var fileSize int64
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT COALESCE(ca.storage_key, ''), ca.filename, COALESCE(ca.content_type, 'application/octet-stream'), ca.file_size, COALESCE(ca.url, '')
+		`SELECT COALESCE(ca.storage_key, ''), ca.filename, COALESCE(ca.content_type, 'application/octet-stream'), ca.file_size, COALESCE(ca.url, ''), ca.challenge_id::text
 		 FROM challenge_attachments ca
 		 JOIN challenges c ON c.id = ca.challenge_id
-		 WHERE ca.id = $1 AND c.slug = $2 AND c.status = 'published'
-		   AND (c.release_date IS NULL OR c.release_date <= NOW())`,
+		 WHERE ca.id = $1 AND c.slug = $2 AND `+statusCond,
 		attachmentID, slug,
-	).Scan(&storageKey, &filename, &contentType, &fileSize, &externalURL)
+	).Scan(&storageKey, &filename, &contentType, &fileSize, &externalURL, &challengeID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "attachment not found"})
 		return
 	} else if err != nil {
 		h.logger.Error("failed to query attachment for download", zap.String("attachment_id", attachmentID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "file unavailable"})
+		return
+	}
+	if !ticketed && rejectLocked(c, h.db, h.logger, challengeID) {
 		return
 	}
 
@@ -484,7 +493,12 @@ func (h *AttachmentHandler) Download(c *gin.Context) {
 }
 
 func (h *AttachmentHandler) ListPublic(c *gin.Context, challengeID string) ([]AttachmentResponse, error) {
-	return h.queryAttachments(c, challengeID)
+	attachments, err := h.queryAttachments(c, challengeID)
+	exp := time.Now().Add(attachmentTicketTTL)
+	for i := range attachments {
+		attachments[i].Ticket = attachmentTicket(h.ticketKey, attachments[i].ID, exp)
+	}
+	return attachments, err
 }
 
 func (h *AttachmentHandler) queryAttachments(c *gin.Context, challengeID string) ([]AttachmentResponse, error) {
