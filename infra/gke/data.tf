@@ -41,11 +41,21 @@ resource "google_sql_database_instance" "anvil" {
   depends_on = [google_service_networking_connection.psa]
 
   settings {
-    edition           = "ENTERPRISE" # standard edition; ENTERPRISE_PLUS forces perf-optimized tiers
-    tier              = "db-custom-1-3840" # 1 vCPU / 3.75 GB — small, stoppable when idle
+    edition           = "ENTERPRISE"        # standard edition; ENTERPRISE_PLUS forces perf-optimized tiers
+    tier              = "db-custom-4-16384" # 4 vCPU / 16 GB — event sizing
     availability_type = "ZONAL"
     disk_size         = 20
     disk_autoresize   = true
+
+    # 8 api pods x 40 conns (anvil.yaml hpa) with headroom.
+    database_flags {
+      name  = "max_connections"
+      value = "400"
+    }
+
+    insights_config {
+      query_insights_enabled = true
+    }
 
     ip_configuration {
       ipv4_enabled    = false # private IP only
@@ -59,6 +69,12 @@ resource "google_sql_database_instance" "anvil" {
   }
 
   deletion_protection = false
+
+  lifecycle {
+    # insights was enabled without a query length, so the api reports 0 and the
+    # provider's 1024 default would show a diff forever.
+    ignore_changes = [settings[0].insights_config[0].query_string_length]
+  }
 }
 
 resource "google_sql_database" "anvil" {

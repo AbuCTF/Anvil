@@ -37,6 +37,10 @@ resource "google_container_cluster" "anvil" {
     channel = "REGULAR"
   }
 
+  # the h7ctf26-event-freeze exclusion (no_upgrades, to 2026-10-10) is set with
+  # gcloud: the provider only takes exclusions next to a maintenance window and
+  # we run none. with no maintenance_policy block tf never reads or clears it.
+
   # we admin the API from atom; open for now, tighten to atom's IP later.
   master_authorized_networks_config {
     cidr_blocks {

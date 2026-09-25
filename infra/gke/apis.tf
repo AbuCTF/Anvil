@@ -3,7 +3,7 @@
 # APIs out from under anything else in the project.
 locals {
   services = [
-    "compute.googleapis.com",           # VMs / networking / GKE nodes
+    "compute.googleapis.com",            # VMs / networking / GKE nodes
     "container.googleapis.com",          # GKE
     "artifactregistry.googleapis.com",   # challenge + platform images
     "servicenetworking.googleapis.com",  # private services access (Cloud SQL/Redis private IP)
@@ -12,6 +12,8 @@ locals {
     "certificatemanager.googleapis.com", # managed certs (option alongside cert-manager)
     "monitoring.googleapis.com",
     "logging.googleapis.com",
+    "cloudquotas.googleapis.com", # quota increase requests
+    "cloudbilling.googleapis.com",
   ]
 }
 

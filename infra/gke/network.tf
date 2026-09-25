@@ -27,8 +27,8 @@ resource "google_compute_subnetwork" "subnet" {
 }
 
 # --- egress for private nodes: one Cloud NAT IP for the whole cluster ------
-# one NAT IP provides ~64k ports => ~1000 VMs of egress; auto-only scales IPs
-# only if we ever exceed that (we won't at this scale), so it stays at 1 IP.
+# one NAT IP provides ~64k ports; auto-only adds a second only if the per-vm
+# allocations below (128-2048 each) ever outgrow it.
 resource "google_compute_router" "router" {
   name    = "anvil-router"
   region  = var.region
@@ -42,9 +42,39 @@ resource "google_compute_router_nat" "nat" {
   nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
 
+  # dynamic ports: busy nodes grow from 128 to 2048 instead of exhausting a
+  # fixed slice; a short time-wait recycles ports fast under bursty egress.
+  enable_dynamic_port_allocation = true
+  min_ports_per_vm               = 128
+  max_ports_per_vm               = 2048
+  tcp_time_wait_timeout_sec      = 30
+
   log_config {
     enable = true
     filter = "ERRORS_ONLY"
+  }
+}
+
+# --- static ingress IPs ------------------------------------------------------
+# promoted from the ephemeral IPs k8s gave the LoadBalancer services, which pin
+# them via loadBalancerIP (instancer/config/deploy). DNS points here: never release.
+resource "google_compute_address" "traefik" {
+  name    = "anvil-traefik-ip" # ctf + *.web.h7tex.com
+  region  = var.region
+  address = "34.93.46.24"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_compute_address" "tcpproxy" {
+  name    = "anvil-tcpproxy-ip" # pwn/web3.h7tex.com
+  region  = var.region
+  address = "34.180.1.168"
+
+  lifecycle {
+    prevent_destroy = true
   }
 }
 
