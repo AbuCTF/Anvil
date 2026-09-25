@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -116,10 +117,10 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	// provisioned once already (endpoints published): only pods can have gone
-	// missing, so recreate those instead of re-issuing every create. a launch wave's
-	// pod events otherwise queue ~12 creates each ahead of brand-new instances.
-	if inst.Status.Namespace != "" && len(inst.Status.Endpoints) > 0 {
+	// fully provisioned once already: only pods can have gone missing, so recreate
+	// those instead of re-issuing every create. a launch wave's pod events otherwise
+	// queue ~12 creates each ahead of brand-new instances.
+	if apimeta.IsStatusConditionTrue(inst.Status.Conditions, condProvisioned) {
 		for _, p := range inst.Spec.Pods {
 			if err := r.createIfAbsent(ctx, buildPod(inst, p, r.Cfg, exposedPods)); err != nil {
 				return ctrl.Result{}, fmt.Errorf("recreate pod %s: %w", p.Name, err)
@@ -167,6 +168,12 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	objs = append(objs, routes...)
 
+	// publish the connect info now: the api is waiting on it, and hostnames and the
+	// port lock are already final. the objects below follow in this same pass.
+	if err := r.setStatus(ctx, inst, "Provisioning", ns, endpoints, ""); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	for _, o := range objs {
 		if err := r.createIfAbsent(ctx, o); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create %T %s: %w", o, o.GetName(), err)
@@ -177,7 +184,8 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.setStatus(ctx, inst, phase, ns, endpoints, ""); err != nil {
+	provisioned := metav1.Condition{Type: condProvisioned, Status: metav1.ConditionTrue, Reason: "Created", ObservedGeneration: inst.Generation}
+	if err := r.setStatus(ctx, inst, phase, ns, endpoints, "", provisioned); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -332,7 +340,10 @@ func (r *ChallengeInstanceReconciler) instancePhase(ctx context.Context, ns stri
 	return "Ready", nil
 }
 
-func (r *ChallengeInstanceReconciler) setStatus(ctx context.Context, inst *instv1.ChallengeInstance, phase, ns string, eps []instv1.InstanceEndpoint, msg string) error {
+// condProvisioned marks that every object of the instance was created once.
+const condProvisioned = "Provisioned"
+
+func (r *ChallengeInstanceReconciler) setStatus(ctx context.Context, inst *instv1.ChallengeInstance, phase, ns string, eps []instv1.InstanceEndpoint, msg string, extra ...metav1.Condition) error {
 	orig := inst.DeepCopy()
 	inst.Status.Phase = phase
 	inst.Status.Namespace = ns
@@ -352,6 +363,9 @@ func (r *ChallengeInstanceReconciler) setStatus(ctx context.Context, inst *instv
 		meta.Status = metav1.ConditionTrue
 	}
 	setCondition(&inst.Status.Conditions, meta)
+	for _, c := range extra {
+		setCondition(&inst.Status.Conditions, c)
+	}
 	if equality.Semantic.DeepEqual(orig.Status, inst.Status) {
 		return nil
 	}

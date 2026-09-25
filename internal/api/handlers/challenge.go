@@ -1463,6 +1463,11 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 			return
 		} else if ecErr := applyEconomySolve(ctx, tx, h.config.Economy, *ecoTeamID, chalUUID, ecoDifficulty); ecErr != nil {
+			var eo *EconomyOpError
+			if errors.As(ecErr, &eo) {
+				c.JSON(eo.Status, gin.H{"error": eo.Message})
+				return
+			}
 			h.logger.Error("failed to apply economy solve", zap.Error(ecErr))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 			return

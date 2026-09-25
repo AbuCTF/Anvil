@@ -189,6 +189,12 @@ func buildPod(inst *instv1.ChallengeInstance, pod instv1.InstancePod, cfg Config
 	if spec.RestartPolicy == "" {
 		spec.RestartPolicy = corev1.RestartPolicyAlways
 	}
+	// challenge servers hold no state worth a graceful stop; a 30s default made
+	// teardown (and a team's relaunch waiting on it) crawl in a wave of expiries.
+	if spec.TerminationGracePeriodSeconds == nil {
+		grace := int64(5)
+		spec.TerminationGracePeriodSeconds = &grace
+	}
 	if runtimeClass != "" && spec.RuntimeClassName == nil {
 		rc := runtimeClass
 		spec.RuntimeClassName = &rc

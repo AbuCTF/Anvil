@@ -213,12 +213,14 @@ func applyEconomySolve(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig,
 	if err != nil {
 		return err
 	}
-	return applyEconomyFrac(ctx, tx, cfg, teamID, challengeID, difficulty, frac)
+	return applyEconomyFrac(ctx, tx, cfg, teamID, challengeID, difficulty, frac, true)
 }
 
-// applyGradedScore raises a graded challenge's share to the reported best.
+// applyGradedScore raises a graded challenge's share to the reported best. no
+// clean refund: a throwaway 0.01 submission would otherwise buy half-price
+// scouting of the judge.
 func applyGradedScore(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, teamID, challengeID uuid.UUID, difficulty string, score float64) error {
-	return applyEconomyFrac(ctx, tx, cfg, teamID, challengeID, difficulty, score)
+	return applyEconomyFrac(ctx, tx, cfg, teamID, challengeID, difficulty, score, false)
 }
 
 // teamFlagFrac is the team's share of a challenge's flags, weighted by flag points
@@ -256,35 +258,42 @@ func shareOf(held, total float64, heldN, totalN int) float64 {
 // shares, so shallow grabs decay a challenge less than full solves do, and each
 // holder earns value x its own share. first capture counts the team as a holder
 // and pays the clean refund, once.
-func applyEconomyFrac(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, teamID, challengeID uuid.UUID, difficulty string, frac float64) error {
+func applyEconomyFrac(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, teamID, challengeID uuid.UUID, difficulty string, frac float64, refund bool) error {
 	if math.IsNaN(frac) || frac <= 0 {
 		return nil
 	}
 	frac = math.Min(frac, 1)
 
+	// re-checked under the row lock: the caller's open check ran before its tx, so
+	// a concurrent abandon (refund paid) or a lapsed timer must not score.
+	var status string
+	var live bool
 	var wrongSubs int
 	var holds bool
 	var cur float64
 	err := tx.QueryRow(ctx,
-		`SELECT wrong_subs, holds_solve, frac FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2 FOR UPDATE`,
+		`SELECT status, COALESCE(expires_at > NOW(), FALSE), wrong_subs, holds_solve, frac
+		 FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2 FOR UPDATE`,
 		teamID, challengeID,
-	).Scan(&wrongSubs, &holds, &cur)
+	).Scan(&status, &live, &wrongSubs, &holds, &cur)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if _, e := tx.Exec(ctx,
-			`INSERT INTO economy_challenge_state (team_id, challenge_id, status) VALUES ($1, $2, 'open')
-			 ON CONFLICT (team_id, challenge_id) DO NOTHING`, teamID, challengeID); e != nil {
-			return e
-		}
+		return &EconomyOpError{Status: http.StatusConflict, Message: "open this challenge first"}
 	} else if err != nil {
 		return err
+	}
+	if status != "solved" && !(status == "open" && live) {
+		return &EconomyOpError{Status: http.StatusConflict, Message: "this challenge is no longer open for your team"}
 	}
 	if holds && frac <= cur {
 		return nil // nothing deeper than what the team already holds
 	}
 	first := !holds
 
+	// a partial holder stays open: its timer, slot and wrong-sub count keep running
+	// until the share is whole.
 	if _, err := tx.Exec(ctx,
-		`UPDATE economy_challenge_state SET status = 'solved', holds_solve = TRUE, frac = $3
+		`UPDATE economy_challenge_state
+		 SET status = CASE WHEN $3 >= 1 THEN 'solved' ELSE status END, holds_solve = TRUE, frac = $3
 		 WHERE team_id = $1 AND challenge_id = $2`, teamID, challengeID, frac); err != nil {
 		return err
 	}
@@ -336,8 +345,10 @@ func applyEconomyFrac(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, 
 			hh.team, challengeID, newVal); err != nil {
 			return err
 		}
+		// floored at 0: a points->credits conversion lowers points but not the holding,
+		// so a later decay delta could otherwise push a team negative.
 		if _, err := tx.Exec(ctx,
-			`UPDATE economy_team_score SET points = points + $2, updated_at = NOW() WHERE team_id = $1`,
+			`UPDATE economy_team_score SET points = GREATEST(points + $2, 0), updated_at = NOW() WHERE team_id = $1`,
 			hh.team, delta); err != nil {
 			return err
 		}
@@ -350,7 +361,7 @@ func applyEconomyFrac(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, 
 	// the refund comes last: team score rows are taken in team_id order above, and
 	// the solver's is already among them, so two solves on different challenges
 	// can't each hold one team's row while waiting on the other's (deadlock -> 500).
-	if first && wrongSubs == 0 {
+	if first && refund && wrongSubs == 0 {
 		if refund := cfg.CleanRefundFrac * launchCost(cfg, difficulty); refund > 0 {
 			cid := challengeID
 			if _, err := applyCredit(ctx, tx, teamID, "clean_refund", refund, &cid, nil); err != nil {
