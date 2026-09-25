@@ -292,8 +292,10 @@ func applyEconomyFrac(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, 
 	// a partial holder stays open: its timer, slot and wrong-sub count keep running
 	// until the share is whole.
 	if _, err := tx.Exec(ctx,
+		// explicit float8: next to the integer literal postgres types $3 as int, and a
+		// 0.1 share was stored as 0 (every partial capture paid nothing).
 		`UPDATE economy_challenge_state
-		 SET status = CASE WHEN $3 >= 1 THEN 'solved' ELSE status END, holds_solve = TRUE, frac = $3
+		 SET status = CASE WHEN $3::float8 >= 1 THEN 'solved' ELSE status END, holds_solve = TRUE, frac = $3::float8
 		 WHERE team_id = $1 AND challenge_id = $2`, teamID, challengeID, frac); err != nil {
 		return err
 	}
