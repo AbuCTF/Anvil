@@ -619,7 +619,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check instance limit"})
 			return
 		}
-		if activeCount >= maxInstances {
+		if !isStaff(c) && activeCount >= maxInstances {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error":       "instance limit reached",
 				"max_allowed": maxInstances,

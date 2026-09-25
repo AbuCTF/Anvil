@@ -347,7 +347,7 @@
 							<span class="h-3 w-40 rounded bg-stone-900/60 animate-pulse"></span>
 							<div class="flex-1 h-px bg-stone-800/60"></div>
 						</div>
-						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[2200px]:grid-cols-5 gap-4">
+						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[2200px]:grid-cols-5 gap-4 items-start">
 							{#each [0, 1, 2] as k (k)}
 								<div class="h-32 rounded-lg border border-stone-800 bg-stone-900/40 animate-pulse"></div>
 							{/each}
@@ -403,7 +403,7 @@
 							</span>
 							<div class="flex-1 h-px bg-stone-800/60"></div>
 						</div>
-						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[2200px]:grid-cols-5 gap-4">
+						<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 min-[2200px]:grid-cols-5 gap-4 items-start">
 							{#each group.challenges as challenge (challenge.id)}
 								<ChallengeTile {challenge} />
 							{/each}

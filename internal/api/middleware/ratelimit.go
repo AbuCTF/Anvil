@@ -115,6 +115,14 @@ func RateLimitEndpoint(cfg config.RateLimit) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		endpoint := c.FullPath()
 
+		// staff (admin/author) bypass action rate limits — they test, not abuse.
+		if role, ok := c.Get("role"); ok {
+			if r, _ := role.(string); r == "admin" || r == "author" {
+				c.Next()
+				return
+			}
+		}
+
 		endpointLimitersMu.Lock()
 		limiter, exists := endpointLimiters[endpoint]
 		if !exists {
