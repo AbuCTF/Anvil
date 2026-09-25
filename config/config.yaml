@@ -79,3 +79,13 @@ rate_limit:
   vpn_config_gen:
     requests: 2
     window: 1h
+
+# Ledger economy — CTF26-1 final, sim-confirmed (see CTF26/ledger-quals-final.md).
+# All other economy params use the code defaults (config.go), which already match
+# CTF26-1's block; two overrides:
+#  - crowd_floors: easy/medium .15 -> .25 (fixes hoarder>beginner, ~2x beginner pts)
+#  - launch_costs: insane 250 -> 400 (curbs fast-agent flood of insanes at the drop:
+#    top-10 agent share 23% -> 4% in the pessimistic case; elite margin unchanged)
+economy:
+  crowd_floors: [0.25, 0.25, 0.15, 0.75]
+  launch_costs: [50, 100, 200, 400]

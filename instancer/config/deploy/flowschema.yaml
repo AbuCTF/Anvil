@@ -1,13 +1,35 @@
-# The instance path (the api creating and polling ChallengeInstances, the operator
-# building them) rides the high API priority level, so a launch wave or a noisy
-# client can't queue it behind lower-priority traffic.
+# API Priority & Fairness for the instance path (api creating/polling
+# ChallengeInstances, operator building them). Under a launch wave this keeps the
+# instancer's api-server calls in their own concurrency lane so a noisy client
+# can't queue them behind lower-priority traffic and stall provisioning.
+#
+# GKE's flowcontrol guardrail webhook forbids a user FlowSchema from referencing
+# the cluster-critical built-ins (workload-high/-low, system, ...), so we run our
+# own PriorityLevelConfiguration and point the FlowSchema at that.
+apiVersion: flowcontrol.apiserver.k8s.io/v1
+kind: PriorityLevelConfiguration
+metadata:
+  name: anvil-instancing
+spec:
+  type: Limited
+  limited:
+    # relative slice of api-server concurrency (system=30, workload-high=40).
+    nominalConcurrencyShares: 30
+    # queue rather than 429 the controller — a launch wave waits, it doesn't fail.
+    limitResponse:
+      type: Queue
+      queuing:
+        queues: 128
+        handSize: 6
+        queueLengthLimit: 50
+---
 apiVersion: flowcontrol.apiserver.k8s.io/v1
 kind: FlowSchema
 metadata:
   name: anvil-instancing
 spec:
   priorityLevelConfiguration:
-    name: workload-high
+    name: anvil-instancing
   matchingPrecedence: 1000
   distinguisherMethod:
     type: ByUser
