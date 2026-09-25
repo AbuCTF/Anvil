@@ -21,11 +21,12 @@ spec:
       labels: { app: anvil-api }
     spec:
       nodeSelector: { pool: platform }
-      # one node loss must not take every replica with it.
+      # one node loss must not take every replica with it (hard: soft spread got
+      # ignored under uneven load and stacked replicas on one node).
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: DoNotSchedule
           labelSelector:
             matchLabels: { app: anvil-api }
       containers:
@@ -76,7 +77,7 @@ spec:
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: DoNotSchedule
           labelSelector:
             matchLabels: { app: anvil-web }
       containers:
