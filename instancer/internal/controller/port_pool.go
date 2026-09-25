@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -84,8 +85,13 @@ func (r *ChallengeInstanceReconciler) allocatePort(ctx context.Context, inst *in
 		}
 	}
 
-	// claim the lowest free port; Create is atomic so a race just tries the next
-	for port := pool.Start; port <= pool.End; port++ {
+	// probe from a random offset: ports aren't guessable in sequence, and
+	// concurrent launches rarely race for the same one. Create is atomic, so a
+	// lost race just moves on.
+	n := pool.End - pool.Start + 1
+	off := rand.IntN(n)
+	for i := range n {
+		port := pool.Start + (off+i)%n
 		if used[port] {
 			continue
 		}

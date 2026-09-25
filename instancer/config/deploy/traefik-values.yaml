@@ -1,21 +1,50 @@
-# Traefik values (reconciled into repo = live release, revision 4).
+# Traefik values (reconciled into repo = live release).
 # Raw-TCP challenge instances (pwn/web3) do NOT go through Traefik: its TCP proxy
 # drops the server's reply on a client half-close (shutdown(SHUT_WR)), so it can
 # never deliver a flag. They are served by the anvil `tcpproxy` (a half-close-
 # preserving L4 proxy behind its own passthrough NLB) — see config/deploy/tcpproxy.yaml.
-# So the old 64-port pool (t30000-t30063) + the separate `tcppool` LoadBalancer
-# that lived here have been REMOVED. This file now only carries the main LB
-# (web/websecure from chart defaults) + the legacy pwn SNI :1337 entrypoint
-# (used only by the controller's SNI fallback when the port pool is disabled).
+# This file carries the main LB (web/websecure from chart defaults) + the legacy
+# pwn SNI :1337 entrypoint (used only by the controller's SNI fallback when the
+# port pool is disabled).
 # Apply (kubectl/helm pointed at the cluster):
 #   helm upgrade traefik traefik/traefik --version 41.6.0 -n traefik -f traefik-values.yaml
-deployment:
-  replicas: 2
 service:
   type: LoadBalancer
+  spec:
+    # reserved static address (anvil-traefik-ip): ctf + *.web.h7tex.com point here.
+    loadBalancerIP: 34.93.46.24
+    # only nodes running traefik take traffic, so the client ip survives (no snat
+    # hop); the api rate-limits and logs by it.
+    externalTrafficPolicy: Local
 ports:
   pwn:
     port: 1337
     protocol: TCP
     expose:
       default: true
+nodeSelector: { pool: platform }
+# the platform and every web instance ride this; a pod without requests is the
+# first thing evicted under node pressure.
+resources:
+  requests: { cpu: 250m, memory: 256Mi }
+  limits: { cpu: "2", memory: 1Gi }
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: traefik
+        app.kubernetes.io/instance: traefik-traefik
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }

@@ -44,6 +44,7 @@ spec:
         app: instancer
     spec:
       serviceAccountName: instancer
+      nodeSelector: { pool: platform }
       securityContext:
         runAsNonRoot: true
         seccompProfile:
@@ -61,14 +62,23 @@ spec:
               value: traefik
             - name: INSTANCER_RESYNC
               value: 30s
+            # a launch wave reconciles in parallel; ready instances are a cache read.
+            - name: INSTANCER_MAX_CONCURRENT
+              value: "32"
+            # pod requests as % of limits: idle challenges reserve a slice, not the
+            # whole limit, so a node packs ~100 of them (limits still cap each pod).
+            - name: INSTANCER_CPU_REQUEST_PCT
+              value: "10"
+            - name: INSTANCER_MEM_REQUEST_PCT
+              value: "25"
             # legacy SNI+TLS fallback (used only if the pool below is unset)
             - name: INSTANCER_TCP_ROUTES
               value: "pwn=pwn:1337,web3=pwn:1337"
-            # plain-TCP per-instance port pool: each raw-TCP instance gets a
-            # dedicated port on the tcppool LB so `nc host port` + half-close work.
-            # Matches the t30000-t30063 entrypoints in traefik-values.yaml.
+            # plain-TCP per-instance port pool: each raw-TCP instance gets a random
+            # free port on the tcpproxy NLB so `nc host port` + half-close work.
+            # Must equal PROXY_POOL_RANGE in tcpproxy.yaml (deploy script checks).
             - name: INSTANCER_TCP_POOL_RANGE
-              value: "30000-30063"
+              value: "40000-49999"
             - name: INSTANCER_TCP_POOL_NAMESPACE
               value: anvil-instancer
           ports:
@@ -95,8 +105,8 @@ spec:
               drop: ["ALL"]
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
+              cpu: 200m
               memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi

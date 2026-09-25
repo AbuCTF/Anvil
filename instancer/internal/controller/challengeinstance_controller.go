@@ -6,6 +6,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -14,7 +15,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	instv1 "github.com/anvil-lab/anvil/instancer/api/v1alpha1"
 )
@@ -36,6 +39,8 @@ type Config struct {
 	TCPRoutes        map[string]TCPRoute // category -> raw-TLS entrypoint (legacy SNI fallback)
 	Pool             PortPool            // plain-TCP per-instance port pool (preferred for raw TCP)
 	ResyncInterval   time.Duration       // status refresh cadence while an instance lives
+	CPURequestPct    int64               // pod cpu request as % of its limit (0 = leave to k8s)
+	MemRequestPct    int64               // pod memory request as % of its limit (0 = leave to k8s)
 }
 
 // tcpRouteFor returns the TCP entrypoint for a category, defaulting the
@@ -92,6 +97,23 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	ns := namespaceFor(inst.Name)
 	exposedPods := exposedPodSet(inst)
 
+	// a healthy instance costs a cache read, not a round of creates + a status
+	// write; at a thousand instances that resync was hundreds of api writes/s.
+	if inst.Status.Phase == "Ready" && len(inst.Status.Endpoints) > 0 {
+		phase, err := r.instancePhase(ctx, ns, inst)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if phase == "Ready" {
+			return ctrl.Result{RequeueAfter: r.requeueAfter(deadline)}, nil
+		}
+		// a pod went missing or unready (spot preemption, crash): repair below
+	}
+
+	if err := r.deleteFailedPods(ctx, ns); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if err := r.ensureNamespace(ctx, inst); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -107,7 +129,7 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if svc := buildService(inst, p); svc != nil {
 			objs = append(objs, svc)
 		}
-		objs = append(objs, buildPod(inst, p, r.Cfg.RuntimeClass, exposedPods))
+		objs = append(objs, buildPod(inst, p, r.Cfg, exposedPods))
 	}
 	routes, endpoints, err := r.routesAndEndpoints(ctx, inst, ns)
 	if err != nil {
@@ -238,6 +260,24 @@ func (r *ChallengeInstanceReconciler) routesAndEndpoints(ctx context.Context, in
 	return objs, eps, nil
 }
 
+// deleteFailedPods clears pods that can't come back on their own (evicted, or
+// killed with their node), so the create pass replaces them.
+func (r *ChallengeInstanceReconciler) deleteFailedPods(ctx context.Context, ns string) error {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(ns), client.MatchingLabels{labelManaged: "true"}); err != nil {
+		return err
+	}
+	for i := range pods.Items {
+		if pods.Items[i].Status.Phase != corev1.PodFailed {
+			continue
+		}
+		if err := r.Delete(ctx, &pods.Items[i]); client.IgnoreNotFound(err) != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *ChallengeInstanceReconciler) instancePhase(ctx context.Context, ns string, inst *instv1.ChallengeInstance) (string, error) {
 	var pods corev1.PodList
 	if err := r.List(ctx, &pods, client.InNamespace(ns), client.MatchingLabels{labelManaged: "true"}); err != nil {
@@ -283,6 +323,9 @@ func (r *ChallengeInstanceReconciler) setStatus(ctx context.Context, inst *instv
 		meta.Status = metav1.ConditionTrue
 	}
 	setCondition(&inst.Status.Conditions, meta)
+	if equality.Semantic.DeepEqual(orig.Status, inst.Status) {
+		return nil
+	}
 	return r.Status().Patch(ctx, inst, client.MergeFrom(orig))
 }
 
@@ -331,9 +374,19 @@ func exposedPodSet(inst *instv1.ChallengeInstance) map[string]bool {
 }
 
 func (r *ChallengeInstanceReconciler) SetupWithManager(mgr ctrl.Manager, maxConcurrent int) error {
+	// pods are not owned by the cluster-scoped CR, so map them back by label: a
+	// preempted or crashed pod gets repaired now instead of at the next resync.
+	podToInstance := handler.EnqueueRequestsFromMapFunc(func(_ context.Context, o client.Object) []reconcile.Request {
+		name := o.GetLabels()[labelInstance]
+		if name == "" || o.GetLabels()[labelManaged] != "true" {
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
+	})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&instv1.ChallengeInstance{}).
 		Owns(&corev1.Namespace{}).
+		Watches(&corev1.Pod{}, podToInstance).
 		WithOptions(ctrlcontroller.Options{MaxConcurrentReconciles: maxConcurrent}).
 		Complete(r)
 }

@@ -64,7 +64,7 @@ func buildLimitRange(ns string) *corev1.LimitRange {
 		Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
 			Type:           corev1.LimitTypeContainer,
 			Default:        corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("512Mi")},
-			DefaultRequest: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("128Mi")},
+			DefaultRequest: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("50m"), corev1.ResourceMemory: resource.MustParse("64Mi")},
 		}}},
 	}
 }
@@ -175,8 +175,9 @@ func buildService(inst *instv1.ChallengeInstance, pod instv1.InstancePod) *corev
 // buildPod applies hardened defaults over the challenge-authored spec: no
 // service-account token, gVisor sandbox, seccomp, and dropped capabilities.
 // The authored spec still wins where it sets a field explicitly.
-func buildPod(inst *instv1.ChallengeInstance, pod instv1.InstancePod, runtimeClass string, exposedPods map[string]bool) *corev1.Pod {
+func buildPod(inst *instv1.ChallengeInstance, pod instv1.InstancePod, cfg Config, exposedPods map[string]bool) *corev1.Pod {
 	spec := *pod.Spec.DeepCopy()
+	runtimeClass := cfg.RuntimeClass
 
 	no := false
 	spec.AutomountServiceAccountToken = &no
@@ -194,6 +195,14 @@ func buildPod(inst *instv1.ChallengeInstance, pod instv1.InstancePod, runtimeCla
 	if spec.SecurityContext == nil {
 		spec.SecurityContext = &corev1.PodSecurityContext{}
 	}
+	// leave a dead node after 60s instead of the default 5 min, so a preempted
+	// spot node's instances come back on a live one quickly.
+	gone := int64(60)
+	for _, key := range []string{"node.kubernetes.io/not-ready", "node.kubernetes.io/unreachable"} {
+		spec.Tolerations = append(spec.Tolerations, corev1.Toleration{
+			Key: key, Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute, TolerationSeconds: &gone,
+		})
+	}
 	if spec.SecurityContext.SeccompProfile == nil {
 		spec.SecurityContext.SeccompProfile = &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
 	}
@@ -201,9 +210,11 @@ func buildPod(inst *instv1.ChallengeInstance, pod instv1.InstancePod, runtimeCla
 	flagEnv := flagsEnv(inst.Spec.Flags)
 	for i := range spec.Containers {
 		hardenContainer(&spec.Containers[i], flagEnv)
+		reserveRequests(&spec.Containers[i], cfg.CPURequestPct, cfg.MemRequestPct)
 	}
 	for i := range spec.InitContainers {
 		hardenContainer(&spec.InitContainers[i], flagEnv)
+		reserveRequests(&spec.InitContainers[i], cfg.CPURequestPct, cfg.MemRequestPct)
 	}
 
 	labels := baseLabels(inst)
@@ -216,8 +227,33 @@ func buildPod(inst *instv1.ChallengeInstance, pod instv1.InstancePod, runtimeCla
 	}
 
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: namespaceFor(inst.Name), Labels: labels},
-		Spec:       spec,
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pod.Name,
+			Namespace: namespaceFor(inst.Name),
+			Labels:    labels,
+			// a live instance is never evicted to consolidate nodes; nodes drain as instances expire.
+			Annotations: map[string]string{"cluster-autoscaler.kubernetes.io/safe-to-evict": "false"},
+		},
+		Spec: spec,
+	}
+}
+
+// reserveRequests sets requests to a slice of the limits when only limits are
+// given. k8s otherwise copies limits into requests, so an idle challenge would
+// reserve its whole limit and a node would hold a handful of instances.
+func reserveRequests(c *corev1.Container, cpuPct, memPct int64) {
+	if c.Resources.Requests != nil || c.Resources.Limits == nil {
+		return
+	}
+	req := corev1.ResourceList{}
+	if cpu, ok := c.Resources.Limits[corev1.ResourceCPU]; ok && cpuPct > 0 {
+		req[corev1.ResourceCPU] = *resource.NewMilliQuantity(max(cpu.MilliValue()*cpuPct/100, 10), resource.DecimalSI)
+	}
+	if mem, ok := c.Resources.Limits[corev1.ResourceMemory]; ok && memPct > 0 {
+		req[corev1.ResourceMemory] = *resource.NewQuantity(max(mem.Value()*memPct/100, 64<<20), resource.BinarySI)
+	}
+	if len(req) > 0 {
+		c.Resources.Requests = req
 	}
 }
 

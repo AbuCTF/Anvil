@@ -32,6 +32,13 @@ func env(key, def string) string {
 	return def
 }
 
+func envInt(key string, def int64) int64 {
+	if v, err := strconv.ParseInt(os.Getenv(key), 10, 64); err == nil && v >= 0 {
+		return v
+	}
+	return def
+}
+
 // parsePool reads "start-end" (e.g. "30000-30063") into a PortPool. An empty or
 // malformed range yields a disabled pool (Start==0), so the controller falls
 // back to the legacy SNI route.
@@ -88,6 +95,8 @@ func main() {
 		TCPRoutes:        parseTCPRoutes(env("INSTANCER_TCP_ROUTES", "pwn=pwn:1337")),
 		Pool:             parsePool(env("INSTANCER_TCP_POOL_RANGE", ""), env("INSTANCER_TCP_POOL_NAMESPACE", "anvil-instancer")),
 		ResyncInterval:   resync,
+		CPURequestPct:    envInt("INSTANCER_CPU_REQUEST_PCT", 10),
+		MemRequestPct:    envInt("INSTANCER_MEM_REQUEST_PCT", 25),
 	}
 
 	maxConcurrent := 8
