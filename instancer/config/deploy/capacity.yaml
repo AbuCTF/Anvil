@@ -1,0 +1,42 @@
+# Warm headroom for the launch surge: low-priority placeholder pods reserve node
+# capacity on the gVisor challenge pools. A challenge pod that doesn't fit evicts a
+# placeholder at once; the placeholder goes pending and the autoscaler adds a node
+# in the background, so the buffer refills itself. Scale `replicas` to size it
+# (two placeholders ~= one n2-highmem-8); 0 releases it.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: capacity-buffer
+value: -10 # below every workload, still high enough to trigger scale-up
+preemptionPolicy: Never
+globalDefault: false
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: capacity
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: capacity-buffer
+  namespace: capacity
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app: capacity-buffer }
+  template:
+    metadata:
+      labels: { app: capacity-buffer }
+    spec:
+      priorityClassName: capacity-buffer
+      runtimeClassName: gvisor # lands on the challenge pools
+      terminationGracePeriodSeconds: 0
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests: { cpu: 3500m, memory: 24Gi }
+            limits: { cpu: 3500m, memory: 24Gi }
