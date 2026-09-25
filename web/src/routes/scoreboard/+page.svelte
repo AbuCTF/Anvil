@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { API_BASE } from "$lib/config";
   import { auth } from "$stores/auth";
+  import { platformInfo } from "$lib/stores/platform";
   import { formatDur } from "$lib/chart/time";
   import { formatLocalDateTime, instantTitle } from "$lib/time";
   import LineChart from "$lib/components/LineChart.svelte";
@@ -40,6 +41,7 @@
     name: string;
     category: string;
     category_color: string;
+    difficulty?: string;
     points: number;
   }
 
@@ -50,48 +52,51 @@
     name: string;
     total: number;
     delta: number;
-    cells: { s: number; b: number }[];
+    cells: { s: number; b: number; p?: number }[];
   }
 
-  const SCORE_POLL_MS = 5000;
+  type View = "standings" | "matrix";
+
+  // only the open tab polls; the api caches each page for 2-5s per pod
+  const SCORE_POLL_MS = 15000;
+  const MATRIX_POLL_MS = 20000;
   const HISTORY_POLL_MS = 30000;
-  const MATRIX_POLL_MS = 15000;
   const SCORE_PAGE_SIZE = 100;
+  const MATRIX_PAGE_SIZE = 50;
 
   let entries: Entry[] = [];
-  let totalUsers = 0;
-  let matchingUsers = 0;
   let raceSeries: Series[] = [];
   let matrixChallenges: MatrixChallenge[] = [];
   let matrixRows: MatrixRow[] = [];
-  let matrixTotalUsers = 0;
-  let loading = true;
-  let matrixLoading = true;
-  let error = "";
-  let matrixError = "";
-  let scoreStale = false;
+  let total = 0;
+  let scoreMatching = 0;
+  let matrixMatching = 0;
+  let boardTeams: boolean | null = null;
+  let economy = false;
+  let frozen = false;
+  let loaded: Record<View, boolean> = { standings: false, matrix: false };
+  let loadError = 0; // http status of a failed first load (-1 = network)
+  let boardStale = false;
   let historyStale = false;
   let historyError = "";
-  let scoresLoaded = false;
-  let scoreInFlight = false;
+  let boardSeq = 0;
+  let boardBusy = false;
   let historyInFlight = false;
-  let matrixInFlight = false;
-  let scoreTimer: ReturnType<typeof setTimeout>;
+  let boardTimer: ReturnType<typeof setTimeout>;
   let historyTimer: ReturnType<typeof setTimeout>;
-  let matrixTimer: ReturnType<typeof setTimeout>;
   let requestController: AbortController;
-  let scoreETag = "";
-  let scoreETagKey = "";
-  let historyETag = "";
-  let matrixETag = "";
-  let scoreReloadPending = false;
   let searchDebounce: ReturnType<typeof setTimeout>;
+  const lastETag: Record<View, string> = { standings: "", matrix: "" };
+  const lastURL: Record<View, string> = { standings: "", matrix: "" };
+  let historyETag = "";
+  let historyRaw: HistorySeries[] = [];
 
   let search = "";
   let sortKey: "rank" | "name" = "rank";
-  let view: "matrix" | "standings" = "matrix";
+  let view: View = "standings";
   let category = "";
   let scorePage = 1;
+  let matrixPage = 1;
 
   const jitter = (interval: number) => interval * (0.85 + Math.random() * 0.3);
   function authHeaders(): Record<string, string> {
@@ -100,119 +105,80 @@
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
-  let frozen = false;
+  function boardURL(which: View) {
+    const params = new URLSearchParams({
+      page: String(which === "matrix" ? matrixPage : scorePage),
+      limit: String(which === "matrix" ? MATRIX_PAGE_SIZE : SCORE_PAGE_SIZE),
+      sort: sortKey,
+    });
+    const query = search.trim();
+    if (query) params.set("q", query);
+    return `${API_BASE}/api/v1/scoreboard${which === "matrix" ? "/matrix" : ""}?${params}`;
+  }
 
-  async function loadScores() {
-    if (scoreInFlight) {
-      scoreReloadPending = true;
-      return;
-    }
-    if (document.hidden) return;
-    scoreInFlight = true;
-    const requestedPage = view === "standings" ? scorePage : 1;
-    const requestedQuery = view === "standings" ? search.trim() : "";
-    const requestedSort = view === "standings" ? sortKey : "rank";
-    const requestKey = `${requestedPage}:${requestedSort}:${requestedQuery}`;
+  // loads the open tab; a newer request (tab, page, search or sort change) supersedes an older one
+  async function loadBoard(force = false) {
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (boardBusy && !force) return;
+    const seq = ++boardSeq;
+    const which = view;
+    const url = boardURL(which);
+    boardBusy = true;
     try {
-      const params = new URLSearchParams({
-        limit: String(SCORE_PAGE_SIZE),
-        page: String(requestedPage),
-        sort: requestedSort,
-      });
-      if (requestedQuery) params.set("q", requestedQuery);
-      const response = await fetch(`${API_BASE}/api/v1/scoreboard?${params}`, {
+      const response = await fetch(url, {
         headers: authHeaders(),
         signal: requestController?.signal,
       });
+      if (seq !== boardSeq) return;
       if (!response.ok) throw response.status;
-      const nextETag = response.headers.get("etag") ?? "";
-      if (nextETag && nextETag === scoreETag && requestKey === scoreETagKey) {
-        scoresLoaded = true;
-        error = "";
-        scoreStale = false;
+      const etag = response.headers.get("etag") ?? "";
+      if (etag && etag === lastETag[which] && url === lastURL[which]) {
+        loadError = 0;
+        boardStale = false;
         return;
       }
-      const scoreboard = await response.json();
-      if (
-        (view !== "standings" && requestKey !== "1:rank:") ||
-        (view === "standings" &&
-          (requestedPage !== scorePage ||
-            requestedQuery !== search.trim() ||
-            requestedSort !== sortKey))
-      ) {
-        scoreReloadPending = true;
+      const data = await response.json();
+      if (seq !== boardSeq) return;
+
+      const size = which === "matrix" ? MATRIX_PAGE_SIZE : SCORE_PAGE_SIZE;
+      const matching = data.matching_users ?? data.total_users ?? 0;
+      const pages = Math.max(1, Math.ceil(matching / size));
+      const requested = which === "matrix" ? matrixPage : scorePage;
+      if (requested > pages) {
+        if (which === "matrix") matrixPage = pages;
+        else scorePage = pages;
+        setTimeout(() => loadBoard(true));
         return;
       }
 
-      frozen = !!scoreboard.frozen;
-      const nextEntries: Entry[] = scoreboard.leaderboard ?? [];
-      const nextTotalUsers = scoreboard.total_users ?? nextEntries.length;
-      const nextMatchingUsers = scoreboard.matching_users ?? nextTotalUsers;
-      const nextPages = Math.max(
-        1,
-        Math.ceil(nextMatchingUsers / SCORE_PAGE_SIZE),
-      );
-      if (view === "standings" && requestedPage > nextPages) {
-        scorePage = nextPages;
-        scoreReloadPending = true;
-        return;
-      }
-
-      entries = nextEntries;
-      const viewer = nextEntries.find((entry) => entry.user_id === $auth.user?.id);
-      if (viewer) auth.updateRank(viewer.rank);
-      totalUsers = nextTotalUsers;
-      matchingUsers = nextMatchingUsers;
-      scoreETag = nextETag;
-      scoreETagKey = requestKey;
-      scoresLoaded = true;
-      error = "";
-      scoreStale = false;
-    } catch (caught) {
-      if (requestController?.signal.aborted) return;
-      if (!scoresLoaded) {
-        error =
-          typeof caught === "number"
-            ? `HTTP ${caught}`
-            : "Failed to load scoreboard";
+      frozen = !!data.frozen;
+      boardTeams = !!data.teams;
+      economy = !!data.economy;
+      total = data.total_users ?? 0;
+      if (which === "matrix") {
+        matrixChallenges = data.challenges ?? [];
+        matrixRows = data.rows ?? [];
+        matrixMatching = matching;
       } else {
-        scoreStale = true;
+        entries = data.leaderboard ?? [];
+        scoreMatching = matching;
+        if (!boardTeams) {
+          const viewer = entries.find((entry) => entry.user_id === $auth.user?.id);
+          if (viewer) auth.updateRank(viewer.rank);
+        }
       }
+      lastETag[which] = etag;
+      lastURL[which] = url;
+      loaded = { ...loaded, [which]: true };
+      loadError = 0;
+      boardStale = false;
+    } catch (caught) {
+      if (requestController?.signal.aborted || seq !== boardSeq) return;
+      if (loaded[which]) boardStale = true;
+      else loadError = typeof caught === "number" ? caught : -1;
     } finally {
-      loading = false;
-      scoreInFlight = false;
-      if (scoreReloadPending) {
-        scoreReloadPending = false;
-        void loadScores();
-      }
+      if (seq === boardSeq) boardBusy = false;
     }
-  }
-
-  function scheduleSearch() {
-    if (view !== "standings") return;
-    scorePage = 1;
-    clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(loadScores, 250);
-  }
-
-  function setView(next: "matrix" | "standings") {
-    view = next;
-    scorePage = 1;
-    if (next === "matrix") void loadMatrix(true);
-    void loadScores();
-  }
-
-  function setSort(next: "rank" | "name") {
-    sortKey = next;
-    if (view === "standings") {
-      scorePage = 1;
-      void loadScores();
-    }
-  }
-
-  function setScorePage(next: number) {
-    scorePage = next;
-    void loadScores();
   }
 
   async function loadHistory() {
@@ -227,15 +193,12 @@
       historyStale = false;
       historyError = "";
       const nextETag = response.headers.get("etag") ?? "";
-      if (nextETag && nextETag === historyETag) return;
+      if (nextETag && nextETag === historyETag) {
+        historyRaw = historyRaw; // re-extend the lines to now
+        return;
+      }
       const history = await response.json();
-      const historySeries: HistorySeries[] = history.series ?? [];
-      const usedColors = new Set<string>();
-      raceSeries = historySeries.map((series) => {
-        const color = uniqueSeriesColor(series.id, usedColors);
-        usedColors.add(color);
-        return { label: series.label, color, points: series.points };
-      });
+      historyRaw = history.series ?? [];
       historyETag = nextETag;
     } catch {
       if (!requestController?.signal.aborted) {
@@ -247,44 +210,53 @@
     }
   }
 
-  async function loadMatrix(force = false) {
-    if (matrixInFlight || document.hidden || (!force && view !== "matrix"))
-      return;
-    matrixInFlight = true;
-    try {
-      const response = await fetch(`${API_BASE}/api/v1/scoreboard/matrix`, {
-        headers: authHeaders(),
-        signal: requestController?.signal,
-      });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const nextETag = response.headers.get("etag") ?? "";
-      if (nextETag && nextETag === matrixETag) {
-        matrixError = "";
-        return;
-      }
-      const data = await response.json();
-      matrixChallenges = data.challenges ?? [];
-      matrixRows = data.rows ?? [];
-      matrixTotalUsers = data.total_users ?? matrixRows.length;
-      matrixETag = nextETag;
-      matrixError = "";
-    } catch (caught) {
-      if (requestController?.signal.aborted) return;
-      matrixError =
-        caught instanceof Error
-          ? caught.message
-          : "Failed to load challenge matrix";
-    } finally {
-      matrixLoading = false;
-      matrixInFlight = false;
-    }
+  function reloadBoard() {
+    clearTimeout(boardTimer);
+    void loadBoard(true);
+    scheduleBoard();
   }
 
-  function scheduleScores() {
-    scoreTimer = setTimeout(async () => {
-      await loadScores();
-      scheduleScores();
-    }, jitter(SCORE_POLL_MS));
+  function scheduleSearch() {
+    scorePage = 1;
+    matrixPage = 1;
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(reloadBoard, 250);
+  }
+
+  function setView(next: View) {
+    if (view === next) return;
+    view = next;
+    boardStale = false;
+    reloadBoard();
+  }
+
+  function setSort(next: "rank" | "name") {
+    if (sortKey === next) return;
+    sortKey = next;
+    scorePage = 1;
+    matrixPage = 1;
+    reloadBoard();
+  }
+
+  function setScorePage(next: number) {
+    scorePage = next;
+    reloadBoard();
+  }
+
+  function setMatrixPage(next: number) {
+    matrixPage = next;
+    reloadBoard();
+  }
+
+  function scheduleBoard() {
+    clearTimeout(boardTimer);
+    boardTimer = setTimeout(
+      async () => {
+        await loadBoard();
+        scheduleBoard();
+      },
+      jitter(view === "matrix" ? MATRIX_POLL_MS : SCORE_POLL_MS),
+    );
   }
 
   function scheduleHistory() {
@@ -294,33 +266,22 @@
     }, jitter(HISTORY_POLL_MS));
   }
 
-  function scheduleMatrix() {
-    matrixTimer = setTimeout(async () => {
-      await loadMatrix();
-      scheduleMatrix();
-    }, jitter(MATRIX_POLL_MS));
-  }
-
   onMount(() => {
     requestController = new AbortController();
-    loadScores();
-    loadHistory();
-    loadMatrix(true);
-    scheduleScores();
+    void loadBoard(true);
+    void loadHistory();
+    scheduleBoard();
     scheduleHistory();
-    scheduleMatrix();
     const refreshVisible = () => {
       if (!document.hidden) {
-        loadScores();
-        loadHistory();
-        loadMatrix(view === "matrix");
+        void loadBoard(true);
+        void loadHistory();
       }
     };
     document.addEventListener("visibilitychange", refreshVisible);
     return () => {
-      clearTimeout(scoreTimer);
+      clearTimeout(boardTimer);
       clearTimeout(historyTimer);
-      clearTimeout(matrixTimer);
       clearTimeout(searchDebounce);
       requestController.abort();
       document.removeEventListener("visibilitychange", refreshVisible);
@@ -328,6 +289,7 @@
   });
 
   const displayName = (entry: Entry) => entry.display_name || entry.username;
+  const score = (value: number) => Math.round(value).toLocaleString();
 
   const raceColors = [
     "#6f9dc9",
@@ -355,28 +317,72 @@
     return preferred;
   }
 
+  function seconds(value?: string) {
+    const parsed = value ? Date.parse(value) / 1000 : NaN;
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  // every line starts at 0 when the event opens and runs flat to now, so a single solve still draws
+  $: eventStart = seconds($platformInfo?.event?.start_at);
+  $: eventEnd = seconds($platformInfo?.event?.end_at);
+  $: raceSeries = (() => {
+    const points = historyRaw.flatMap((series) => series.points);
+    if (!points.length) return [];
+    const firstX = Math.min(...points.map((point) => point.x));
+    const lastX = Math.max(...points.map((point) => point.x));
+    const origin = eventStart != null && eventStart < firstX ? eventStart : firstX;
+    const now = Math.min(Date.now() / 1000, eventEnd ?? Infinity);
+    const edge = Math.max(lastX, now);
+    const used = new Set<string>();
+    return historyRaw.map((series) => {
+      const color = uniqueSeriesColor(series.id, used);
+      used.add(color);
+      const last = series.points.at(-1);
+      return {
+        label: series.label,
+        color,
+        points: [
+          { x: origin, y: 0 },
+          ...series.points,
+          ...(last && last.x < edge ? [{ x: edge, y: last.y }] : []),
+        ],
+      };
+    });
+  })();
   $: leaderIndex = raceSeries.reduce((best, series, index) => {
     if (best < 0) return index;
     const score = series.points.at(-1)?.y ?? 0;
     const bestScore = raceSeries[best].points.at(-1)?.y ?? 0;
     return score > bestScore ? index : best;
   }, -1);
-  $: raceStart = raceSeries.length
-    ? Math.min(
-        ...raceSeries.flatMap((series) =>
-          series.points.map((point) => point.x),
-        ),
-      )
-    : 0;
+  $: raceStart = raceSeries.length ? raceSeries[0].points[0].x : 0;
   $: raceTime = (value: number) =>
     value <= raceStart ? "0" : `+${formatDur(value - raceStart)}`;
   $: matrixCategories = [
     ...new Set(matrixChallenges.map((challenge) => challenge.category)),
   ].sort((a, b) => a.localeCompare(b));
-  $: filtered = (() => {
-    return entries;
-  })();
-  $: scorePages = Math.max(1, Math.ceil(matchingUsers / SCORE_PAGE_SIZE));
+  $: scorePages = Math.max(1, Math.ceil(scoreMatching / SCORE_PAGE_SIZE));
+  $: matrixPages = Math.max(1, Math.ceil(matrixMatching / MATRIX_PAGE_SIZE));
+  $: anyLoaded = loaded.standings || loaded.matrix;
+  // the api says whether rows are teams; /info covers the first paint
+  $: teamsBoard =
+    boardTeams ?? !!($platformInfo?.teams_mode || $platformInfo?.economy_enabled);
+  $: noun = teamsBoard ? "team" : "player";
+  $: subtitle = !anyLoaded
+    ? ""
+    : teamsBoard
+      ? total === 0
+        ? "Waiting for the first solve"
+        : `${total.toLocaleString()} team${total === 1 ? "" : "s"} on the board`
+      : `${total.toLocaleString()} participant${total === 1 ? "" : "s"}`;
+  $: errorText =
+    loadError === 401
+      ? "Sign in to see the scoreboard."
+      : loadError === 404
+        ? "The scoreboard is hidden right now."
+        : loadError === -1
+          ? "Couldn't reach the scoreboard."
+          : `Couldn't load the scoreboard (HTTP ${loadError}).`;
 
   function formatDate(value?: string) {
     return formatLocalDateTime(value);
@@ -392,7 +398,7 @@
     downloadRankCard({
       rank: entry.rank,
       username: displayName(entry),
-      score: entry.total_score,
+      score: Math.round(entry.total_score),
       solves: entry.challenges_solved,
       delta: entry.delta,
       spark: entry.spark ?? [],
@@ -412,7 +418,7 @@
       Scoreboard frozen — final standings are hidden until the results are published.
     </div>
   {/if}
-  <PageHeader title="Scoreboard" subtitle="{totalUsers} participants">
+  <PageHeader title="Scoreboard" {subtitle}>
     <div
       slot="actions"
       class="flex w-full max-w-full flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end"
@@ -425,7 +431,7 @@
         <input
           bind:value={search}
           type="search"
-          placeholder="Search players"
+          placeholder={teamsBoard ? "Search teams" : "Search players"}
           aria-label="Search scoreboard"
           maxlength="50"
           on:input={scheduleSearch}
@@ -438,17 +444,6 @@
       >
         <button
           class="inline-flex items-center gap-1.5 px-2.5 py-1.5 transition-colors {view ===
-          'matrix'
-            ? 'bg-stone-800 text-stone-200'
-            : 'text-stone-500 hover:text-stone-300'}"
-          on:click={() => setView("matrix")}
-          aria-pressed={view === "matrix"}
-        >
-          <OpticalIcon icon="mdi:view-grid-outline" size={12} box={12} />
-          <span class="optical-label">Matrix</span>
-        </button>
-        <button
-          class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view ===
           'standings'
             ? 'bg-stone-800 text-stone-200'
             : 'text-stone-500 hover:text-stone-300'}"
@@ -458,9 +453,20 @@
           <OpticalIcon icon="mdi:format-list-numbered" size={12} box={12} />
           <span class="optical-label">Standings</span>
         </button>
+        <button
+          class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view ===
+          'matrix'
+            ? 'bg-stone-800 text-stone-200'
+            : 'text-stone-500 hover:text-stone-300'}"
+          on:click={() => setView("matrix")}
+          aria-pressed={view === "matrix"}
+        >
+          <OpticalIcon icon="mdi:view-grid-outline" size={12} box={12} />
+          <span class="optical-label">Matrix</span>
+        </button>
       </div>
 
-      {#if view === "matrix"}
+      {#if view === "matrix" && matrixCategories.length > 1}
         <select
           bind:value={category}
           aria-label="Filter matrix by category"
@@ -499,21 +505,45 @@
     </div>
   </PageHeader>
 
-  {#if loading}
-    <div class="flex items-center justify-center py-16">
+  {#if !anyLoaded && !loadError}
+    <div
+      class="flex items-center justify-center py-16"
+      role="status"
+      aria-label="Loading scoreboard"
+    >
       <Icon icon="mdi:loading" class="h-6 w-6 animate-spin text-stone-500" />
     </div>
-  {:else if error}
-    <EmptyState icon="mdi:alert-circle-outline" text={error}>
-      <button
-        on:click={loadScores}
-        class="mt-3 text-xs text-amber-500 hover:text-amber-400">Retry</button
+  {:else if !anyLoaded}
+    <Card hasHeader={false}>
+      <EmptyState
+        icon={loadError === 401
+          ? "mdi:lock-outline"
+          : loadError === 404
+            ? "mdi:eye-off-outline"
+            : "mdi:alert-circle-outline"}
+        text={errorText}
       >
-    </EmptyState>
-  {:else if totalUsers === 0}
-    <EmptyState icon="mdi:trophy-outline" text="No scores yet." />
+        {#if loadError === 401}
+          <a href="/login" class="mt-3 text-xs text-amber-500 hover:text-amber-400"
+            >Sign in</a
+          >
+        {:else if loadError !== 404}
+          <button
+            on:click={() => loadBoard(true)}
+            class="mt-3 text-xs text-amber-500 hover:text-amber-400">Retry</button
+          >
+        {/if}
+      </EmptyState>
+    </Card>
+  {:else if total === 0}
+    <Card title={view === "matrix" ? "Challenge matrix" : "Standings"}>
+      <EmptyState
+        icon="mdi:trophy-outline"
+        text="No solves yet — the board fills as {noun}s score."
+      />
+    </Card>
   {:else}
-    {#if scoreStale}
+    {#if boardStale}
       <div
         role="status"
         class="mb-4 rounded-md border border-warn/25 bg-warn/5 px-3 py-2 text-xs text-warn"
@@ -541,7 +571,7 @@
                   class="h-2 w-2 shrink-0 rounded-full"
                   style="background: {series.color};"
                 ></span>
-                <span class="optical-label max-w-32 truncate"
+                <span class="optical-label max-w-44 truncate sm:max-w-60" title={series.label}
                   >{series.label}</span
                 >
               </span>
@@ -576,194 +606,239 @@
         <span slot="meta" class="metadata-label text-stone-500"
           >{matrixChallenges.length} challenges</span
         >
-        {#if matrixLoading && matrixRows.length === 0}
+        {#if !loaded.matrix}
           <div
             class="flex items-center justify-center py-12"
             role="status"
             aria-label="Loading challenge matrix"
           >
-            <Icon
-              icon="mdi:loading"
-              class="h-5 w-5 animate-spin text-stone-500"
-            />
-          </div>
-        {:else if matrixError && matrixRows.length === 0}
-          <div class="px-4 py-10 text-center">
-            <p class="text-sm text-stone-500">
-              The challenge matrix is temporarily unavailable.
-            </p>
-            <button
-              on:click={() => loadMatrix(true)}
-              class="mt-3 text-xs text-amber-500 hover:text-amber-400"
-              >Retry</button
-            >
+            {#if loadError}
+              <div class="text-center">
+                <p class="text-sm text-stone-500">
+                  The challenge matrix is temporarily unavailable.
+                </p>
+                <button
+                  on:click={() => loadBoard(true)}
+                  class="mt-3 text-xs text-amber-500 hover:text-amber-400"
+                  >Retry</button
+                >
+              </div>
+            {:else}
+              <Icon
+                icon="mdi:loading"
+                class="h-5 w-5 animate-spin text-stone-500"
+              />
+            {/if}
           </div>
         {:else}
-          {#if matrixError}
-            <div
-              role="status"
-              class="border-b border-warn/20 bg-warn/5 px-4 py-2 text-xs text-warn"
-            >
-              Matrix update delayed; showing the last successful result.
-            </div>
-          {/if}
           <ScoreboardMatrix
             challenges={matrixChallenges}
             rows={matrixRows}
-            totalPlayers={matrixTotalUsers}
+            teams={teamsBoard}
+            {economy}
             {search}
             {category}
-            sort={sortKey}
+            page={matrixPage}
+            pages={matrixPages}
+            matching={matrixMatching}
+            onPage={setMatrixPage}
           />
         {/if}
       </Card>
     {:else}
-      <Card title="Standings" bodyClass="">
+      <Card title="Standings" bodyClass="p-0">
         <span slot="meta" class="metadata-label text-stone-500"
-          >{matchingUsers.toLocaleString()} players</span
+          >{scoreMatching.toLocaleString()} {noun}{scoreMatching === 1 ? "" : "s"}</span
         >
-        <div class="mx-auto max-w-[1200px] overflow-x-auto">
-          <table class="w-full min-w-[900px] table-fixed text-sm">
-            <thead>
-              <tr
-                class="metadata-label border-b border-stone-800 text-stone-500"
-              >
-                <th class="w-28 px-4 py-2.5 text-left">Rank</th>
-                <th class="w-72 px-4 py-2.5 text-left">Player</th>
-                <th class="hidden w-28 px-4 py-2.5 text-left sm:table-cell"
-                  >Trend</th
-                >
-                <th class="hidden w-24 px-4 py-2.5 text-right md:table-cell"
-                  >Solves</th
-                >
-                <th class="w-28 px-4 py-2.5 text-right">Score</th>
-                <th class="hidden w-44 px-4 py-2.5 text-right xl:table-cell"
-                  >Last solve</th
-                >
-                <th class="w-12 px-3 py-2.5"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each filtered as entry (entry.user_id)}
-                {@const color = teamColor(entry.user_id)}
-                {@const icon = tierIcon(entry.rank)}
-                <tr
-                  class="group border-b border-stone-800/60 transition-colors hover:bg-stone-800/20 {entry.rank ===
-                  1
-                    ? 'bg-amber-500/[0.04]'
-                    : ''}"
-                >
-                  <td class="whitespace-nowrap px-4 py-2.5">
-                    <div class="flex h-4 items-center gap-1.5 leading-none">
-                      {#if icon}
-                        <OpticalIcon
-                          {icon}
-                          size={14}
-                          box={16}
-                          className={rankAccent(entry.rank)}
-                        />
-                      {:else}
-                        <span class="h-4 w-4 shrink-0"></span>
-                      {/if}
-                      <span
-                        class="optical-label font-semibold tabular-nums leading-[14px] text-stone-200"
-                        >{entry.rank}</span
-                      >
-                      {#if entry.delta !== 0}
-                        <span
-                          class="{entry.delta > 0
-                            ? 'text-up'
-                            : 'text-down'} inline-flex items-center text-[0.65rem] leading-none tabular-nums"
-                        >
-                          <OpticalIcon
-                            icon={entry.delta > 0
-                              ? "mdi:menu-up"
-                              : "mdi:menu-down"}
-                            size={12}
-                            box={12}
-                          />
-                          <span class="optical-label"
-                            >{Math.abs(entry.delta)}</span
-                          >
-                        </span>
-                      {/if}
-                    </div>
-                  </td>
-                  <td class="whitespace-nowrap px-4 py-2.5">
-                    <div class="flex items-center gap-2.5 leading-none">
-                      <span
-                        class="h-2 w-2 shrink-0 rounded-full"
-                        style="background: {color};"
-                      ></span>
-                      <a
-                        href="/profile/{entry.username}"
-                        class="optical-label max-w-[200px] truncate text-stone-200 transition hover:text-amber-400"
-                        >{displayName(entry)}</a
-                      >
-                    </div>
-                  </td>
-                  <td class="hidden px-4 py-2.5 sm:table-cell">
-                    <Sparkline data={entry.spark ?? []} {color} />
-                  </td>
-                  <td
-                    class="hidden whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-stone-400 md:table-cell"
-                    >{entry.challenges_solved}</td
-                  >
-                  <td
-                    class="whitespace-nowrap px-4 py-2.5 text-right font-semibold tabular-nums text-amber-500/90"
-                    >{entry.total_score.toLocaleString()}</td
-                  >
-                  <td
-                    class="hidden whitespace-nowrap px-4 py-2.5 text-right text-xs tabular-nums text-stone-500 xl:table-cell"
-                    title={instantTitle(entry.last_solve_at)}
-                    >{formatDate(entry.last_solve_at)}</td
-                  >
-                  <td class="px-3 py-2.5 text-right">
-                    <button
-                      on:click={() => share(entry)}
-                      title="Share rank card"
-                      aria-label="Share {displayName(entry)} rank card"
-                      class="inline-flex h-8 w-8 items-center justify-center text-stone-700 opacity-0 transition hover:text-amber-400 focus:opacity-100 group-hover:opacity-100"
-                    >
-                      <Icon icon="mdi:share-variant-outline" class="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              {/each}
-              {#if filtered.length === 0}
-                <tr>
-                  <td colspan="7" class="px-4 py-8 text-center text-stone-500"
-                    >No players match “{search}”.</td
-                  >
-                </tr>
-              {/if}
-            </tbody>
-          </table>
-        </div>
-        {#if scorePages > 1}
+        {#if !loaded.standings}
           <div
-            class="mt-4 flex items-center justify-between border-t border-stone-800 pt-4 text-xs text-stone-500"
+            class="flex items-center justify-center py-12"
+            role="status"
+            aria-label="Loading standings"
           >
-            <span class="metadata-label">Page {scorePage} of {scorePages}</span>
-            <div
-              class="inline-flex overflow-hidden rounded border border-stone-800"
-            >
-              <button
-                type="button"
-                disabled={scorePage === 1}
-                on:click={() => setScorePage(scorePage - 1)}
-                class="px-3 py-1.5 hover:text-stone-200 disabled:cursor-not-allowed disabled:opacity-30"
-                >Previous</button
-              >
-              <button
-                type="button"
-                disabled={scorePage === scorePages}
-                on:click={() => setScorePage(scorePage + 1)}
-                class="border-l border-stone-800 px-3 py-1.5 hover:text-stone-200 disabled:cursor-not-allowed disabled:opacity-30"
-                >Next</button
-              >
-            </div>
+            {#if loadError}
+              <div class="text-center">
+                <p class="text-sm text-stone-500">
+                  Standings are temporarily unavailable.
+                </p>
+                <button
+                  on:click={() => loadBoard(true)}
+                  class="mt-3 text-xs text-amber-500 hover:text-amber-400"
+                  >Retry</button
+                >
+              </div>
+            {:else}
+              <Icon
+                icon="mdi:loading"
+                class="h-5 w-5 animate-spin text-stone-500"
+              />
+            {/if}
           </div>
+        {:else}
+          <div class="overflow-x-auto">
+            <table class="w-full table-fixed text-sm">
+              <thead>
+                <tr
+                  class="metadata-label border-b border-stone-800 text-stone-500"
+                >
+                  <th class="w-[5.25rem] py-2.5 pl-3 pr-2 text-left sm:w-28 sm:pl-4"
+                    >Rank</th
+                  >
+                  <th class="px-2 py-2.5 text-left sm:px-4"
+                    >{teamsBoard ? "Team" : "Player"}</th
+                  >
+                  {#if !teamsBoard}
+                    <th class="hidden w-32 px-4 py-2.5 text-left md:table-cell"
+                      >Trend</th
+                    >
+                  {/if}
+                  <th class="hidden w-24 px-4 py-2.5 text-right sm:table-cell"
+                    >Solves</th
+                  >
+                  <th class="w-24 py-2.5 pl-2 pr-3 text-right sm:w-28 sm:px-4"
+                    >Score</th
+                  >
+                  <th class="hidden w-48 px-4 py-2.5 text-right lg:table-cell"
+                    >Last solve</th
+                  >
+                  <th class="hidden w-12 px-3 py-2.5 sm:table-cell"
+                    ><span class="sr-only">Share</span></th
+                  >
+                </tr>
+              </thead>
+              <tbody>
+                {#each entries as entry (entry.user_id)}
+                  {@const color = teamColor(entry.user_id)}
+                  {@const icon = tierIcon(entry.rank)}
+                  <tr
+                    class="group border-b border-stone-800/60 transition-colors last:border-b-0 hover:bg-stone-800/20 {entry.rank ===
+                    1
+                      ? 'bg-amber-500/[0.04]'
+                      : ''}"
+                  >
+                    <td class="whitespace-nowrap py-2.5 pl-3 pr-2 sm:pl-4">
+                      <div class="flex h-4 items-center gap-1.5 leading-none">
+                        {#if icon}
+                          <OpticalIcon
+                            {icon}
+                            size={14}
+                            box={16}
+                            className={rankAccent(entry.rank)}
+                          />
+                        {:else}
+                          <span class="h-4 w-4 shrink-0"></span>
+                        {/if}
+                        <span
+                          class="optical-label font-semibold tabular-nums leading-[14px] text-stone-200"
+                          >{entry.rank}</span
+                        >
+                        {#if entry.delta !== 0}
+                          <span
+                            class="{entry.delta > 0
+                              ? 'text-up'
+                              : 'text-down'} inline-flex items-center text-[0.65rem] leading-none tabular-nums"
+                          >
+                            <OpticalIcon
+                              icon={entry.delta > 0
+                                ? "mdi:menu-up"
+                                : "mdi:menu-down"}
+                              size={12}
+                              box={12}
+                            />
+                            <span class="optical-label"
+                              >{Math.abs(entry.delta)}</span
+                            >
+                          </span>
+                        {/if}
+                      </div>
+                    </td>
+                    <td class="whitespace-nowrap px-2 py-2.5 sm:px-4">
+                      <div class="flex min-w-0 items-center gap-2.5 leading-none">
+                        <span
+                          class="h-2 w-2 shrink-0 rounded-full"
+                          style="background: {color};"
+                        ></span>
+                        {#if teamsBoard}
+                          <span
+                            class="optical-label min-w-0 truncate text-stone-200"
+                            title={entry.username}>{entry.username}</span
+                          >
+                        {:else}
+                          <a
+                            href="/profile/{encodeURIComponent(entry.username)}"
+                            class="optical-label min-w-0 truncate text-stone-200 transition hover:text-amber-400"
+                            title={displayName(entry)}>{displayName(entry)}</a
+                          >
+                        {/if}
+                      </div>
+                    </td>
+                    {#if !teamsBoard}
+                      <td class="hidden px-4 py-2.5 md:table-cell">
+                        <Sparkline data={entry.spark ?? []} {color} />
+                      </td>
+                    {/if}
+                    <td
+                      class="hidden whitespace-nowrap px-4 py-2.5 text-right tabular-nums text-stone-400 sm:table-cell"
+                      >{entry.challenges_solved}</td
+                    >
+                    <td
+                      class="whitespace-nowrap py-2.5 pl-2 pr-3 text-right font-semibold tabular-nums text-amber-500/90 sm:px-4"
+                      >{score(entry.total_score)}</td
+                    >
+                    <td
+                      class="hidden whitespace-nowrap px-4 py-2.5 text-right text-xs tabular-nums text-stone-500 lg:table-cell"
+                      title={instantTitle(entry.last_solve_at)}
+                      >{entry.last_solve_at ? formatDate(entry.last_solve_at) : "—"}</td
+                    >
+                    <td class="hidden px-3 py-1.5 text-right sm:table-cell">
+                      <button
+                        on:click={() => share(entry)}
+                        title="Share rank card"
+                        aria-label="Share {displayName(entry)} rank card"
+                        class="inline-flex h-8 w-8 items-center justify-center text-stone-700 opacity-0 transition hover:text-amber-400 focus:opacity-100 group-hover:opacity-100"
+                      >
+                        <Icon icon="mdi:share-variant-outline" class="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+                {#if entries.length === 0}
+                  <tr>
+                    <td colspan="7" class="px-4 py-10 text-center text-stone-500"
+                      >{search.trim()
+                        ? `No ${noun}s match “${search.trim()}”.`
+                        : `No ${noun}s on this page.`}</td
+                    >
+                  </tr>
+                {/if}
+              </tbody>
+            </table>
+          </div>
+          {#if scorePages > 1}
+            <div
+              class="flex items-center justify-between border-t border-stone-800 px-4 py-3 text-xs text-stone-500"
+            >
+              <span class="metadata-label">Page {scorePage} of {scorePages}</span>
+              <div
+                class="inline-flex overflow-hidden rounded border border-stone-800"
+              >
+                <button
+                  type="button"
+                  disabled={scorePage === 1}
+                  on:click={() => setScorePage(scorePage - 1)}
+                  class="px-3 py-1.5 hover:text-stone-200 disabled:cursor-not-allowed disabled:opacity-30"
+                  >Previous</button
+                >
+                <button
+                  type="button"
+                  disabled={scorePage === scorePages}
+                  on:click={() => setScorePage(scorePage + 1)}
+                  class="border-l border-stone-800 px-3 py-1.5 hover:text-stone-200 disabled:cursor-not-allowed disabled:opacity-30"
+                  >Next</button
+                >
+              </div>
+            </div>
+          {/if}
         {/if}
       </Card>
     {/if}
