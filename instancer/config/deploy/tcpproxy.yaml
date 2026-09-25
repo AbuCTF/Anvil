@@ -20,6 +20,9 @@ spec:
     spec:
       serviceAccountName: instancer
       nodeSelector: { pool: platform }
+      # k8s injects ~5 env vars per port of every service in the namespace; the
+      # 10k-port tcpproxy lb would overflow exec's arg limit (E2BIG) at startup.
+      enableServiceLinks: false
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
