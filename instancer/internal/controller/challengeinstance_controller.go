@@ -41,6 +41,7 @@ type Config struct {
 	ResyncInterval   time.Duration       // status refresh cadence while an instance lives
 	CPURequestPct    int64               // pod cpu request as % of its limit (0 = leave to k8s)
 	MemRequestPct    int64               // pod memory request as % of its limit (0 = leave to k8s)
+	MaxLifetime      time.Duration       // hard cap on any instance's life, extensions included (0 = none)
 }
 
 // tcpRouteFor returns the TCP entrypoint for a category, defaulting the
@@ -346,9 +347,15 @@ func setCondition(conds *[]metav1.Condition, c metav1.Condition) {
 func (r *ChallengeInstanceReconciler) effectiveExpiry(inst *instv1.ChallengeInstance) time.Time {
 	exp := inst.Spec.ExpiresAt.Time
 	if inst.Spec.MaxLifetime != nil {
-		hardCap := inst.CreationTimestamp.Add(inst.Spec.MaxLifetime.Duration)
-		if hardCap.Before(exp) {
-			return hardCap
+		if hardCap := inst.CreationTimestamp.Add(inst.Spec.MaxLifetime.Duration); hardCap.Before(exp) {
+			exp = hardCap
+		}
+	}
+	// cluster-wide backstop: a bad expiry (a seconds/minutes mixup made instances
+	// live 30h) must not pin ports and nodes for the whole event.
+	if r.Cfg.MaxLifetime > 0 {
+		if hardCap := inst.CreationTimestamp.Add(r.Cfg.MaxLifetime); hardCap.Before(exp) {
+			exp = hardCap
 		}
 	}
 	return exp

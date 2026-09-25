@@ -85,6 +85,7 @@ func main() {
 	lg := ctrl.Log.WithName("setup")
 
 	resync, _ := time.ParseDuration(env("INSTANCER_RESYNC", "30s"))
+	maxLife, _ := time.ParseDuration(env("INSTANCER_MAX_LIFETIME", "0"))
 	httpPort, _ := strconv.Atoi(env("INSTANCER_HTTP_PORT", "443"))
 	cfg := controller.Config{
 		BaseDomain:       env("INSTANCER_BASE_DOMAIN", "h7tex.com"),
@@ -97,6 +98,7 @@ func main() {
 		ResyncInterval:   resync,
 		CPURequestPct:    envInt("INSTANCER_CPU_REQUEST_PCT", 10),
 		MemRequestPct:    envInt("INSTANCER_MEM_REQUEST_PCT", 25),
+		MaxLifetime:      maxLife,
 	}
 
 	maxConcurrent := 8

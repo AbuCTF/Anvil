@@ -71,6 +71,9 @@ spec:
               value: "10"
             - name: INSTANCER_MEM_REQUEST_PCT
               value: "25"
+            # no instance outlives this, extensions included (longest legit: 120m + 4x30m).
+            - name: INSTANCER_MAX_LIFETIME
+              value: 4h
             # legacy SNI+TLS fallback (used only if the pool below is unset)
             - name: INSTANCER_TCP_ROUTES
               value: "pwn=pwn:1337,web3=pwn:1337"

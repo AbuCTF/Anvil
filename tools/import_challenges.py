@@ -312,7 +312,8 @@ def parse_deploy(doc: dict, src_dir: Path, ch: Challenge, where: str) -> None:
             # the exposed_ports column mirrors the public roles' ports (drives the UI/detail)
             ch.exposed_ports = [dict(p) for s in public for p in s["ports"]]
         if dep.get("instance_timeout") is not None:
-            ch.instance_timeout = int(dep["instance_timeout"])
+            # challenge.yml gives seconds; anvil stores minutes
+            ch.instance_timeout = max(1, int(dep["instance_timeout"]) // 60)
         if dep.get("max_extensions") is not None:
             ch.max_extensions = int(dep["max_extensions"])
         ch.privesc = bool(dep.get("privesc", False))
