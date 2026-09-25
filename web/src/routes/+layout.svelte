@@ -7,11 +7,11 @@
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { auth } from '$stores/auth';
-	import { api } from '$api';
+	import { api, ApiError } from '$api';
 	import Icon from '@iconify/svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import EventClock from '$lib/components/EventClock.svelte';
-	import { loadPlatformInfo, registerHref, platformInfo } from '$lib/stores/platform';
+	import { loadPlatformInfo, registerHref, platformInfo, hasTeam } from '$lib/stores/platform';
 	import RankBadge from '$lib/components/RankBadge.svelte';
 	import DialogHost from '$lib/components/DialogHost.svelte';
 
@@ -27,14 +27,14 @@
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		...($platformInfo?.scoreboard_enabled !== false ? [{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' }] : []),
 		...(($platformInfo?.arena_enabled || isAdmin) ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
-		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
+		{ name: 'Instances', href: '/instances', icon: 'mdi:server' },
+		...($platformInfo?.teams_mode && $auth.isAuthenticated ? [{ name: 'Team', href: '/team', icon: 'mdi:account-group' }] : [])
 	];
 
-	// "My Instances" dropped here — the top-nav Instances tab already covers it.
+	// "My Instances" and "Team" dropped here — the top nav already covers them.
 	$: userMenu = [
 		...($auth.user?.role === 'admin' ? [{ name: 'Admin', href: '/admin', icon: 'mdi:shield-crown' }] : []),
 		{ name: 'Profile', href: '/profile', icon: 'mdi:account' },
-		...($platformInfo?.teams_mode ? [{ name: 'Team', href: '/team', icon: 'mdi:account-group' }] : []),
 		...($platformInfo?.vpn_enabled ? [{ name: 'VPN', href: '/vpn', icon: 'mdi:vpn' }] : [])
 	];
 
@@ -76,16 +76,61 @@
 		try {
 			const e = await api.getEconomy();
 			credits = e.credits;
-		} catch {
+			hasTeam.set(true);
+		} catch (e) {
 			credits = null;
+			// 403 = no team (e.g. removed since the check): stop polling, show the banner
+			if (e instanceof ApiError && e.status === 403) hasTeam.set(false);
 		}
 	}
-	$: if ($auth.isAuthenticated && $platformInfo?.economy_enabled && $page.url.pathname) loadCredits();
+	// teamless callers only ever get a 403 here, so wait until we know there's a team
+	$: if ($auth.isAuthenticated && $platformInfo?.economy_enabled && $hasTeam && $page.url.pathname) loadCredits();
+	$: if ($hasTeam === false) credits = null;
+
+	// once per signed-in user; the team page updates the store on create/join/leave.
+	let teamCheckedFor = '';
+	$: if (browser && $platformInfo?.teams_mode && $auth.isAuthenticated && $auth.user?.id && teamCheckedFor !== $auth.user.id) checkTeam($auth.user.id);
+	$: if (browser && !$auth.isAuthenticated && !$auth.isLoading && teamCheckedFor) {
+		teamCheckedFor = '';
+		hasTeam.set(null);
+	}
+	async function checkTeam(uid: string) {
+		teamCheckedFor = uid;
+		try {
+			const r = await api.getMyTeam();
+			if (teamCheckedFor === uid) hasTeam.set(!!r.team);
+		} catch {
+			// unknown: let the economy poll answer it (200 = team, 403 = none)
+			if (teamCheckedFor === uid) loadCredits();
+		}
+	}
+
+	// staff play from organizer test teams, if at all; don't nag them.
+	let teamBannerDismissed = false;
+	$: showTeamBanner =
+		$hasTeam === false &&
+		!teamBannerDismissed &&
+		$auth.user?.role !== 'admin' &&
+		$auth.user?.role !== 'author' &&
+		!$page.url.pathname.startsWith('/team');
+	function dismissTeamBanner() {
+		teamBannerDismissed = true;
+		try {
+			sessionStorage.setItem('teamBannerDismissed', '1');
+		} catch {
+			/* ignore */
+		}
+	}
 
 	onMount(() => {
 		auth.checkAuth();
 		loadPlatformInfo();
 		theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+		try {
+			teamBannerDismissed = sessionStorage.getItem('teamBannerDismissed') === '1';
+		} catch {
+			/* ignore */
+		}
 		const refreshVisibleRank = () => {
 			if (!document.hidden) void auth.refreshRank();
 		};
@@ -309,6 +354,33 @@
 			</div>
 		{/if}
 	</nav>
+
+	{#if showTeamBanner}
+		<div class="border-b border-amber-500/20 bg-amber-500/[0.06]" role="status">
+			<div class="flex w-full items-center gap-3 px-4 py-2.5 sm:px-6 lg:px-8 2xl:px-10">
+				<OpticalIcon icon="mdi:account-group" size={15} box={16} className="shrink-0 text-amber-500" />
+				<p class="min-w-0 flex-1 text-sm leading-snug text-stone-300">
+					<span class="font-medium text-amber-500">You're not on a team yet.</span>
+					<span class="hidden text-stone-400 sm:inline">You need one to open challenges and score.</span>
+				</p>
+				<a
+					href="/team"
+					class="shrink-0 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-medium leading-none text-amber-500 transition-colors hover:border-amber-500/50 hover:bg-amber-500/15 hover:text-amber-400"
+				>
+					<span class="sm:hidden">Join or create</span>
+					<span class="hidden sm:inline">Create or join a team</span>
+				</a>
+				<button
+					type="button"
+					on:click={dismissTeamBanner}
+					aria-label="Dismiss"
+					class="shrink-0 rounded-md p-1 text-stone-500 transition-colors hover:bg-stone-800/40 hover:text-stone-200"
+				>
+					<Icon icon="mdi:close" class="h-4 w-4" />
+				</button>
+			</div>
+		</div>
+	{/if}
 
 	<main class="flex-1">
 		<slot />

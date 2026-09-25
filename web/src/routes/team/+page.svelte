@@ -7,6 +7,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { confirmDialog } from '$lib/stores/dialog';
+	import { hasTeam } from '$lib/stores/platform';
 
 	let loading = true;
 	let teamsDisabled = false;
@@ -32,6 +33,7 @@
 		try {
 			const res = await api.getMyTeam();
 			team = res.team;
+			hasTeam.set(!!team); // clears the no-team banner / resumes the credits poll
 			if (team) {
 				try { eco = await api.getEconomy(); } catch { eco = null; }
 			}

@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/stores';
-	import { api } from '$api';
+	import { api, ApiError } from '$api';
 	import { auth } from '$stores/auth';
 	import { categoryColor, difficultyClass } from '$lib/rank';
 	import { API_BASE } from '$lib/config';
@@ -10,6 +10,8 @@
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { formatLocalDateTime, instantTitle } from '$lib/time';
 	import { confirmDialog, alertDialog } from '$lib/stores/dialog';
+	import { eventClock, kickoffDelay } from '$lib/stores/platform';
+	import KickoffCountdown from '$lib/components/KickoffCountdown.svelte';
 
 	let challenge: any = null;
 	let instance: any = null;
@@ -162,12 +164,30 @@
 
 	onDestroy(() => {
 		if (timerInterval) clearInterval(timerInterval);
+		clearTimeout(kickoffTimer);
 	});
+
+	// pre-start the api hides every challenge (404 + phase). hold on the countdown
+	// and refetch after a jitter once the clock says live, like the board does.
+	let preStart = false;
+	let kickoffTimer: ReturnType<typeof setTimeout> | undefined;
+	$: phase = $eventClock.phase;
+	$: if (preStart && phase === 'live') armKickoff(false);
+	function armKickoff(retry: boolean) {
+		if (kickoffTimer) return;
+		kickoffTimer = setTimeout(async () => {
+			await loadChallenge();
+			kickoffTimer = undefined;
+			if (preStart && phase === 'live') armKickoff(true);
+		}, kickoffDelay(retry));
+	}
 
 	async function loadChallenge() {
 		if (!slug) return;
+		const sentPhase = phase;
 		try {
 			challenge = await api.getChallenge(slug);
+			preStart = false;
 			editForm = {
 				name: challenge.name,
 				description: challenge.description || '',
@@ -178,6 +198,10 @@
 				editingFlags = challenge.flags.map((f: any) => ({ ...f, editing: false, newFlag: '' }));
 			}
 		} catch (e) {
+			// a failed go-live refetch (5xx, network) keeps waiting; only a real 404 ends it
+			const scheduled = e instanceof ApiError && e.details.phase === 'scheduled';
+			const missing = e instanceof ApiError && e.status === 404 && !scheduled;
+			preStart = !challenge && (scheduled || sentPhase === 'scheduled' || (preStart && !missing));
 			error = e instanceof Error ? e.message : 'Failed to load challenge';
 		} finally {
 			loading = false;
@@ -204,6 +228,14 @@
 	let ecoBusy = false;
 	let ecoError = '';
 	$: locked = challenge?.economy?.enabled && !challenge.economy.launched;
+	// economy pays the live band value; flags weigh a share of it, not flat points
+	$: economyOn = !!challenge?.economy?.enabled;
+	$: shownPoints = typeof challenge?.economy?.value === 'number' ? Math.round(challenge.economy.value) : challenge?.base_points;
+	$: flagWeightTotal = (challenge?.flags ?? []).reduce((sum: number, f: any) => sum + (f.points || 0), 0);
+	function flagPct(f: any): number {
+		const n = challenge?.flags?.length || 1;
+		return Math.round((flagWeightTotal > 0 ? (f.points || 0) / flagWeightTotal : 1 / n) * 100);
+	}
 
 	async function ecoAction(fn: () => Promise<unknown>) {
 		if (ecoBusy) return;
@@ -665,6 +697,14 @@
 		<div class="flex items-center justify-center min-h-[60vh]">
 			<Icon icon="mdi:loading" class="w-7 h-7 text-stone-600 animate-spin" />
 		</div>
+	{:else if preStart && !challenge}
+		<div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+			<a href="/challenges" class="inline-flex items-center gap-1.5 text-stone-500 hover:text-stone-300 text-sm leading-none transition-colors">
+				<OpticalIcon icon="mdi:arrow-left" size={14} box={14} />
+				<span class="optical-label">Challenges</span>
+			</a>
+			<KickoffCountdown />
+		</div>
 	{:else if error && !challenge}
 		<div class="max-w-2xl mx-auto px-4 py-20 text-center">
 			<Icon icon="mdi:alert-circle-outline" class="w-10 h-10 text-down/60 mx-auto mb-4" />
@@ -763,8 +803,11 @@
 								/>
 								<p class="metadata-label text-stone-500 mt-1">Points</p>
 							{:else}
-								<p class="text-2xl font-semibold text-amber-500 tabular-nums">{challenge.base_points}</p>
+								<p class="text-2xl font-semibold text-amber-500 tabular-nums" title={economyOn ? 'Live value: drops as more teams solve' : undefined}>{shownPoints}</p>
 								<p class="metadata-label text-stone-500">Points</p>
+								{#if economyOn && challenge.economy.share}
+									<p class="mt-1 text-xs text-stone-500 tabular-nums" title="Your team's share of this challenge and what it's worth now">Yours {Math.round(challenge.economy.earned || 0)} · {Math.round(challenge.economy.share * 100)}%</p>
+								{/if}
 							{/if}
 						</div>
 					</div>
@@ -805,12 +848,23 @@
 					{#if locked}
 						<Card title="Locked">
 							<div class="space-y-3">
-								<p class="text-sm text-stone-400 leading-relaxed">Launching unlocks the full brief, files, and instance, and starts your solve timer.</p>
-								<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-									{ecoBusy ? 'Launching…' : 'Launch challenge'}
-								</button>
-								<p class="text-xs text-stone-500">Costs <span class="font-medium text-amber-500 tabular-nums">{challenge.economy.launch_cost}</span> credits · balance <span class="tabular-nums">{Math.round(challenge.economy.credits)}</span></p>
-								{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
+								{#if $auth.isAuthenticated && challenge.economy.has_team === false}
+									<p class="text-sm text-stone-400 leading-relaxed">Challenges are opened and scored per team. Join or create a team to play.</p>
+									<a href="/team" class="flex w-full items-center justify-center gap-1.5 py-2.5 bg-stone-100 text-stone-950 text-sm leading-none font-medium rounded-md hover:bg-stone-50 transition-colors">
+										<Icon icon="mdi:account-group" class="w-4 h-4 shrink-0" />
+										Join or create a team
+									</a>
+								{:else}
+									<p class="text-sm text-stone-400 leading-relaxed">Launching unlocks the full brief, files, and instance, and starts your solve timer.</p>
+									<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+										{ecoBusy ? 'Launching…' : 'Launch challenge'}
+									</button>
+									<p class="text-xs text-stone-500">Costs <span class="font-medium text-amber-500 tabular-nums">{challenge.economy.launch_cost}</span> credits · balance <span class="tabular-nums">{Math.round(challenge.economy.credits)}</span></p>
+									{#if $auth.isAuthenticated && challenge.economy.credits < challenge.economy.launch_cost}
+										<p class="text-xs text-stone-500">Not enough credits. Convert points or claim the one-time bailout on your <a href="/team" class="text-stone-300 underline underline-offset-2 hover:text-stone-100">team page</a>.</p>
+									{/if}
+									{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
+								{/if}
 							</div>
 						</Card>
 					{:else}
@@ -943,7 +997,11 @@
 														<span class="optical-label">{flag.total_solves}</span>
 													</span>
 												{/if}
-												<span class="text-xs {flag.is_solved ? 'text-up/70' : 'text-stone-500'} tabular-nums">{flag.points} pts</span>
+												{#if economyOn}
+													<span class="text-xs {flag.is_solved ? 'text-up/70' : 'text-stone-500'} tabular-nums" title="Share of the challenge's value">{flagPct(flag)}%</span>
+												{:else}
+													<span class="text-xs {flag.is_solved ? 'text-up/70' : 'text-stone-500'} tabular-nums">{flag.points} pts</span>
+												{/if}
 											</div>
 										</div>
 									{/each}

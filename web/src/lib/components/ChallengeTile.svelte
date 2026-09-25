@@ -13,6 +13,7 @@
 		has_instance?: boolean;
 		base_points?: number;
 		points?: number;
+		value?: number;
 		total_flags: number;
 		total_solves: number;
 		user_solves: number;
@@ -24,7 +25,9 @@
 
 	// resource_type is always 'docker' in data; the real signal is has_instance.
 	$: displayResource = challenge.resource_type === 'vm' ? 'vm' : challenge.has_instance ? 'docker' : 'static';
-	$: points = challenge.base_points ?? challenge.points ?? 0;
+	// economy boards carry the live value (band ceiling x crowd decay); else base points
+	$: live = typeof challenge.value === 'number';
+	$: points = live ? Math.round(challenge.value ?? 0) : (challenge.base_points ?? challenge.points ?? 0);
 	$: multiFlag = challenge.total_flags > 1;
 	$: progress = challenge.total_flags
 		? Math.min(100, ((challenge.user_solves || 0) / challenge.total_flags) * 100)
@@ -85,7 +88,7 @@
 		{/if}
 		<div class="flex items-center justify-between text-xs leading-none">
 			<div class="flex items-center gap-3">
-				<span class="inline-flex items-center gap-1 text-amber-500 font-semibold tabular-nums" title="Points">
+				<span class="inline-flex items-center gap-1 text-amber-500 font-semibold tabular-nums" title={live ? 'Points now: drops as more teams solve' : 'Points'}>
 					<OpticalIcon icon="mdi:star-outline" size={12} box={12} />
 					<span class="optical-label">{points}</span>
 				</span>

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -56,6 +57,8 @@ type ChallengeListResponse struct {
 	SubDescription *string `json:"sub_description,omitempty"` // short one-liner shown on the tile
 	ArenaMode      string  `json:"arena_mode"`                // per_team (default) or shared (KotH)
 	HasInstance    bool    `json:"has_instance"`              // docker w/ image, or active vm template; false = static download
+
+	Value *float64 `json:"value,omitempty"` // economy: what a new full capture pays right now
 }
 
 type ChallengeDetailResponse struct {
@@ -78,6 +81,11 @@ type ChallengeEconomyInfo struct {
 	Solved     bool    `json:"solved"`
 	LaunchCost float64 `json:"launch_cost"`
 	Credits    float64 `json:"credits"`
+	HasTeam    bool    `json:"has_team"`
+
+	Value  *float64 `json:"value,omitempty"`  // a new full capture's worth right now
+	Share  float64  `json:"share,omitempty"`  // the team's held fraction, 0..1
+	Earned float64  `json:"earned,omitempty"` // what that holding is worth now
 }
 
 type FlagResponse struct {
@@ -103,7 +111,8 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 	// before the CTF starts, non-staff see no challenges (the /challenges page
 	// shows a countdown off /info instead). staff preview everything.
 	if phase == "scheduled" && !staff {
-		c.JSON(http.StatusOK, gin.H{"challenges": []ChallengeListResponse{}, "total": 0})
+		// phase tells the board the list is held back, so it refetches at go-live
+		c.JSON(http.StatusOK, gin.H{"challenges": []ChallengeListResponse{}, "total": 0, "phase": phase})
 		return
 	}
 
@@ -187,6 +196,20 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 			challenges[i].Description = nil
 		}
 	}
+	// the economy pays the live band value, not base_points; best-effort so a
+	// failed read never blanks the board.
+	if on, err := isEconomyMode(c.Request.Context(), h.db); err != nil {
+		h.logger.Warn("failed to read economy_mode for values", zap.Error(err))
+	} else if on {
+		if crowds, err := economyCrowds(c.Request.Context(), h.db, nil); err != nil {
+			h.logger.Warn("failed to read economy crowds", zap.Error(err))
+		} else {
+			for i := range challenges {
+				v := challengeValue(h.config.Economy, challenges[i].Difficulty, crowds[challenges[i].ID], 0)
+				challenges[i].Value = &v
+			}
+		}
+	}
 
 	if challenges == nil {
 		challenges = []ChallengeListResponse{}
@@ -203,7 +226,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 
 	// pre-event: challenge detail is hidden from non-staff (matches the empty list).
 	if phase, staff := eventPlayState(c, h.db); phase == "scheduled" && !staff {
-		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found", "phase": phase})
 		return
 	}
 
@@ -384,12 +407,24 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	}
 	if on {
 		info := &ChallengeEconomyInfo{Enabled: true, LaunchCost: launchCost(h.config.Economy, ch.Difficulty)}
+		if crowds, cErr := economyCrowds(c.Request.Context(), h.db, &ch.ID); cErr != nil {
+			h.logger.Warn("failed to read economy crowd", zap.String("challenge_id", ch.ID), zap.Error(cErr))
+		} else {
+			v := challengeValue(h.config.Economy, ch.Difficulty, crowds[ch.ID], 0)
+			info.Value = &v
+		}
 		var st economyState
 		if uid, ok := contextUserID(c); ok {
 			if teamID, tErr := resolveTeamID(c.Request.Context(), h.db, uid); tErr == nil && teamID != nil {
+				info.HasTeam = true
+				var holds bool
+				var frac, earned float64
 				_ = h.db.Pool.QueryRow(c.Request.Context(),
-					`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
-					*teamID, ch.ID).Scan(&st.status, &st.expiresAt)
+					`SELECT status, expires_at, holds_solve, frac, current_value FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+					*teamID, ch.ID).Scan(&st.status, &st.expiresAt, &holds, &frac, &earned)
+				if holds {
+					info.Share, info.Earned = frac, earned
+				}
 				// launched = can act now; an expired team re-opens from the locked card
 				info.Launched = economyCanAct(st, time.Now())
 				info.Solved = st.status == "solved"
@@ -1502,12 +1537,19 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// challenge (ceiling × crowd-decay × wrong-sub), retroactively recomputed for
 	// all holders, plus the clean-solve credit refund. replaces the flat team
 	// scoring below. idempotent per team+challenge.
+	// the toast reports what the capture earned the team, not the flag's raw weight
+	var ecoEarned *float64
 	if economyMode && ecoTeamID != nil {
-		if chalUUID, pErr := uuid.Parse(challengeID); pErr != nil {
+		chalUUID, pErr := uuid.Parse(challengeID)
+		if pErr != nil {
 			h.logger.Error("failed to parse challenge id for economy solve", zap.Error(pErr))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 			return
-		} else if ecErr := applyEconomySolve(ctx, tx, h.config.Economy, *ecoTeamID, chalUUID, ecoDifficulty); ecErr != nil {
+		}
+		const heldValue = `SELECT current_value FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`
+		var before, after float64
+		_ = tx.QueryRow(ctx, heldValue, *ecoTeamID, chalUUID).Scan(&before)
+		if ecErr := applyEconomySolve(ctx, tx, h.config.Economy, *ecoTeamID, chalUUID, ecoDifficulty); ecErr != nil {
 			var eo *EconomyOpError
 			if errors.As(ecErr, &eo) {
 				c.JSON(eo.Status, gin.H{"error": eo.Message})
@@ -1516,6 +1558,10 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			h.logger.Error("failed to apply economy solve", zap.Error(ecErr))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 			return
+		}
+		if err := tx.QueryRow(ctx, heldValue, *ecoTeamID, chalUUID).Scan(&after); err == nil {
+			d := math.Max(0, after-before)
+			ecoEarned = &d
 		}
 	} else if teamsErr != nil {
 		// team-aggregated scoring (teams mode, economy off): credit the team once
@@ -1601,11 +1647,15 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
+	points := matchedFlag.Points
+	if ecoEarned != nil {
+		points = int(math.Round(*ecoEarned))
+	}
 	response := gin.H{
 		"correct":      true,
 		"message":      "Correct! Flag captured!",
 		"flag_name":    matchedFlag.Name,
-		"points":       matchedFlag.Points,
+		"points":       points,
 		"fully_solved": solvedFlags >= totalFlags,
 		"solved_flags": solvedFlags,
 		"total_flags":  totalFlags,
