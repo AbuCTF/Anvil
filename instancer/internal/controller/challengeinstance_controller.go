@@ -56,6 +56,7 @@ func (c Config) tcpRouteFor(category string) TCPRoute {
 // ChallengeInstanceReconciler drives one instance to its desired state.
 type ChallengeInstanceReconciler struct {
 	client.Client
+	Reader client.Reader // uncached, for the rare existence re-check
 	Scheme *runtime.Scheme
 	Cfg    Config
 }
@@ -202,8 +203,16 @@ func (r *ChallengeInstanceReconciler) ensureNamespace(ctx context.Context, inst 
 // (hot-update is a later phase), so there is no drift to reconcile.
 func (r *ChallengeInstanceReconciler) createIfAbsent(ctx context.Context, o client.Object) error {
 	err := r.Create(ctx, o)
-	if apierrors.IsAlreadyExists(err) {
+	if err == nil || apierrors.IsAlreadyExists(err) {
 		return nil
+	}
+	// admission (quota) runs before the existence check, so re-creating an object
+	// that exists in a full namespace says Forbidden, not AlreadyExists.
+	if apierrors.IsForbidden(err) && r.Reader != nil {
+		existing := o.DeepCopyObject().(client.Object)
+		if gerr := r.Reader.Get(ctx, client.ObjectKeyFromObject(o), existing); gerr == nil {
+			return nil
+		}
 	}
 	return err
 }

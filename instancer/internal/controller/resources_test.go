@@ -13,6 +13,7 @@ func TestReserveRequests(t *testing.T) {
 		{"1", "512Mi", "100m", "128Mi"},
 		{"2", "1Gi", "200m", "256Mi"},
 		{"50m", "64Mi", "10m", "64Mi"}, // floors
+		{"5m", "32Mi", "5m", "32Mi"},   // floors never exceed the limit
 	}
 	for _, tc := range cases {
 		c := corev1.Container{Resources: corev1.ResourceRequirements{Limits: corev1.ResourceList{

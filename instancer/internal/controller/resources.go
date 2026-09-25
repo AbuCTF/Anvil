@@ -49,9 +49,10 @@ func buildQuota(ns string) *corev1.ResourceQuota {
 		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
 			corev1.ResourceRequestsCPU:    resource.MustParse("2"),
 			corev1.ResourceRequestsMemory: resource.MustParse("2Gi"),
-			corev1.ResourceLimitsCPU:      resource.MustParse("4"),
-			corev1.ResourceLimitsMemory:   resource.MustParse("4Gi"),
-			corev1.ResourcePods:           resource.MustParse("8"),
+			// multi-pod challenges (argus's reconciler adds its own pods) filled 4/4Gi
+			corev1.ResourceLimitsCPU:    resource.MustParse("8"),
+			corev1.ResourceLimitsMemory: resource.MustParse("8Gi"),
+			corev1.ResourcePods:         resource.MustParse("12"),
 		}},
 	}
 }
@@ -245,12 +246,16 @@ func reserveRequests(c *corev1.Container, cpuPct, memPct int64) {
 	if c.Resources.Requests != nil || c.Resources.Limits == nil {
 		return
 	}
+	// floors cover the sandbox's own overhead, but never above the limit itself
+	// (a request over its limit makes the pod invalid).
 	req := corev1.ResourceList{}
 	if cpu, ok := c.Resources.Limits[corev1.ResourceCPU]; ok && cpuPct > 0 {
-		req[corev1.ResourceCPU] = *resource.NewMilliQuantity(max(cpu.MilliValue()*cpuPct/100, 10), resource.DecimalSI)
+		m := cpu.MilliValue()
+		req[corev1.ResourceCPU] = *resource.NewMilliQuantity(max(m*cpuPct/100, min(10, m)), resource.DecimalSI)
 	}
 	if mem, ok := c.Resources.Limits[corev1.ResourceMemory]; ok && memPct > 0 {
-		req[corev1.ResourceMemory] = *resource.NewQuantity(max(mem.Value()*memPct/100, 64<<20), resource.BinarySI)
+		b := mem.Value()
+		req[corev1.ResourceMemory] = *resource.NewQuantity(max(b*memPct/100, min(64<<20, b)), resource.BinarySI)
 	}
 	if len(req) > 0 {
 		c.Resources.Requests = req

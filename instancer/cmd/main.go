@@ -117,7 +117,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	r := &controller.ChallengeInstanceReconciler{Client: mgr.GetClient(), Scheme: mgr.GetScheme(), Cfg: cfg}
+	r := &controller.ChallengeInstanceReconciler{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Scheme: mgr.GetScheme(), Cfg: cfg}
 	if err := r.SetupWithManager(mgr, maxConcurrent); err != nil {
 		lg.Error(err, "unable to create controller")
 		os.Exit(1)
