@@ -9,6 +9,7 @@ cd "$(dirname "$0")/../.."
 kubectl apply --server-side --force-conflicts -f config/crd/
 kubectl apply -f config/rbac/role.yaml
 kubectl apply -f config/deploy/traefik-tls.yaml
+kubectl apply -f config/deploy/flowschema.yaml
 kubectl apply -f config/deploy/operator.yaml
 # raw-TCP half-close proxy + its L4 NLB (routes pool ports to instances).
 # one pool range, read from the proxy manifest; the operator must agree.

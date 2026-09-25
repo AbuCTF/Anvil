@@ -1,0 +1,28 @@
+# The instance path (the api creating and polling ChallengeInstances, the operator
+# building them) rides the high API priority level, so a launch wave or a noisy
+# client can't queue it behind lower-priority traffic.
+apiVersion: flowcontrol.apiserver.k8s.io/v1
+kind: FlowSchema
+metadata:
+  name: anvil-instancing
+spec:
+  priorityLevelConfiguration:
+    name: workload-high
+  matchingPrecedence: 1000
+  distinguisherMethod:
+    type: ByUser
+  rules:
+    - subjects:
+        - kind: ServiceAccount
+          serviceAccount: { name: instancer, namespace: anvil-instancer }
+        - kind: ServiceAccount
+          serviceAccount: { name: default, namespace: anvil }
+      resourceRules:
+        - verbs: ["*"]
+          apiGroups: ["*"]
+          resources: ["*"]
+          clusterScope: true
+          namespaces: ["*"]
+      nonResourceRules:
+        - verbs: ["*"]
+          nonResourceURLs: ["*"]

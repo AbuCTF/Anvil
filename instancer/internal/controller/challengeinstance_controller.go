@@ -86,7 +86,7 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		if err := r.Patch(ctx, inst, patch); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		// carry on in this pass: a requeue per new instance doubled the queue in a launch wave
 	}
 
 	// Reaper: past the effective deadline, delete self; the deletion path tears down.
@@ -114,6 +114,25 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	if err := r.deleteFailedPods(ctx, ns); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	// provisioned once already (endpoints published): only pods can have gone
+	// missing, so recreate those instead of re-issuing every create. a launch wave's
+	// pod events otherwise queue ~12 creates each ahead of brand-new instances.
+	if inst.Status.Namespace != "" && len(inst.Status.Endpoints) > 0 {
+		for _, p := range inst.Spec.Pods {
+			if err := r.createIfAbsent(ctx, buildPod(inst, p, r.Cfg, exposedPods)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("recreate pod %s: %w", p.Name, err)
+			}
+		}
+		phase, err := r.instancePhase(ctx, ns, inst)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.setStatus(ctx, inst, phase, ns, inst.Status.Endpoints, ""); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: r.requeueAfter(deadline)}, nil
 	}
 
 	if err := r.ensureNamespace(ctx, inst); err != nil {

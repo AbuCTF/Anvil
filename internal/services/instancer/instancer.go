@@ -10,6 +10,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -160,11 +161,15 @@ func (s *Service) Launch(ctx context.Context, spec LaunchSpec) (*LaunchResult, e
 
 	eps, err := s.waitForEndpoints(ctx, id)
 	if err != nil {
-		// never leave a half-born instance running unaccounted; a retry recreates it
-		dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if derr := s.Destroy(dctx, id); derr != nil {
-			s.logger.Warn("failed to clean up instance after launch failure", zap.String("instance", id), zap.Error(derr))
+		// a broken instance is removed; a merely slow one (launch wave backlog) is
+		// left to finish, so the player's retry adopts it instead of starting over.
+		// unclaimed, it dies at its own expiry.
+		if errors.Is(err, errInstanceFailed) {
+			dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if derr := s.Destroy(dctx, id); derr != nil {
+				s.logger.Warn("failed to clean up instance after launch failure", zap.String("instance", id), zap.Error(derr))
+			}
 		}
 		return nil, err
 	}
@@ -217,8 +222,10 @@ func (s *Service) Extend(ctx context.Context, instanceID string, expiresAt time.
 // readiness) or the instance errors / the wait times out. A timeout means the
 // instance never came up (pool at capacity, image pull stuck, controller down),
 // surfaced to the caller as a clean, retryable error.
+var errInstanceFailed = errors.New("instance failed to provision")
+
 func (s *Service) waitForEndpoints(ctx context.Context, id string) ([]Endpoint, error) {
-	deadline := time.Now().Add(30 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	lastPhase := ""
 	for {
 		st, err := s.Status(ctx, id)
@@ -231,7 +238,7 @@ func (s *Service) waitForEndpoints(ctx context.Context, id string) ([]Endpoint, 
 				return st.Endpoints, nil
 			}
 			if st.Phase == "Errored" {
-				return nil, fmt.Errorf("instance failed to provision")
+				return nil, errInstanceFailed
 			}
 		}
 		if time.Now().After(deadline) {

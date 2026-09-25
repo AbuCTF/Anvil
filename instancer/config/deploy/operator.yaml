@@ -67,7 +67,7 @@ spec:
               value: 30s
             # a launch wave reconciles in parallel; ready instances are a cache read.
             - name: INSTANCER_MAX_CONCURRENT
-              value: "32"
+              value: "64"
             # pod requests as % of limits: idle challenges reserve a slice, not the
             # whole limit, so a node packs ~100 of them (limits still cap each pod).
             - name: INSTANCER_CPU_REQUEST_PCT
