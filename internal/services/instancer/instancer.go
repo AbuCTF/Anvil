@@ -18,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 
@@ -110,6 +111,9 @@ func NewService(cfg config.InstancerConfig, logger *zap.Logger) (*Service, error
 		logger.Warn("instancer backend is k8s but not running in-cluster; instancing will error until deployed on GKE", zap.Error(err))
 		return s, nil
 	}
+	// client-go defaults to 5 qps / burst 10 per pod, which queues a launch
+	// wave behind itself; the apiserver's own fairness is the real limit.
+	rc.QPS, rc.Burst = 100, 200
 	dyn, err := dynamic.NewForConfig(rc)
 	if err != nil {
 		return nil, fmt.Errorf("build dynamic client: %w", err)
@@ -150,16 +154,62 @@ func (s *Service) Launch(ctx context.Context, spec LaunchSpec) (*LaunchResult, e
 	}
 	cr := s.buildCR(id, spec, expose)
 
-	_, err := s.dyn.Resource(gvr).Create(ctx, cr, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return nil, fmt.Errorf("create ChallengeInstance: %w", err)
+	if err := s.create(ctx, cr); err != nil {
+		return nil, err
 	}
 
 	eps, err := s.waitForEndpoints(ctx, id)
 	if err != nil {
+		// never leave a half-born instance running unaccounted; a retry recreates it
+		dctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if derr := s.Destroy(dctx, id); derr != nil {
+			s.logger.Warn("failed to clean up instance after launch failure", zap.String("instance", id), zap.Error(derr))
+		}
 		return nil, err
 	}
 	return &LaunchResult{InstanceID: id, Namespace: "inst-" + id, Endpoints: eps}, nil
+}
+
+// create makes the CR. The id is deterministic per team+challenge, so a
+// relaunch right after a stop can collide with the previous incarnation still
+// in its finalizer; wait that one out instead of adopting its dying endpoints.
+func (s *Service) create(ctx context.Context, cr *unstructured.Unstructured) error {
+	deadline := time.Now().Add(45 * time.Second)
+	for {
+		_, err := s.dyn.Resource(gvr).Create(ctx, cr, metav1.CreateOptions{})
+		if err == nil {
+			return nil
+		}
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create ChallengeInstance: %w", err)
+		}
+		old, gerr := s.dyn.Resource(gvr).Get(ctx, cr.GetName(), metav1.GetOptions{})
+		if gerr == nil && old.GetDeletionTimestamp() == nil {
+			return nil // live instance already exists, reuse it
+		}
+		if gerr != nil && !apierrors.IsNotFound(gerr) {
+			return fmt.Errorf("read existing ChallengeInstance: %w", gerr)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("previous instance is still shutting down, please try again shortly")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// Extend moves the CR's expiry so the operator's reaper honours an extension.
+func (s *Service) Extend(ctx context.Context, instanceID string, expiresAt time.Time) error {
+	if !s.Enabled() {
+		return fmt.Errorf("instancer k8s backend not available")
+	}
+	patch := fmt.Sprintf(`{"spec":{"expiresAt":%q}}`, expiresAt.UTC().Format(time.RFC3339))
+	_, err := s.dyn.Resource(gvr).Patch(ctx, instanceID, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	return err
 }
 
 // waitForEndpoints polls the CR status until the operator publishes endpoints

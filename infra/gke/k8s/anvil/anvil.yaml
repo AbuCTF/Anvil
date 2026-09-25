@@ -7,24 +7,13 @@ kind: Namespace
 metadata:
   name: anvil
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: anvil-storage
-  namespace: anvil
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 10Gi
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: anvil-api
   namespace: anvil
 spec:
-  replicas: 2
+  replicas: 3
   selector:
     matchLabels: { app: anvil-api }
   template:
@@ -32,6 +21,13 @@ spec:
       labels: { app: anvil-api }
     spec:
       nodeSelector: { pool: platform }
+      # one node loss must not take every replica with it.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: anvil-api }
       containers:
         - name: anvil-api
           image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-api:latest
@@ -41,20 +37,18 @@ spec:
             - secretRef: { name: anvil-secrets }
           readinessProbe:
             httpGet: { path: /health, port: 8080 }
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
+          # liveness must not hang on the db: a slow db under load would get
+          # every pod restarted mid-surge.
           livenessProbe:
-            httpGet: { path: /health, port: 8080 }
+            tcpSocket: { port: 8080 }
             initialDelaySeconds: 20
             periodSeconds: 15
           resources:
-            requests: { cpu: 100m, memory: 256Mi }
-            limits: { cpu: "1", memory: 768Mi }
-          volumeMounts:
-            - { name: storage, mountPath: /var/lib/anvil }
-      volumes:
-        - name: storage
-          persistentVolumeClaim: { claimName: anvil-storage }
+            requests: { cpu: 250m, memory: 256Mi }
+            limits: { cpu: "2", memory: 1Gi }
 ---
 apiVersion: v1
 kind: Service
@@ -79,6 +73,12 @@ spec:
       labels: { app: anvil-web }
     spec:
       nodeSelector: { pool: platform }
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: anvil-web }
       containers:
         - name: anvil-web
           image: asia-south1-docker.pkg.dev/project-c36a8ca6-dbc7-4a90-9d2/anvil/anvil-web:latest
@@ -89,11 +89,12 @@ spec:
             - { name: HOST, value: "0.0.0.0" }
           readinessProbe:
             httpGet: { path: /, port: 3000 }
-            initialDelaySeconds: 10
+            initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
           resources:
-            requests: { cpu: 50m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: "1", memory: 512Mi }
 ---
 apiVersion: v1
 kind: Service
@@ -137,7 +138,8 @@ spec:
   tls:
     secretName: ctf-h7tex-tls
 ---
-# autoscaling: hold 2 for HA, burst on CPU during the login/challenge spike.
+# autoscaling: hold 3 for HA, burst on CPU during the login/challenge spike.
+# 8 api pods x 40 db conns stays under cloud sql's max_connections (400).
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -148,8 +150,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: anvil-api
-  minReplicas: 2
-  maxReplicas: 4
+  minReplicas: 3
+  maxReplicas: 8
   metrics:
     - type: Resource
       resource:
@@ -167,7 +169,7 @@ spec:
     kind: Deployment
     name: anvil-web
   minReplicas: 2
-  maxReplicas: 3
+  maxReplicas: 6
   metrics:
     - type: Resource
       resource:

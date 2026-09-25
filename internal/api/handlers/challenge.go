@@ -1349,6 +1349,10 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	// read before the tx: the tx below holds the challenge row lock, and a second
+	// pooled connection taken under it deadlocks the pool when a popular
+	// challenge gets a burst of solves.
+	teamsMode, teamsErr := isTeamsMode(ctx, h.db)
 	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
 		h.logger.Error("failed to begin solve transaction", zap.Error(err))
@@ -1463,10 +1467,10 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 			return
 		}
-	} else if teamsMode, tErr := isTeamsMode(ctx, h.db); tErr != nil {
+	} else if teamsErr != nil {
 		// team-aggregated scoring (teams mode, economy off): credit the team once
 		// per distinct flag. best-effort; teams.total_score is denormalized.
-		h.logger.Warn("teams_mode read failed during solve; skipping team score", zap.Error(tErr))
+		h.logger.Warn("teams_mode read failed during solve; skipping team score", zap.Error(teamsErr))
 	} else if teamsMode {
 		var teamID *uuid.UUID
 		if err := tx.QueryRow(ctx, `SELECT team_id FROM users WHERE id = $1`, uid).Scan(&teamID); err != nil {

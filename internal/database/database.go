@@ -49,6 +49,8 @@ func New(cfg config.DatabaseConfig) (*DB, error) {
 		poolConfig.ConnConfig.RuntimeParams = make(map[string]string)
 	}
 	poolConfig.ConnConfig.RuntimeParams["timezone"] = "UTC"
+	// a runaway query must not pin a pooled connection forever under load.
+	poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = "30000"
 	previousAfterConnect := poolConfig.AfterConnect
 	poolConfig.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		if previousAfterConnect != nil {

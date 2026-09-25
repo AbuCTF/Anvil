@@ -267,10 +267,16 @@ func main() {
 					  AND c.resource_type = 'vm'
 				`).Scan(&deletingCount)
 
+				// vm rows only: container rows carry the dynamic flags, which must
+				// stay submittable after the instance is gone.
 				if _, err := db.Pool.Exec(ctx, `
-					DELETE FROM instances 
-					WHERE status IN ('failed', 'stopped', 'expired') 
-					  AND created_at < NOW() - INTERVAL '1 hour'
+					DELETE FROM instances i
+					USING challenges c
+					WHERE i.challenge_id = c.id
+					  AND c.resource_type = 'vm'
+					  AND i.status IN ('failed', 'stopped', 'expired')
+					  AND i.created_at < NOW() - INTERVAL '1 hour'
+					  AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.instance_id = i.id)
 				`); err != nil {
 					sugar.Errorf("Failed to cleanup old instances: %v", err)
 				}

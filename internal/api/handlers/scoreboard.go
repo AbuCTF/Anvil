@@ -409,13 +409,8 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		return
 	}
 	defer h.finishCacheFill(cacheKey)
-	tx, ok := h.beginReadSnapshot(c)
-	if !ok {
-		return
-	}
-	defer tx.Rollback(c.Request.Context())
-
-	// teams mode ranks teams instead of users; the team path is fully isolated (separate count + query, trends skipped) so the user path is untouched
+	// teams mode ranks teams instead of users; the team path is fully isolated (separate count + query, trends skipped) so the user path is untouched.
+	// settings are read before the snapshot tx so the fill never holds two pooled connections.
 	teamsMode, tmErr := isTeamsMode(c.Request.Context(), h.db)
 	if tmErr != nil {
 		h.respondQueryError(c, "failed to read teams_mode", tmErr)
@@ -427,6 +422,12 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		return
 	}
 	teamRanked := teamsMode || economyMode // both rank teams, not users
+
+	tx, ok := h.beginReadSnapshot(c)
+	if !ok {
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
 
 	countQuery := `SELECT COUNT(*), COUNT(*) FILTER (
 			 WHERE $1 = '' OR username ILIKE '%' || $1 || '%' ESCAPE '\'

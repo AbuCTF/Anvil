@@ -445,6 +445,40 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+
+	// admins test freely: they skip the team requirement, economy gate, concurrency
+	// limit, and cooldown so any challenge can be previewed without setup.
+	isAdmin := c.GetString("role") == "admin"
+
+	// settings + team membership are read before the tx: a pooled read while a
+	// tx holds its own connection deadlocks the pool once a launch wave fills it.
+	teamsMode, err := isTeamsMode(ctx, h.db)
+	if err != nil {
+		h.logger.Error("failed to read teams_mode", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
+		return
+	}
+	var teamID *uuid.UUID
+	if teamsMode && !isAdmin {
+		if teamID, err = resolveTeamID(ctx, h.db, uid); err != nil {
+			h.logger.Error("failed to resolve team", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
+			return
+		}
+		if teamID == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "join a team before starting an instance"})
+			return
+		}
+	}
+	economyOn := false
+	if teamID != nil {
+		if economyOn, err = isEconomyMode(ctx, h.db); err != nil {
+			h.logger.Error("failed to read economy_mode", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
+			return
+		}
+	}
+
 	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
 		h.logger.Error("failed to begin instance admission transaction", zap.Error(err))
@@ -495,10 +529,6 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// admins test freely: they skip the team requirement, economy gate, concurrency
-	// limit, and cooldown so any challenge can be previewed without setup.
-	isAdmin := c.GetString("role") == "admin"
-
 	var cooldownUntil time.Time
 	err = tx.QueryRow(ctx,
 		`SELECT cooldown_until FROM user_cooldowns WHERE user_id = $1 AND challenge_id = $2`,
@@ -521,33 +551,16 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 
 	// teams mode: scope reuse, the concurrency limit, and ownership on the team;
 	// keep user_id for attribution.
-	teamsMode, err := isTeamsMode(ctx, h.db)
-	if err != nil {
-		h.logger.Error("failed to read teams_mode", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
-		return
-	}
 	ownerCol, ownerArg := "user_id", interface{}(uid)
-	var teamID *uuid.UUID
-	if teamsMode && !isAdmin {
-		tid, tErr := resolveTeamID(ctx, h.db, uid)
-		if tErr != nil {
-			h.logger.Error("failed to resolve team", zap.Error(tErr))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
-			return
-		}
-		if tid == nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "join a team before starting an instance"})
-			return
-		}
-		teamID, ownerCol, ownerArg = tid, "team_id", interface{}(*tid)
-	}
-
 	if teamID != nil {
-		economyOn, ecErr := isEconomyMode(ctx, h.db)
-		if ecErr != nil {
-			h.logger.Error("failed to read economy_mode", zap.Error(ecErr))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create instance"})
+		ownerCol, ownerArg = "team_id", interface{}(*teamID)
+		// teammates share one admission lock, or two members launching at once
+		// both pass the cap and duplicate checks below.
+		if _, err := tx.Exec(ctx,
+			`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+			"anvil-instance-create:team:"+teamID.String()); err != nil {
+			h.logger.Error("failed to acquire team admission lock", zap.Error(err), zap.String("team_id", teamID.String()))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check instance eligibility"})
 			return
 		}
 		if economyOn {
@@ -1366,9 +1379,18 @@ func (h *InstanceHandler) Extend(c *gin.Context) {
 		return
 	}
 
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin instance extend transaction", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to extend instance"})
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	var newExpiry time.Time
 	var extensionsUsed, maxExtensions int
-	err = h.db.Pool.QueryRow(ctx, fmt.Sprintf(`
+	var runtimeID string
+	err = tx.QueryRow(ctx, fmt.Sprintf(`
 		WITH extended AS (
 			UPDATE instances i
 			SET expires_at = COALESCE(i.expires_at, NOW()) + ($3 * INTERVAL '1 minute'),
@@ -1378,11 +1400,27 @@ func (h *InstanceHandler) Extend(c *gin.Context) {
 			WHERE i.challenge_id = ch.id
 			  AND i.id = $1 AND i.%s = $2 AND i.status = 'running'
 			  AND COALESCE(i.extensions_used, 0) < COALESCE(ch.max_extensions, 3)
-			RETURNING i.expires_at, i.extensions_used, COALESCE(ch.max_extensions, 3) AS max_extensions
+			RETURNING i.expires_at, i.extensions_used, COALESCE(ch.max_extensions, 3) AS max_extensions,
+			          COALESCE(i.container_id, '') AS container_id, ch.resource_type::text AS resource_type
 		)
-		SELECT expires_at, extensions_used, max_extensions FROM extended
-	`, ownerCol), instanceID, ownerArg, extensionMinutes).Scan(&newExpiry, &extensionsUsed, &maxExtensions)
+		SELECT expires_at, extensions_used, max_extensions,
+		       CASE WHEN resource_type = 'docker' THEN container_id ELSE '' END FROM extended
+	`, ownerCol), instanceID, ownerArg, extensionMinutes).Scan(&newExpiry, &extensionsUsed, &maxExtensions, &runtimeID)
 	if err == nil {
+		// on k8s the operator reaps by the CR's own expiry, so move it too or
+		// the pod dies at the old deadline while the UI shows the new one.
+		if runtimeID != "" && h.instancerSvc != nil && h.instancerSvc.Enabled() {
+			if perr := h.instancerSvc.Extend(ctx, runtimeID, newExpiry); perr != nil {
+				h.logger.Error("failed to extend instance runtime", zap.Error(perr), zap.String("runtime_id", runtimeID))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to extend instance"})
+				return
+			}
+		}
+		if cerr := tx.Commit(ctx); cerr != nil {
+			h.logger.Error("failed to commit instance extension", zap.Error(cerr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to extend instance"})
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{
 			"message":              "Instance extended successfully",
 			"new_expires_at":       newExpiry.Unix(),
@@ -1784,9 +1822,10 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	h.logger.Info("attempting to delete instance from database", zap.String("instance_id", instanceID.String()))
+	// keep the row: its dynamic flags cascade with it, and a player who stops
+	// an instance to free a slot must still be able to submit what they found.
 	result, err = tx.Exec(ctx,
-		`DELETE FROM instances WHERE id = $1 AND user_id = $2 AND status = 'stopping'`, instanceID, uid)
+		`UPDATE instances SET status = 'stopped', updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'stopping'`, instanceID, uid)
 	if err != nil {
 		h.logger.Error("failed to delete instance", zap.Error(err), zap.String("instance_id", instanceID.String()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete instance"})
@@ -1797,7 +1836,7 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete instance"})
 		return
 	}
-	h.logger.Info("successfully deleted instance from database", zap.String("instance_id", instanceID.String()))
+	h.logger.Info("instance stopped", zap.String("instance_id", instanceID.String()))
 
 	if inst.ResourceType == "vm" {
 		if updateErr := releaseVMNodeCapacity(ctx, tx, inst.VMNodeID, inst.ReservedVCPU, inst.ReservedMemoryMB); updateErr != nil {
