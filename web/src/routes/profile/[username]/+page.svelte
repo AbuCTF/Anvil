@@ -69,6 +69,10 @@
   let rank: number | null = null;
   let solves: Solve[] = [];
   let challenges: ProfileChallenge[] = [];
+  let displayName = "";
+  // the URL is keyed on the (email-derived) username, but the public name shown
+  // is the player's chosen display_name when set, matching the scoreboard.
+  $: publicName = displayName || username;
 
   let profileView: "challenges" | "analytics" = "challenges";
   let challengeSearch = "";
@@ -258,6 +262,7 @@
     loading = true;
     error = "";
     notFound = false;
+    displayName = "";
     try {
       const response = await fetch(
         `${API_BASE}/api/v1/profile/${encodeURIComponent(name)}`,
@@ -279,6 +284,7 @@
       totalScore = data.user?.total_score ?? 0;
       solvedCount = data.user?.challenges_solved ?? solves.length;
       rank = data.user?.global_rank ?? null;
+      displayName = data.user?.display_name ?? "";
     } catch (caught) {
       if (controller.signal.aborted) return;
       error =
@@ -318,7 +324,7 @@
 </script>
 
 <svelte:head>
-  <title>{username} - Anvil</title>
+  <title>{publicName} - Anvil</title>
 </svelte:head>
 
 <div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
@@ -356,7 +362,7 @@
         <h1
           class="truncate text-2xl font-semibold tracking-tight text-stone-100"
         >
-          {username}
+          {publicName}
         </h1>
       </div>
       <div class="text-right">

@@ -860,10 +860,11 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 
 	var userID uuid.UUID
 	var totalScore, globalRank int
+	var displayName *string
 	err := tx.QueryRow(c.Request.Context(),
-		`SELECT id, total_score, global_rank
+		`SELECT id, display_name, total_score, global_rank
 		 FROM (
-			SELECT u.id, u.username, u.total_score,
+			SELECT u.id, u.username, u.display_name, u.total_score,
 			       ROW_NUMBER() OVER (
 			           ORDER BY u.total_score DESC, ls.last_solve ASC NULLS LAST,
 			                    u.created_at ASC, u.id ASC
@@ -879,7 +880,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 			WHERE u.status = 'active' AND u.role != 'admin'
 		 ) ranked
 		 WHERE username = $1`, username).
-		Scan(&userID, &totalScore, &globalRank)
+		Scan(&userID, &displayName, &totalScore, &globalRank)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "player not found"})
 		return
@@ -1055,6 +1056,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 	h.respondCacheableJSON(c, profileCacheKey, 2*time.Second, gin.H{
 		"user": gin.H{
 			"username":          username,
+			"display_name":      displayName,
 			"total_score":       totalScore,
 			"challenges_solved": challengesSolved,
 			"global_rank":       globalRank,
