@@ -75,7 +75,7 @@
 
 	async function leaveTeam() {
 		if (busy) return;
-		if (!confirm('Leave this team? You’ll need the join code to rejoin — and the code can expire or the team fill up.')) return;
+		if (!confirm('Leave this team? You\'ll need the join code to get back in, so keep it handy.')) return;
 		busy = true;
 		error = '';
 		try {
