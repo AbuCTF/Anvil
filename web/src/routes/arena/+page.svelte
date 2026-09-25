@@ -579,4 +579,9 @@
 			transform: translateY(0);
 		}
 	}
+	@media (prefers-reduced-motion: reduce) {
+		.fade-in {
+			animation: none;
+		}
+	}
 </style>

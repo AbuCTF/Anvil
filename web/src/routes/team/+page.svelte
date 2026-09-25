@@ -219,7 +219,7 @@
 					</div>
 
 					<form on:submit|preventDefault={convert} class="mt-4 flex gap-2">
-						<input class={inputClass} type="number" min="1" bind:value={convertAmt} placeholder="Convert points → credits" />
+						<input class={inputClass} type="number" min="1" bind:value={convertAmt} placeholder="Convert points → credits" aria-label="Points to convert to credits" />
 						<button type="submit" disabled={busy || !convertAmt} class="{primaryBtn} whitespace-nowrap">Convert</button>
 					</form>
 					<p class="text-xs text-stone-600 mt-1">The conversion rate falls with each block, so converting back and forth loses value.</p>
@@ -237,7 +237,7 @@
 				<Card title="Create a Team">
 					<p class="text-sm text-stone-500 mb-3">Start a team and share the join code with your teammates.</p>
 					<form on:submit|preventDefault={createTeam} class="space-y-3">
-						<input class={inputClass} bind:value={createName} maxlength="100" placeholder="Team name" />
+						<input class={inputClass} bind:value={createName} maxlength="100" placeholder="Team name" aria-label="Team name" />
 						<button type="submit" disabled={busy || !createName.trim()} class="w-full {primaryBtn}">Create Team</button>
 					</form>
 				</Card>
@@ -245,7 +245,7 @@
 				<Card title="Join a Team">
 					<p class="text-sm text-stone-500 mb-3">Have a join code from a teammate? Enter it here.</p>
 					<form on:submit|preventDefault={joinTeam} class="space-y-3">
-						<input class={inputClass} bind:value={joinCode} placeholder="Join code" />
+						<input class={inputClass} bind:value={joinCode} placeholder="Join code" aria-label="Team join code" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
 						<button type="submit" disabled={busy || !joinCode.trim()} class="w-full {primaryBtn}">Join Team</button>
 					</form>
 				</Card>

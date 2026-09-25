@@ -1254,6 +1254,12 @@
 									type="text"
 									bind:value={flagInput}
 									placeholder="flag&#123;...&#125;"
+									autocapitalize="off"
+									autocorrect="off"
+									autocomplete="off"
+									spellcheck="false"
+									inputmode="text"
+									aria-label="Flag"
 									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-md text-stone-100 text-sm font-mono placeholder-stone-600 focus:outline-none focus:border-stone-600"
 								/>
 								<button type="submit" disabled={submitting || !flagInput.trim()} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
@@ -1263,7 +1269,7 @@
 
 							{#if submitResult}
 								{#key submitAttempt}
-									<div class="mt-3 flex items-start gap-2 py-2.5 px-3 rounded-lg text-sm border {submitResult.correct ? 'bg-up/10 border-up/20 text-up' : 'bg-down/10 border-down/20 text-down wrong-shake'}">
+									<div role="status" aria-live="polite" class="mt-3 flex items-start gap-2 py-2.5 px-3 rounded-lg text-sm border {submitResult.correct ? 'bg-up/10 border-up/20 text-up' : 'bg-down/10 border-down/20 text-down wrong-shake'}">
 										<Icon icon={submitResult.correct ? 'mdi:check-circle' : 'mdi:alert-circle'} class="w-4 h-4 mt-0.5 shrink-0" />
 										<span>{submitResult.message}</span>
 									</div>

@@ -37,7 +37,17 @@
 
 	// challenge access follows the event phase: scheduled => locked + countdown,
 	// ended => practice (playable, unscored). Backend enforces it; this is the UX.
-	$: eventPhase = $platformInfo?.event?.phase ?? null;
+	// derive it from the ticking clock (below) rather than the static snapshot so a
+	// board loaded pre-kickoff flips to 'live' at go-live without a full reload; fall
+	// back to the server's static phase when there's no parseable start.
+	$: eventPhase =
+		startMs && !Number.isNaN(startMs)
+			? clockNow + serverOffset < startMs
+				? 'scheduled'
+				: endMs && !Number.isNaN(endMs) && clockNow + serverOffset >= endMs
+					? 'ended'
+					: 'live'
+			: ($platformInfo?.event?.phase ?? null);
 	// staff preview the board (incl. drafts) even before the event starts.
 	$: isStaff = $auth.user?.role === 'admin' || $auth.user?.role === 'author';
 
@@ -48,6 +58,7 @@
 	onDestroy(() => clearInterval(clockTimer));
 	$: serverOffset = $platformInfo?.server_time ? Date.parse($platformInfo.server_time) - Date.now() : 0;
 	$: startMs = $platformInfo?.event?.start_at ? Date.parse($platformInfo.event.start_at) : null;
+	$: endMs = $platformInfo?.event?.end_at ? Date.parse($platformInfo.event.end_at) : null;
 	$: countdownUnits = countdownUnitsFrom(startMs ? startMs - (clockNow + serverOffset) : 0);
 	function countdownUnitsFrom(ms: number): { value: string; unit: string }[] {
 		const t = Math.max(0, Math.floor(ms / 1000));
@@ -163,7 +174,7 @@
 		}
 	};
 
-	onMount(async () => {
+	async function loadChallenges() {
 		// on a back-nav the cache already rendered the board; still refresh in the
 		// background so solve state and any new challenges are current.
 		try {
@@ -182,7 +193,9 @@
 		} finally {
 			loading = false;
 		}
-	});
+	}
+
+	onMount(loadChallenges);
 </script>
 
 <svelte:head>
@@ -263,6 +276,7 @@
 						type="text"
 						bind:value={searchQuery}
 						placeholder="Search challenges…"
+						aria-label="Search challenges"
 						class="w-full pl-9 pr-9 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-100 placeholder-stone-600 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
 					/>
 					{#if searchQuery}
@@ -279,6 +293,7 @@
 				<div class="relative">
 					<select
 						bind:value={selectedDifficulty}
+						aria-label="Filter by difficulty"
 						class="w-full appearance-none pl-3 pr-9 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm {selectedDifficulty ? 'text-stone-100' : 'text-stone-500'} focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors cursor-pointer"
 					>
 						<option value="">All difficulties</option>
@@ -293,6 +308,7 @@
 				<div class="relative">
 					<select
 						bind:value={selectedCategory}
+						aria-label="Filter by category"
 						class="w-full appearance-none pl-3 pr-9 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm {selectedCategory ? 'text-stone-100' : 'text-stone-500'} focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors cursor-pointer"
 					>
 						<option value="">All categories</option>
@@ -359,9 +375,16 @@
 				{/each}
 			</div>
 		{:else if error}
-			<div class="rounded-lg border border-down/30 bg-down/10 px-4 py-3 flex items-start gap-2.5">
-				<Icon icon="mdi:alert-circle-outline" class="w-3.5 h-3.5 text-down shrink-0 mt-0.5" />
-				<p class="text-down text-sm">{error}</p>
+			<div class="rounded-lg border border-down/30 bg-down/5 p-6 text-center">
+				<Icon icon="mdi:alert-circle-outline" class="w-8 h-8 text-down mx-auto mb-3" />
+				<p class="text-down text-sm mb-4">{error}</p>
+				<button
+					on:click={() => { error = ''; loading = true; loadChallenges(); }}
+					class="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-stone-800 text-stone-200 hover:bg-stone-800/40 hover:text-stone-100 text-sm leading-none font-medium transition-colors"
+				>
+					<Icon icon="mdi:refresh" class="w-3.5 h-3.5 shrink-0" />
+					<span>Try again</span>
+				</button>
 			</div>
 		{:else if filteredChallenges.length === 0}
 			<div class="flex min-h-52 flex-col items-center justify-center px-4 text-center" role="status">

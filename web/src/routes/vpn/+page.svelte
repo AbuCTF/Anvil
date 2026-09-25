@@ -293,7 +293,7 @@
 
 					<p class="leading-none text-stone-600 mt-3 flex items-center gap-1.5">
 						<OpticalIcon icon="mdi:information-outline" size={11} box={12} />
-						<span class="optical-label metadata-label">Status updates every 3 seconds</span>
+						<span class="optical-label metadata-label">Status updates every 5 seconds</span>
 					</p>
 				{:else}
 					<div class="flex items-center gap-2.5 mb-4 leading-none">

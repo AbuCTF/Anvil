@@ -40,11 +40,12 @@
 
   onMount(() => {
     const updateViewportWidth = () => {
+      if (!scrollViewport) return;
       viewportWidth = scrollViewport.clientWidth;
     };
     const observer = new ResizeObserver(updateViewportWidth);
     updateViewportWidth();
-    observer.observe(scrollViewport);
+    if (scrollViewport) observer.observe(scrollViewport);
     return () => observer.disconnect();
   });
 
