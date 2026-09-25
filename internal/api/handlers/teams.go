@@ -321,7 +321,7 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 	}
 
 	rows, err := h.db.Pool.Query(ctx,
-		`SELECT u.id, u.username,
+		`SELECT u.id, u.username, u.display_name,
 		        COALESCE((SELECT COUNT(*) FROM solves s WHERE s.user_id = u.id), 0) AS solve_count
 		 FROM users u
 		 WHERE u.team_id = $1
@@ -339,14 +339,15 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 	for rows.Next() {
 		var mid uuid.UUID
 		var mname string
+		var mdisplay *string
 		var solves int
-		if err := rows.Scan(&mid, &mname, &solves); err != nil {
+		if err := rows.Scan(&mid, &mname, &mdisplay, &solves); err != nil {
 			h.logger.Error("failed to scan team member", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
 			return
 		}
 		members = append(members, gin.H{
-			"id": mid.String(), "username": mname, "solve_count": solves,
+			"id": mid.String(), "username": mname, "display_name": mdisplay, "solve_count": solves,
 		})
 	}
 	if err := rows.Err(); err != nil {

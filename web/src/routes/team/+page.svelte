@@ -187,7 +187,7 @@
 					<div class="divide-y divide-stone-800/70 border border-stone-800 rounded-md overflow-hidden">
 						{#each (team.members ?? []) as m}
 							<div class="flex items-center justify-between px-3 py-2.5">
-								<span class="text-sm text-stone-200">{m.username}</span>
+								<span class="text-sm text-stone-200">{m.display_name || m.username}</span>
 								<span class="text-xs text-stone-500 tabular-nums">{m.solve_count} solve{m.solve_count === 1 ? '' : 's'}</span>
 							</div>
 						{/each}
