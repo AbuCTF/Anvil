@@ -80,6 +80,7 @@ type instanceChallenge struct {
 	InstanceTimeout   *int
 	MaxExtensions     *int
 	MaxResets         int
+	Privesc           bool // relax securityContext (allowPrivilegeEscalation:true) for boot-to-root/SUID challenges
 }
 
 type instancePortConfig struct {
@@ -96,6 +97,7 @@ type serviceConfig struct {
 	Command     []string             `json:"command"`
 	Public      bool                 `json:"public"`
 	Egress      bool                 `json:"egress"`
+	Privesc     bool                 `json:"privesc"`
 	Ports       []instancePortConfig `json:"ports"`
 	Env         map[string]string    `json:"env"`
 	CPULimit    string               `json:"cpu_limit"`
@@ -264,14 +266,14 @@ func (h *InstanceHandler) loadPublishedChallenge(
 		        COALESCE(cpu_limit, '1'), COALESCE(memory_limit, '512Mi'),
 		        COALESCE(exposed_ports, '[]'::jsonb), instance_timeout,
 		        max_extensions, COALESCE(max_resets, 3),
-		        COALESCE(container_spec, 'null'::jsonb)
+		        COALESCE(container_spec, 'null'::jsonb), COALESCE(privesc, false)
 		 FROM challenges
 		 WHERE slug = $1 AND `+statusCond, slug).Scan(
 		&challenge.ID, &challenge.Name, &challenge.Slug, &challenge.ResourceType,
 		&challenge.ContainerImage, &challenge.ContainerTag, &challenge.ContainerPlatform,
 		&challenge.CPULimit, &challenge.MemoryLimit, &challenge.ExposedPorts,
 		&challenge.InstanceTimeout, &challenge.MaxExtensions, &challenge.MaxResets,
-		&challenge.ContainerSpec,
+		&challenge.ContainerSpec, &challenge.Privesc,
 	)
 	return challenge, err
 }
@@ -814,6 +816,7 @@ func (h *InstanceHandler) provisionInstance(
 			CPULimit:    challenge.CPULimit,
 			MemoryLimit: challenge.MemoryLimit,
 			Timeout:     h.instanceTimeout(challenge),
+			Privesc:     challenge.Privesc,
 		}
 		if len(plan.services) > 0 {
 			// multi-container: resolve per-instance placeholders per role. FLAG is
@@ -836,6 +839,7 @@ func (h *InstanceHandler) provisionInstance(
 					Ports:       toPortSpecs(svc.Ports),
 					Public:      svc.Public,
 					Egress:      svc.Egress,
+					Privesc:     svc.Privesc,
 					CPULimit:    svc.CPULimit,
 					MemoryLimit: svc.MemoryLimit,
 				})

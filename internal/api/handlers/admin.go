@@ -412,6 +412,10 @@ type CreateChallengeRequest struct {
 	// whole field attacks). Empty = leave unchanged (update) / default (create).
 	ArenaMode string `json:"arena_mode"`
 
+	// privesc: relax the container securityContext (allowPrivilegeEscalation:true /
+	// no_new_privs off) for boot-to-root / SUID-privesc challenges. Caps stay dropped.
+	Privesc bool `json:"privesc"`
+
 	Flags []FlagInput `json:"flags"`
 
 	// legacy single flag support, kept for backward compatibility
@@ -631,14 +635,14 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 			exposed_ports, base_points, instance_timeout, max_extensions,
 			vm_timeout_minutes, vm_max_extensions, vm_extension_minutes, cooldown_minutes,
 			author_name, resource_type, supports_docker, supports_vm,
-			total_flags, sub_description, container_spec, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, NOW(), NOW())`,
+			total_flags, sub_description, container_spec, privesc, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW())`,
 		challengeID, req.Name, challengeSlug, req.Description, req.Difficulty, req.CategoryID,
 		req.ContainerImage, req.ContainerTag, req.ContainerPlatform, req.CPULimit, req.MemoryLimit,
 		portsJSON, req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 		req.VMTimeoutMinutes, req.VMMaxExtensions, req.VMExtensionMinutes, req.CooldownMinutes,
 		req.AuthorName, resourceType, supportsDocker, supportsVM, len(req.Flags), subDescriptionOrNil(req.SubDescription),
-		nilIfEmpty(containerSpec),
+		nilIfEmpty(containerSpec), req.Privesc,
 	)
 	if err != nil {
 		h.logger.Error("failed to create challenge", zap.Error(err))

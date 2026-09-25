@@ -123,6 +123,7 @@ class Challenge:
     attachments: list[Attachment] = field(default_factory=list)
     resource_type: str | None = None   # docker | vm | None (static-download)
     instancing: str = "on_demand"
+    privesc: bool = False              # relax securityContext (allowPrivilegeEscalation) for boot-to-root/SUID
     container_image: str = ""
     container_tag: str = ""
     cpu_limit: str = ""
@@ -314,6 +315,7 @@ def parse_deploy(doc: dict, src_dir: Path, ch: Challenge, where: str) -> None:
             ch.instance_timeout = int(dep["instance_timeout"])
         if dep.get("max_extensions") is not None:
             ch.max_extensions = int(dep["max_extensions"])
+        ch.privesc = bool(dep.get("privesc", False))
         if inst == "static":
             ch.warnings.append(
                 "instancing=static → imported as a NO-CONTAINER challenge (no per-user "
@@ -506,6 +508,8 @@ class Anvil:
                 body["instance_timeout"] = ch.instance_timeout
             if ch.max_extensions is not None:
                 body["max_extensions"] = ch.max_extensions
+            if ch.privesc:
+                body["privesc"] = True
         r = self.s.post(self._url("/admin/challenges"), headers=self._hdr(),
                         json=body, timeout=60)
         if r.status_code not in (200, 201):

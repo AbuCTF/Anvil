@@ -60,6 +60,7 @@ type LaunchSpec struct {
 	Flags       map[string]string
 	Containers  []ContainerSpec // non-empty => multi-container; supersedes Image/Ports/Flags
 	Timeout     time.Duration
+	Privesc     bool // single-container: relax securityContext (allowPrivilegeEscalation:true / no_new_privs off)
 }
 
 // ContainerSpec is one role in a multi-container challenge. It becomes one pod
@@ -76,6 +77,7 @@ type ContainerSpec struct {
 	Ports       []PortSpec // internal listen ports; each role with ports gets a ClusterIP service
 	Public      bool       // only public roles get a route/expose entry
 	Egress      bool
+	Privesc     bool // relax this role's securityContext (allowPrivilegeEscalation:true / no_new_privs off)
 	CPULimit    string
 	MemoryLimit string
 }
@@ -313,7 +315,7 @@ func buildExposeMulti(containers []ContainerSpec) []map[string]any {
 
 // containerPod builds one CRD pod (a single container + its ClusterIP service).
 // The service is named after the pod, so peers resolve it by that name.
-func containerPod(name, image string, args []string, ports []PortSpec, env map[string]string, cpu, mem string, egress bool) map[string]any {
+func containerPod(name, image string, args []string, ports []PortSpec, env map[string]string, cpu, mem string, egress, privesc bool) map[string]any {
 	var containerPorts, svcPorts []any
 	for _, p := range ports {
 		containerPorts = append(containerPorts, map[string]any{"containerPort": int64(p.Port)})
@@ -340,6 +342,12 @@ func containerPod(name, image string, args []string, ports []PortSpec, env map[s
 	if lim := resourceLimits(cpu, mem); lim != nil {
 		container["resources"] = map[string]any{"limits": lim}
 	}
+	if privesc {
+		// opt-in (boot-to-root / SUID challenges): no_new_privs off so setuid works.
+		// The operator's hardenContainer only defaults a NIL securityContext, so caps
+		// stay dropped-ALL and gVisor + default-deny egress are untouched.
+		container["securityContext"] = map[string]any{"allowPrivilegeEscalation": true}
+	}
 	pod := map[string]any{
 		"name": name,
 		"spec": map[string]any{"containers": []any{container}},
@@ -361,7 +369,7 @@ func buildPods(spec LaunchSpec) []any {
 		if spec.Tag != "" {
 			image += ":" + spec.Tag
 		}
-		return []any{containerPod("main", image, nil, spec.Ports, spec.Flags, spec.CPULimit, spec.MemoryLimit, false)}
+		return []any{containerPod("main", image, nil, spec.Ports, spec.Flags, spec.CPULimit, spec.MemoryLimit, false, spec.Privesc)}
 	}
 	var pods []any
 	for _, c := range spec.Containers {
@@ -384,7 +392,7 @@ func buildPods(spec LaunchSpec) []any {
 		if mem == "" {
 			mem = spec.MemoryLimit
 		}
-		pods = append(pods, containerPod(c.Name, image, c.Command, c.Ports, c.Env, cpu, mem, c.Egress))
+		pods = append(pods, containerPod(c.Name, image, c.Command, c.Ports, c.Env, cpu, mem, c.Egress, c.Privesc))
 	}
 	return pods
 }
