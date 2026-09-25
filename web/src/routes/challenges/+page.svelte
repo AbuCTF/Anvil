@@ -16,6 +16,7 @@
 		resource_type?: string;
 		has_instance?: boolean;
 		arena_mode?: string;
+		value?: number;
 	}
 
 	// persist the loaded board across client-side navigations so returning from a
@@ -33,44 +34,31 @@
 	import ChallengeTile from '$lib/components/ChallengeTile.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
-	import { platformInfo } from '$lib/stores/platform';
+	import KickoffCountdown from '$lib/components/KickoffCountdown.svelte';
+	import { eventClock, kickoffDelay } from '$lib/stores/platform';
 
 	// challenge access follows the event phase: scheduled => locked + countdown,
 	// ended => practice (playable, unscored). Backend enforces it; this is the UX.
-	// derive it from the ticking clock (below) rather than the static snapshot so a
-	// board loaded pre-kickoff flips to 'live' at go-live without a full reload; fall
-	// back to the server's static phase when there's no parseable start.
-	$: eventPhase =
-		startMs && !Number.isNaN(startMs)
-			? clockNow + serverOffset < startMs
-				? 'scheduled'
-				: endMs && !Number.isNaN(endMs) && clockNow + serverOffset >= endMs
-					? 'ended'
-					: 'live'
-			: ($platformInfo?.event?.phase ?? null);
+	// the phase comes off a ticking server-corrected clock, so a board loaded
+	// pre-kickoff flips to 'live' at go-live without a full reload.
+	$: eventPhase = $eventClock.phase;
 	// staff preview the board (incl. drafts) even before the event starts.
 	$: isStaff = $auth.user?.role === 'admin' || $auth.user?.role === 'author';
 
-	// pre-event countdown, ticked off a server-corrected clock (matches EventClock's
-	// approach) so it's right regardless of the viewer's local clock skew.
-	let clockNow = Date.now();
-	const clockTimer = setInterval(() => (clockNow = Date.now()), 1000);
-	onDestroy(() => clearInterval(clockTimer));
-	$: serverOffset = $platformInfo?.server_time ? Date.parse($platformInfo.server_time) - Date.now() : 0;
-	$: startMs = $platformInfo?.event?.start_at ? Date.parse($platformInfo.event.start_at) : null;
-	$: endMs = $platformInfo?.event?.end_at ? Date.parse($platformInfo.event.end_at) : null;
-	$: countdownUnits = countdownUnitsFrom(startMs ? startMs - (clockNow + serverOffset) : 0);
-	function countdownUnitsFrom(ms: number): { value: string; unit: string }[] {
-		const t = Math.max(0, Math.floor(ms / 1000));
-		const parts = [
-			{ value: String(Math.floor(t / 86_400)), unit: 'd' },
-			{ value: String(Math.floor((t % 86_400) / 3_600)).padStart(2, '0'), unit: 'h' },
-			{ value: String(Math.floor((t % 3_600) / 60)).padStart(2, '0'), unit: 'm' },
-			{ value: String(t % 60).padStart(2, '0'), unit: 's' }
-		];
-		// drop a leading 0d so it reads cleanly close to kickoff
-		return parts[0].value === '0' ? parts.slice(1) : parts;
+	// the api held the board back (pre-start). once the clock says live, refetch
+	// after a jitter; re-armed while the server still says scheduled (clock skew).
+	let preStart = false;
+	let kickoffTimer: ReturnType<typeof setTimeout> | undefined;
+	$: if (preStart && eventPhase === 'live') armKickoff(false);
+	function armKickoff(retry: boolean) {
+		if (kickoffTimer) return;
+		kickoffTimer = setTimeout(async () => {
+			await loadChallenges();
+			kickoffTimer = undefined;
+			if (preStart && eventPhase === 'live') armKickoff(true);
+		}, kickoffDelay(retry));
 	}
+	onDestroy(() => clearTimeout(kickoffTimer));
 
 	let challenges: Challenge[] = cachedChallenges ?? [];
 	let loading = cachedChallenges === null;
@@ -177,6 +165,7 @@
 	async function loadChallenges() {
 		// on a back-nav the cache already rendered the board; still refresh in the
 		// background so solve state and any new challenges are current.
+		const sentPhase = eventPhase;
 		try {
 			const response = await api.getChallenges();
 			const mapped =
@@ -185,8 +174,11 @@
 					const isSolved = userSolves >= c.total_flags && c.total_flags > 0;
 					return { ...c, user_solves: userSolves, is_solved: isSolved };
 				}) || [];
+			preStart = response.phase === 'scheduled' || (sentPhase === 'scheduled' && mapped.length === 0);
+			error = ''; // a failed kickoff retry may have left one
 			challenges = mapped;
-			cachedChallenges = mapped;
+			// never cache the held-back empty board: a back-nav after go-live would show it
+			cachedChallenges = preStart ? null : mapped;
 		} catch (e) {
 			// keep the cached board on a refresh failure; only surface if we had nothing.
 			if (cachedChallenges === null) error = e instanceof Error ? e.message : 'Failed to load challenges';
@@ -242,19 +234,8 @@
 			</svelte:fragment>
 		</PageHeader>
 
-		{#if eventPhase === 'scheduled' && !isStaff}
-			<div class="mx-auto mt-20 flex max-w-md flex-col items-center text-center">
-				<div class="relative mb-5">
-					<span class="absolute inset-0 rounded-full bg-amber-500/10 blur-xl"></span>
-					<Icon icon="mdi:lock-clock" class="relative h-10 w-10 text-stone-500" />
-				</div>
-				<h2 class="text-xl font-semibold tracking-tight text-stone-100">The competition hasn't started yet</h2>
-				<p class="mt-2 text-sm text-stone-500">Challenges unlock the moment the CTF begins.</p>
-				<div class="mt-9 inline-flex items-center gap-3 rounded-full border border-stone-800 bg-stone-900/50 py-3 px-6">
-					<span class="h-2 w-2 shrink-0 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)] animate-pulse"></span>
-					<span class="whitespace-nowrap font-mono text-2xl font-medium tabular-nums text-stone-100">{#each countdownUnits as u, i}{u.value}<span class="text-base text-stone-500">{u.unit}</span>{#if i < countdownUnits.length - 1}<span class="px-1.5 text-stone-700">:</span>{/if}{/each}</span>
-				</div>
-			</div>
+		{#if (eventPhase === 'scheduled' || preStart) && !isStaff}
+			<KickoffCountdown />
 		{:else}
 		{#if eventPhase === 'ended'}
 			<div class="mb-6 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 text-sm text-amber-500">
@@ -391,11 +372,13 @@
 				<span class="mb-3 inline-flex h-8 w-8 items-center justify-center text-stone-600">
 					<OpticalIcon icon={solvedOnlyEmpty ? 'mdi:check-circle-outline' : 'mdi:filter-off-outline'} size={22} box={24} />
 				</span>
-				<p class="text-sm font-medium text-stone-300">{solvedOnlyEmpty ? 'No solved challenges yet' : 'No matching challenges'}</p>
+				<p class="text-sm font-medium text-stone-300">{solvedOnlyEmpty ? 'No solved challenges yet' : hasFilters ? 'No matching challenges' : 'No challenges yet'}</p>
 				<p class="mt-1 text-xs text-stone-600">
 					{solvedOnlyEmpty
 						? 'Completed challenges will appear here.'
-						: 'Try adjusting or clearing the current filters.'}
+						: hasFilters
+							? 'Try adjusting or clearing the current filters.'
+							: 'Check back soon.'}
 				</p>
 				{#if hasFilters}
 					<button

@@ -306,7 +306,8 @@ class ApiClient {
 		const queryString = params
 			? '?' + new URLSearchParams(params as Record<string, string>).toString()
 			: '';
-		return this.request<{ challenges: any[] }>(`/challenges${queryString}`, {}, false);
+		// phase: 'scheduled' when the board is held back until the start
+		return this.request<{ challenges: any[]; phase?: EventPhase }>(`/challenges${queryString}`, {}, false);
 	}
 
 	async getChallenge(slug: string) {

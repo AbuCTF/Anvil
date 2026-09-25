@@ -78,6 +78,31 @@ func challengeValue(cfg config.EconomyConfig, difficulty string, crowd float64, 
 	return ceiling * decay * mult
 }
 
+// economyCrowds is the crowd applyEconomyFrac prices against (public holders'
+// summed shares) per challenge id, read-only for display. nil id = every challenge.
+func economyCrowds(ctx context.Context, db *database.DB, challengeID *string) (map[string]float64, error) {
+	rows, err := db.Pool.Query(ctx,
+		`SELECT e.challenge_id::text, COALESCE(SUM(e.frac), 0) FROM economy_challenge_state e
+		 WHERE e.holds_solve AND ($1::uuid IS NULL OR e.challenge_id = $1::uuid)
+		   AND EXISTS (SELECT 1 FROM users pm WHERE pm.team_id = e.team_id
+		     AND pm.status = 'active' AND pm.role NOT IN ('admin', 'author'))
+		 GROUP BY e.challenge_id`, challengeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	crowds := map[string]float64{}
+	for rows.Next() {
+		var id string
+		var crowd float64
+		if err := rows.Scan(&id, &crowd); err != nil {
+			return nil, err
+		}
+		crowds[id] = crowd
+	}
+	return crowds, rows.Err()
+}
+
 func launchCost(cfg config.EconomyConfig, difficulty string) float64 {
 	return bandParam(cfg.LaunchCosts, bandIndex(difficulty))
 }
