@@ -1,3 +1,28 @@
+<script context="module" lang="ts">
+	export interface Challenge {
+		id: string;
+		name: string;
+		slug: string;
+		description?: string;
+		difficulty: string;
+		category?: string;
+		category_id?: string;
+		base_points: number;
+		total_solves: number;
+		total_flags: number;
+		user_solves: number;
+		is_solved: boolean;
+		author_name?: string;
+		resource_type?: string;
+		has_instance?: boolean;
+		arena_mode?: string;
+	}
+
+	// persist the loaded board across client-side navigations so returning from a
+	// challenge detail restores the list instantly — no reload, no scroll reset.
+	let cachedChallenges: Challenge[] | null = null;
+</script>
+
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
@@ -36,27 +61,8 @@
 		return parts[0].value === '0' ? parts.slice(1) : parts;
 	}
 
-	interface Challenge {
-		id: string;
-		name: string;
-		slug: string;
-		description?: string;
-		difficulty: string;
-		category?: string;
-		category_id?: string;
-		base_points: number;
-		total_solves: number;
-		total_flags: number;
-		user_solves: number;
-		is_solved: boolean;
-		author_name?: string;
-		resource_type?: string;
-		has_instance?: boolean;
-		arena_mode?: string;
-	}
-
-	let challenges: Challenge[] = [];
-	let loading = true;
+	let challenges: Challenge[] = cachedChallenges ?? [];
+	let loading = cachedChallenges === null;
 	let error = '';
 
 	let searchQuery = '';
@@ -66,16 +72,27 @@
 	let showKoth = false;
 
 	// icons only — the accent color always comes from the muted categoryColor palette.
+	// keyed by the lowercased category name; keep both the live H7 names and the
+	// generic aliases so this maps cleanly across events.
 	const categoryIcons: Record<string, { icon: string; size: number }> = {
+		ai: { icon: 'mdi:brain', size: 14.5 },
+		boot2root: { icon: 'mdi:server-security', size: 13.75 },
 		b2r: { icon: 'mdi:server-security', size: 13.75 },
-		web3: { icon: 'mdi:ethereum', size: 15.5 },
-		'web exploitation': { icon: 'mdi:web', size: 13.75 },
-		'binary exploitation': { icon: 'mdi:memory', size: 15.25 },
-		'reverse engineering': { icon: 'mdi:cog-outline', size: 13.75 },
+		crypto: { icon: 'mdi:key-variant', size: 13.75 },
 		cryptography: { icon: 'mdi:key-variant', size: 13.75 },
+		devsecops: { icon: 'mdi:shield-lock-outline', size: 14 },
 		forensics: { icon: 'mdi:fingerprint', size: 13.75 },
+		hardware: { icon: 'mdi:chip', size: 14.5 },
+		mobile: { icon: 'mdi:cellphone', size: 13.75 },
+		misc: { icon: 'mdi:shape-outline', size: 13.75 },
 		osint: { icon: 'mdi:earth', size: 13.75 },
-		misc: { icon: 'mdi:shape-outline', size: 13.75 }
+		pwn: { icon: 'mdi:memory', size: 15.25 },
+		'binary exploitation': { icon: 'mdi:memory', size: 15.25 },
+		rev: { icon: 'mdi:cog-outline', size: 13.75 },
+		'reverse engineering': { icon: 'mdi:cog-outline', size: 13.75 },
+		web: { icon: 'mdi:web', size: 13.75 },
+		'web exploitation': { icon: 'mdi:web', size: 13.75 },
+		web3: { icon: 'mdi:ethereum', size: 15.5 }
 	};
 
 	function catIcon(name: string) {
@@ -125,17 +142,43 @@
 		showKoth = false;
 	}
 
+	// preserve the filter state across a challenge-detail round-trip: SvelteKit
+	// captures this before navigating away and restores it on back, which — with the
+	// cached list rendered synchronously — lets built-in scroll restoration land us
+	// back on the same section instead of the top.
+	export const snapshot = {
+		capture: () => ({ searchQuery, selectedDifficulty, selectedCategory, showSolved, showKoth }),
+		restore: (v: {
+			searchQuery: string;
+			selectedDifficulty: string;
+			selectedCategory: string;
+			showSolved: boolean;
+			showKoth: boolean;
+		}) => {
+			searchQuery = v.searchQuery;
+			selectedDifficulty = v.selectedDifficulty;
+			selectedCategory = v.selectedCategory;
+			showSolved = v.showSolved;
+			showKoth = v.showKoth;
+		}
+	};
+
 	onMount(async () => {
+		// on a back-nav the cache already rendered the board; still refresh in the
+		// background so solve state and any new challenges are current.
 		try {
 			const response = await api.getChallenges();
-			challenges =
+			const mapped =
 				response.challenges?.map((c) => {
 					const userSolves = c.user_solves || 0;
 					const isSolved = userSolves >= c.total_flags && c.total_flags > 0;
 					return { ...c, user_solves: userSolves, is_solved: isSolved };
 				}) || [];
+			challenges = mapped;
+			cachedChallenges = mapped;
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Failed to load challenges';
+			// keep the cached board on a refresh failure; only surface if we had nothing.
+			if (cachedChallenges === null) error = e instanceof Error ? e.message : 'Failed to load challenges';
 		} finally {
 			loading = false;
 		}
@@ -233,26 +276,32 @@
 					{/if}
 				</div>
 
-				<select
-					bind:value={selectedDifficulty}
-					class="w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-100 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
-				>
-					<option value="">All difficulties</option>
-					<option value="easy">Easy</option>
-					<option value="medium">Medium</option>
-					<option value="hard">Hard</option>
-					<option value="insane">Insane</option>
-				</select>
+				<div class="relative">
+					<select
+						bind:value={selectedDifficulty}
+						class="w-full appearance-none pl-3 pr-9 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm {selectedDifficulty ? 'text-stone-100' : 'text-stone-500'} focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors cursor-pointer"
+					>
+						<option value="">All difficulties</option>
+						<option value="easy">Easy</option>
+						<option value="medium">Medium</option>
+						<option value="hard">Hard</option>
+						<option value="insane">Insane</option>
+					</select>
+					<Icon icon="mdi:chevron-down" class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-500" />
+				</div>
 
-				<select
-					bind:value={selectedCategory}
-					class="w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm text-stone-100 focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors"
-				>
-					<option value="">All categories</option>
-					{#each categories as category}
-						<option value={category}>{category}</option>
-					{/each}
-				</select>
+				<div class="relative">
+					<select
+						bind:value={selectedCategory}
+						class="w-full appearance-none pl-3 pr-9 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm {selectedCategory ? 'text-stone-100' : 'text-stone-500'} focus:outline-none focus:border-stone-600 focus:ring-1 focus:ring-stone-600 transition-colors cursor-pointer"
+					>
+						<option value="">All categories</option>
+						{#each categories as category}
+							<option value={category}>{category}</option>
+						{/each}
+					</select>
+					<Icon icon="mdi:chevron-down" class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-stone-500" />
+				</div>
 			</div>
 
 			{#if $auth.isAuthenticated || hasFilters || hasKoth}
