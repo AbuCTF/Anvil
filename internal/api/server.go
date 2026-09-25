@@ -124,7 +124,7 @@ func (s *Server) setupRouter() {
 			challengesPublic := v1.Group("")
 			challengesPublic.Use(middleware.OptionalAuth(s.config, s.db))
 			{
-				attachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger)
+				attachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger, s.config.JWT.Secret)
 				challengeHandler := handlers.NewChallengeHandlerWithAttachments(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger, attachmentHandler)
 				challengesPublic.GET("/challenges", challengeHandler.List)
 				challengesPublic.GET("/challenges/:slug", challengeHandler.Get)
@@ -255,7 +255,9 @@ func (s *Server) setupRouter() {
 			}
 
 			if s.vmSvc != nil {
+				// raw template vms skip every challenge gate; players launch via /instances.
 				vms := protected.Group("/vms")
+				vms.Use(middleware.RequireRole("admin"))
 				{
 					vmHandler := handlers.NewVMHandler(s.vmSvc, s.logger)
 					vms.GET("", vmHandler.ListUserVMs)
@@ -348,7 +350,7 @@ func (s *Server) setupRouter() {
 				challenges.DELETE("/:id/hints/:hint_id", adminChallengeHandler.DeleteHint)
 
 				// admin: upload/list/delete; download is public
-				adminAttachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger)
+				adminAttachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger, s.config.JWT.Secret)
 				challenges.GET("/:id/attachments", adminAttachmentHandler.List)
 				challenges.POST("/:id/attachments", adminAttachmentHandler.Upload)
 				challenges.POST("/:id/attachments/link", adminAttachmentHandler.CreateLink)

@@ -1013,7 +1013,7 @@
 										</div>
 										<div class="flex items-center gap-2 shrink-0">
 											<a
-											href={`${API_BASE}/api/v1/challenges/${challenge.slug}/attachments/${attachment.id}/download`}
+											href={`${API_BASE}/api/v1/challenges/${challenge.slug}/attachments/${attachment.id}/download${attachment.ticket ? `?t=${encodeURIComponent(attachment.ticket)}` : ''}`}
 												download={attachment.filename}
 											class="text-xs leading-none px-2.5 py-1 bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-stone-100 rounded-md transition-colors flex items-center gap-1"
 											>

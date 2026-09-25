@@ -2001,12 +2001,12 @@ func (h *AdminChallengeHandler) ListInstanceFlags(c *gin.Context) {
 func (h *StatsHandler) Get(c *gin.Context) {
 	query := `
 		SELECT
-			(SELECT COUNT(*) FROM users WHERE role != 'admin') as total_users,
+			(SELECT COUNT(*) FROM users WHERE role NOT IN ('admin', 'author')) as total_users,
 			(SELECT COUNT(*) FROM challenges) as total_challenges,
 			(SELECT COUNT(*) FROM challenges WHERE status = 'published') as published_challenges,
 			(SELECT COUNT(*) FROM challenges WHERE status = 'draft') as draft_challenges,
 			(SELECT COUNT(*) FROM solves s WHERE NOT EXISTS (
-				SELECT 1 FROM users u WHERE u.id = s.user_id AND u.role = 'admin')) as total_solves,
+				SELECT 1 FROM users u WHERE u.id = s.user_id AND u.role IN ('admin', 'author'))) as total_solves,
 			(SELECT COUNT(*) FROM instances) as total_instances,
 			(SELECT COUNT(*) FROM instances WHERE status = 'running') as active_instances
 	`

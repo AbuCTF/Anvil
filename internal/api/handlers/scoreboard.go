@@ -280,8 +280,27 @@ type ScoreboardEntry struct {
 	Spark            []int   `json:"spark,omitempty"`
 }
 
+// teamRankedCTE is the team board's ranking (jeopardy total + capped KotH hold-time,
+// test teams excluded); /user/me ranks against it too so the badge matches the board.
+var teamRankedCTE = `last_solves AS (
+		SELECT u.team_id, MAX(s.solved_at) AS last_solve
+		FROM solves s JOIN users u ON u.id = s.user_id
+		WHERE u.team_id IS NOT NULL GROUP BY u.team_id
+	), ranked AS (
+		-- unified board: jeopardy total_score + capped KotH hold-time (koth_score is
+		-- 0 unless the shared-arena engine is active, so this is a no-op otherwise)
+		SELECT t.id, t.name, (t.total_score + t.koth_score)::int AS total_score, ls.last_solve,
+			ROW_NUMBER() OVER (
+				ORDER BY (t.total_score + t.koth_score) DESC, ls.last_solve ASC NULLS LAST,
+				         t.created_at ASC, t.id ASC
+			) AS rank
+		FROM teams t
+		LEFT JOIN last_solves ls ON ls.team_id = t.id
+		WHERE ` + publicTeamSQL("t") + `
+	)`
+
 // teamScoreboardQuery ranks teams (teams mode) with the same column shape, params ($1 limit, $2 offset, $3 search, $4 sort), and scan order as the user query: id, name (as username), display_name (null), total_score, challenges_solved (fully-completed), flags_solved (distinct flags), last_solve, rank
-const teamScoreboardQuery = `
+var teamScoreboardQuery = `
 	WITH team_solves AS (
 		SELECT DISTINCT u.team_id AS team_id, s.flag_id, f.challenge_id
 		FROM solves s
@@ -305,21 +324,7 @@ const teamScoreboardQuery = `
 			GROUP BY ts.team_id, ts.challenge_id, ft.total_flags
 			HAVING COUNT(DISTINCT ts.flag_id) >= ft.total_flags
 		) fully GROUP BY team_id
-	), last_solves AS (
-		SELECT u.team_id, MAX(s.solved_at) AS last_solve
-		FROM solves s JOIN users u ON u.id = s.user_id
-		WHERE u.team_id IS NOT NULL GROUP BY u.team_id
-	), ranked AS (
-		-- unified board: jeopardy total_score + capped KotH hold-time (koth_score is
-		-- 0 unless the shared-arena engine is active, so this is a no-op otherwise)
-		SELECT t.id, t.name, (t.total_score + t.koth_score)::int AS total_score, ls.last_solve,
-			ROW_NUMBER() OVER (
-				ORDER BY (t.total_score + t.koth_score) DESC, ls.last_solve ASC NULLS LAST,
-				         t.created_at ASC, t.id ASC
-			) AS rank
-		FROM teams t
-		LEFT JOIN last_solves ls ON ls.team_id = t.id
-	), page_teams AS (
+	), ` + teamRankedCTE + `, page_teams AS (
 		SELECT * FROM ranked
 		WHERE $3 = '' OR name ILIKE '%' || $3 || '%' ESCAPE '\'
 		ORDER BY CASE WHEN $4 = 'name' THEN LOWER(name) END, rank
@@ -335,22 +340,27 @@ const teamScoreboardQuery = `
 	ORDER BY CASE WHEN $4 = 'name' THEN LOWER(pt.name) END, pt.rank
 `
 
-// teamEconomyScoreboardQuery ranks teams by their economy point total (economy mode); same column/scan shape as the user + team queries; challenges/flags "solved" = challenges the team holds under the economy
-const teamEconomyScoreboardQuery = `
-	WITH scores AS (
+// teamEconomyRankedCTE is the economy board's ranking: economy points plus the
+// capped KotH hold-time (koth_score is points-only, never convertible).
+var teamEconomyRankedCTE = `scores AS (
 		SELECT t.id, t.name,
-			COALESCE(ets.points, 0) AS points,
+			COALESCE(ets.points, 0) + t.koth_score AS points,
 			(SELECT MAX(s.solved_at) FROM solves s JOIN users u ON u.id = s.user_id WHERE u.team_id = t.id) AS last_solve,
 			(SELECT COUNT(*)::int FROM economy_challenge_state e WHERE e.team_id = t.id AND e.holds_solve) AS solved
 		FROM teams t
 		LEFT JOIN economy_team_score ets ON ets.team_id = t.id
+		WHERE ` + publicTeamSQL("t") + `
 	), ranked AS (
 		SELECT id, name, points, last_solve, solved,
 			ROW_NUMBER() OVER (
 				ORDER BY points DESC, last_solve ASC NULLS LAST, name ASC
 			) AS rank
 		FROM scores
-	), page_teams AS (
+	)`
+
+// teamEconomyScoreboardQuery ranks teams by their economy point total (economy mode); same column/scan shape as the user + team queries; challenges/flags "solved" = challenges the team holds under the economy
+var teamEconomyScoreboardQuery = `
+	WITH ` + teamEconomyRankedCTE + `, page_teams AS (
 		SELECT * FROM ranked
 		WHERE $3 = '' OR name ILIKE '%' || $3 || '%' ESCAPE '\'
 		ORDER BY CASE WHEN $4 = 'name' THEN LOWER(name) END, rank
@@ -433,11 +443,11 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 			 WHERE $1 = '' OR username ILIKE '%' || $1 || '%' ESCAPE '\'
 			    OR COALESCE(display_name, '') ILIKE '%' || $1 || '%' ESCAPE '\'
 		 )
-		 FROM users WHERE role != 'admin' AND status = 'active'`
+		 FROM users WHERE role NOT IN ('admin', 'author') AND status = 'active'`
 	if teamRanked {
 		countQuery = `SELECT COUNT(*), COUNT(*) FILTER (
 			 WHERE $1 = '' OR name ILIKE '%' || $1 || '%' ESCAPE '\'
-		 ) FROM teams`
+		 ) FROM teams t WHERE ` + publicTeamSQL("t")
 	}
 	var totalUsers, matchingUsers int
 	if err := tx.QueryRow(c.Request.Context(), countQuery, queryPattern).Scan(&totalUsers, &matchingUsers); err != nil {
@@ -475,7 +485,7 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 				ORDER BY solved_at DESC
 				LIMIT 1
 			) ls ON true
-			WHERE u.role != 'admin' AND u.status = 'active'
+			WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active'
 		), page_users AS MATERIALIZED (
 			SELECT * FROM ranked
 			WHERE $3 = '' OR username ILIKE '%' || $3 || '%' ESCAPE '\'
@@ -690,7 +700,7 @@ func (h *ScoreboardHandler) historicRanks(ctx context.Context, query scoreboardQ
 			FROM users u
 			LEFT JOIN solve_stats ss ON ss.user_id = u.id
 			LEFT JOIN hint_stats hs ON hs.user_id = u.id
-			WHERE u.role != 'admin' AND u.status = 'active'
+			WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active'
 		)
 		SELECT id, rank FROM ranked WHERE id = ANY($2)
 	`, cutoff, ids)
@@ -746,7 +756,7 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 				FROM solves WHERE user_id = u.id
 				ORDER BY solved_at DESC LIMIT 1
 			) ls ON true
-			WHERE u.role != 'admin' AND u.status = 'active' AND u.total_score > 0
+			WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active' AND u.total_score > 0
 			ORDER BY u.total_score DESC, ls.last_solve ASC NULLS LAST, u.created_at ASC, u.id ASC
 			LIMIT 10
 		), events AS (
@@ -878,7 +888,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 				ORDER BY solved_at DESC
 				LIMIT 1
 			) ls ON true
-			WHERE u.status = 'active' AND u.role != 'admin'
+			WHERE u.status = 'active' AND u.role NOT IN ('admin', 'author')
 		 ) ranked
 		 WHERE username = $1`, username).
 		Scan(&userID, &displayName, &totalScore, &globalRank)
@@ -979,7 +989,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 			JOIN flags f ON f.id = s.flag_id
 			JOIN flag_totals ft ON ft.challenge_id = f.challenge_id
 			JOIN users u ON u.id = s.user_id
-			WHERE u.role != 'admin' AND u.status = 'active'
+			WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active'
 			GROUP BY f.challenge_id, s.user_id, ft.total_flags
 			HAVING ft.total_flags > 0 AND COUNT(DISTINCT s.flag_id) >= ft.total_flags
 		),
@@ -1149,7 +1159,7 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 	userRows, err := tx.Query(ctx, `
 		SELECT u.id, u.username, u.display_name, u.total_score, COUNT(*) OVER()
 		FROM users u
-		WHERE u.role != 'admin' AND u.status = 'active'
+		WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active'
 		ORDER BY u.total_score DESC,
 		         (SELECT solved_at FROM solves WHERE user_id = u.id ORDER BY solved_at DESC LIMIT 1) ASC NULLS LAST,
 		         u.created_at ASC, u.id ASC
@@ -1209,7 +1219,7 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 			JOIN flags f ON f.id = s.flag_id
 			JOIN flag_totals ft ON ft.challenge_id = f.challenge_id
 			JOIN users u ON u.id = s.user_id
-			WHERE u.role != 'admin' AND u.status = 'active'
+			WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active'
 			GROUP BY s.user_id, f.challenge_id, ft.total_flags
 			HAVING ft.total_flags > 0 AND COUNT(DISTINCT s.flag_id) >= ft.total_flags
 		), ranked AS MATERIALIZED (

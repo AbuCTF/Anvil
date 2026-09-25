@@ -307,13 +307,24 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 		return
 	}
 
+	economyMode, err := isEconomyMode(ctx, h.db)
+	if err != nil {
+		h.logger.Error("failed to read economy_mode", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
+		return
+	}
 	var name, joinCode string
 	var totalScore int
 	var maxMembers *int
 	var expiresAt *time.Time
+	// same total the board shows: economy points or jeopardy score, plus koth hold-time
 	if err := h.db.Pool.QueryRow(ctx,
-		`SELECT name, join_code, total_score, max_members, join_expires_at FROM teams WHERE id = $1`,
-		*teamID,
+		`SELECT name, join_code,
+		        CASE WHEN $2 THEN ROUND(COALESCE((SELECT points FROM economy_team_score WHERE team_id = t.id), 0) + koth_score)::int
+		             ELSE (total_score + koth_score)::int END,
+		        max_members, join_expires_at
+		 FROM teams t WHERE id = $1`,
+		*teamID, economyMode,
 	).Scan(&name, &joinCode, &totalScore, &maxMembers, &expiresAt); err != nil {
 		h.logger.Error("failed to load team", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})

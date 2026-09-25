@@ -18,7 +18,34 @@ import (
 	"go.uber.org/zap"
 )
 
+// teamBoardRank is the caller's team's place on a team-ranked board (teams or
+// economy mode), same sum as /scoreboard; ok=false when the board ranks users.
+func teamBoardRank(ctx context.Context, db *database.DB, userID uuid.UUID) (rank int, ok bool, err error) {
+	teamsMode, err := isTeamsMode(ctx, db)
+	if err != nil {
+		return 0, false, err
+	}
+	economyMode, err := isEconomyMode(ctx, db)
+	if err != nil {
+		return 0, false, err
+	}
+	if !teamsMode && !economyMode {
+		return 0, false, nil
+	}
+	cte := teamRankedCTE
+	if economyMode {
+		cte = teamEconomyRankedCTE
+	}
+	err = db.Pool.QueryRow(ctx, `WITH `+cte+`
+		SELECT COALESCE((SELECT r.rank FROM ranked r JOIN users u ON u.team_id = r.id WHERE u.id = $1), 0)`,
+		userID).Scan(&rank)
+	return rank, true, err
+}
+
 func currentUserRank(ctx context.Context, db *database.DB, userID uuid.UUID) (int, error) {
+	if rank, ok, err := teamBoardRank(ctx, db, userID); err != nil || ok {
+		return rank, err
+	}
 	var rank int
 	err := db.Pool.QueryRow(ctx, `
 		SELECT COALESCE((
@@ -30,7 +57,7 @@ func currentUserRank(ctx context.Context, db *database.DB, userID uuid.UUID) (in
 							candidate.created_at ASC, candidate.id ASC
 					) AS position
 				FROM users candidate
-				WHERE candidate.role != 'admin' AND candidate.status = 'active'
+				WHERE candidate.role NOT IN ('admin', 'author') AND candidate.status = 'active'
 			) ranked WHERE ranked.id = $1
 		), 0)
 	`, userID).Scan(&rank)
@@ -152,7 +179,7 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 								candidate.created_at ASC, candidate.id ASC
 						) AS position
 					FROM users candidate
-					WHERE candidate.role != 'admin' AND candidate.status = 'active'
+					WHERE candidate.role NOT IN ('admin', 'author') AND candidate.status = 'active'
 				) ranked WHERE ranked.id = u.id
 			), 0),
 			(SELECT COUNT(*) FROM solves s WHERE s.user_id = u.id),
@@ -185,6 +212,13 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 	}
 
 	profile.JoinedAt = createdAt.Unix()
+	if rank, ok, err := teamBoardRank(c.Request.Context(), h.db, uid); err != nil {
+		h.logger.Error("failed to get team rank", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch profile"})
+		return
+	} else if ok {
+		profile.Rank = rank
+	}
 
 	c.JSON(http.StatusOK, profile)
 }
@@ -298,7 +332,7 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 								candidate.created_at ASC, candidate.id ASC
 						) AS position
 					FROM users candidate
-					WHERE candidate.role != 'admin' AND candidate.status = 'active'
+					WHERE candidate.role NOT IN ('admin', 'author') AND candidate.status = 'active'
 				) ranked WHERE ranked.id = u.id
 			), 0),
 			(SELECT COUNT(*) FROM solves s WHERE s.user_id = u.id),
@@ -328,6 +362,13 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 		h.logger.Error("failed to load user stats", zap.String("user_id", uid.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
 		return
+	}
+	if rank, ok, err := teamBoardRank(c.Request.Context(), h.db, uid); err != nil {
+		h.logger.Error("failed to get team rank", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
+	} else if ok {
+		stats.Rank = rank
 	}
 
 	rows, err := h.db.Pool.Query(c.Request.Context(),

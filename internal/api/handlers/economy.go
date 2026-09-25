@@ -155,13 +155,13 @@ func openChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID uu
 		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to prepare team economy"}
 	}
 
-	var status string
+	var st economyState
 	err := tx.QueryRow(ctx,
-		`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+		`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
 		teamID, challengeID,
-	).Scan(&status)
-	if err == nil && (status == "open" || status == "solved") {
-		return nil
+	).Scan(&st.status, &st.expiresAt)
+	if err == nil && economyCanAct(st, time.Now()) {
+		return nil // live timer or solved; an expired open re-opens (and pays) below
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to read challenge state"}
@@ -298,16 +298,22 @@ func applyEconomyFrac(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, 
 		return err
 	}
 	if first {
-		// display count: teams holding any share
+		// display count: public teams holding any share (organizer test teams don't count)
 		if _, err := tx.Exec(ctx,
-			`UPDATE challenges SET economy_solve_count = economy_solve_count + 1 WHERE id = $1`, challengeID); err != nil {
+			`UPDATE challenges SET economy_solve_count = economy_solve_count + 1
+			 WHERE id = $1 AND EXISTS (SELECT 1 FROM users pm WHERE pm.team_id = $2
+			   AND pm.status = 'active' AND pm.role NOT IN ('admin', 'author'))`, challengeID, teamID); err != nil {
 			return err
 		}
 	}
 
+	// the crowd is public teams only, so private testing never devalues a challenge
 	var crowd float64
 	if err := tx.QueryRow(ctx,
-		`SELECT COALESCE(SUM(frac), 0) FROM economy_challenge_state WHERE challenge_id = $1 AND holds_solve`,
+		`SELECT COALESCE(SUM(e.frac), 0) FROM economy_challenge_state e
+		 WHERE e.challenge_id = $1 AND e.holds_solve
+		   AND EXISTS (SELECT 1 FROM users pm WHERE pm.team_id = e.team_id
+		     AND pm.status = 'active' AND pm.role NOT IN ('admin', 'author'))`,
 		challengeID).Scan(&crowd); err != nil {
 		return err
 	}
@@ -373,11 +379,11 @@ func applyEconomyFrac(ctx context.Context, tx pgx.Tx, cfg config.EconomyConfig, 
 }
 
 func abandonChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID uuid.UUID, difficulty string, cfg config.EconomyConfig) *EconomyOpError {
-	var status string
+	var st economyState
 	err := tx.QueryRow(ctx,
-		`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2 FOR UPDATE`,
-		teamID, challengeID).Scan(&status)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && status != "open") {
+		`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2 FOR UPDATE`,
+		teamID, challengeID).Scan(&st.status, &st.expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (st.status != "open" || !economyCanAct(st, time.Now()))) {
 		return &EconomyOpError{Status: http.StatusBadRequest, Message: "challenge is not open"}
 	}
 	if err != nil {
@@ -404,7 +410,7 @@ func extendChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID 
 	err := tx.QueryRow(ctx,
 		`SELECT status, extensions_used, COALESCE(expires_at, NOW()) FROM economy_challenge_state
 		 WHERE team_id = $1 AND challenge_id = $2 FOR UPDATE`, teamID, challengeID).Scan(&status, &used, &expires)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && status != "open") {
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (status != "open" || !expires.After(time.Now()))) {
 		return time.Time{}, &EconomyOpError{Status: http.StatusBadRequest, Message: "challenge is not open"}
 	}
 	if err != nil {

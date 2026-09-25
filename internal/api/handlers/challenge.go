@@ -176,6 +176,17 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
 		return
 	}
+	gate, err := loadEconomyGate(c, h.db)
+	if err != nil {
+		h.logger.Error("failed to load economy gate", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
+		return
+	}
+	for i := range challenges {
+		if !gate.canView(challenges[i].ID) {
+			challenges[i].Description = nil
+		}
+	}
 
 	if challenges == nil {
 		challenges = []ChallengeListResponse{}
@@ -208,7 +219,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	}
 
 	var statusCondition string
-	if userID != nil && userRole == "admin" {
+	if userID != nil && (userRole == "admin" || userRole == "author") {
 		statusCondition = "(c.status = 'published' OR c.status = 'draft')"
 	} else {
 		statusCondition = "c.status = 'published' AND (c.release_date IS NULL OR c.release_date <= NOW())"
@@ -365,24 +376,45 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	// economy enrichment: when the economy is live, tell the client whether the
 	// caller's team has launched this challenge (which gates the full description,
 	// files, submission, and instance), the launch cost, and the team's credits.
-	if on, _ := isEconomyMode(c.Request.Context(), h.db); on {
+	on, err := isEconomyMode(c.Request.Context(), h.db)
+	if err != nil {
+		h.logger.Error("failed to read economy_mode", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+		return
+	}
+	if on {
 		info := &ChallengeEconomyInfo{Enabled: true, LaunchCost: launchCost(h.config.Economy, ch.Difficulty)}
+		var st economyState
 		if uid, ok := contextUserID(c); ok {
 			if teamID, tErr := resolveTeamID(c.Request.Context(), h.db, uid); tErr == nil && teamID != nil {
-				var status string
 				_ = h.db.Pool.QueryRow(c.Request.Context(),
-					`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
-					*teamID, ch.ID).Scan(&status)
-				info.Launched = status == "open" || status == "solved"
-				info.Solved = status == "solved"
+					`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+					*teamID, ch.ID).Scan(&st.status, &st.expiresAt)
+				// launched = can act now; an expired team re-opens from the locked card
+				info.Launched = economyCanAct(st, time.Now())
+				info.Solved = st.status == "solved"
 				_ = h.db.Pool.QueryRow(c.Request.Context(),
 					`SELECT COALESCE(credits, 0) FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&info.Credits)
 			}
 		}
 		ch.Economy = info
+		if !isStaff(c) && !economyCanView(st) {
+			ch.redactLocked()
+		}
 	}
 
 	c.JSON(http.StatusOK, ch)
+}
+
+// an unopened challenge shows only its card: no brief, files, hints, flag names or ports.
+func (ch *ChallengeDetailResponse) redactLocked() {
+	ch.Description = nil
+	ch.Flags = []FlagResponse{}
+	ch.Hints = []HintResponse{}
+	ch.Attachments = []AttachmentResponse{}
+	ch.ExposedPorts = []models.ExposedPort{}
+	ch.InstanceTimeout = nil
+	ch.MaxExtensions = nil
 }
 
 func (h *ChallengeHandler) GetFlags(c *gin.Context) {
@@ -405,6 +437,9 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 	} else if err != nil {
 		h.logger.Error("failed to query challenge flags", zap.String("slug", slug), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
+		return
+	}
+	if rejectLocked(c, h.db, h.logger, challengeID, false) {
 		return
 	}
 
@@ -501,8 +536,8 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 	var difficulty string
 	err = h.db.Pool.QueryRow(ctx,
 		`SELECT id, difficulty FROM challenges
-		 WHERE slug = $1 AND status = 'published' AND (release_date IS NULL OR release_date <= NOW())`,
-		slug).Scan(&chalID, &difficulty)
+		 WHERE slug = $1 AND ((status = 'published' AND (release_date IS NULL OR release_date <= NOW())) OR $2)`,
+		slug, isStaff(c)).Scan(&chalID, &difficulty)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
@@ -646,6 +681,12 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 
 	// charge the buy-in when the economy is on (402 if short); free entry otherwise.
 	if on, _ := isEconomyMode(ctx, h.db); on {
+		// lazy grant, as on open: a team with no economy row yet would 500 in applyCredit
+		if err := ensureTeamEconomy(ctx, tx, *teamID, h.config.Economy); err != nil {
+			h.logger.Error("koth enter: prepare team economy", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+			return
+		}
 		if _, aerr := applyCredit(ctx, tx, *teamID, "koth_buyin", -kothBuyinCost(ctx, h.db), &chalID, nil); aerr != nil {
 			var opErr *EconomyOpError
 			if errors.As(aerr, &opErr) {
@@ -710,8 +751,8 @@ func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID u
 	}
 	err = h.db.Pool.QueryRow(ctx,
 		`SELECT id, difficulty FROM challenges
-		 WHERE slug = $1 AND status = 'published' AND (release_date IS NULL OR release_date <= NOW())`,
-		c.Param("slug")).Scan(&chalID, &difficulty)
+		 WHERE slug = $1 AND ((status = 'published' AND (release_date IS NULL OR release_date <= NOW())) OR $2)`,
+		c.Param("slug"), isStaff(c)).Scan(&chalID, &difficulty)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
@@ -948,23 +989,27 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
 			return
 		}
-		if tid == nil {
-			c.JSON(http.StatusForbidden, gin.H{"error": "join a team and launch this challenge before submitting"})
+		// staff skip the gate but keep their team, so a test team still scores via the economy.
+		if tid == nil && !submitStaff {
+			c.JSON(http.StatusForbidden, gin.H{"error": "join a team and open this challenge first"})
 			return
 		}
-		ecoTeamID = tid
-		var st string
-		if sErr := h.db.Pool.QueryRow(c.Request.Context(),
-			`SELECT COALESCE((SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2), 'unopened'),
-			        (SELECT difficulty FROM challenges WHERE id = $2)`,
-			*tid, challengeID).Scan(&st, &ecoDifficulty); sErr != nil {
-			h.logger.Error("failed to read economy challenge state", zap.Error(sErr))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
-			return
-		}
-		if st != "open" && st != "solved" {
-			c.JSON(http.StatusForbidden, gin.H{"error": "launch this challenge before submitting"})
-			return
+		if tid != nil {
+			ecoTeamID = tid
+			var st economyState
+			if sErr := h.db.Pool.QueryRow(c.Request.Context(),
+				`SELECT COALESCE((SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2), 'unopened'),
+				        (SELECT expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2),
+				        (SELECT difficulty FROM challenges WHERE id = $2)`,
+				*tid, challengeID).Scan(&st.status, &st.expiresAt, &ecoDifficulty); sErr != nil {
+				h.logger.Error("failed to read economy challenge state", zap.Error(sErr))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+				return
+			}
+			if !submitStaff && !economyCanAct(st, time.Now()) {
+				c.JSON(http.StatusForbidden, gin.H{"error": economyDenied(st)})
+				return
+			}
 		}
 	}
 
@@ -1501,11 +1546,12 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 
 	flagResult, err := tx.Exec(ctx,
 		`UPDATE flags SET total_solves = (
-			SELECT COUNT(*) FROM solves WHERE flag_id = $1
-		), first_blood_user_id = COALESCE(first_blood_user_id, $2),
-		   first_blood_at = COALESCE(first_blood_at, NOW()),
+			SELECT COUNT(*) FROM solves s JOIN users u ON u.id = s.user_id
+			WHERE s.flag_id = $1 AND u.role NOT IN ('admin', 'author')
+		), first_blood_user_id = CASE WHEN $3 THEN first_blood_user_id ELSE COALESCE(first_blood_user_id, $2) END,
+		   first_blood_at = CASE WHEN $3 THEN first_blood_at ELSE COALESCE(first_blood_at, NOW()) END,
 		   updated_at = NOW()
-		 WHERE id = $1`, matchedFlag.ID, uid)
+		 WHERE id = $1`, matchedFlag.ID, uid, isStaff(c)) // organizer test solves never take a blood or a count
 	if err != nil {
 		h.logger.Error("failed to update flag solve count", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
@@ -1717,6 +1763,9 @@ func (h *ChallengeHandler) GetHints(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch hints"})
 		return
 	}
+	if rejectLocked(c, h.db, h.logger, challengeID, false) {
+		return
+	}
 
 	query := `
 		SELECT h.id, h.content, h.cost, h.sort_order, hu.id IS NOT NULL
@@ -1787,6 +1836,9 @@ func (h *ChallengeHandler) UnlockHint(c *gin.Context) {
 	} else if err != nil {
 		h.logger.Error("failed to query challenge for hint unlock", zap.String("slug", slug), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to unlock hint"})
+		return
+	}
+	if rejectLocked(c, h.db, h.logger, challengeID, true) {
 		return
 	}
 
