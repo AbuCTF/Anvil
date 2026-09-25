@@ -9,6 +9,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { formatLocalDateTime, instantTitle } from '$lib/time';
+	import { confirmDialog, alertDialog } from '$lib/stores/dialog';
 
 	let challenge: any = null;
 	let instance: any = null;
@@ -79,7 +80,7 @@
 
 	async function deleteAttachment(attachmentId: string) {
 		if (!challenge?.id) return;
-		if (!confirm('Delete this attachment?')) return;
+		if (!(await confirmDialog({ message: 'Delete this attachment?', title: 'Delete attachment', confirmLabel: 'Delete', danger: true }))) return;
 		actionError = '';
 		try {
 			await api.deleteAttachment(challenge.id, attachmentId);
@@ -309,7 +310,7 @@
 	}
 
 	async function stopInstance() {
-		if (!instance || !confirm('Stop this instance? You will have a cooldown period before starting again.')) return;
+		if (!instance || !(await confirmDialog({ message: 'Stop this instance? You will have a cooldown period before starting again.', title: 'Stop instance', confirmLabel: 'Stop', danger: true }))) return;
 		instanceAction = 'stopping';
 		instanceError = '';
 		try {
@@ -345,7 +346,7 @@
 			showEditSuccess = true;
 			setTimeout(() => showEditSuccess = false, 3000);
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to save');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to save' });
 		} finally {
 			saving = false;
 		}
@@ -358,7 +359,7 @@
 			await api.publishChallenge(challenge.id);
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to publish');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to publish' });
 		} finally {
 			saving = false;
 		}
@@ -371,7 +372,7 @@
 			await api.unpublishChallenge(challenge.id);
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to unpublish');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to unpublish' });
 		} finally {
 			saving = false;
 		}
@@ -543,7 +544,7 @@
 			});
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to update flag');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to update flag' });
 		} finally {
 			savingFlag = false;
 		}
@@ -558,20 +559,20 @@
 			showFlagModal = false;
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to create flag');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to create flag' });
 		} finally {
 			savingFlag = false;
 		}
 	}
 
 	async function deleteFlag(flagId: string) {
-		if (!challenge || !confirm('Delete this flag?')) return;
+		if (!challenge || !(await confirmDialog({ message: 'Delete this flag?', title: 'Delete flag', confirmLabel: 'Delete', danger: true }))) return;
 		savingFlag = true;
 		try {
 			await api.deleteFlag(challenge.id, flagId);
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to delete flag');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to delete flag' });
 		} finally {
 			savingFlag = false;
 		}
@@ -585,7 +586,7 @@
 			await api.unlockHint(challenge.slug, hintId);
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to unlock hint');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to unlock hint' });
 		} finally {
 			unlockingHint = null;
 		}
@@ -603,7 +604,7 @@
 			newHint = { content: '', cost: 0 };
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to add hint');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to add hint' });
 		} finally {
 			savingHint = false;
 		}
@@ -616,19 +617,19 @@
 			hint.editing = false;
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to save hint');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to save hint' });
 		} finally {
 			savingHint = false;
 		}
 	}
 	async function deleteHint(hintId: string) {
-		if (!challenge || !confirm('Delete this hint?')) return;
+		if (!challenge || !(await confirmDialog({ message: 'Delete this hint?', title: 'Delete hint', confirmLabel: 'Delete', danger: true }))) return;
 		savingHint = true;
 		try {
 			await api.deleteHint(challenge.id, hintId);
 			await loadChallenge();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to delete hint');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to delete hint' });
 		} finally {
 			savingHint = false;
 		}

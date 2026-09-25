@@ -6,6 +6,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { confirmDialog } from '$lib/stores/dialog';
 
 	let loading = true;
 	let teamsDisabled = false;
@@ -75,7 +76,7 @@
 
 	async function leaveTeam() {
 		if (busy) return;
-		if (!confirm('Leave this team? You\'ll need the join code to get back in, so keep it handy.')) return;
+		if (!(await confirmDialog({ message: 'Leave this team? You\'ll need the join code to get back in, so keep it handy.', title: 'Leave team', confirmLabel: 'Leave', danger: true }))) return;
 		busy = true;
 		error = '';
 		try {

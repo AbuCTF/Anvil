@@ -8,6 +8,7 @@
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
 	import { formatLocalDateLong, formatLocalDateTimeWithZone, instantTitle, viewerTimeZone } from '$lib/time';
+	import { confirmDialog, alertDialog, promptDialog } from '$lib/stores/dialog';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -175,7 +176,7 @@
 			await api.publishChallenge(challenge.id);
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to publish');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to publish' });
 		} finally {
 			actionLoading = '';
 		}
@@ -187,20 +188,20 @@
 			await api.unpublishChallenge(challenge.id);
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to unpublish');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to unpublish' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function deleteChallenge(challenge: any) {
-		if (!confirm(`Delete "${challenge.name}"? This cannot be undone.`)) return;
+		if (!(await confirmDialog({ title: 'Delete challenge', message: `Delete "${challenge.name}"? This cannot be undone.`, confirmLabel: 'Delete', danger: true }))) return;
 		actionLoading = challenge.id;
 		try {
 			await api.deleteAdminChallenge(challenge.id);
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to delete');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to delete' });
 		} finally {
 			actionLoading = '';
 		}
@@ -403,7 +404,7 @@
 			showEditModal = false;
 			editingChallenge = null;
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to update');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to update' });
 		} finally {
 			actionLoading = '';
 		}
@@ -505,7 +506,7 @@
 			await api.updatePlatformSettings(platformSettings);
 			settingsChanged = false;
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to save settings');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to save settings' });
 		} finally {
 			savingSettings = false;
 		}
@@ -594,20 +595,20 @@
 			newNode = { name: '', hostname: '', ip_address: '', total_vcpu: 16, total_memory_mb: 61440, total_disk_gb: 100, max_vms: 10, region: '', provider: 'gcp' };
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to create node');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to create node' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function deleteNode(nodeId: string) {
-		if (!confirm('Delete this node? This cannot be undone.')) return;
+		if (!(await confirmDialog({ title: 'Delete node', message: 'Delete this node? This cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
 		actionLoading = nodeId;
 		try {
 			await api.deleteNode(nodeId);
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to delete node');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to delete node' });
 		} finally {
 			actionLoading = '';
 		}
@@ -636,72 +637,72 @@
 			templateDescription = '';
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to upload template');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to upload template' });
 		} finally {
 			templateUploading = false;
 		}
 	}
 
 	async function deleteTemplate(templateId: string) {
-		if (!confirm('Delete this template? Challenges using it will break.')) return;
+		if (!(await confirmDialog({ title: 'Delete template', message: 'Delete this template? Challenges using it will break.', confirmLabel: 'Delete', danger: true }))) return;
 		actionLoading = templateId;
 		try {
 			await api.deleteVMTemplate(templateId);
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to delete template');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to delete template' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function deleteInstance(instanceId: string) {
-		if (!confirm('Force stop and remove this VM instance? The user will lose their session.')) return;
+		if (!(await confirmDialog({ title: 'Terminate instance', message: 'Force stop and remove this VM instance? The user will lose their session.', confirmLabel: 'Terminate', danger: true }))) return;
 		actionLoading = instanceId;
 		try {
 			await api.forceStopAdminInstance(instanceId);
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to stop instance');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to stop instance' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function deleteDockerInstance(instanceId: string) {
-		if (!confirm('Force stop and remove this Docker instance? The user will lose their session.')) return;
+		if (!(await confirmDialog({ title: 'Terminate instance', message: 'Force stop and remove this Docker instance? The user will lose their session.', confirmLabel: 'Terminate', danger: true }))) return;
 		actionLoading = instanceId;
 		try {
 			await api.forceStopAdminInstance(instanceId);
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to stop Docker instance');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to stop Docker instance' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function deleteUser(userId: string) {
-		if (!confirm('Delete this user? This action cannot be undone.')) return;
+		if (!(await confirmDialog({ title: 'Delete user', message: 'Delete this user? This action cannot be undone.', confirmLabel: 'Delete', danger: true }))) return;
 		actionLoading = userId;
 		try {
 			await api.deleteAdminUser(userId);
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to delete user');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to delete user' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function changeUserRole(userId: string, newRole: string) {
-		if (!confirm(`Change user role to ${newRole}?`)) return;
+		if (!(await confirmDialog({ message: `Change user role to ${newRole}?` }))) return;
 		actionLoading = userId;
 		try {
 			await api.updateAdminUser(userId, { role: newRole });
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to change user role');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to change user role' });
 		} finally {
 			actionLoading = '';
 		}
@@ -709,13 +710,18 @@
 
 	async function toggleBan(user: any) {
 		const banned = user.is_banned;
-		if (!confirm(banned ? `Unban ${user.username}?` : `Ban ${user.username}? They won't be able to sign in.`)) return;
+		if (!(await confirmDialog({
+			title: banned ? 'Unban user' : 'Ban user',
+			message: banned ? `Unban ${user.username}?` : `Ban ${user.username}? They won't be able to sign in.`,
+			confirmLabel: banned ? 'Unban' : 'Ban',
+			danger: !banned
+		}))) return;
 		actionLoading = user.id;
 		try {
 			await (banned ? api.unbanUser(user.id) : api.banUser(user.id));
 			await loadDashboard();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to update ban status');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to update ban status' });
 		} finally {
 			actionLoading = '';
 		}
@@ -741,75 +747,75 @@
 			await api.updateAdminTeam(id, data);
 			await loadTeams();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to update team');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to update team' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function renameTeam(team: any) {
-		const name = prompt('New team name:', team.name);
+		const name = await promptDialog({ message: 'New team name:', defaultValue: team.name });
 		if (name === null || name.trim() === team.name) return;
 		await teamUpdate(team.id, { name: name.trim() });
 	}
 
 	async function editTeamScore(team: any) {
-		const raw = prompt('Total score:', String(team.total_score ?? 0));
+		const raw = await promptDialog({ message: 'Total score:', defaultValue: String(team.total_score ?? 0) });
 		if (raw === null) return;
 		const score = parseInt(raw.trim(), 10);
 		if (Number.isNaN(score)) {
-			alert('Score must be an integer');
+			alertDialog({ title: 'Error', message: 'Score must be an integer' });
 			return;
 		}
 		await teamUpdate(team.id, { total_score: score });
 	}
 
 	async function editTeamMax(team: any) {
-		const raw = prompt('Max members (blank = unlimited):', team.max_members == null ? '' : String(team.max_members));
+		const raw = await promptDialog({ message: 'Max members (blank = unlimited):', defaultValue: team.max_members == null ? '' : String(team.max_members) });
 		if (raw === null) return;
 		const trimmed = raw.trim();
 		const max = trimmed === '' ? null : parseInt(trimmed, 10);
 		if (max !== null && (Number.isNaN(max) || max < 1)) {
-			alert('Max members must be a positive integer or blank');
+			alertDialog({ title: 'Error', message: 'Max members must be a positive integer or blank' });
 			return;
 		}
 		await teamUpdate(team.id, { max_members: max });
 	}
 
 	async function rotateTeamCode(team: any) {
-		if (!confirm(`Regenerate the join code for ${team.name}? The current code stops working.`)) return;
+		if (!(await confirmDialog({ message: `Regenerate the join code for ${team.name}? The current code stops working.` }))) return;
 		actionLoading = team.id;
 		try {
 			await api.rotateAdminTeamCode(team.id);
 			await loadTeams();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to rotate join code');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to rotate join code' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function disbandTeam(team: any) {
-		if (!confirm(`Disband ${team.name}? Its ${team.member_count} member(s) will be removed. This cannot be undone.`)) return;
+		if (!(await confirmDialog({ title: 'Disband team', message: `Disband ${team.name}? Its ${team.member_count} member(s) will be removed. This cannot be undone.`, confirmLabel: 'Disband', danger: true }))) return;
 		actionLoading = team.id;
 		try {
 			await api.deleteAdminTeam(team.id);
 			await loadTeams();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to disband team');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to disband team' });
 		} finally {
 			actionLoading = '';
 		}
 	}
 
 	async function kickMember(team: any, member: any) {
-		if (!confirm(`Remove ${member.username} from ${team.name}?`)) return;
+		if (!(await confirmDialog({ title: 'Remove member', message: `Remove ${member.username} from ${team.name}?`, confirmLabel: 'Remove', danger: true }))) return;
 		actionLoading = team.id;
 		try {
 			await api.removeAdminTeamMember(team.id, member.id);
 			await loadTeams();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to remove member');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to remove member' });
 		} finally {
 			actionLoading = '';
 		}
@@ -824,7 +830,7 @@
 			addMemberInput[team.id] = '';
 			await loadTeams();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : 'Failed to add member');
+			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to add member' });
 		} finally {
 			actionLoading = '';
 		}

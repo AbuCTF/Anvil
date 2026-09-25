@@ -13,6 +13,7 @@
 	import EventClock from '$lib/components/EventClock.svelte';
 	import { loadPlatformInfo, registerHref, platformInfo } from '$lib/stores/platform';
 	import RankBadge from '$lib/components/RankBadge.svelte';
+	import DialogHost from '$lib/components/DialogHost.svelte';
 
 	let mobileMenuOpen = false;
 	let userMenuOpen = false;
@@ -313,6 +314,8 @@
 		<slot />
 	</main>
 </div>
+
+<DialogHost />
 
 <style>
 	/* indeterminate top progress bar during route navigation */
