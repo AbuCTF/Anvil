@@ -392,8 +392,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("webverse.expect_slug", "YfQq-BkjAX1I9bECP5U9xcsY")
 	// WebVerse lab slug -> Anvil challenge slug. PENDING Leighlin's prod slug confirm;
 	// identity map for now, override via config.yaml (webverse.slug_map) with no redeploy of code.
+	// WebVerse lab slug -> Anvil challenge slug (Abu-confirmed WebVerse slugs).
 	v.SetDefault("webverse.slug_map", map[string]string{
-		"flux":        "flux",
+		"bartbrack":   "bartbrack",
 		"splice":      "splice",
 		"merged":      "merged",
 		"worldoutter": "worldoutter",
