@@ -880,11 +880,15 @@
 										Join or create a team
 									</a>
 								{:else}
-									<p class="text-sm text-stone-400 leading-relaxed">{challenge.description ? 'Opening unlocks the files and instance and starts your solve timer, then you submit here. A clean solve refunds half the cost.' : 'Opening unlocks the full brief, files, and instance, and starts your solve timer.'}</p>
+									{#if isExternal}
+										<p class="text-sm text-stone-400 leading-relaxed">This challenge is played on WebVerse Labs. You do not need to open it here: solve it on WebVerse with your registered email and it syncs to your score automatically, for free. Opening here is optional and costs credits and 1 of your 3 open slots.</p>
+									{:else}
+										<p class="text-sm text-stone-400 leading-relaxed">{challenge.description ? 'Opening unlocks the files and instance and starts your solve timer, then you submit here. A clean solve refunds half the cost.' : 'Opening unlocks the full brief, files, and instance, and starts your solve timer.'}</p>
+									{/if}
 									<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-										{ecoBusy ? 'Launching…' : 'Launch challenge'}
+										{ecoBusy ? 'Opening…' : isExternal ? 'Open on H7 (optional)' : 'Launch challenge'}
 									</button>
-									<p class="text-xs text-stone-500">Costs <span class="font-medium text-amber-500 tabular-nums">{challenge.economy.launch_cost}</span> credits · balance <span class="tabular-nums">{Math.floor(challenge.economy.credits)}</span></p>
+									<p class="text-xs text-stone-500">Costs <span class="font-medium text-amber-500 tabular-nums">{challenge.economy.launch_cost}</span> credits · uses 1 of your 3 open slots · balance <span class="tabular-nums">{Math.floor(challenge.economy.credits)}</span></p>
 									{#if $auth.isAuthenticated && challenge.economy.credits < challenge.economy.launch_cost}
 										<p class="text-xs text-stone-500">Not enough credits: this costs {challenge.economy.launch_cost}, you have {challenge.economy.credits.toFixed(1)}. Convert points or claim the one-time bailout on your <a href="/team" class="text-stone-300 underline underline-offset-2 hover:text-stone-100">team page</a>.</p>
 									{/if}
