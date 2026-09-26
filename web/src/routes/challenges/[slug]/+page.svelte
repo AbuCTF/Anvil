@@ -35,6 +35,7 @@
 	let instanceLoadedForToken = '';
 	let timerInterval: ReturnType<typeof setInterval>;
 	let timeRemaining = '';
+	let economyTimeRemaining = ''; // the economy act-timer countdown (works for static + instance challenges)
 
 	let isEditing = false;
 	let editForm: { name: string; description: string; difficulty: string; base_points: number | string } | null = null;
@@ -152,6 +153,15 @@
 				if (instance.expires_at < Math.floor(Date.now() / 1000)) {
 					instance = null;
 					loadUserInstance();
+				}
+			}
+			// economy act-timer: the "how long can I still submit" clock, shown for
+			// every opened challenge (static download or instance-backed). when it hits
+			// zero refresh so the view flips to the locked/re-open card.
+			if (challenge?.economy?.expires_at) {
+				economyTimeRemaining = formatTimeRemaining(challenge.economy.expires_at);
+				if (challenge.economy.expires_at < Math.floor(Date.now() / 1000) && challenge.economy.launched) {
+					loadChallenge();
 				}
 			}
 			if (cooldownInfo && cooldownInfo.until > Math.floor(Date.now() / 1000)) {
@@ -848,8 +858,15 @@
 					{/if}
 
 					{#if locked}
-						<Card title="Locked">
+						<Card title={challenge.description ? 'Open Challenge' : 'Locked'}>
 							<div class="space-y-3">
+								{#if challenge.description}
+									<div class="font-sans text-sm text-stone-300 leading-relaxed space-y-3">
+										<!-- eslint-disable-next-line svelte/no-at-html-tags -- renderMarkdown escapes source text before adding its fixed markup -->
+										{@html renderMarkdown(challenge.description)}
+									</div>
+									<div class="border-t border-stone-800/60"></div>
+								{/if}
 								{#if $auth.isAuthenticated && challenge.economy.has_team === false}
 									<p class="text-sm text-stone-400 leading-relaxed">Challenges are opened and scored per team. Join or create a team to play.</p>
 									<a href="/team" class="flex w-full items-center justify-center gap-1.5 py-2.5 bg-stone-100 text-stone-950 text-sm leading-none font-medium rounded-md hover:bg-stone-50 transition-colors">
@@ -857,7 +874,7 @@
 										Join or create a team
 									</a>
 								{:else}
-									<p class="text-sm text-stone-400 leading-relaxed">Launching unlocks the full brief, files, and instance, and starts your solve timer.</p>
+									<p class="text-sm text-stone-400 leading-relaxed">{challenge.description ? 'Opening unlocks the files and instance and starts your solve timer, then you submit here. A clean solve refunds half the cost.' : 'Opening unlocks the full brief, files, and instance, and starts your solve timer.'}</p>
 									<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
 										{ecoBusy ? 'Launching…' : 'Launch challenge'}
 									</button>
@@ -1165,6 +1182,7 @@
 
 									<div>
 										<p class="metadata-label text-stone-500 mb-2">Connect</p>
+										<p class="text-xs text-stone-500 mb-2 -mt-1 leading-relaxed">The service can take a few seconds to start after launch. If it does not respond, wait a moment and retry.</p>
 										{#if instance.ports && Object.keys(instance.ports).length > 0}
 											<div class="space-y-2">
 												{#each Object.entries(instance.ports) as [portKey]}
@@ -1277,14 +1295,25 @@
 
 					{#if challenge?.economy?.launched && !challenge.economy.solved}
 						<Card title="Launched">
-							<div class="flex items-center justify-between">
-								<span class="text-sm text-stone-400"><span class="text-amber-500 font-semibold tabular-nums">{Math.round(challenge.economy.credits)}</span> credits left</span>
-								<div class="flex gap-2">
-									<button on:click={extendTimer} disabled={ecoBusy} class="text-xs py-1.5 px-3 rounded-md border border-stone-800 text-stone-300 hover:bg-stone-800/40 disabled:opacity-40 transition-colors">Extend</button>
-									<button on:click={abandonChallenge} disabled={ecoBusy} class="text-xs py-1.5 px-3 rounded-md border border-down/30 bg-down/10 text-down hover:bg-down/20 disabled:opacity-40 transition-colors">Abandon</button>
+							<div class="space-y-3">
+								{#if challenge.economy.expires_at}
+									<div class="flex items-baseline justify-between">
+										<span class="text-xs text-stone-500 uppercase tracking-wide">Time to submit</span>
+										<span
+											class="text-lg font-mono font-semibold tabular-nums {getTimeColorClass(challenge.economy.expires_at)}"
+											title={instantTitle(challenge.economy.expires_at, 'seconds')}
+										>{economyTimeRemaining || formatTimeRemaining(challenge.economy.expires_at)}</span>
+									</div>
+								{/if}
+								<div class="flex items-center justify-between border-t border-stone-800/60 pt-3">
+									<span class="text-sm text-stone-400"><span class="text-amber-500 font-semibold tabular-nums">{Math.round(challenge.economy.credits)}</span> credits left</span>
+									<div class="flex gap-2">
+										<button on:click={extendTimer} disabled={ecoBusy} title="Add time for a credit cost that rises each extension" class="text-xs py-1.5 px-3 rounded-md border border-stone-800 text-stone-300 hover:bg-stone-800/40 disabled:opacity-40 transition-colors">Extend</button>
+										<button on:click={abandonChallenge} disabled={ecoBusy} title="Release the slot for a partial refund" class="text-xs py-1.5 px-3 rounded-md border border-down/30 bg-down/10 text-down hover:bg-down/20 disabled:opacity-40 transition-colors">Abandon</button>
+									</div>
 								</div>
+								{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
 							</div>
-							{#if ecoError}<p class="mt-2 text-xs text-down">{ecoError}</p>{/if}
 						</Card>
 					{/if}
 

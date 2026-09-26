@@ -92,7 +92,7 @@ func TestRedactLockedKeepsOnlyTheCard(t *testing.T) {
 		ExposedPorts:    []models.ExposedPort{{}},
 		InstanceTimeout: &timeout,
 	}
-	ch.redactLocked()
+	ch.redactLocked(false)
 	if ch.Description != nil || len(ch.Flags) != 0 || len(ch.Hints) != 0 || len(ch.Attachments) != 0 ||
 		len(ch.ExposedPorts) != 0 || ch.InstanceTimeout != nil {
 		t.Fatalf("locked content survived redaction: %+v", ch)

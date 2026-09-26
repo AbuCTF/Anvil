@@ -87,6 +87,8 @@ type ChallengeEconomyInfo struct {
 	Value  *float64 `json:"value,omitempty"`  // a new full capture's worth right now
 	Share  float64  `json:"share,omitempty"`  // the team's held fraction, 0..1
 	Earned float64  `json:"earned,omitempty"` // what that holding is worth now
+
+	ExpiresAt *int64 `json:"expires_at,omitempty"` // unix ts the open/act timer runs out; the "how long can I still submit" clock
 }
 
 type FlagResponse struct {
@@ -437,22 +439,34 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 				// launched = can act now; an expired team re-opens from the locked card
 				info.Launched = economyCanAct(st, time.Now())
 				info.Solved = st.status == "solved"
+				if st.expiresAt != nil {
+					u := st.expiresAt.Unix()
+					info.ExpiresAt = &u // the act-timer countdown for the launched view
+				}
 				_ = h.db.Pool.QueryRow(c.Request.Context(),
 					`SELECT COALESCE(credits, 0) FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&info.Credits)
 			}
 		}
 		ch.Economy = info
 		if !isStaff(c) && !economyCanView(st) {
-			ch.redactLocked()
+			// show the brief before opening EXCEPT for pure flag-only challenges (no
+			// instance, no files) where the description IS the whole challenge -
+			// revealing those pre-open lets a team solve offline then open+submit to
+			// dodge the timer. every act-gate (files, flags, instance) stays shut.
+			flagOnly := !ch.HasInstance && len(ch.Attachments) == 0
+			ch.redactLocked(!flagOnly)
 		}
 	}
 
 	c.JSON(http.StatusOK, ch)
 }
 
-// an unopened challenge shows only its card: no brief, files, hints, flag names or ports.
-func (ch *ChallengeDetailResponse) redactLocked() {
-	ch.Description = nil
+// redactLocked shuts every act-gate on an unopened challenge (files, flags, hints, ports);
+// keepDescription lets the brief through for non-flag-only challenges (the paid open still gates the actual challenge).
+func (ch *ChallengeDetailResponse) redactLocked(keepDescription bool) {
+	if !keepDescription {
+		ch.Description = nil
+	}
 	ch.Flags = []FlagResponse{}
 	ch.Hints = []HintResponse{}
 	ch.Attachments = []AttachmentResponse{}
