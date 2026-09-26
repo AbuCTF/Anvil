@@ -450,7 +450,7 @@ func abandonChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID
 	return nil
 }
 
-func extendChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID uuid.UUID, difficulty string, cfg config.EconomyConfig) (time.Time, *EconomyOpError) {
+func extendChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID uuid.UUID, difficulty string, quoteVersion int, cfg config.EconomyConfig) (time.Time, *EconomyOpError) {
 	var status string
 	var used int
 	var expires time.Time
@@ -462,6 +462,9 @@ func extendChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID 
 	}
 	if err != nil {
 		return time.Time{}, &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to read challenge state"}
+	}
+	if used != quoteVersion {
+		return time.Time{}, &EconomyOpError{Status: http.StatusConflict, Message: "extension quote changed; review the latest price and confirm again"}
 	}
 	if used >= cfg.MaxExtensions {
 		return time.Time{}, &EconomyOpError{Status: http.StatusConflict, Message: "no extensions remaining"}
@@ -485,7 +488,7 @@ func extendChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID 
 }
 
 // sell points for credits, block by block so the rate diminishes as more is sold.
-func convertPointsToCredits(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, points float64, cfg config.EconomyConfig) (float64, *EconomyOpError) {
+func convertPointsToCredits(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, points float64, quoteVersion int, cfg config.EconomyConfig) (float64, *EconomyOpError) {
 	if points <= 0 {
 		return 0, &EconomyOpError{Status: http.StatusBadRequest, Message: "points must be positive"}
 	}
@@ -498,6 +501,9 @@ func convertPointsToCredits(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, po
 		`SELECT points, p2c_blocks FROM economy_team_score WHERE team_id = $1 FOR UPDATE`, teamID,
 	).Scan(&have, &blocks); err != nil {
 		return 0, &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to read balance"}
+	}
+	if blocks != quoteVersion {
+		return 0, &EconomyOpError{Status: http.StatusConflict, Message: "conversion quote changed; review the latest proceeds and confirm again"}
 	}
 	if points > have {
 		return 0, &EconomyOpError{Status: http.StatusBadRequest, Message: "you do not have enough points to convert"}
@@ -732,10 +738,11 @@ func (h *EconomyHandler) Convert(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Points float64 `json:"points" binding:"required"`
+		Points       float64 `json:"points" binding:"required"`
+		QuoteVersion *int    `json:"quote_version" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "points is required"})
+	if err := c.ShouldBindJSON(&req); err != nil || req.QuoteVersion == nil || *req.QuoteVersion < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "points and a valid quote_version are required"})
 		return
 	}
 	ctx := c.Request.Context()
@@ -745,7 +752,7 @@ func (h *EconomyHandler) Convert(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	gained, opErr := convertPointsToCredits(ctx, tx, teamID, req.Points, h.config.Economy)
+	gained, opErr := convertPointsToCredits(ctx, tx, teamID, req.Points, *req.QuoteVersion, h.config.Economy)
 	if opErr != nil {
 		c.JSON(opErr.Status, gin.H{"error": opErr.Message})
 		return

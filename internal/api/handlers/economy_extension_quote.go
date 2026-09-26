@@ -43,6 +43,7 @@ func (h *EconomyHandler) QuoteExtension(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"cost":                 cost,
 		"added_seconds":        int(added.Seconds()),
+		"quote_version":        used,
 		"extensions_used":      used,
 		"extensions_remaining": h.config.Economy.MaxExtensions - used,
 	})

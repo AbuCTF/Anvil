@@ -68,6 +68,7 @@ func (h *EconomyHandler) QuoteConvert(c *gin.Context) {
 		"points":         req.Points,
 		"credits":        credits,
 		"effective_rate": credits / req.Points,
+		"quote_version":  blocks,
 		"blocks_used":    blocks,
 	})
 }

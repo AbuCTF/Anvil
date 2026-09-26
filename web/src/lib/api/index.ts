@@ -519,12 +519,14 @@ class ApiClient {
 		return this.request<{ status: string }>(`/challenges/${slug}/abandon`, { method: 'POST' });
 	}
 
-	async extendChallenge(slug: string) {
-		return this.request<{ status: string; expires_at: number }>(`/challenges/${slug}/extend`, { method: 'POST' });
+	async extendChallenge(slug: string, quoteVersion: number) {
+		return this.request<{ status: string; expires_at: number }>(`/challenges/${slug}/extend`, {
+			method: 'POST', body: JSON.stringify({ quote_version: quoteVersion })
+		});
 	}
 
 	async quoteChallengeExtension(slug: string) {
-		return this.request<{ cost: number; added_seconds: number; extensions_used: number; extensions_remaining: number }>(
+		return this.request<{ cost: number; added_seconds: number; quote_version: number; extensions_used: number; extensions_remaining: number }>(
 			`/economy/challenges/${slug}/extension-quote`, { cache: 'no-store' });
 	}
 
@@ -532,13 +534,13 @@ class ApiClient {
 		return this.request<{ status: string }>('/economy/bailout', { method: 'POST' });
 	}
 
-	async convertPoints(points: number) {
+	async convertPoints(points: number, quoteVersion: number) {
 		return this.request<{ credits_gained: number; points_spent: number }>(
-			'/economy/convert', { method: 'POST', body: JSON.stringify({ points }) });
+			'/economy/convert', { method: 'POST', body: JSON.stringify({ points, quote_version: quoteVersion }) });
 	}
 
 	async quotePointConversion(points: number) {
-		return this.request<{ points: number; credits: number; effective_rate: number; blocks_used: number }>(
+		return this.request<{ points: number; credits: number; effective_rate: number; quote_version: number; blocks_used: number }>(
 			'/economy/convert/quote', { method: 'POST', body: JSON.stringify({ points }) });
 	}
 

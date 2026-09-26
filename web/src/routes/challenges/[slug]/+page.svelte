@@ -255,7 +255,7 @@
 
 	let ecoBusy = false;
 	let ecoError = '';
-	let extensionQuote: { cost: number; added_seconds: number; extensions_used: number; extensions_remaining: number } | null = null;
+	let extensionQuote: { cost: number; added_seconds: number; quote_version: number; extensions_used: number; extensions_remaining: number } | null = null;
 	let extensionQuoteLoading = false;
 	$: locked = challenge?.economy?.enabled && !challenge.economy.launched;
 	// economy pays the live band value; flags weigh a share of it, not flat points
@@ -349,13 +349,28 @@
 			ecoError = 'The next extension price is unavailable.';
 			return;
 		}
+		const approvedQuote = extensionQuote;
 		if (!(await confirmDialog({
 			title: 'Extend challenge timer',
-			message: `Add ${extensionDuration(extensionQuote.added_seconds)} for ${extensionQuote.cost.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits? Extension prices rise after each purchase.`,
+			message: `Add ${extensionDuration(approvedQuote.added_seconds)} for ${approvedQuote.cost.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits? Extension prices rise after each purchase.`,
 			confirmLabel: 'Purchase extension',
 			danger: true
 		}))) return;
-		await ecoAction(() => api.extendChallenge(slug!));
+		ecoBusy = true;
+		ecoError = '';
+		try {
+			await api.extendChallenge(slug!, approvedQuote.quote_version);
+			await loadChallenge();
+		} catch (e) {
+			if (e instanceof ApiError && e.status === 409) {
+				await loadExtensionQuote();
+				ecoError = 'The extension price changed. Review the updated quote and confirm again.';
+			} else {
+				ecoError = e instanceof Error ? e.message : 'extension failed';
+			}
+		} finally {
+			ecoBusy = false;
+		}
 	}
 
 	async function submitFlag() {

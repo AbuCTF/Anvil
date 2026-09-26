@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
-	import { api } from '$api';
+	import { api, ApiError } from '$api';
 	import { auth } from '$stores/auth';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -20,7 +20,7 @@
 	let copied = false;
 	let eco: any = null;
 	let convertAmt = '';
-	let conversionQuote: { points: number; credits: number; effective_rate: number } | null = null;
+	let conversionQuote: { points: number; credits: number; effective_rate: number; quote_version: number } | null = null;
 	let quoteLoading = false;
 	let quoteError = '';
 	let quoteTimer: ReturnType<typeof setTimeout> | undefined;
@@ -99,24 +99,44 @@
 	async function convert() {
 		const pts = Number(convertAmt);
 		if (!pts || pts <= 0 || busy || !conversionQuote || conversionQuote.points !== pts) return;
+		const approvedQuote = conversionQuote;
 		if (!(await confirmDialog({
 			title: 'Convert team points',
-			message: `Spend ${pts.toLocaleString()} points for approximately ${conversionQuote.credits.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits? This cannot be undone.`,
+			message: `Spend ${pts.toLocaleString()} points for ${approvedQuote.credits.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits? This cannot be undone.`,
 			confirmLabel: 'Convert',
 			danger: true
 		}))) return;
 		busy = true;
 		error = '';
 		try {
-			await api.convertPoints(pts);
+			await api.convertPoints(pts, approvedQuote.quote_version);
 			convertAmt = '';
 			conversionQuote = null;
 			quoteError = '';
 			await load();
 		} catch (e: any) {
-			error = e?.message ?? 'convert failed';
+			if (e instanceof ApiError && e.status === 409) {
+				conversionQuote = null;
+				await requestConversionQuote(pts);
+				error = 'The conversion quote changed. Review the updated proceeds and confirm again.';
+			} else {
+				error = e?.message ?? 'convert failed';
+			}
 		} finally {
 			busy = false;
+		}
+	}
+
+	async function requestConversionQuote(points: number, generation = ++quoteGeneration) {
+		quoteLoading = true;
+		quoteError = '';
+		try {
+			const quote = await api.quotePointConversion(points);
+			if (generation === quoteGeneration) conversionQuote = quote;
+		} catch (e: any) {
+			if (generation === quoteGeneration) quoteError = e?.message ?? 'Quote unavailable';
+		} finally {
+			if (generation === quoteGeneration) quoteLoading = false;
 		}
 	}
 
@@ -131,15 +151,9 @@
 			return;
 		}
 		quoteLoading = true;
-		quoteTimer = setTimeout(async () => {
-			try {
-				const quote = await api.quotePointConversion(points);
-				if (generation === quoteGeneration) conversionQuote = quote;
-			} catch (e: any) {
-				if (generation === quoteGeneration) quoteError = e?.message ?? 'Quote unavailable';
-			} finally {
-				if (generation === quoteGeneration) quoteLoading = false;
-			}
+		quoteTimer = setTimeout(() => {
+			quoteTimer = undefined;
+			void requestConversionQuote(points, generation);
 		}, 250);
 	}
 

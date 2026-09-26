@@ -1019,6 +1019,13 @@ func (h *ChallengeHandler) ExtendChallenge(c *gin.Context) {
 	if !ok {
 		return
 	}
+	var req struct {
+		QuoteVersion *int `json:"quote_version" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.QuoteVersion == nil || *req.QuoteVersion < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "a valid quote_version is required"})
+		return
+	}
 	ctx := c.Request.Context()
 	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
@@ -1026,7 +1033,7 @@ func (h *ChallengeHandler) ExtendChallenge(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	newExpiry, opErr := extendChallengeEconomy(ctx, tx, teamID, chalID, difficulty, h.config.Economy)
+	newExpiry, opErr := extendChallengeEconomy(ctx, tx, teamID, chalID, difficulty, *req.QuoteVersion, h.config.Economy)
 	if opErr != nil {
 		c.JSON(opErr.Status, gin.H{"error": opErr.Message})
 		return
