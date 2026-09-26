@@ -336,8 +336,8 @@ func setDefaults(v *viper.Viper) {
 	// ledger economy (player 0-1000 anchor, ×10 of ledger-sim/reference_config.json).
 	v.SetDefault("economy.grant", 4000.0)
 	v.SetDefault("economy.ceilings", []float64{100, 250, 500, 1000})
-	v.SetDefault("economy.launch_costs", []float64{50, 100, 200, 250})
-	v.SetDefault("economy.crowd_floors", []float64{0.15, 0.15, 0.15, 0.75})
+	v.SetDefault("economy.launch_costs", []float64{50, 100, 200, 400})
+	v.SetDefault("economy.crowd_floors", []float64{0.25, 0.25, 0.15, 0.75})
 	v.SetDefault("economy.crowd_halflives", []float64{8, 12, 20, 40})
 	v.SetDefault("economy.clean_refund_frac", 0.5)
 	v.SetDefault("economy.abandon_refund_frac", 0.3)
