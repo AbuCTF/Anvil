@@ -25,6 +25,9 @@
     bio?: string | null;
     role: string;
     joined_at: number;
+    total_score: number;
+    rank: number;
+    score_scope?: "user" | "team";
   }
 
   interface UserStats {
@@ -37,6 +40,7 @@
     rank: number;
     solves_by_difficulty: Record<string, number>;
     solves_by_category: Record<string, number>;
+    score_scope?: "user" | "team";
   }
 
   interface Progress {
@@ -86,6 +90,8 @@
   let saveError = "";
 
   $: displayName = profile?.display_name || profile?.username || "";
+  $: teamScoring =
+    profile?.score_scope === "team" || stats?.score_scope === "team";
   $: challengeBySlug = new Map(
     challenges.map((challenge) => [challenge.slug, challenge]),
   );
@@ -183,20 +189,22 @@
         ]);
       if (profileState.status === "rejected") throw profileState.reason;
 
-      profile = profileState.value;
+      const loadedProfile = profileState.value as Profile;
+      profile = loadedProfile;
       stats =
         statsState.status === "fulfilled"
           ? statsState.value
           : {
-              total_score: 0,
+              total_score: loadedProfile.total_score,
               total_solves: 0,
               total_challenges_solved: 0,
               total_attempts: 0,
               hints_unlocked: 0,
               points_spent_on_hints: 0,
-              rank: 0,
+              rank: loadedProfile.rank,
               solves_by_difficulty: {},
               solves_by_category: {},
+              score_scope: loadedProfile.score_scope || "user",
             };
       solves =
         solvesState.status === "fulfilled"
@@ -324,7 +332,7 @@
         <p class="mt-1 text-sm text-stone-500">@{profile.username}</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        {#if profile.role !== "admin"}
+        {#if profile.role !== "admin" && !teamScoring}
           <a
             href="/profile/{profile.username}"
             class="inline-flex items-center gap-1.5 rounded-md border border-stone-800 px-3 py-2 text-sm leading-none text-stone-400 transition-colors hover:border-stone-700 hover:text-stone-200"
@@ -347,12 +355,12 @@
 
     <div class="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       <StatTile
-        label="Points"
+        label={teamScoring ? "Team points" : "Points"}
         value={stats.total_score.toLocaleString()}
         accent
       />
       <StatTile
-        label="Global rank"
+        label={teamScoring ? "Team rank" : "Global rank"}
         value={stats.rank ? `#${stats.rank}` : "-"}
       />
       <StatTile
@@ -558,20 +566,32 @@
 
       <section class="min-w-0 space-y-6">
         {#if solves.length}
-          <Card title="Solve points over time">
-            <span slot="meta" class="metadata-label text-stone-500"
-              >Solve points</span
+          {#if teamScoring}
+            <div
+              class="rounded-md border border-stone-800 bg-stone-900/20 px-4 py-3 text-sm leading-relaxed text-stone-500"
             >
-            <ProfileScoreChart points={scorePoints} height={240} />
-          </Card>
-
-          <div class="grid gap-6 md:grid-cols-2">
-            <Card title="Points by category">
+              Ranking points belong to your team and include Ledger pricing,
+              penalties, conversions, and KotH. Capture history is shown without
+              legacy per-user base-point totals.
+            </div>
+          {:else}
+            <Card title="Solve points over time">
               <span slot="meta" class="metadata-label text-stone-500"
-                >{categoryPoints.length} categories</span
+                >Solve points</span
               >
-              <CategoryBars categories={categoryPoints} />
+              <ProfileScoreChart points={scorePoints} height={240} />
             </Card>
+          {/if}
+
+          <div class="grid gap-6 {teamScoring ? '' : 'md:grid-cols-2'}">
+            {#if !teamScoring}
+              <Card title="Points by category">
+                <span slot="meta" class="metadata-label text-stone-500"
+                  >{categoryPoints.length} categories</span
+                >
+                <CategoryBars categories={categoryPoints} />
+              </Card>
+            {/if}
 
             <Card title="Challenge progress">
               <span slot="meta" class="text-xs tabular-nums text-stone-500"
@@ -656,9 +676,11 @@
                     >
                   </span>
                   <span class="shrink-0 text-right">
-                    <span class="block text-sm font-medium tabular-nums text-up"
-                      >+{solve.points}</span
-                    >
+                    {#if !teamScoring}
+                      <span class="block text-sm font-medium tabular-nums text-up"
+                        >+{solve.points}</span
+                      >
+                    {/if}
                     <span
                       class="mt-1 block text-xs tabular-nums text-stone-600"
                       title={instantTitle(solve.solved_at)}

@@ -83,12 +83,13 @@ type ChallengeDetailResponse struct {
 
 // economy state for the caller's team; present only when economy_mode is on.
 type ChallengeEconomyInfo struct {
-	Enabled    bool    `json:"enabled"`
-	Launched   bool    `json:"launched"`
-	Solved     bool    `json:"solved"`
-	LaunchCost float64 `json:"launch_cost"`
-	Credits    float64 `json:"credits"`
-	HasTeam    bool    `json:"has_team"`
+	Enabled       bool    `json:"enabled"`
+	Launched      bool    `json:"launched"`
+	Solved        bool    `json:"solved"`
+	LaunchCost    float64 `json:"launch_cost"`
+	AbandonRefund float64 `json:"abandon_refund"`
+	Credits       float64 `json:"credits"`
+	HasTeam       bool    `json:"has_team"`
 
 	Value  *float64 `json:"value,omitempty"`  // a new full capture's worth right now
 	Share  float64  `json:"share,omitempty"`  // the team's held fraction, 0..1
@@ -475,22 +476,21 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		return
 	}
 	if on {
-		info := &ChallengeEconomyInfo{Enabled: true, LaunchCost: launchCost(h.config.Economy, ch.Difficulty)}
-		if crowds, cErr := economyCrowds(c.Request.Context(), h.db, &ch.ID); cErr != nil {
-			h.logger.Warn("failed to read economy crowd", zap.String("challenge_id", ch.ID), zap.Error(cErr))
-		} else {
-			v := challengeValue(h.config.Economy, ch.Difficulty, crowds[ch.ID], 0)
-			info.Value = &v
+		cost := launchCost(h.config.Economy, ch.Difficulty)
+		info := &ChallengeEconomyInfo{
+			Enabled: true, LaunchCost: cost,
+			AbandonRefund: h.config.Economy.AbandonRefundFrac * cost,
 		}
 		var st economyState
+		wrongSubs := 0
 		if uid, ok := contextUserID(c); ok {
 			if teamID, tErr := resolveTeamID(c.Request.Context(), h.db, uid); tErr == nil && teamID != nil {
 				info.HasTeam = true
 				var holds bool
 				var frac, earned float64
 				_ = h.db.Pool.QueryRow(c.Request.Context(),
-					`SELECT status, expires_at, holds_solve, frac, current_value FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
-					*teamID, ch.ID).Scan(&st.status, &st.expiresAt, &holds, &frac, &earned)
+					`SELECT status, expires_at, holds_solve, frac, current_value, wrong_subs FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+					*teamID, ch.ID).Scan(&st.status, &st.expiresAt, &holds, &frac, &earned, &wrongSubs)
 				if holds {
 					info.Share, info.Earned = frac, earned
 				}
@@ -504,6 +504,12 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 				_ = h.db.Pool.QueryRow(c.Request.Context(),
 					`SELECT COALESCE(credits, 0) FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&info.Credits)
 			}
+		}
+		if crowds, cErr := economyCrowds(c.Request.Context(), h.db, &ch.ID); cErr != nil {
+			h.logger.Warn("failed to read economy crowd", zap.String("challenge_id", ch.ID), zap.Error(cErr))
+		} else {
+			v := challengeValue(h.config.Economy, ch.Difficulty, crowds[ch.ID], wrongSubs)
+			info.Value = &v
 		}
 		ch.Economy = info
 		if !isStaff(c) && !economyCanView(st) {

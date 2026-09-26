@@ -216,6 +216,8 @@ func (s *Server) setupRouter() {
 			{
 				economyHandler := handlers.NewEconomyHandler(s.config, s.db, s.logger)
 				economyRoutes.GET("/me", economyHandler.Balance)
+				economyRoutes.GET("/challenges/:slug/extension-quote", economyHandler.QuoteExtension)
+				economyRoutes.POST("/convert/quote", economyHandler.QuoteConvert)
 				economyRoutes.POST("/bailout", economyHandler.Bailout)
 				economyRoutes.POST("/convert", economyHandler.Convert)
 			}
@@ -250,6 +252,7 @@ func (s *Server) setupRouter() {
 			}
 
 			uploads := protected.Group("/uploads")
+			uploads.Use(middleware.RequireRole("admin"))
 			{
 				uploadHandler := handlers.NewUploadHandler(s.uploadSvc, s.logger)
 				uploads.GET("", uploadHandler.ListUserUploads)
