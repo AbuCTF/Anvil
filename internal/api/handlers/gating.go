@@ -136,8 +136,13 @@ func attachmentTicketMAC(key []byte, attachmentID, exp string) string {
 
 // organizer test teams (no active non-staff member) never show publicly.
 func publicTeamSQL(alias string) string {
-	return `EXISTS (SELECT 1 FROM users pm WHERE pm.team_id = ` + alias + `.id
-		AND pm.status = 'active' AND pm.role NOT IN ('admin', 'author'))`
+	// public = has an active non-staff member AND is not a zz- test/QA team. the
+	// zz- prefix is our test convention (also swept by the pre-event reset); adding
+	// it here keeps a QA account that plays as a real user off the live board/crowd.
+	// parenthesized so `NOT ` + publicTeamSQL negates the whole predicate correctly.
+	return `(EXISTS (SELECT 1 FROM users pm WHERE pm.team_id = ` + alias + `.id
+		AND pm.status = 'active' AND pm.role NOT IN ('admin', 'author'))
+		AND ` + alias + `.name NOT LIKE 'zz-%')`
 }
 
 // arena rows mirror real teams by id (koth native); hide mirrors of test teams.
