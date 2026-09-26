@@ -46,6 +46,60 @@ export interface PlatformInfoResponse {
 	};
 }
 
+// graded (relative-score) challenges: the team's depth race on one challenge
+export interface GradedRaceEntry {
+	rank: number;
+	team: string;
+	best: number;
+	updated_at: string;
+	own?: boolean;
+}
+
+export interface GradedRace {
+	slug: string;
+	base_points: number;
+	own: {
+		best: number;
+		rank?: number;
+		points?: number;
+		raw?: Record<string, unknown>;
+		updated_at: string;
+	} | null;
+	evaluations?: {
+		used: number;
+		free_left: number;
+		next_cost: number;
+		in_flight: boolean;
+		retry_after: number;
+	};
+	top: GradedRaceEntry[];
+	teams: number;
+	attempted: number;
+	last_update: string | null;
+	gated: boolean;
+	hidden: boolean;
+}
+
+export interface GradedAdminInfo {
+	scoring_mode: string;
+	secret: string;
+	report_url: string;
+	scored_teams: number;
+	evaluations: number;
+	credits_charged: number;
+	log: Array<{
+		eval_id: string;
+		team_id: string;
+		team: string;
+		seq: number;
+		charged: number;
+		status: 'pending' | 'ok' | 'infra_error' | 'expired';
+		score: number | null;
+		created_at: string;
+		closed_at: string | null;
+	}>;
+}
+
 export class ApiError extends Error {
 	[key: string]: unknown;
 
@@ -456,6 +510,11 @@ class ApiClient {
 			`/challenges/${slug}/koth-enter`, { method: 'POST' });
 	}
 
+	// graded challenges: own best + evaluations + the field's depth race
+	async getGradedRace(slug: string, options: RequestInit = {}) {
+		return this.request<GradedRace>(`/challenges/${slug}/graded`, { cache: 'no-store', ...options });
+	}
+
 	async abandonChallenge(slug: string) {
 		return this.request<{ status: string }>(`/challenges/${slug}/abandon`, { method: 'POST' });
 	}
@@ -628,6 +687,15 @@ class ApiClient {
 
 	async getAdminChallenge(challengeId: string) {
 		return this.request<any>(`/admin/challenges/${challengeId}`);
+	}
+
+	// graded challenges (admin): grader secret, wiring, recent evaluations
+	async getGradedAdmin(challengeId: string) {
+		return this.request<GradedAdminInfo>(`/admin/challenges/${challengeId}/graded`, { cache: 'no-store' });
+	}
+
+	async rotateGradedSecret(challengeId: string) {
+		return this.request<{ secret: string }>(`/admin/challenges/${challengeId}/graded/rotate`, { method: 'POST' });
 	}
 
 	async getChallengeFlags(challengeId: string) {

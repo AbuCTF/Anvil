@@ -356,6 +356,20 @@ func main() {
 		}()
 	}
 
+	// graded janitor: prune spent grader nonces, expire + refund evaluations
+	// whose grader never reported.
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := handlers.SweepGraded(ctx, db); err != nil {
+				sugar.Errorf("Graded sweep failed: %v", err)
+			}
+			cancel()
+		}
+	}()
+
 	// game engine (attack-defense + koth) — no-op unless game.enabled.
 	gameCtx, gameCancel := context.WithCancel(context.Background())
 	go game.NewController(cfg.Game, db, logger).Run(gameCtx)

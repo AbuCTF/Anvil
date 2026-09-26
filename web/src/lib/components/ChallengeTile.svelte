@@ -22,6 +22,9 @@
 		author_name?: string;
 		sub_description?: string;
 		arena_mode?: string;
+		scoring_mode?: string;
+		graded_best?: number | null;
+		graded_teams?: number;
 	};
 
 	// resource_type is always 'docker' in data; the real signals are has_instance and
@@ -37,7 +40,11 @@
 	// economy boards carry the live value (band ceiling x crowd decay); else base points
 	$: live = typeof challenge.value === 'number';
 	$: points = live ? Math.round(challenge.value ?? 0) : (challenge.base_points ?? challenge.points ?? 0);
-	$: multiFlag = challenge.total_flags > 1;
+	$: graded = challenge.scoring_mode === 'graded';
+	// graded: depth in [0,1] from the team's best evaluation, not a flag count
+	$: depth = Math.max(0, Math.min(1, challenge.graded_best ?? 0)) * 100;
+	$: depthLabel = depth === 0 || depth === 100 ? `${depth}%` : `${depth.toFixed(depth < 10 ? 1 : 0)}%`;
+	$: multiFlag = !graded && challenge.total_flags > 1;
 	$: progress = challenge.total_flags
 		? Math.min(100, ((challenge.user_solves || 0) / challenge.total_flags) * 100)
 		: 0;
@@ -66,6 +73,12 @@
 		<span class="inline-flex items-center rounded border px-2 py-0.5 text-[0.68rem] leading-none font-medium capitalize {difficultyClass(challenge.difficulty)}">
 			<span class="badge-label">{challenge.difficulty}</span>
 		</span>
+		{#if graded}
+			<span class="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[0.68rem] leading-none font-medium text-amber-500" title="Graded — scored by depth, your best run counts">
+				<OpticalIcon icon="mdi:gauge" size={12} box={12} />
+				<span class="badge-label">Graded</span>
+			</span>
+		{/if}
 		{#if challenge.arena_mode === 'shared'}
 			<span class="inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[0.68rem] leading-none font-medium text-amber-500" title="King of the Hill - shared contested arena">
 				<OpticalIcon icon="mdi:crown-outline" size={12} box={12} />
@@ -84,6 +97,17 @@
 	     and a taller neighbour (e.g. a multi-flag progress bar) only adds breathing
 	     room above rather than dead space below shorter tiles -->
 	<div class="mt-auto pt-3 border-t border-stone-800/60">
+		{#if $auth.isAuthenticated && graded}
+			<div class="mb-3">
+				<div class="flex items-baseline justify-between text-xs mb-1.5">
+					<span class="metadata-label text-stone-500">Depth</span>
+					<span class="optical-label tabular-nums {challenge.graded_best ? 'text-amber-500' : 'text-stone-600'}">{challenge.graded_best == null ? '—' : depthLabel}</span>
+				</div>
+				<div class="w-full bg-stone-800 rounded-full h-1 overflow-hidden">
+					<div class="h-full bg-amber-500/80 rounded-full transition-all duration-500" style="width: {depth}%"></div>
+				</div>
+			</div>
+		{/if}
 		{#if $auth.isAuthenticated && multiFlag}
 			<div class="mb-3">
 				<div class="flex items-baseline justify-between text-xs mb-1.5">
@@ -101,15 +125,24 @@
 					<OpticalIcon icon="mdi:star-outline" size={12} box={12} />
 					<span class="optical-label">{points}</span>
 				</span>
-				<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Flags">
-					<OpticalIcon icon="mdi:flag-outline" size={12} box={12} />
-					<span class="optical-label">{challenge.total_flags}</span>
-				</span>
+				{#if !graded}
+					<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Flags">
+						<OpticalIcon icon="mdi:flag-outline" size={12} box={12} />
+						<span class="optical-label">{challenge.total_flags}</span>
+					</span>
+				{/if}
 			</div>
-			<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Solves">
-				<OpticalIcon icon="mdi:account-group" size={12} box={12} />
-				<span class="optical-label">{challenge.total_solves}</span>
-			</span>
+			{#if graded}
+				<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Teams on the board">
+					<OpticalIcon icon="mdi:account-group" size={12} box={12} />
+					<span class="optical-label">{challenge.graded_teams ?? 0}</span>
+				</span>
+			{:else}
+				<span class="inline-flex items-center gap-1 text-stone-500 tabular-nums" title="Solves">
+					<OpticalIcon icon="mdi:account-group" size={12} box={12} />
+					<span class="optical-label">{challenge.total_solves}</span>
+				</span>
+			{/if}
 		</div>
 	</div>
 </a>

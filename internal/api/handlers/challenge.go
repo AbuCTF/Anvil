@@ -60,6 +60,11 @@ type ChallengeListResponse struct {
 	HasAttachments bool    `json:"has_attachments"`           // server-side truth (true even while files are gated pre-open); no instance + no attachment = external
 
 	Value *float64 `json:"value,omitempty"` // economy: what a new full capture pays right now
+
+	// graded challenges score depth in [0,1] instead of flags
+	ScoringMode string   `json:"scoring_mode"`           // flag (default) or graded
+	GradedBest  *float64 `json:"graded_best,omitempty"`  // caller's team best (graded only)
+	GradedTeams int      `json:"graded_teams,omitempty"` // teams with a score above zero (graded only)
 }
 
 type ChallengeDetailResponse struct {
@@ -157,7 +162,17 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 						WHERE u2.team_id = (SELECT team_id FROM users WHERE id = $1)
 						  AND (SELECT team_id FROM users WHERE id = $1) IS NOT NULL))
 				)
-			), 0) AS user_solves
+			), 0) AS user_solves,
+			c.scoring_mode,
+			CASE WHEN c.scoring_mode = 'graded' THEN (
+				SELECT gs.best FROM graded_scores gs
+				JOIN users u ON u.team_id = gs.team_id
+				WHERE u.id = $1 AND gs.challenge_id = c.id
+			) END AS graded_best,
+			CASE WHEN c.scoring_mode = 'graded' THEN (
+				SELECT COUNT(*) FROM graded_scores gs JOIN teams t ON t.id = gs.team_id
+				WHERE gs.challenge_id = c.id AND gs.best > 0 AND ` + publicTeamSQL("t") + `
+			) ELSE 0 END AS graded_teams
 		FROM challenges c
 		LEFT JOIN categories cat ON c.category_id = cat.id
 		WHERE ` + statusFilter + `
@@ -181,6 +196,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 			&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
 			&ch.ResourceType, &ch.SubDescription, &ch.ArenaMode, &ch.HasInstance, &ch.HasAttachments, &categoryID, &categoryName, &ch.UserSolves,
+			&ch.ScoringMode, &ch.GradedBest, &ch.GradedTeams,
 		); err != nil {
 			h.logger.Error("failed to scan challenge", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
@@ -191,6 +207,9 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		ch.Category = categoryName
 
 		ch.IsSolved = ch.UserSolves >= ch.TotalFlags && ch.TotalFlags > 0
+		if ch.ScoringMode == "graded" {
+			ch.IsSolved = ch.GradedBest != nil && *ch.GradedBest >= 1
+		}
 
 		challenges = append(challenges, ch)
 	}
@@ -270,7 +289,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
 			c.exposed_ports, c.instance_timeout, c.max_extensions, c.release_date,
-			c.resource_type, c.status, c.sub_description, c.arena_mode,
+			c.resource_type, c.status, c.sub_description, c.arena_mode, c.scoring_mode,
 			(
 				(c.resource_type = 'docker' AND COALESCE(c.container_image, '') <> '')
 				OR (c.resource_type = 'vm' AND EXISTS (
@@ -291,7 +310,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 		&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
 		&exposedPortsJSON, &ch.InstanceTimeout, &ch.MaxExtensions, &ch.ReleaseDate,
-		&ch.ResourceType, &ch.Status, &ch.SubDescription, &ch.ArenaMode,
+		&ch.ResourceType, &ch.Status, &ch.SubDescription, &ch.ArenaMode, &ch.ScoringMode,
 		&ch.HasInstance, &ch.HasAttachments,
 		&categoryID, &categoryName,
 	)
@@ -404,6 +423,20 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	}
 
 	ch.IsSolved = ch.UserSolves >= ch.TotalFlags && ch.TotalFlags > 0
+	if ch.ScoringMode == "graded" {
+		if err := h.db.Pool.QueryRow(c.Request.Context(),
+			`SELECT (SELECT gs.best FROM graded_scores gs
+			         JOIN users u ON u.team_id = gs.team_id
+			         WHERE u.id = $2 AND gs.challenge_id = $1),
+			        (SELECT COUNT(*) FROM graded_scores gs JOIN teams t ON t.id = gs.team_id
+			         WHERE gs.challenge_id = $1 AND gs.best > 0 AND `+publicTeamSQL("t")+`)`,
+			ch.ID, userID).Scan(&ch.GradedBest, &ch.GradedTeams); err != nil {
+			h.logger.Error("failed to query graded best", zap.String("challenge_id", ch.ID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+			return
+		}
+		ch.IsSolved = ch.GradedBest != nil && *ch.GradedBest >= 1
+	}
 
 	// poller-scored (e.g. WebVerse Labs): only 'external' flags -> no local submission;
 	// the web hides the submit box and shows the partner note instead. best-effort.

@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api } from '$api';
+	import { api, type GradedAdminInfo } from '$api';
 	import Icon from '@iconify/svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
-	import { formatLocalDateLong, formatLocalDateTimeWithZone, instantTitle, viewerTimeZone } from '$lib/time';
+	import { formatLocalDateLong, formatLocalDateTime, formatLocalDateTimeWithZone, instantTitle, viewerTimeZone } from '$lib/time';
 	import { confirmDialog, alertDialog, promptDialog } from '$lib/stores/dialog';
 
 	let activeTab = 'overview';
@@ -225,16 +225,18 @@
 			memory_limit: challenge.memory_limit || '512Mi',
 			author_name: challenge.author_name || '',
 			category_id: challenge.category_id || '',
+			scoring_mode: challenge.scoring_mode || 'flag',
 		};
 		editTab = 'settings';
 		editFlags = []; editHints = []; editAttachments = [];
+		grading = null; gradingError = ''; secretShown = false;
 		subError = ''; subNote = '';
 		showEditModal = true;
 		void loadEditSubdata(challenge.id);
 	}
 
 	// --- edit modal: flags / hints / files management (CTFd-parity, inline CRUD) ---
-	let editTab: 'settings' | 'flags' | 'hints' | 'files' = 'settings';
+	let editTab: 'settings' | 'flags' | 'hints' | 'files' | 'grading' = 'settings';
 	let editFlags: any[] = [];
 	let editHints: any[] = [];
 	let editAttachments: any[] = [];
@@ -263,6 +265,68 @@
 	}
 
 	function flash(msg: string) { subNote = msg; subError = ''; setTimeout(() => { if (subNote === msg) subNote = ''; }, 2500); }
+
+	// --- edit modal: graded challenges (grader secret + recent evaluations) ---
+	let grading: GradedAdminInfo | null = null;
+	let gradingError = '';
+	let gradingLoading = false;
+	let secretShown = false;
+	let secretCopied = false;
+	const secretRef = '${GRADER_SECRET}';
+	const graderEnv = `GRADER_SECRET: ${secretRef}\nGRADER_URL: \${GRADER_URL}\nANVIL_TEAM_ID: \${ANVIL_TEAM_ID}\nINSTANCE_ID: \${INSTANCE_ID}`;
+
+	async function loadGrading() {
+		if (!editingChallenge) return;
+		gradingLoading = true; gradingError = '';
+		try {
+			grading = await api.getGradedAdmin(editingChallenge.id);
+		} catch (e) {
+			gradingError = e instanceof Error ? e.message : 'Failed to load grading';
+		} finally {
+			gradingLoading = false;
+		}
+	}
+
+	async function copySecret() {
+		if (!grading) return;
+		try {
+			await navigator.clipboard.writeText(grading.secret);
+			secretCopied = true;
+			setTimeout(() => (secretCopied = false), 1500);
+		} catch {
+			gradingError = 'Copy failed — reveal the secret and copy it by hand';
+		}
+	}
+
+	async function rotateSecret() {
+		if (!editingChallenge || !grading) return;
+		if (!(await confirmDialog({
+			title: 'Rotate grader secret',
+			message: 'Running instances keep the old secret in their env, so their grader calls fail until the instances are restarted.',
+			confirmLabel: 'Rotate',
+			danger: true
+		}))) return;
+		try {
+			const r = await api.rotateGradedSecret(editingChallenge.id);
+			grading = { ...grading, secret: r.secret };
+			secretShown = true;
+			flash('Secret rotated');
+		} catch (e) {
+			gradingError = e instanceof Error ? e.message : 'Rotate failed';
+		}
+	}
+
+	function openEditTab(id: typeof editTab) {
+		editTab = id;
+		if (id === 'grading' && !grading && !gradingLoading) void loadGrading();
+	}
+
+	const evalStatusCls: Record<string, string> = {
+		ok: 'text-up border-up/30 bg-up/10',
+		pending: 'text-info border-info/30 bg-info/10',
+		infra_error: 'text-warn border-warn/30 bg-warn/10',
+		expired: 'text-stone-500 border-stone-700 bg-stone-800/40'
+	};
 
 	function addEditFlag() {
 		editFlags = [...editFlags, { name: `Flag ${editFlags.length + 1}`, flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '', has_value: false }];
@@ -378,6 +442,7 @@
 				instance_timeout: editingChallenge.instance_timeout,
 				max_extensions: editingChallenge.max_extensions,
 				cooldown_minutes: editingChallenge.cooldown_minutes,
+				scoring_mode: editingChallenge.scoring_mode || 'flag',
 			};
 
 			// category: send category_id (may be empty string to clear it) or fall back to name
@@ -1274,6 +1339,11 @@
 											<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
 												<td class="px-4 py-2.5">
 													<a href="/challenges/{challenge.slug}" class="text-stone-200 hover:text-amber-400 transition-colors">{challenge.name}</a>
+													{#if challenge.scoring_mode === 'graded'}
+														<span class="ml-1.5 inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[0.65rem] leading-none text-amber-500 align-middle" title="Graded challenge">
+															<OpticalIcon icon="mdi:gauge" size={11} box={11} /><span class="badge-label">Graded</span>
+														</span>
+													{/if}
 												</td>
 												<td class="px-4 py-2.5">
 													<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}"><span class="badge-label">{challenge.difficulty}</span></span>
@@ -2811,8 +2881,8 @@
 			</div>
 
 			<div class="px-6 border-b border-stone-800 flex gap-1 bg-stone-950">
-				{#each [{ id: 'settings', label: 'Settings', n: 0 }, { id: 'flags', label: 'Flags', n: editFlags.length }, { id: 'hints', label: 'Hints', n: editHints.length }, { id: 'files', label: 'Files', n: editAttachments.length }] as t}
-					<button type="button" on:click={() => (editTab = t.id as typeof editTab)} class="px-3.5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors {editTab === t.id ? 'border-amber-500 text-stone-100' : 'border-transparent text-stone-500 hover:text-stone-300'}">
+				{#each [{ id: 'settings', label: 'Settings', n: 0 }, { id: 'flags', label: 'Flags', n: editFlags.length }, { id: 'hints', label: 'Hints', n: editHints.length }, { id: 'files', label: 'Files', n: editAttachments.length }, ...(editingChallenge.scoring_mode === 'graded' ? [{ id: 'grading', label: 'Grading', n: 0 }] : [])] as t}
+					<button type="button" on:click={() => openEditTab(t.id as typeof editTab)} class="px-3.5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors {editTab === t.id ? 'border-amber-500 text-stone-100' : 'border-transparent text-stone-500 hover:text-stone-300'}">
 						{t.label}{#if t.n}<span class="ml-1.5 text-xs tabular-nums {editTab === t.id ? 'text-amber-500' : 'text-stone-600'}">{t.n}</span>{/if}
 					</button>
 				{/each}
@@ -2864,6 +2934,13 @@
 					<label class="block">
 						<span class={labelCls}>Author Name</span>
 						<input type="text" bind:value={editingChallenge.author_name} placeholder="e.g. abu" class="w-full {fieldCls}" />
+					</label>
+					<label class="block col-span-2">
+						<span class={labelCls}>Scoring</span>
+						<select bind:value={editingChallenge.scoring_mode} class="w-full {fieldCls}">
+							<option value="flag">Flag — solves by flag submission</option>
+							<option value="graded">Graded — an in-instance grader scores depth 0–1, best × points</option>
+						</select>
 					</label>
 				</div>
 
@@ -3028,6 +3105,80 @@
 						{/each}
 						{#if !editHints.length}<p class="text-stone-600 text-sm">No hints yet.</p>{/if}
 						<button type="button" on:click={addEditHint} class="text-sm text-stone-400 hover:text-stone-200 transition-colors flex items-center gap-1.5"><Icon icon="mdi:plus" class="w-4 h-4" /> Add Hint</button>
+					{/if}
+				</div>
+			{/if}
+
+			{#if editTab === 'grading'}
+				<div class="p-6 space-y-5">
+					{#if gradingError}<div class="px-3 py-2 rounded-md bg-down/10 border border-down/30 text-down text-xs">{gradingError}</div>{/if}
+					{#if !grading}
+						<p class="text-stone-500 text-sm">{gradingLoading ? 'Loading…' : ''}</p>
+					{:else}
+						{#if grading.scoring_mode !== 'graded'}
+							<p class="px-3 py-2 rounded-md bg-warn/10 border border-warn/30 text-warn text-xs">Save the Settings tab to switch this challenge to graded; grader calls are refused until then.</p>
+						{/if}
+						<div>
+							<span class={labelCls}>Challenge secret</span>
+							<div class="flex items-center gap-2">
+								<code class="flex-1 min-w-0 truncate px-3 py-2 bg-stone-950 border border-stone-800 rounded-md font-mono text-xs {secretShown ? 'text-amber-500' : 'text-stone-500'}">{secretShown ? grading.secret : '•'.repeat(32)}</code>
+								<button type="button" on:click={() => (secretShown = !secretShown)} class="{btnGhost} px-3">{secretShown ? 'Hide' : 'Reveal'}</button>
+								<button type="button" on:click={copySecret} class="{btnGhost} px-3">{secretCopied ? 'Copied' : 'Copy'}</button>
+								<button type="button" on:click={rotateSecret} class="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-md border border-down/30 bg-down/10 text-down text-sm leading-none font-medium hover:bg-down/20 transition-colors">Rotate</button>
+							</div>
+							<p class="text-stone-600 text-xs mt-1.5">Admin-only; never leaves Anvil. Each grader gets <code class="text-stone-500">{secretRef}</code> = HMAC-SHA256(this, its instance id), so a leaked key covers one instance. Only roles whose env names it receive it, and a public role asking for it is refused at launch.</p>
+						</div>
+						<div>
+							<span class={labelCls}>Grader role env</span>
+							<pre class="px-3 py-2 bg-stone-950 border border-stone-800 rounded-md font-mono text-xs text-stone-300 whitespace-pre-wrap">{graderEnv}</pre>
+							<p class="text-stone-600 text-xs mt-1.5">Put these on the internal grader role (<code class="text-stone-500">public: false</code>, <code class="text-stone-500">egress: true</code> to reach <code class="text-stone-500 break-all">{grading.report_url}</code>). Contract: docs/GRADED.md.</p>
+						</div>
+						<div class="grid grid-cols-3 gap-3">
+							{#each [{ l: 'Teams scoring', v: grading.scored_teams }, { l: 'Evaluations', v: grading.evaluations }, { l: 'Credits charged', v: Math.round(grading.credits_charged) }] as st}
+								<div class="rounded-lg border border-stone-800 bg-stone-950 px-3 py-2">
+									<p class="metadata-label text-stone-500 mb-1">{st.l}</p>
+									<p class="text-base font-semibold text-stone-100 tabular-nums">{st.v}</p>
+								</div>
+							{/each}
+						</div>
+						<div>
+							<div class="flex items-center justify-between mb-2">
+								<span class="metadata-label text-stone-400">Recent evaluations</span>
+								<button type="button" on:click={loadGrading} disabled={gradingLoading} class="text-xs text-stone-400 hover:text-stone-200 transition-colors inline-flex items-center gap-1 disabled:opacity-50"><Icon icon="mdi:refresh" class="w-3.5 h-3.5" /> Refresh</button>
+							</div>
+							{#if grading.log.length === 0}
+								<p class="text-stone-600 text-sm">No evaluations yet.</p>
+							{:else}
+								<div class="overflow-x-auto border border-stone-800 rounded-lg">
+									<table class="w-full min-w-[560px] text-xs">
+										<thead>
+											<tr class="metadata-label text-stone-500 border-b border-stone-800">
+												<th class="px-3 py-2 text-left">When</th>
+												<th class="px-3 py-2 text-left">Team</th>
+												<th class="px-3 py-2 text-left">Eval</th>
+												<th class="px-3 py-2 text-right">#</th>
+												<th class="px-3 py-2 text-right">Charged</th>
+												<th class="px-3 py-2 text-left">Status</th>
+												<th class="px-3 py-2 text-right">Score</th>
+											</tr>
+										</thead>
+										<tbody>
+											{#each grading.log as e (e.eval_id)}
+												<tr class="border-b border-stone-800/60 last:border-0">
+													<td class="px-3 py-1.5 text-stone-500 tabular-nums whitespace-nowrap" title={instantTitle(e.created_at)}>{formatLocalDateTime(e.created_at)}</td>
+													<td class="px-3 py-1.5 text-stone-200 truncate max-w-[10rem]">{e.team}</td>
+													<td class="px-3 py-1.5 font-mono text-stone-400 truncate max-w-[8rem]" title={e.eval_id}>{e.eval_id}</td>
+													<td class="px-3 py-1.5 text-right text-stone-400 tabular-nums">{e.seq}</td>
+													<td class="px-3 py-1.5 text-right tabular-nums {e.charged > 0 ? 'text-amber-500' : 'text-stone-600'}">{e.charged > 0 ? e.charged : 'free'}</td>
+													<td class="px-3 py-1.5"><span class="inline-flex px-1.5 py-0.5 rounded border text-[0.65rem] leading-none {evalStatusCls[e.status] ?? ''}"><span class="badge-label">{e.status.replace('_', ' ')}</span></span></td>
+													<td class="px-3 py-1.5 text-right tabular-nums text-stone-200">{e.score == null ? '—' : e.score.toFixed(3)}</td>
+												</tr>
+											{/each}
+										</tbody>
+									</table>
+								</div>
+							{/if}
+						</div>
 					{/if}
 				</div>
 			{/if}

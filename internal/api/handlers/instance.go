@@ -85,7 +85,8 @@ type instanceChallenge struct {
 	InstanceTimeout   *int
 	MaxExtensions     *int
 	MaxResets         int
-	Privesc           bool // relax securityContext (allowPrivilegeEscalation:true) for boot-to-root/SUID challenges
+	Privesc           bool   // relax securityContext (allowPrivilegeEscalation:true) for boot-to-root/SUID challenges
+	GraderSecret      string // graded challenges only; grader roles get a per-instance key derived from it
 }
 
 type instancePortConfig struct {
@@ -274,14 +275,15 @@ func (h *InstanceHandler) loadPublishedChallenge(
 		        COALESCE(cpu_limit, '1'), COALESCE(memory_limit, '512Mi'),
 		        COALESCE(exposed_ports, '[]'::jsonb), instance_timeout,
 		        max_extensions, COALESCE(max_resets, 3),
-		        COALESCE(container_spec, 'null'::jsonb), COALESCE(privesc, false)
+		        COALESCE(container_spec, 'null'::jsonb), COALESCE(privesc, false),
+		        CASE WHEN scoring_mode = 'graded' THEN graded_secret ELSE '' END
 		 FROM challenges
 		 WHERE slug = $1 AND `+statusCond, slug).Scan(
 		&challenge.ID, &challenge.Name, &challenge.Slug, &challenge.ResourceType,
 		&challenge.ContainerImage, &challenge.ContainerTag, &challenge.ContainerPlatform,
 		&challenge.CPULimit, &challenge.MemoryLimit, &challenge.ExposedPorts,
 		&challenge.InstanceTimeout, &challenge.MaxExtensions, &challenge.MaxResets,
-		&challenge.ContainerSpec, &challenge.Privesc,
+		&challenge.ContainerSpec, &challenge.Privesc, &challenge.GraderSecret,
 	)
 	return challenge, err
 }
@@ -363,6 +365,10 @@ func (h *InstanceHandler) prepareProvisionPlan(
 				}
 				if svc.Public {
 					publicCount++
+					// a player with rce on a public role could forge a 1.0 with the secret.
+					if referencesEnvPlaceholder(svc.Env, "GRADER_SECRET") {
+						return plan, newInstanceOperationError(http.StatusInternalServerError, "challenge container spec gives GRADER_SECRET to a public role", fmt.Errorf("service %s is public", svc.Name))
+					}
 				}
 				for _, port := range svc.Ports {
 					if port.Port < 1 || port.Port > 65535 {
@@ -745,6 +751,27 @@ func resolveEnvPlaceholders(env, subst map[string]string) map[string]string {
 	return out
 }
 
+// referencesEnvPlaceholder reports whether any env value names ${name}.
+func referencesEnvPlaceholder(env map[string]string, name string) bool {
+	for _, v := range env {
+		for _, m := range envPlaceholder.FindAllStringSubmatch(v, -1) {
+			if m[1] == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// graderTeamID is the team a grader reports for. the k8s owner is the team in
+// teams mode; a teamless owner (admin preview) has none, and its reports 404.
+func graderTeamID(ownerID string, uid uuid.UUID) string {
+	if ownerID == uid.String() {
+		return ""
+	}
+	return ownerID
+}
+
 // endpointService maps a CR endpoint kind to the ports-map service segment the
 // UI splits on ("<port>/<svc>"): tcp-ssl -> tcp (rendered `nc host port`),
 // http/https rendered as a URL.
@@ -849,6 +876,14 @@ func (h *InstanceHandler) provisionInstance(
 				"INTERNAL_TOKEN": randHex(24),
 				"FLAG":           envMap(envVars)["FLAG"],
 				"PUBLIC_PORT":    "", // resolved post-launch if referenced; unused by current challenges
+				"GRADER_URL":     h.config.Graded.ReportURL,
+				"ANVIL_TEAM_ID":  graderTeamID(ownerID, uid),
+			}
+			// graded: the grader role signs with a key bound to this instance (and
+			// names it with ${INSTANCE_ID}). like FLAG it lands only in a role that
+			// declares it; prepareProvisionPlan refuses a public role that asks.
+			if challenge.GraderSecret != "" {
+				subst["GRADER_SECRET"] = graderKey(challenge.GraderSecret, subst["INSTANCE_ID"])
 			}
 			for _, svc := range plan.services {
 				launchSpec.Containers = append(launchSpec.Containers, instancer.ContainerSpec{

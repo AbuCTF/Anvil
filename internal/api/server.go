@@ -90,6 +90,15 @@ func (s *Server) setupRouter() {
 	// unknown paths: friendly page for a browser, json 404 for api clients.
 	r.NoRoute(middleware.NoRoute)
 
+	// grader -> platform calls, hmac-signed (no jwt). registered ahead of the
+	// global per-ip limiter: every grader pod egresses through the cluster's one
+	// nat ip, so that limiter would throttle the whole field at once. the handler
+	// caps each (challenge, team) itself.
+	gradedHandler := handlers.NewGradedHandler(s.config, s.db, s.logger)
+	graderLimit := middleware.RateLimitEndpoint(s.config.RateLimit.GradedReport)
+	r.POST("/api/v1/graded/evaluate", graderLimit, gradedHandler.Evaluate)
+	r.POST("/api/v1/graded/report", graderLimit, gradedHandler.Report)
+
 	if s.config.RateLimit.Enabled {
 		r.Use(middleware.RateLimiter(s.config.RateLimit))
 	}
@@ -191,6 +200,7 @@ func (s *Server) setupRouter() {
 				), challengeHandler.SubmitFlag)
 				challenges.GET("/:slug/hints", challengeHandler.GetHints)
 				challenges.POST("/:slug/hints/:hint_id/unlock", challengeHandler.UnlockHint)
+				challenges.GET("/:slug/graded", gradedHandler.Race) // graded depth race
 			}
 
 			arenaRoutes := protected.Group("/arena")
@@ -344,6 +354,10 @@ func (s *Server) setupRouter() {
 				challenges.POST("/:id/flags", adminChallengeHandler.CreateFlag)
 				challenges.PUT("/:id/flags/:flag_id", adminChallengeHandler.UpdateFlag)
 				challenges.DELETE("/:id/flags/:flag_id", adminChallengeHandler.DeleteFlag)
+
+				// graded challenges: grader secret (admin-only) + recent report log
+				challenges.GET("/:id/graded", gradedHandler.AdminInfo)
+				challenges.POST("/:id/graded/rotate", gradedHandler.AdminRotate)
 
 				challenges.GET("/:id/hints", adminChallengeHandler.ListHints)
 				challenges.POST("/:id/hints", adminChallengeHandler.CreateHint)

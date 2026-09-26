@@ -138,7 +138,7 @@ func TestWindowOK(t *testing.T) {
 		{"unknown solved_at defers to caller", nil, &opened, true},
 		{"in window", &solvedIn, &opened, true},
 		{"never opened here", &solvedIn, nil, false},
-		{"solved before opening here", &solvedBeforeOpen, &opened, false},
+		{"solved before opening here still credits (order-free since v0.291)", &solvedBeforeOpen, &opened, true},
 		{"solved after event end", &solvedAfterEnd, &opened, false},
 	}
 	for _, tc := range cases {
