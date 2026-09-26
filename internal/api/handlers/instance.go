@@ -93,6 +93,9 @@ type instancePortConfig struct {
 	Port     int    `json:"port"`
 	Protocol string `json:"protocol"`
 	Service  string `json:"service"`
+	// internal ports get a ClusterIP service (peers reach them by role name) but NO
+	// player-facing route - for cross-container wiring like a grader->tier token push.
+	Internal bool `json:"internal"`
 }
 
 // serviceConfig mirrors the admin ContainerService JSON stored in container_spec.
@@ -714,7 +717,7 @@ func envMap(env []string) map[string]string {
 func toPortSpecs(pc []instancePortConfig) []instancer.PortSpec {
 	out := make([]instancer.PortSpec, 0, len(pc))
 	for _, p := range pc {
-		out = append(out, instancer.PortSpec{Port: p.Port, Protocol: p.Protocol, Service: p.Service})
+		out = append(out, instancer.PortSpec{Port: p.Port, Protocol: p.Protocol, Service: p.Service, Internal: p.Internal})
 	}
 	return out
 }

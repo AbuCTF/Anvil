@@ -122,6 +122,73 @@ func (h *AdminUserHandler) Get(c *gin.Context) {
 	})
 }
 
+// Detail is the per-user support view for the crew: the user's own points/solves,
+// the team they belong to (with the team's economy line), and every instance the
+// user currently has running. Read-only; one place to answer "what does this
+// player have going on" without hand-written SQL.
+func (h *AdminUserHandler) Detail(c *gin.Context) {
+	userID := c.Param("id")
+	if _, err := uuid.Parse(userID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	var username, role, status string
+	var email, displayName, teamID, teamName *string
+	var totalScore int
+	if err := h.db.Pool.QueryRow(ctx,
+		`SELECT u.username, u.email, u.display_name, u.role, u.status, COALESCE(u.total_score,0),
+		        u.team_id::text, t.name
+		 FROM users u LEFT JOIN teams t ON t.id = u.team_id WHERE u.id = $1`, userID,
+	).Scan(&username, &email, &displayName, &role, &status, &totalScore, &teamID, &teamName); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+
+	var solveCount int
+	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(DISTINCT flag_id) FROM solves WHERE user_id = $1`, userID).Scan(&solveCount)
+
+	team := gin.H(nil)
+	if teamID != nil {
+		var credits, points float64
+		var bailoutUsed bool
+		_ = h.db.Pool.QueryRow(ctx,
+			`SELECT COALESCE(credits,0), COALESCE(points,0), COALESCE(bailout_used,false)
+			 FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&credits, &points, &bailoutUsed)
+		team = gin.H{"id": *teamID, "name": teamName, "credits": credits, "points": points, "bailout_used": bailoutUsed}
+	}
+
+	instances := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx,
+		`SELECT i.id, c.name, c.slug, i.status::text, i.created_at, i.expires_at, COALESCE(i.container_id,'')
+		 FROM instances i JOIN challenges c ON c.id = i.challenge_id
+		 WHERE i.user_id = $1 AND i.status::text NOT IN ('stopped','failed','expired')
+		 ORDER BY i.created_at DESC`, userID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, name, slug, st, cid string
+			var createdAt time.Time
+			var expiresAt *time.Time
+			if rows.Scan(&id, &name, &slug, &st, &createdAt, &expiresAt, &cid) == nil {
+				it := gin.H{"id": id, "challenge_name": name, "challenge_slug": slug, "status": st,
+					"created_at": createdAt.Unix(), "has_runtime": cid != ""}
+				if expiresAt != nil {
+					it["expires_at"] = expiresAt.Unix()
+				}
+				instances = append(instances, it)
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"user": gin.H{"id": userID, "username": username, "email": email, "display_name": displayName,
+			"role": role, "status": status, "total_score": totalScore, "solve_count": solveCount},
+		"team":      team,
+		"instances": instances,
+	})
+}
+
 func (h *AdminUserHandler) Update(c *gin.Context) {
 	userID := c.Param("id")
 
@@ -439,6 +506,7 @@ type ContainerService struct {
 		Port     int    `json:"port"`
 		Protocol string `json:"protocol"`
 		Service  string `json:"service"`
+		Internal bool   `json:"internal"` // ClusterIP-only (peer-reachable by role name), no player route
 	} `json:"ports"`
 	Env         map[string]string `json:"env"`
 	CPULimit    string            `json:"cpu_limit"`

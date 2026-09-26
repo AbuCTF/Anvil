@@ -293,6 +293,7 @@ func (s *Server) setupRouter() {
 				adminUserHandler := handlers.NewAdminUserHandler(s.config, s.db, s.logger)
 				users.GET("", adminUserHandler.List)
 				users.GET("/:id", adminUserHandler.Get)
+				users.GET("/:id/detail", adminUserHandler.Detail)
 				users.PUT("/:id", adminUserHandler.Update)
 				users.POST("/:id/ban", adminUserHandler.Ban)
 				users.POST("/:id/unban", adminUserHandler.Unban)

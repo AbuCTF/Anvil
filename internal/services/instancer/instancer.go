@@ -45,6 +45,10 @@ type PortSpec struct {
 	Port     int
 	Protocol string
 	Service  string
+	// Internal: give this port a ClusterIP service (peers resolve it by role name)
+	// but do NOT publish an external route to players. For cross-container wiring
+	// (e.g. a grader pushing tokens to a public tier's internal port).
+	Internal bool
 }
 
 // LaunchSpec is one instance to spawn. Single-container challenges set
@@ -351,6 +355,9 @@ func buildExposeMulti(containers []ContainerSpec) []map[string]any {
 			continue
 		}
 		for _, p := range c.Ports {
+			if p.Internal {
+				continue // ClusterIP-only: peers reach it by role name, players get no route
+			}
 			kind := exposeKind(p.Service)
 			class := routingClass(p.Service, kind)
 			prefix := class
