@@ -884,9 +884,9 @@
 									<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
 										{ecoBusy ? 'Launching…' : 'Launch challenge'}
 									</button>
-									<p class="text-xs text-stone-500">Costs <span class="font-medium text-amber-500 tabular-nums">{challenge.economy.launch_cost}</span> credits · balance <span class="tabular-nums">{Math.round(challenge.economy.credits)}</span></p>
+									<p class="text-xs text-stone-500">Costs <span class="font-medium text-amber-500 tabular-nums">{challenge.economy.launch_cost}</span> credits · balance <span class="tabular-nums">{Math.floor(challenge.economy.credits)}</span></p>
 									{#if $auth.isAuthenticated && challenge.economy.credits < challenge.economy.launch_cost}
-										<p class="text-xs text-stone-500">Not enough credits. Convert points or claim the one-time bailout on your <a href="/team" class="text-stone-300 underline underline-offset-2 hover:text-stone-100">team page</a>.</p>
+										<p class="text-xs text-stone-500">Not enough credits: this costs {challenge.economy.launch_cost}, you have {challenge.economy.credits.toFixed(1)}. Convert points or claim the one-time bailout on your <a href="/team" class="text-stone-300 underline underline-offset-2 hover:text-stone-100">team page</a>.</p>
 									{/if}
 									{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
 								{/if}
@@ -1319,7 +1319,7 @@
 									</div>
 								{/if}
 								<div class="flex items-center justify-between border-t border-stone-800/60 pt-3">
-									<span class="text-sm text-stone-400"><span class="text-amber-500 font-semibold tabular-nums">{Math.round(challenge.economy.credits)}</span> credits left</span>
+									<span class="text-sm text-stone-400"><span class="text-amber-500 font-semibold tabular-nums">{Math.floor(challenge.economy.credits)}</span> credits left</span>
 									<div class="flex gap-2">
 										<button on:click={extendTimer} disabled={ecoBusy} title="Add time for a credit cost that rises each extension" class="text-xs py-1.5 px-3 rounded-md border border-stone-800 text-stone-300 hover:bg-stone-800/40 disabled:opacity-40 transition-colors">Extend</button>
 										<button on:click={abandonChallenge} disabled={ecoBusy} title="Release the slot for a partial refund" class="text-xs py-1.5 px-3 rounded-md border border-down/30 bg-down/10 text-down hover:bg-down/20 disabled:opacity-40 transition-colors">Abandon</button>

@@ -158,7 +158,10 @@ func applyCredit(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, kind string, 
 	}
 	newBal := credits + amount
 	if newBal < 0 {
-		return credits, &EconomyOpError{Status: http.StatusPaymentRequired, Message: "insufficient credits"}
+		// -amount is the spend (launch/extend cost); name need vs have so a team
+		// short by a fraction (e.g. 99.8 vs a 100 cost) sees why, not a bare refusal.
+		return credits, &EconomyOpError{Status: http.StatusPaymentRequired,
+			Message: fmt.Sprintf("insufficient credits: need %.0f, have %.1f", -amount, credits)}
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE economy_team_score SET credits = $2, updated_at = NOW() WHERE team_id = $1`, teamID, newBal,

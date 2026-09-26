@@ -217,7 +217,7 @@
 					<div class="grid gap-4 sm:grid-cols-2">
 						<div>
 							<p class="metadata-label text-stone-500 mb-1">Credits</p>
-							<p class="text-2xl font-semibold text-amber-500 tabular-nums">{Math.round(eco.credits)}</p>
+							<p class="text-2xl font-semibold text-amber-500 tabular-nums">{Math.floor(eco.credits)}</p>
 						</div>
 						<div>
 							<p class="metadata-label text-stone-500 mb-1">Points</p>

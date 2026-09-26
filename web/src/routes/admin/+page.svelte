@@ -1613,7 +1613,7 @@
 														{@const sup = teamSupport[team.id]}
 														<div class="space-y-4">
 															<div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
-																<span class="text-stone-500">Credits <span class="text-amber-500 font-semibold tabular-nums">{Math.round(sup.economy?.credits ?? 0)}</span></span>
+																<span class="text-stone-500">Credits <span class="text-amber-500 font-semibold tabular-nums">{Math.floor(sup.economy?.credits ?? 0)}</span></span>
 																<span class="text-stone-500">Points <span class="text-stone-200 font-semibold tabular-nums">{Math.round(sup.economy?.points ?? 0)}</span></span>
 																<span class="text-stone-500">Open <span class="{sup.open_count >= sup.concurrency_cap ? 'text-warn' : 'text-stone-200'} font-semibold tabular-nums">{sup.open_count}/{sup.concurrency_cap}</span></span>
 																<span class="text-stone-500">Grant <span class="text-stone-300">{sup.economy?.grant_issued ? 'issued' : 'none'}</span></span>
