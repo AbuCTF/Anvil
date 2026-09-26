@@ -132,6 +132,9 @@
 		}
 	}
 
+	// challenges currently holding one of the team's 3 open slots (solved ones are excluded)
+	$: openNow = (eco?.open ?? []).filter((o: any) => o.status === 'open');
+
 	onMount(load);
 </script>
 
@@ -235,6 +238,20 @@
 						<p class="text-xs text-stone-600 mt-1">A one-time top-up, available while your balance is zero.</p>
 					{/if}
 				</Card>
+
+				{#if openNow.length}
+					<Card title="Open now ({openNow.length}/3)" className="mt-4">
+						<p class="text-xs text-stone-500 mb-3">These count toward your 3 open limit (static challenges and any teammate's opens count too). Solve or abandon one to open another.</p>
+						<ul class="space-y-2">
+							{#each openNow as o}
+								<li class="flex items-center justify-between rounded-md border border-stone-800 bg-stone-950 px-3 py-2">
+									<a href="/challenges/{o.slug}" class="text-sm text-stone-200 hover:text-stone-50 truncate min-w-0">{o.name}</a>
+									<span class="text-xs text-stone-500 tabular-nums ml-2 shrink-0">open</span>
+								</li>
+							{/each}
+						</ul>
+					</Card>
+				{/if}
 			{/if}
 		{:else}
 			<div class="grid gap-4 sm:grid-cols-2">

@@ -29,6 +29,8 @@
 	let celebrationPractice = false;
 
 	let creatingInstance = false;
+	let justLaunchedAt = 0; // ms; drives the "starting up ~15s" warm-up banner after launch
+	let warmingUp = false;
 	let instanceAction = '';
 	let instanceError = '';
 	let instanceLoadFailed = false;
@@ -148,6 +150,8 @@
 		await loadChallenge();
 
 		timerInterval = setInterval(() => {
+			// warm-up window: freshly-launched backends take ~10-20s to become reachable
+			warmingUp = justLaunchedAt > 0 && Date.now() - justLaunchedAt < 18000;
 			if (instance?.expires_at) {
 				timeRemaining = formatTimeRemaining(instance.expires_at);
 				if (instance.expires_at < Math.floor(Date.now() / 1000)) {
@@ -324,6 +328,8 @@
 			instance = result.instance;
 			if (instance) {
 				timeRemaining = formatTimeRemaining(instance.expires_at);
+				justLaunchedAt = Date.now();
+				warmingUp = true;
 			}
 		} catch (e: any) {
 			if (e?.cooldown_until) {
@@ -1182,7 +1188,14 @@
 
 									<div>
 										<p class="metadata-label text-stone-500 mb-2">Connect</p>
-										<p class="text-xs text-stone-500 mb-2 -mt-1 leading-relaxed">The service can take a few seconds to start after launch. If it does not respond, wait a moment and retry.</p>
+										{#if warmingUp}
+											<div class="mb-2 -mt-1 flex items-start gap-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2">
+												<Icon icon="mdi:loading" class="w-4 h-4 text-warn shrink-0 animate-spin mt-0.5" />
+												<span class="text-xs text-warn leading-relaxed">Starting up. Give it ~15s to boot before you connect. A 404 or timeout right after launch just means it is not ready yet.</span>
+											</div>
+										{:else}
+											<p class="text-xs text-stone-500 mb-2 -mt-1 leading-relaxed">The service can take a few seconds to start after launch. If it does not respond, wait a moment and retry.</p>
+										{/if}
 										{#if instance.ports && Object.keys(instance.ports).length > 0}
 											<div class="space-y-2">
 												{#each Object.entries(instance.ports) as [portKey]}
