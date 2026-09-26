@@ -52,10 +52,13 @@
 	// after a jitter; re-armed while the server still says scheduled (clock skew).
 	let preStart = false;
 	let kickoffTimer: ReturnType<typeof setTimeout> | undefined;
+	// The timer guard makes this finite; the callback changes preStart only after an API response.
+	// eslint-disable-next-line svelte/infinite-reactive-loop
 	$: if (preStart && eventPhase === 'live') armKickoff(false);
 	function armKickoff(retry: boolean) {
 		if (kickoffTimer) return;
 		kickoffTimer = setTimeout(async () => {
+			// eslint-disable-next-line svelte/infinite-reactive-loop
 			await loadChallenges();
 			kickoffTimer = undefined;
 			if (preStart && eventPhase === 'live') armKickoff(true);
@@ -180,6 +183,8 @@
 						: userSolves >= c.total_flags && c.total_flags > 0;
 					return { ...c, user_solves: userSolves, is_solved: isSolved };
 				}) || [];
+			// This async response settles the guarded kickoff loop; it is not a synchronous reactive write.
+			// eslint-disable-next-line svelte/infinite-reactive-loop
 			preStart = response.phase === 'scheduled' || (sentPhase === 'scheduled' && mapped.length === 0);
 			error = ''; // a failed kickoff retry may have left one
 			challenges = mapped;

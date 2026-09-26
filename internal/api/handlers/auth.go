@@ -523,6 +523,7 @@ func (h *AuthHandler) TokenAuth(c *gin.Context) {
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(h.config.JWT.AccessExpiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    h.config.JWT.Issuer,
+			ID:        uuid.NewString(),
 		},
 	}
 
@@ -692,17 +693,58 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {
-	authHeader := c.GetHeader("Authorization")
-	if authHeader == "" {
-		c.JSON(http.StatusOK, gin.H{
-			"message": "Logged out",
-		})
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	_ = c.ShouldBindJSON(&req) // the body is optional for access-token-only sessions
+
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log out"})
 		return
 	}
+	defer tx.Rollback(ctx)
 
-	c.JSON(http.StatusOK, gin.H{
-		"message": "Logged out",
-	})
+	authHeader := c.GetHeader("Authorization")
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") && strings.TrimSpace(parts[1]) != "" {
+		token := strings.TrimSpace(parts[1])
+		// Ignore malformed/expired bearer strings instead of letting this public
+		// endpoint become an unauthenticated blacklist-row creation primitive.
+		if claims, parseErr := middleware.ParseAccessToken(token, h.config); parseErr == nil {
+			var userID *uuid.UUID
+			if claims.UserID != uuid.Nil {
+				uid := claims.UserID
+				userID = &uid
+			}
+			expiresAt := time.Now().Add(h.config.JWT.AccessExpiry)
+			if claims.ExpiresAt != nil {
+				expiresAt = claims.ExpiresAt.Time
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO revoked_access_tokens (token_hash, user_id, expires_at)
+				VALUES ($1, $2, $3) ON CONFLICT (token_hash) DO NOTHING`,
+				middleware.HashAccessToken(token), userID, expiresAt); err != nil {
+				h.logger.Error("Failed to revoke access token", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log out"})
+				return
+			}
+		}
+	}
+	if req.RefreshToken != "" {
+		if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = $1`,
+			hashToken(req.RefreshToken)); err != nil {
+			h.logger.Error("Failed to revoke refresh token", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log out"})
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log out"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out"})
 }
 
 type tokenPair struct {
@@ -945,6 +987,7 @@ func (h *AuthHandler) generateTokensWithStore(ctx context.Context, store tokenSt
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(h.config.JWT.AccessExpiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Issuer:    h.config.JWT.Issuer,
+			ID:        uuid.NewString(),
 		},
 	}
 

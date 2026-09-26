@@ -60,7 +60,8 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	flag1Hash := sha256.Sum256([]byte("flag{one}"))
 
 	exec(`TRUNCATE users, teams, challenges, categories CASCADE`) // cascades into platform_settings too
-	exec(`INSERT INTO platform_settings (key, value) VALUES ('economy_mode', 'true'), ('teams_mode', 'true')
+	exec(`INSERT INTO platform_settings (key, value) VALUES
+		('economy_mode', 'true'), ('teams_mode', 'true'), ('registration_mode', '"token"')
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
 	exec(`INSERT INTO teams (id, name, join_code, total_score, koth_score) VALUES
 		($1, 'alpha', 'ja', 0, 0), ($2, 'bravo', 'jb', 0, 50), ($3, 'h7 test', 'jt', 0, 0),
@@ -116,24 +117,34 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	token := func(uid uuid.UUID) string {
 		s, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
 			UserID: uid, TokenType: "user",
-			RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
+			RegisteredClaims: jwt.RegisteredClaims{
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+				ID:        uuid.NewString(),
+			},
 		}).SignedString([]byte(cfg.JWT.Secret))
 		return s
 	}
-	call := func(method, path string, who *uuid.UUID, body string) (int, map[string]any, http.Header) {
+	callBearer := func(method, path, bearer, body string) (int, map[string]any, http.Header) {
 		t.Helper()
 		req := httptest.NewRequest(method, path, strings.NewReader(body))
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
-		if who != nil {
-			req.Header.Set("Authorization", "Bearer "+token(*who))
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
 		}
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		out := map[string]any{}
 		_ = json.Unmarshal(w.Body.Bytes(), &out)
 		return w.Code, out, w.Header()
+	}
+	call := func(method, path string, who *uuid.UUID, body string) (int, map[string]any, http.Header) {
+		bearer := ""
+		if who != nil {
+			bearer = token(*who)
+		}
+		return callBearer(method, path, bearer, body)
 	}
 	expect := func(what string, got, want int, body map[string]any) {
 		t.Helper()
@@ -152,6 +163,29 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 		return out
 	}
 
+	// Infrastructure artifact ingestion is an admin surface. A participant is
+	// rejected before an upload service/session can be reached or created.
+	{
+		code, body, _ := call("GET", "/api/v1/uploads/types", &p1, "")
+		expect("participant upload types", code, http.StatusForbidden, body)
+		code, body, _ = call("GET", "/api/v1/uploads/types", &admin, "")
+		expect("admin upload types", code, http.StatusOK, body)
+	}
+
+	// Public discovery and registration enforcement read the same runtime mode.
+	if code, body, _ := call("GET", "/api/v1/info", nil, ""); code != http.StatusOK || body["registration_mode"] != "token" {
+		t.Errorf("platform registration mode = %d %v, want token", code, body)
+	}
+
+	// Irreversible economy actions expose their current server-side price before
+	// the UI enables them; quote calls themselves do not mutate either ledger.
+	if code, body, _ := call("POST", "/api/v1/economy/convert/quote", &p1, `{"points":75}`); code != http.StatusOK || body["credits"] != 67.5 {
+		t.Errorf("conversion quote = %d %v, want 67.5 credits", code, body)
+	}
+	if code, body, _ := call("GET", "/api/v1/economy/challenges/static-one/extension-quote", &p1, ""); code != http.StatusOK || body["cost"] != 25.0 || body["added_seconds"] != 3600.0 {
+		t.Errorf("extension quote = %d %v, want 25 credits and 3600 seconds", code, body)
+	}
+
 	// list: description only for the opener's team (and staff)
 	if d := listDesc(&p1); d["static-one"] != "SECRET BRIEF" || d["box-two"] != "BOX BRIEF" {
 		t.Errorf("opener list = %v", d)
@@ -165,11 +199,12 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 		t.Errorf("author list = %v", d)
 	}
 
-	// detail: card only when locked; full + ticketed files when open
+	// detail: locked resource-backed challenges retain the brief, but redact every
+	// act-gated resource; an opened team receives the resources and file ticket.
 	for _, who := range []*uuid.UUID{nil, &p2, &p3} {
 		code, body, _ := call("GET", "/api/v1/challenges/static-one", who, "")
 		expect("locked detail", code, 200, body)
-		if body["description"] != nil || len(body["flags"].([]any)) != 0 || len(body["hints"].([]any)) != 0 ||
+		if body["description"] != "SECRET BRIEF" || len(body["flags"].([]any)) != 0 || len(body["hints"].([]any)) != 0 ||
 			len(body["attachments"].([]any)) != 0 || body["sub_description"] != "teaser line" || body["total_flags"] != 1.0 {
 			t.Errorf("locked detail = %v", body)
 		}
@@ -229,7 +264,12 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	code, body, _ = call("POST", "/api/v1/instances", &author, `{"challenge_slug":"box-two"}`)
 	expect("author instance start bypasses the gate", code, 400, body)
 
-	// author on the test team: full scoring path, unopened challenge
+	// Author on the hidden test team: open it so the economy write path has a
+	// locked state row, then exercise the full scoring path.
+	code, body, _ = call("POST", "/api/v1/challenges/static-one/open", &author, "")
+	if code != http.StatusOK || body["status"] != "open" {
+		t.Fatalf("author open = %d %v", code, body)
+	}
 	code, body, _ = call("POST", "/api/v1/challenges/static-one/submit", &author, `{"flag":"flag{one}"}`)
 	if code != 200 || body["correct"] != true {
 		t.Fatalf("author submit = %d %v", code, body)
@@ -238,6 +278,10 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	_ = db.Pool.QueryRow(ctx, `SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`, teamT, c1).Scan(&st)
 	if st != "solved" {
 		t.Errorf("author's team economy status = %q, want solved", st)
+	}
+	code, body, _ = call("POST", "/api/v1/challenges/static-one/open", &author, "")
+	if code != http.StatusOK || body["status"] != "solved" || body["already_solved"] != true {
+		t.Errorf("open solved challenge = %d %v", code, body)
 	}
 
 	// timer ran out: still readable (paid once), but nothing actionable until re-opened
@@ -297,8 +341,8 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	if code != 200 || body["rank"] != 2.0 {
 		t.Errorf("p1 team rank = %d %v, want 2", code, body)
 	}
-	if _, body, _ = call("GET", "/api/v1/user/me", &p3, ""); body["rank"] != 1.0 {
-		t.Errorf("p3 profile rank = %v, want 1", body["rank"])
+	if _, body, _ = call("GET", "/api/v1/user/me", &p3, ""); body["rank"] != 1.0 || body["total_score"] != 120.0 || body["score_scope"] != "team" {
+		t.Errorf("p3 team-scoped profile = %v, want rank 1 and score 120", body)
 	}
 	if _, body, _ = call("GET", "/api/v1/user/me/rank", &author, ""); body["rank"] != 0.0 {
 		t.Errorf("author rank = %v, want 0 (hidden)", body["rank"])
@@ -327,4 +371,20 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	}
 	code, body, _ = call("GET", dl, nil, "")
 	expect("economy off anonymous download", code, 302, body)
+
+	// Logout revokes the exact bearer immediately, rather than only clearing
+	// browser storage. A separately minted token for the same user stays valid.
+	code, body, _ = callBearer("POST", "/api/v1/auth/logout", "not-a-valid-jwt", `{}`)
+	expect("invalid bearer logout", code, http.StatusOK, body)
+	var revocations int
+	if err := db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM revoked_access_tokens`).Scan(&revocations); err != nil || revocations != 0 {
+		t.Errorf("invalid bearer created %d revocation rows (err=%v)", revocations, err)
+	}
+	access := token(p1)
+	code, body, _ = callBearer("POST", "/api/v1/auth/logout", access, `{}`)
+	expect("logout", code, http.StatusOK, body)
+	code, body, _ = callBearer("GET", "/api/v1/user/me", access, "")
+	expect("revoked access token", code, http.StatusUnauthorized, body)
+	code, body, _ = call("GET", "/api/v1/user/me", &p1, "")
+	expect("independent access token", code, http.StatusOK, body)
 }

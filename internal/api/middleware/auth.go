@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -13,6 +15,21 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
+
+func HashAccessToken(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
+}
+
+func accessTokenRevoked(c *gin.Context, db *database.DB, token string) (bool, error) {
+	var revoked bool
+	err := db.Pool.QueryRow(c.Request.Context(), `
+		SELECT EXISTS(
+			SELECT 1 FROM revoked_access_tokens
+			WHERE token_hash = $1 AND expires_at > NOW()
+		)`, HashAccessToken(token)).Scan(&revoked)
+	return revoked, err
+}
 
 func Logger(logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -87,7 +104,10 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func parseAccessToken(tokenString string, cfg *config.Config) (*Claims, error) {
+// ParseAccessToken validates the access-token signature, issuer, expiry, and
+// token-specific identity fields. Handlers that need to act on the bearer
+// itself (such as logout) must use the same validation contract as Auth.
+func ParseAccessToken(tokenString string, cfg *config.Config) (*Claims, error) {
 	parserOptions := []jwt.ParserOption{
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 	}
@@ -147,9 +167,16 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 
 		tokenString := parts[1]
 
-		claims, err := parseAccessToken(tokenString, cfg)
+		claims, err := ParseAccessToken(tokenString, cfg)
 		if err != nil {
 			APIError(c, http.StatusUnauthorized, "Invalid or expired token")
+			return
+		}
+		if revoked, err := accessTokenRevoked(c, db, tokenString); err != nil {
+			APIError(c, http.StatusInternalServerError, "Failed to validate session")
+			return
+		} else if revoked {
+			APIError(c, http.StatusUnauthorized, "Session has been logged out")
 			return
 		}
 
@@ -225,8 +252,12 @@ func OptionalAuth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 
 		tokenString := parts[1]
 
-		claims, err := parseAccessToken(tokenString, cfg)
+		claims, err := ParseAccessToken(tokenString, cfg)
 		if err != nil {
+			c.Next()
+			return
+		}
+		if revoked, err := accessTokenRevoked(c, db, tokenString); err != nil || revoked {
 			c.Next()
 			return
 		}

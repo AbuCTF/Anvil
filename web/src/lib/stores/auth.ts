@@ -139,10 +139,27 @@ function createAuthStore() {
 
 		refreshAccessToken,
 
-		logout: (redirect = true) => {
+		logout: async (redirect = true) => {
+			const accessToken = browser ? localStorage.getItem('accessToken') : null;
+			const refreshToken = browser ? localStorage.getItem('refreshToken') : null;
 			authGeneration++;
 			refreshPromise = null;
 			resetRankRevalidation();
+			if (browser && (accessToken || refreshToken)) {
+				try {
+					await fetch(`${API_BASE}/api/v1/auth/logout`, {
+						method: 'POST',
+						headers: {
+							'Content-Type': 'application/json',
+							...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {})
+						},
+						body: JSON.stringify({ refresh_token: refreshToken || '' }),
+						keepalive: true
+					});
+				} catch (error) {
+					console.error('Server logout failed:', error);
+				}
+			}
 			if (browser) {
 				localStorage.removeItem('accessToken');
 				localStorage.removeItem('refreshToken');

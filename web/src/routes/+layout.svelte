@@ -154,7 +154,7 @@
 	}
 
 	function handleLogout() {
-		auth.logout();
+		void auth.logout();
 		userMenuOpen = false;
 	}
 </script>
