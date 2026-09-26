@@ -128,22 +128,37 @@ func networkPolicies(inst *instv1.ChallengeInstance, ns, traefikNamespace, proxy
 
 // egressPolicy opts one pod into outbound internet while still blocking the
 // cluster's private ranges and the cloud metadata server.
-func egressPolicy(ns, podName string) *netv1.NetworkPolicy {
+func egressPolicy(ns, podName, cpNamespace string, cpPort int32) *netv1.NetworkPolicy {
+	rules := []netv1.NetworkPolicyEgressRule{{
+		To: []netv1.NetworkPolicyPeer{{IPBlock: &netv1.IPBlock{
+			CIDR: "0.0.0.0/0",
+			Except: []string{
+				"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+				"169.254.169.254/32", // metadata server
+				"100.64.0.0/10",      // GKE VPC-native pod/service ranges
+			},
+		}}},
+	}}
+	// The Except above blocks the control plane's ClusterIP, so a grader that
+	// posts signed reports to anvil-api over the internal cluster DNS
+	// (GRADER_URL) can't reach it. Add just the API port back: an egress pod can
+	// already reach anvil-api through the public LB (0.0.0.0/0 covers it), so
+	// this is the same auth-gated surface over a stable in-cluster path, not new
+	// access. Rules are additive, so this ORs on top of the internet rule.
+	if cpNamespace != "" && cpPort > 0 {
+		tcp := corev1.ProtocolTCP
+		port := intstr.FromInt32(cpPort)
+		rules = append(rules, netv1.NetworkPolicyEgressRule{
+			To:    []netv1.NetworkPolicyPeer{{NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": cpNamespace}}}},
+			Ports: []netv1.NetworkPolicyPort{{Protocol: &tcp, Port: &port}},
+		})
+	}
 	return &netv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: "allow-egress-" + podName, Namespace: ns},
 		Spec: netv1.NetworkPolicySpec{
 			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{labelPod: podName}},
 			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
-			Egress: []netv1.NetworkPolicyEgressRule{{
-				To: []netv1.NetworkPolicyPeer{{IPBlock: &netv1.IPBlock{
-					CIDR: "0.0.0.0/0",
-					Except: []string{
-						"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-						"169.254.169.254/32", // metadata server
-						"100.64.0.0/10",      // GKE VPC-native pod/service ranges
-					},
-				}}},
-			}},
+			Egress:      rules,
 		},
 	}
 }

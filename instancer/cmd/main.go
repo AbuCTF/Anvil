@@ -88,17 +88,19 @@ func main() {
 	maxLife, _ := time.ParseDuration(env("INSTANCER_MAX_LIFETIME", "0"))
 	httpPort, _ := strconv.Atoi(env("INSTANCER_HTTP_PORT", "443"))
 	cfg := controller.Config{
-		BaseDomain:       env("INSTANCER_BASE_DOMAIN", "h7tex.com"),
-		RuntimeClass:     env("INSTANCER_RUNTIME_CLASS", "gvisor"),
-		TraefikNamespace: env("INSTANCER_TRAEFIK_NAMESPACE", "traefik"),
-		HTTPEntryPoint:   env("INSTANCER_HTTP_ENTRYPOINT", "websecure"),
-		HTTPPort:         int32(httpPort),
-		TCPRoutes:        parseTCPRoutes(env("INSTANCER_TCP_ROUTES", "pwn=pwn:1337")),
-		Pool:             parsePool(env("INSTANCER_TCP_POOL_RANGE", ""), env("INSTANCER_TCP_POOL_NAMESPACE", "anvil-instancer")),
-		ResyncInterval:   resync,
-		CPURequestPct:    envInt("INSTANCER_CPU_REQUEST_PCT", 10),
-		MemRequestPct:    envInt("INSTANCER_MEM_REQUEST_PCT", 25),
-		MaxLifetime:      maxLife,
+		BaseDomain:            env("INSTANCER_BASE_DOMAIN", "h7tex.com"),
+		RuntimeClass:          env("INSTANCER_RUNTIME_CLASS", "gvisor"),
+		TraefikNamespace:      env("INSTANCER_TRAEFIK_NAMESPACE", "traefik"),
+		HTTPEntryPoint:        env("INSTANCER_HTTP_ENTRYPOINT", "websecure"),
+		HTTPPort:              int32(httpPort),
+		TCPRoutes:             parseTCPRoutes(env("INSTANCER_TCP_ROUTES", "pwn=pwn:1337")),
+		Pool:                  parsePool(env("INSTANCER_TCP_POOL_RANGE", ""), env("INSTANCER_TCP_POOL_NAMESPACE", "anvil-instancer")),
+		ResyncInterval:        resync,
+		CPURequestPct:         envInt("INSTANCER_CPU_REQUEST_PCT", 10),
+		MemRequestPct:         envInt("INSTANCER_MEM_REQUEST_PCT", 25),
+		MaxLifetime:           maxLife,
+		ControlPlaneNamespace: env("INSTANCER_CONTROL_PLANE_NAMESPACE", "anvil"),
+		ControlPlanePort:      int32(envInt("INSTANCER_CONTROL_PLANE_PORT", 8080)),
 	}
 
 	maxConcurrent := 8
