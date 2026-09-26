@@ -685,9 +685,9 @@ func windowOK(solvedAt, openedAt *time.Time, eventEnd time.Time) bool {
 	if openedAt == nil {
 		return false
 	}
-	if solvedAt.Before(*openedAt) {
-		return false
-	}
+	// WebVerse solves live on WebVerse's own timeline: a team that has opened the
+	// challenge on H7 gets credit whether they solved before or after opening here.
+	// (external + authoritative from WebVerse's leaderboard, so no ordering cheese.)
 	if !eventEnd.IsZero() && solvedAt.After(eventEnd) {
 		return false
 	}
