@@ -226,8 +226,14 @@
 	async function loadUserInstance() {
 		try {
 			const response = await api.getInstances();
+			// the instance list is team-scoped (shows teammates' instances too), but this
+			// card + its stop act per-user. show only MY own instance for this challenge
+			// (or the team's shared instance for KotH) so a teammate's box can't hijack the
+			// card and get a false-success stop. a teammate's instance lives on /instances.
+			const myId = $auth.user?.id;
 			instance = response.instances?.find((i: any) =>
-				i.challenge_slug === slug && i.status === 'running'
+				i.challenge_slug === slug && i.status === 'running' &&
+				(!i.owner_user_id || i.owner_user_id === myId || challenge?.arena_mode === 'shared')
 			);
 			instanceError = '';
 			instanceLoadFailed = false;
