@@ -580,3 +580,85 @@ func (h *AdminTeamsHandler) Solves(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"solves": solves, "total": len(solves)})
 }
+
+// Support is the consolidated per-team support view for the crew (owatron/mrghost):
+// the economy line, the challenges holding the team's open slots (n/cap), and every
+// live instance the team owns (with launcher + a stale hint), so cap/instance/credit
+// tickets can be answered and acted on from one place. Read-only; actions reuse the
+// existing /admin/instances/:id/stop and the economy endpoints.
+func (h *AdminTeamsHandler) Support(c *gin.Context) {
+	teamID := c.Param("id")
+	if _, err := uuid.Parse(teamID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid team id"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	var credits, points float64
+	var bailoutUsed, grantIssued bool
+	_ = h.db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(credits,0), COALESCE(points,0), COALESCE(bailout_used,false), COALESCE(grant_issued,false)
+		 FROM economy_team_score WHERE team_id = $1`, teamID).Scan(&credits, &points, &bailoutUsed, &grantIssued)
+
+	opens := []gin.H{}
+	openCount := 0
+	if orows, err := h.db.Pool.Query(ctx,
+		`SELECT c.name, c.slug, e.status::text, e.opened_at, e.expires_at,
+		        ((c.resource_type = 'docker' AND COALESCE(c.container_image,'') <> '')
+		          OR EXISTS (SELECT 1 FROM challenge_resources cr WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active)) AS has_instance
+		 FROM economy_challenge_state e JOIN challenges c ON c.id = e.challenge_id
+		 WHERE e.team_id = $1 AND e.status IN ('open','solved')
+		 ORDER BY e.status::text, e.opened_at`, teamID); err == nil {
+		defer orows.Close()
+		for orows.Next() {
+			var name, slug, status string
+			var openedAt, expiresAt *time.Time
+			var hasInstance bool
+			if orows.Scan(&name, &slug, &status, &openedAt, &expiresAt, &hasInstance) == nil {
+				if status == "open" {
+					openCount++
+				}
+				o := gin.H{"name": name, "slug": slug, "status": status, "has_instance": hasInstance}
+				if openedAt != nil {
+					o["opened_at"] = openedAt.Unix()
+				}
+				if expiresAt != nil {
+					o["expires_at"] = expiresAt.Unix()
+				}
+				opens = append(opens, o)
+			}
+		}
+	}
+
+	insts := []gin.H{}
+	if irows, err := h.db.Pool.Query(ctx,
+		`SELECT i.id, c.name, c.slug, i.status::text, u.username, i.created_at, i.expires_at, COALESCE(i.container_id,''),
+		        (i.status::text IN ('running','creating','pending','stopping') AND (i.expires_at IS NULL OR i.expires_at > NOW())) AS active
+		 FROM instances i JOIN challenges c ON c.id = i.challenge_id JOIN users u ON u.id = i.user_id
+		 WHERE u.team_id = $1 AND i.status::text NOT IN ('stopped','failed','expired')
+		 ORDER BY i.created_at DESC`, teamID); err == nil {
+		defer irows.Close()
+		for irows.Next() {
+			var id, name, slug, status, username, cid string
+			var createdAt time.Time
+			var expiresAt *time.Time
+			var active bool
+			if irows.Scan(&id, &name, &slug, &status, &username, &createdAt, &expiresAt, &cid, &active) == nil {
+				it := gin.H{"id": id, "challenge_name": name, "challenge_slug": slug, "status": status,
+					"launched_by": username, "created_at": createdAt.Unix(), "active": active, "has_runtime": cid != ""}
+				if expiresAt != nil {
+					it["expires_at"] = expiresAt.Unix()
+				}
+				insts = append(insts, it)
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"economy":         gin.H{"credits": credits, "points": points, "bailout_used": bailoutUsed, "grant_issued": grantIssued},
+		"opens":           opens,
+		"open_count":      openCount,
+		"concurrency_cap": h.config.Economy.ConcurrencyCap,
+		"instances":       insts,
+	})
+}

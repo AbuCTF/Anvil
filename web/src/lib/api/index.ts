@@ -567,6 +567,16 @@ class ApiClient {
 		return this.request<{ solves: any[]; total: number }>(`/admin/teams/${id}/solves`);
 	}
 
+	async getAdminTeamSupport(id: string) {
+		return this.request<{
+			economy: { credits: number; points: number; bailout_used: boolean; grant_issued: boolean };
+			opens: any[];
+			open_count: number;
+			concurrency_cap: number;
+			instances: any[];
+		}>(`/admin/teams/${id}/support`);
+	}
+
 	async updateAdminCategory(id: string, data: { name?: string; description?: string; color?: string }) {
 		return this.request<any>(`/admin/categories/${id}`, {
 			method: 'PUT',

@@ -44,6 +44,9 @@
 	let expandedSolves: Record<string, boolean> = {};
 	let teamSolves: Record<string, any[]> = {};
 	let solvesLoading: Record<string, boolean> = {};
+	let expandedSupport: Record<string, boolean> = {};
+	let teamSupport: Record<string, any> = {};
+	let supportLoading: Record<string, boolean> = {};
 
 	let showNodeModal = false;
 	let showTemplateUploadModal = false;
@@ -860,6 +863,38 @@
 		}
 	}
 
+	async function loadSupport(id: string) {
+		supportLoading[id] = true;
+		supportLoading = supportLoading;
+		try {
+			teamSupport[id] = await api.getAdminTeamSupport(id);
+		} catch (e) {
+			teamSupport[id] = null;
+		} finally {
+			supportLoading[id] = false;
+			supportLoading = supportLoading;
+			teamSupport = teamSupport;
+		}
+	}
+
+	async function toggleSupportExpand(id: string) {
+		expandedSupport[id] = !expandedSupport[id];
+		expandedSupport = expandedSupport;
+		if (expandedSupport[id] && teamSupport[id] === undefined) {
+			await loadSupport(id);
+		}
+	}
+
+	async function supportForceStop(teamId: string, instanceId: string, name: string) {
+		if (!(await confirmDialog({ message: `Force-stop the "${name}" instance for this team? This frees an open slot.`, title: 'Force-stop instance', confirmLabel: 'Force-stop', danger: true }))) return;
+		try {
+			await api.forceStopAdminInstance(instanceId);
+			await loadSupport(teamId);
+		} catch (e: any) {
+			await alertDialog({ title: 'Force-stop failed', message: e?.message ?? 'force-stop failed' });
+		}
+	}
+
 	function formatDate(timestamp: number): string {
 		return formatLocalDateLong(timestamp, 'seconds');
 	}
@@ -1500,6 +1535,7 @@
 												<div class="flex items-center justify-end gap-3">
 													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleTeamExpand(team.id)}>Members</button>
 													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleSolvesExpand(team.id)}>Solves</button>
+													<button class="text-xs text-amber-500 hover:underline" on:click={() => toggleSupportExpand(team.id)} title="Economy, open slots and instances">Support</button>
 													<button class="text-xs text-down hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => disbandTeam(team)} disabled={actionLoading === team.id} title="Disband team">
 														{actionLoading === team.id ? '...' : 'Disband'}
 													</button>
@@ -1564,6 +1600,84 @@
 														</div>
 													{:else}
 														<p class="text-xs text-stone-500">No solves yet.</p>
+													{/if}
+												</td>
+											</tr>
+										{/if}
+										{#if expandedSupport[team.id]}
+											<tr class="border-b border-stone-800/60 bg-stone-900/30">
+												<td class="px-4 py-3" colspan="7">
+													{#if supportLoading[team.id]}
+														<p class="text-xs text-stone-500">Loading support view...</p>
+													{:else if teamSupport[team.id]}
+														{@const sup = teamSupport[team.id]}
+														<div class="space-y-4">
+															<div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
+																<span class="text-stone-500">Credits <span class="text-amber-500 font-semibold tabular-nums">{Math.round(sup.economy?.credits ?? 0)}</span></span>
+																<span class="text-stone-500">Points <span class="text-stone-200 font-semibold tabular-nums">{Math.round(sup.economy?.points ?? 0)}</span></span>
+																<span class="text-stone-500">Open <span class="{sup.open_count >= sup.concurrency_cap ? 'text-warn' : 'text-stone-200'} font-semibold tabular-nums">{sup.open_count}/{sup.concurrency_cap}</span></span>
+																<span class="text-stone-500">Grant <span class="text-stone-300">{sup.economy?.grant_issued ? 'issued' : 'none'}</span></span>
+																<span class="text-stone-500">Bailout <span class="text-stone-300">{sup.economy?.bailout_used ? 'used' : 'available'}</span></span>
+															</div>
+
+															<div>
+																<p class="metadata-label text-stone-500 mb-1.5">Open slots ({sup.open_count}/{sup.concurrency_cap})</p>
+																{#if (sup.opens ?? []).filter((o: any) => o.status === 'open').length}
+																	<div class="space-y-1">
+																		{#each (sup.opens ?? []).filter((o: any) => o.status === 'open') as o}
+																			<div class="flex items-center justify-between text-xs">
+																				<span class="text-stone-300">{o.name} <span class="text-stone-600">({o.has_instance ? 'instance' : 'static'})</span></span>
+																				<span class="text-stone-500 tabular-nums" title={o.expires_at ? instantTitle(o.expires_at, 'seconds') : ''}>{o.expires_at ? formatDate(o.expires_at) : '-'}</span>
+																			</div>
+																		{/each}
+																	</div>
+																{:else}
+																	<p class="text-xs text-stone-500">No open slots in use.</p>
+																{/if}
+															</div>
+
+															<div>
+																<p class="metadata-label text-stone-500 mb-1.5">Instances</p>
+																{#if (sup.instances ?? []).length}
+																	<div class="overflow-x-auto">
+																		<table class="w-full min-w-[520px] text-xs">
+																			<thead>
+																				<tr class="metadata-label text-stone-500 border-b border-stone-800">
+																					<th class="px-2 py-1.5 text-left">Challenge</th>
+																					<th class="px-2 py-1.5 text-left">Launched by</th>
+																					<th class="px-2 py-1.5 text-left">Status</th>
+																					<th class="px-2 py-1.5 text-right">Expires</th>
+																					<th class="px-2 py-1.5 text-right">Action</th>
+																				</tr>
+																			</thead>
+																			<tbody>
+																				{#each sup.instances as inst}
+																					<tr class="border-b border-stone-800/40">
+																						<td class="px-2 py-1.5 text-stone-300">{inst.challenge_name}</td>
+																						<td class="px-2 py-1.5 text-stone-400">{inst.launched_by}</td>
+																						<td class="px-2 py-1.5">
+																							<span class="{inst.active ? 'text-up' : 'text-stone-500'}">{inst.status}</span>{#if !inst.has_runtime}<span class="text-stone-600" title="No container id recorded - likely already gone"> (stale?)</span>{/if}
+																						</td>
+																						<td class="px-2 py-1.5 text-right text-stone-500 tabular-nums" title={inst.expires_at ? instantTitle(inst.expires_at, 'seconds') : ''}>{inst.expires_at ? formatDate(inst.expires_at) : '-'}</td>
+																						<td class="px-2 py-1.5 text-right">
+																							{#if inst.active}
+																								<button class="text-down hover:underline" on:click={() => supportForceStop(team.id, inst.id, inst.challenge_name)}>Force-stop</button>
+																							{:else}
+																								<span class="text-stone-600">-</span>
+																							{/if}
+																						</td>
+																					</tr>
+																				{/each}
+																			</tbody>
+																		</table>
+																	</div>
+																{:else}
+																	<p class="text-xs text-stone-500">No instances.</p>
+																{/if}
+															</div>
+														</div>
+													{:else}
+														<p class="text-xs text-stone-500">Could not load support view.</p>
 													{/if}
 												</td>
 											</tr>
