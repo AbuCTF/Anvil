@@ -544,27 +544,46 @@ func (p *WebVersePoller) recordSolveBookkeeping(ctx context.Context, tx pgx.Tx, 
 // and organizer test accounts: a matched user must be an active role='user', which
 // also guarantees the team is a public (non-test) team.
 func (p *WebVersePoller) resolveTeams(ctx context.Context, emails []string) (map[string]teamRef, error) {
-	out := map[string]teamRef{}
+	// index EVERY eligible account by its NORMALIZED email (normEmail: lowercase,
+	// trim, drop +tag, gmail dots) so a solver whose WebVerse email differs from
+	// their Anvil email only by formatting still matches. the WebVerse side is keyed
+	// the same way (normEmail at build time), so the two are symmetric. an ambiguous
+	// normalized key (two distinct teams) is dropped — never credit the wrong team.
 	if len(emails) == 0 {
-		return out, nil
+		return map[string]teamRef{}, nil
 	}
 	rows, err := p.db.Pool.Query(ctx,
-		`SELECT lower(email), id, team_id FROM users
-		 WHERE team_id IS NOT NULL AND status = 'active' AND role = 'user'
-		   AND lower(email) = ANY($1)`, emails)
+		`SELECT email, id, team_id FROM users
+		 WHERE team_id IS NOT NULL AND status = 'active' AND role = 'user'`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	out := map[string]teamRef{}
+	ambiguous := map[string]struct{}{}
 	for rows.Next() {
 		var email string
 		var uid, tid uuid.UUID
 		if err := rows.Scan(&email, &uid, &tid); err != nil {
 			return nil, err
 		}
-		out[email] = teamRef{userID: uid, teamID: tid}
+		k := normEmail(email)
+		if k == "" {
+			continue
+		}
+		if ex, ok := out[k]; ok && ex.teamID != tid {
+			ambiguous[k] = struct{}{}
+			continue
+		}
+		out[k] = teamRef{userID: uid, teamID: tid}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for k := range ambiguous {
+		delete(out, k)
+	}
+	return out, nil
 }
 
 // resolveChallenges maps anvil slugs to their poller-scored challenge meta. Only
@@ -854,7 +873,26 @@ func epochToTime(n float64) *time.Time {
 
 func normSlug(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
-func normEmail(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
+func normEmail(s string) string {
+	e := strings.ToLower(strings.TrimSpace(s))
+	at := strings.LastIndexByte(e, '@')
+	if at <= 0 || at == len(e)-1 {
+		return e
+	}
+	local, domain := e[:at], e[at+1:]
+	// drop a +tag (sub-addressing) — same mailbox on every major provider
+	if plus := strings.IndexByte(local, '+'); plus >= 0 {
+		local = local[:plus]
+	}
+	// gmail/googlemail ignore dots in the local part and are the same domain
+	if domain == "googlemail.com" {
+		domain = "gmail.com"
+	}
+	if domain == "gmail.com" {
+		local = strings.ReplaceAll(local, ".", "")
+	}
+	return local + "@" + domain
+}
 
 // earlier reports whether a is a strictly earlier timestamp than b, treating a known
 // time as earlier than an unknown one (so first blood prefers a real solved_at).
