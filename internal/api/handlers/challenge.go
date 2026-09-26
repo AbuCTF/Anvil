@@ -123,6 +123,9 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 	if uid, ok := contextUserID(c); ok {
 		userID = &uid
 	}
+	// solve progress is team-scoped in teams mode: a challenge is solved for every
+	// member once anyone on the team holds all its flags (default false = per-user).
+	teamsMode, _ := isTeamsMode(c.Request.Context(), h.db)
 
 	// staff (admin/author) preview draft challenges on the board too; everyone
 	// else sees only published + released.
@@ -143,9 +146,15 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 			) AS has_instance,
 			cat.id as category_id, cat.name as category_name,
 			COALESCE((
-				SELECT COUNT(*) FROM solves s
+				SELECT COUNT(DISTINCT s.flag_id) FROM solves s
 				JOIN flags f ON s.flag_id = f.id
-				WHERE s.user_id = $1 AND f.challenge_id = c.id
+				WHERE f.challenge_id = c.id AND (
+					s.user_id = $1
+					OR ($2 AND s.user_id IN (
+						SELECT u2.id FROM users u2
+						WHERE u2.team_id = (SELECT team_id FROM users WHERE id = $1)
+						  AND (SELECT team_id FROM users WHERE id = $1) IS NOT NULL))
+				)
 			), 0) AS user_solves
 		FROM challenges c
 		LEFT JOIN categories cat ON c.category_id = cat.id
@@ -153,7 +162,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		ORDER BY c.created_at DESC
 	`
 
-	rows, err := h.db.Pool.Query(c.Request.Context(), query, userID)
+	rows, err := h.db.Pool.Query(c.Request.Context(), query, userID, teamsMode)
 	if err != nil {
 		h.logger.Error("failed to list challenges", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
@@ -243,6 +252,9 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 			userRole = typedRole
 		}
 	}
+	// team-scoped solve state (see List): a flag shows solved for the whole team
+	// once any member holds it, so teammates don't see it as unsolved.
+	getTeamsMode, _ := isTeamsMode(c.Request.Context(), h.db)
 
 	var statusCondition string
 	if userID != nil && (userRole == "admin" || userRole == "author") {
@@ -308,13 +320,23 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	flagsQuery := `
 		SELECT f.id, f.name, f.points, f.sort_order,
 			(SELECT COUNT(*) FROM solves WHERE flag_id = f.id) AS total_solves,
-			s.solved_at
+			ts.solved_at
 		FROM flags f
-		LEFT JOIN solves s ON s.flag_id = f.id AND s.user_id = $2
+		LEFT JOIN LATERAL (
+			SELECT s.solved_at FROM solves s
+			WHERE s.flag_id = f.id AND (
+				s.user_id = $2
+				OR ($3 AND s.user_id IN (
+					SELECT u2.id FROM users u2
+					WHERE u2.team_id = (SELECT team_id FROM users WHERE id = $2)
+					  AND (SELECT team_id FROM users WHERE id = $2) IS NOT NULL))
+			)
+			ORDER BY s.solved_at ASC LIMIT 1
+		) ts ON TRUE
 		WHERE f.challenge_id = $1
 		ORDER BY f.sort_order
 	`
-	flagRows, err := h.db.Pool.Query(c.Request.Context(), flagsQuery, ch.ID, userID)
+	flagRows, err := h.db.Pool.Query(c.Request.Context(), flagsQuery, ch.ID, userID, getTeamsMode)
 	if err != nil {
 		h.logger.Error("failed to query challenge flags", zap.String("challenge_id", ch.ID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})

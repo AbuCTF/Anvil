@@ -586,6 +586,18 @@ func (h *EconomyHandler) Balance(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	// lazy grant: a team that has never taken an economy action has no
+	// economy_team_score row yet, so a first dashboard view would otherwise read
+	// 0 credits. seed the starting grant here. idempotent — ensureTeamEconomy's
+	// grant_issued guard never grants a team twice.
+	if tx, bErr := h.db.Pool.Begin(ctx); bErr == nil {
+		if gErr := ensureTeamEconomy(ctx, tx, teamID, h.config.Economy); gErr != nil {
+			_ = tx.Rollback(ctx)
+			h.logger.Warn("balance lazy grant failed", zap.Error(gErr))
+		} else if cErr := tx.Commit(ctx); cErr != nil {
+			h.logger.Warn("balance lazy grant commit failed", zap.Error(cErr))
+		}
+	}
 	var credits, points float64
 	var grantIssued, bailoutUsed bool
 	err := h.db.Pool.QueryRow(ctx,
