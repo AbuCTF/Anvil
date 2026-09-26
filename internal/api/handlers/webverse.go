@@ -411,15 +411,34 @@ func (p *WebVersePoller) captureOne(ctx context.Context, teamID, userID uuid.UUI
 		 FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
 		teamID, meta.challengeID).Scan(&status, &openedAt, &expiresAt, &holds, &frac)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return capNotOpen, nil // reused gate: the team never opened it here
-	}
-	if err != nil {
+		// a WebVerse solve credits even if the team never opened the challenge on H7.
+		// auto-open it here with no launch charge (it lives on WebVerse; there is no
+		// H7 instance to pay for), expiring at the event end so applyEconomyFrac's
+		// open+live check passes and the solve below scores.
+		if e := ensureTeamEconomy(ctx, tx, teamID, p.econ); e != nil {
+			return capNotOpen, e
+		}
+		exp := p.eventEnd
+		if exp.IsZero() {
+			exp = time.Now().Add(72 * time.Hour)
+		}
+		ot := time.Now()
+		if solvedAt != nil {
+			ot = *solvedAt
+		}
+		if _, e := tx.Exec(ctx,
+			`INSERT INTO economy_challenge_state (team_id, challenge_id, status, opened_at, expires_at)
+			 VALUES ($1, $2, 'open', $3, $4)
+			 ON CONFLICT (team_id, challenge_id) DO NOTHING`,
+			teamID, meta.challengeID, ot, exp); e != nil {
+			return capNotOpen, e
+		}
+		openedAt = &ot
+	} else if err != nil {
 		return capNotOpen, err
-	}
-	if status == "solved" && holds && frac >= 1 {
+	} else if status == "solved" && holds && frac >= 1 {
 		return capAlready, nil // team already holds the full solve
-	}
-	if !windowOK(solvedAt, openedAt, p.eventEnd) {
+	} else if !windowOK(solvedAt, openedAt, p.eventEnd) {
 		return capOutOfWindow, nil
 	}
 
