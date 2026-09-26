@@ -1362,7 +1362,7 @@
 								<input
 									type="text"
 									bind:value={flagInput}
-									placeholder="flag&#123;...&#125;"
+									placeholder="H7CTF&#123;...&#125;"
 									autocapitalize="off"
 									autocorrect="off"
 									autocomplete="off"
@@ -1535,7 +1535,7 @@
 						id="new-flag-value"
 						type="text"
 						bind:value={newFlag.flag}
-						placeholder="flag&#123;...&#125;"
+						placeholder="H7CTF&#123;...&#125;"
 						required
 						class="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded-md text-sm text-stone-200 font-mono focus:outline-none focus:border-stone-600"
 					/>
