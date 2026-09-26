@@ -32,17 +32,19 @@ type TCPRoute struct {
 
 // Config holds cluster-wide routing and isolation settings.
 type Config struct {
-	BaseDomain       string              // e.g. h7tex.com
-	RuntimeClass     string              // e.g. gvisor; empty disables
-	TraefikNamespace string              // namespace Traefik runs in
-	HTTPEntryPoint   string              // Traefik entrypoint for http/https (e.g. websecure)
-	HTTPPort         int32               // external port players reach http/https on (443)
-	TCPRoutes        map[string]TCPRoute // category -> raw-TLS entrypoint (legacy SNI fallback)
-	Pool             PortPool            // plain-TCP per-instance port pool (preferred for raw TCP)
-	ResyncInterval   time.Duration       // status refresh cadence while an instance lives
-	CPURequestPct    int64               // pod cpu request as % of its limit (0 = leave to k8s)
-	MemRequestPct    int64               // pod memory request as % of its limit (0 = leave to k8s)
-	MaxLifetime      time.Duration       // hard cap on any instance's life, extensions included (0 = none)
+	BaseDomain            string              // e.g. h7tex.com
+	RuntimeClass          string              // e.g. gvisor; empty disables
+	TraefikNamespace      string              // namespace Traefik runs in
+	HTTPEntryPoint        string              // Traefik entrypoint for http/https (e.g. websecure)
+	HTTPPort              int32               // external port players reach http/https on (443)
+	TCPRoutes             map[string]TCPRoute // category -> raw-TLS entrypoint (legacy SNI fallback)
+	Pool                  PortPool            // plain-TCP per-instance port pool (preferred for raw TCP)
+	ResyncInterval        time.Duration       // status refresh cadence while an instance lives
+	CPURequestPct         int64               // pod cpu request as % of its limit (0 = leave to k8s)
+	MemRequestPct         int64               // pod memory request as % of its limit (0 = leave to k8s)
+	MaxLifetime           time.Duration       // hard cap on any instance's life, extensions included (0 = none)
+	ControlPlaneNamespace string              // namespace anvil-api runs in; egress pods (graders) may reach it on the API port
+	ControlPlanePort      int32               // anvil-api port graders post signed reports to (default 8080)
 }
 
 // tcpRouteFor returns the TCP entrypoint for a category, defaulting the
@@ -146,7 +148,7 @@ func (r *ChallengeInstanceReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 	for _, p := range inst.Spec.Pods {
 		if p.Egress {
-			objs = append(objs, egressPolicy(ns, p.Name))
+			objs = append(objs, egressPolicy(ns, p.Name, r.Cfg.ControlPlaneNamespace, r.Cfg.ControlPlanePort))
 		}
 		if svc := buildService(inst, p); svc != nil {
 			objs = append(objs, svc)
