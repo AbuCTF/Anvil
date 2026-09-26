@@ -882,6 +882,14 @@ func (h *InstanceHandler) provisionInstance(
 				"GRADER_URL":     h.config.Graded.ReportURL,
 				"ANVIL_TEAM_ID":  graderTeamID(ownerID, uid),
 			}
+			// expose each named flag as ${FLAG_<NAME>} too, not only ${FLAG} (which is the
+			// first declared flag). lets a multi-flag multi-service challenge inject each
+			// flag into its own role. backward-compatible: ${FLAG} still = the first flag.
+			for k, v := range envMap(envVars) {
+				if strings.HasPrefix(k, "FLAG_") {
+					subst[k] = v
+				}
+			}
 			// graded: the grader role signs with a key bound to this instance (and
 			// names it with ${INSTANCE_ID}). like FLAG it lands only in a role that
 			// declares it; prepareProvisionPlan refuses a public role that asks.

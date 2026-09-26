@@ -146,7 +146,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
 			c.resource_type, c.sub_description, c.arena_mode,
 			(
-				(c.resource_type = 'docker' AND COALESCE(c.container_image, '') <> '')
+				(c.resource_type = 'docker' AND (COALESCE(c.container_image, '') <> '' OR c.container_spec IS NOT NULL))
 				OR (c.resource_type = 'vm' AND EXISTS (
 					SELECT 1 FROM challenge_resources cr
 					WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active = TRUE))
@@ -292,7 +292,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 			c.exposed_ports, c.instance_timeout, c.max_extensions, c.release_date,
 			c.resource_type, c.status, c.sub_description, c.arena_mode, c.scoring_mode,
 			(
-				(c.resource_type = 'docker' AND COALESCE(c.container_image, '') <> '')
+				(c.resource_type = 'docker' AND (COALESCE(c.container_image, '') <> '' OR c.container_spec IS NOT NULL))
 				OR (c.resource_type = 'vm' AND EXISTS (
 					SELECT 1 FROM challenge_resources cr
 					WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active = TRUE))

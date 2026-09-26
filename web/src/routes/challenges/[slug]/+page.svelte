@@ -956,7 +956,7 @@
 						</div>
 					{/if}
 
-					{#if locked}
+					{#if locked && !isKoth}
 						<Card title={challenge.description ? 'Open Challenge' : 'Locked'}>
 							<div class="space-y-3">
 								{#if challenge.description}
