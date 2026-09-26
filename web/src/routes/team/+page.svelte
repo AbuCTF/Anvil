@@ -231,11 +231,11 @@
 					</form>
 					<p class="text-xs text-stone-600 mt-1">The conversion rate falls with each block, so converting back and forth loses value.</p>
 
-					{#if eco.credits === 0 && !eco.bailout_used}
+					{#if eco.credits < 50 && !eco.bailout_used && (eco.open ?? []).filter((o: any) => o.status === 'open').length === 0}
 						<button on:click={bailout} disabled={busy} class="mt-3 w-full rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-500 py-2 text-sm hover:bg-amber-500/20 disabled:opacity-40 transition-colors">
 							Request bailout
 						</button>
-						<p class="text-xs text-stone-600 mt-1">A one-time top-up, available while your balance is zero.</p>
+						<p class="text-xs text-stone-600 mt-1">A one-time top-up when you can no longer afford a launch and cannot convert points to cover it.</p>
 					{/if}
 				</Card>
 
