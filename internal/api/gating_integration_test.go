@@ -179,11 +179,45 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 
 	// Irreversible economy actions expose their current server-side price before
 	// the UI enables them; quote calls themselves do not mutate either ledger.
-	if code, body, _ := call("POST", "/api/v1/economy/convert/quote", &p1, `{"points":75}`); code != http.StatusOK || body["credits"] != 67.5 {
+	if code, body, _ := call("POST", "/api/v1/economy/convert/quote", &p1, `{"points":75}`); code != http.StatusOK || body["credits"] != 67.5 || body["quote_version"] != 0.0 {
 		t.Errorf("conversion quote = %d %v, want 67.5 credits", code, body)
 	}
-	if code, body, _ := call("GET", "/api/v1/economy/challenges/static-one/extension-quote", &p1, ""); code != http.StatusOK || body["cost"] != 25.0 || body["added_seconds"] != 3600.0 {
+	if code, body, _ := call("GET", "/api/v1/economy/challenges/static-one/extension-quote", &p1, ""); code != http.StatusOK || body["cost"] != 25.0 || body["added_seconds"] != 3600.0 || body["quote_version"] != 0.0 {
 		t.Errorf("extension quote = %d %v, want 25 credits and 3600 seconds", code, body)
+	}
+	if code, body, _ := call("POST", "/api/v1/economy/convert", &p1, `{"points":1}`); code != http.StatusBadRequest {
+		t.Errorf("unquoted conversion = %d %v, want 400", code, body)
+	}
+	if code, body, _ := call("POST", "/api/v1/challenges/static-one/extend", &p1, `{}`); code != http.StatusBadRequest {
+		t.Errorf("unquoted extension = %d %v, want 400", code, body)
+	}
+
+	// A mutation consumes the exact version the player approved. Once a teammate
+	// changes the monotonic conversion block, the old quote fails without a debit.
+	code, body, _ := call("POST", "/api/v1/economy/convert/quote", &author, `{"points":10}`)
+	if code != http.StatusOK || body["credits"] != 10.0 || body["quote_version"] != 0.0 {
+		t.Fatalf("author conversion quote = %d %v", code, body)
+	}
+	conversionStatuses := make(chan int, 2)
+	conversionStart := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-conversionStart
+			status, _, _ := call("POST", "/api/v1/economy/convert", &author, `{"points":10,"quote_version":0}`)
+			conversionStatuses <- status
+		}()
+	}
+	close(conversionStart)
+	conversionCounts := map[int]int{<-conversionStatuses: 1}
+	conversionCounts[<-conversionStatuses]++
+	if conversionCounts[http.StatusOK] != 1 || conversionCounts[http.StatusConflict] != 1 {
+		t.Errorf("simultaneous quoted conversions = %v, want one 200 and one 409", conversionCounts)
+	}
+	var authorPoints, authorCredits float64
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT points, credits FROM economy_team_score WHERE team_id = $1`, teamT).
+		Scan(&authorPoints, &authorCredits); err != nil || authorPoints != 990 || authorCredits != 4010 {
+		t.Errorf("stale conversion mutated ledger: points=%v credits=%v err=%v", authorPoints, authorCredits, err)
 	}
 
 	// list: description only for the opener's team (and staff)
@@ -209,7 +243,7 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 			t.Errorf("locked detail = %v", body)
 		}
 	}
-	code, body, _ := call("GET", "/api/v1/challenges/static-one", &p1, "")
+	code, body, _ = call("GET", "/api/v1/challenges/static-one", &p1, "")
 	expect("open detail", code, 200, body)
 	files, _ := body["attachments"].([]any)
 	if body["description"] != "SECRET BRIEF" || len(body["hints"].([]any)) != 1 || len(files) != 1 {
@@ -269,6 +303,36 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	code, body, _ = call("POST", "/api/v1/challenges/static-one/open", &author, "")
 	if code != http.StatusOK || body["status"] != "open" {
 		t.Fatalf("author open = %d %v", code, body)
+	}
+	code, body, _ = call("GET", "/api/v1/economy/challenges/static-one/extension-quote", &author, "")
+	if code != http.StatusOK || body["cost"] != 25.0 || body["quote_version"] != 0.0 {
+		t.Fatalf("author extension quote = %d %v", code, body)
+	}
+	extensionStatuses := make(chan int, 2)
+	extensionStart := make(chan struct{})
+	for range 2 {
+		go func() {
+			<-extensionStart
+			status, _, _ := call("POST", "/api/v1/challenges/static-one/extend", &author, `{"quote_version":0}`)
+			extensionStatuses <- status
+		}()
+	}
+	close(extensionStart)
+	extensionCounts := map[int]int{<-extensionStatuses: 1}
+	extensionCounts[<-extensionStatuses]++
+	if extensionCounts[http.StatusOK] != 1 || extensionCounts[http.StatusConflict] != 1 {
+		t.Errorf("simultaneous quoted extensions = %v, want one 200 and one 409", extensionCounts)
+	}
+	var extensionsUsed int
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT extensions_used FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`, teamT, c1).
+		Scan(&extensionsUsed); err != nil || extensionsUsed != 1 {
+		t.Errorf("stale extension mutated state: used=%d err=%v", extensionsUsed, err)
+	}
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT credits FROM economy_team_score WHERE team_id = $1`, teamT).
+		Scan(&authorCredits); err != nil || authorCredits != 3935 {
+		t.Errorf("stale extension mutated credits: credits=%v err=%v", authorCredits, err)
 	}
 	code, body, _ = call("POST", "/api/v1/challenges/static-one/submit", &author, `{"flag":"flag{one}"}`)
 	if code != 200 || body["correct"] != true {
