@@ -1003,9 +1003,13 @@
 								<p class="text-stone-600 text-sm">No description provided.</p>
 							{/if}
 						</Card>
-					{/if}
+						{/if}
 
-					{#if !locked && ((challenge.flags && challenge.flags.length > 0) || (isEditing && isAdmin))}
+						{#if isGraded && $auth.isAuthenticated}
+							<DepthRace slug={challenge.slug} economy={!!challenge.economy?.enabled} />
+						{/if}
+
+						{#if !locked && ((challenge.flags && challenge.flags.length > 0) || (isEditing && isAdmin))}
 						<Card title="Objectives">
 							<svelte:fragment slot="meta">
 								{#if isEditing && isAdmin}
@@ -1400,7 +1404,7 @@
 					{/if}
 
 					{#if challenge?.economy?.launched && !challenge.economy.solved}
-						<Card title="Launched">
+						<Card title={isGraded ? 'Solve window' : 'Launched'} bodyClass={isGraded ? 'p-3' : 'p-4'}>
 							<div class="space-y-3">
 								{#if challenge.economy.expires_at}
 									<div class="flex items-baseline justify-between">
@@ -1429,10 +1433,6 @@
 								{#if ecoError}<p class="text-xs text-down">{ecoError}</p>{/if}
 							</div>
 						</Card>
-					{/if}
-
-					{#if isGraded && $auth.isAuthenticated}
-						<DepthRace slug={challenge.slug} economy={!!challenge.economy?.enabled} />
 					{/if}
 
 					{#if isKoth && $auth.isAuthenticated}
@@ -1562,42 +1562,71 @@
 					</Card>
 					{/if}
 
-					<Card title="Details">
-						<div class="space-y-2.5 text-sm">
-							{#if isGraded}
+					{#if isGraded}
+						<details class="group overflow-hidden rounded-lg border border-stone-800 bg-stone-900/40">
+							<summary class="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[0.95rem] font-semibold text-stone-200 marker:content-none">
+								<span>Details</span>
+								<Icon icon="mdi:chevron-down" class="ml-auto h-4 w-4 text-stone-500 transition-transform group-open:rotate-180" />
+							</summary>
+							<div class="space-y-2.5 border-t border-stone-800 px-4 py-3 text-sm">
 								<div class="flex items-center justify-between">
 									<span class="metadata-label text-stone-500">Scoring</span>
 									<span class="text-stone-300 tabular-nums">best × {challenge.base_points}</span>
 								</div>
-							{:else}
+								{#if challenge.resource_type}
+									<div class="flex items-center justify-between">
+										<span class="metadata-label text-stone-500">Type</span>
+										<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : challenge.has_instance ? 'Docker' : challenge.has_attachments ? 'Static download' : 'External'}</span>
+									</div>
+								{/if}
+								{#if challenge.category}
+									<div class="flex items-center justify-between">
+										<span class="metadata-label text-stone-500">Category</span>
+										<span class="text-stone-300 inline-flex items-center gap-1.5 leading-none">
+											<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{categoryColor(challenge.category)}"></span>
+											<span class="optical-label">{challenge.category}</span>
+										</span>
+									</div>
+								{/if}
+								{#if challenge.author_name}
+									<div class="flex items-center justify-between">
+										<span class="metadata-label text-stone-500">Author</span>
+										<span class="text-stone-300">{challenge.author_name}</span>
+									</div>
+								{/if}
+							</div>
+						</details>
+					{:else}
+						<Card title="Details">
+							<div class="space-y-2.5 text-sm">
 								<div class="flex items-center justify-between">
 									<span class="metadata-label text-stone-500">Flags</span>
 									<span class="text-stone-300 tabular-nums">{challenge.total_flags}</span>
 								</div>
-							{/if}
-							{#if challenge.resource_type}
-								<div class="flex items-center justify-between">
-									<span class="metadata-label text-stone-500">Type</span>
-									<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : challenge.has_instance ? 'Docker' : challenge.has_attachments ? 'Static download' : 'External'}</span>
-								</div>
-							{/if}
-							{#if challenge.category}
-								<div class="flex items-center justify-between">
-									<span class="metadata-label text-stone-500">Category</span>
-									<span class="text-stone-300 inline-flex items-center gap-1.5 leading-none">
-										<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{categoryColor(challenge.category)}"></span>
-										<span class="optical-label">{challenge.category}</span>
-									</span>
-								</div>
-							{/if}
-							{#if challenge.author_name}
-								<div class="flex items-center justify-between">
-									<span class="metadata-label text-stone-500">Author</span>
-									<span class="text-stone-300">{challenge.author_name}</span>
-								</div>
-							{/if}
-						</div>
-					</Card>
+								{#if challenge.resource_type}
+									<div class="flex items-center justify-between">
+										<span class="metadata-label text-stone-500">Type</span>
+										<span class="text-stone-300">{challenge.resource_type === 'vm' ? 'Virtual Machine' : challenge.has_instance ? 'Docker' : challenge.has_attachments ? 'Static download' : 'External'}</span>
+									</div>
+								{/if}
+								{#if challenge.category}
+									<div class="flex items-center justify-between">
+										<span class="metadata-label text-stone-500">Category</span>
+										<span class="text-stone-300 inline-flex items-center gap-1.5 leading-none">
+											<span class="w-1.5 h-1.5 rounded-full shrink-0" style="background:{categoryColor(challenge.category)}"></span>
+											<span class="optical-label">{challenge.category}</span>
+										</span>
+									</div>
+								{/if}
+								{#if challenge.author_name}
+									<div class="flex items-center justify-between">
+										<span class="metadata-label text-stone-500">Author</span>
+										<span class="text-stone-300">{challenge.author_name}</span>
+									</div>
+								{/if}
+							</div>
+						</Card>
+					{/if}
 				</div>
 			</div>
 		</div>
