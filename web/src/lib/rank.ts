@@ -78,18 +78,21 @@ export function resourceClass(t: string | null | undefined): string {
 	const v = (t || '').toLowerCase();
 	if (v === 'vm') return 'text-purple-500 border-purple-500/30 bg-purple-500/10';
 	if (v === 'static') return 'text-stone-400 border-stone-600/40 bg-stone-500/10';
+	if (v === 'external') return 'text-teal-500 border-teal-500/30 bg-teal-500/10';
 	return 'text-sky-500 border-sky-500/30 bg-sky-500/10';
 }
 export function resourceIcon(t: string | null | undefined): string {
 	const v = (t || '').toLowerCase();
 	if (v === 'vm') return 'mdi:desktop-classic';
 	if (v === 'static') return 'mdi:file-download-outline';
+	if (v === 'external') return 'mdi:open-in-new';
 	return 'mdi:docker';
 }
 export function resourceLabel(t: string | null | undefined): string {
 	const v = (t || '').toLowerCase();
 	if (v === 'vm') return 'VM';
 	if (v === 'static') return 'Static';
+	if (v === 'external') return 'External';
 	return 'Docker';
 }
 

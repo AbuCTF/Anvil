@@ -57,6 +57,7 @@ type ChallengeListResponse struct {
 	SubDescription *string `json:"sub_description,omitempty"` // short one-liner shown on the tile
 	ArenaMode      string  `json:"arena_mode"`                // per_team (default) or shared (KotH)
 	HasInstance    bool    `json:"has_instance"`              // docker w/ image, or active vm template; false = static download
+	HasAttachments bool    `json:"has_attachments"`           // server-side truth (true even while files are gated pre-open); no instance + no attachment = external
 
 	Value *float64 `json:"value,omitempty"` // economy: what a new full capture pays right now
 }
@@ -144,6 +145,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 					SELECT 1 FROM challenge_resources cr
 					WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active = TRUE))
 			) AS has_instance,
+			EXISTS (SELECT 1 FROM challenge_attachments ca WHERE ca.challenge_id = c.id) AS has_attachments,
 			cat.id as category_id, cat.name as category_name,
 			COALESCE((
 				SELECT COUNT(DISTINCT s.flag_id) FROM solves s
@@ -178,7 +180,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		if err := rows.Scan(
 			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 			&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
-			&ch.ResourceType, &ch.SubDescription, &ch.ArenaMode, &ch.HasInstance, &categoryID, &categoryName, &ch.UserSolves,
+			&ch.ResourceType, &ch.SubDescription, &ch.ArenaMode, &ch.HasInstance, &ch.HasAttachments, &categoryID, &categoryName, &ch.UserSolves,
 		); err != nil {
 			h.logger.Error("failed to scan challenge", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
@@ -275,6 +277,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 					SELECT 1 FROM challenge_resources cr
 					WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active = TRUE))
 			) AS has_instance,
+			EXISTS (SELECT 1 FROM challenge_attachments ca WHERE ca.challenge_id = c.id) AS has_attachments,
 			cat.id as category_id, cat.name as category_name
 		FROM challenges c
 		LEFT JOIN categories cat ON c.category_id = cat.id
@@ -289,7 +292,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
 		&exposedPortsJSON, &ch.InstanceTimeout, &ch.MaxExtensions, &ch.ReleaseDate,
 		&ch.ResourceType, &ch.Status, &ch.SubDescription, &ch.ArenaMode,
-		&ch.HasInstance,
+		&ch.HasInstance, &ch.HasAttachments,
 		&categoryID, &categoryName,
 	)
 
