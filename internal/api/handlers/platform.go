@@ -55,10 +55,16 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("failed to read economy_mode", zap.Error(err))
 	}
+	registrationMode := h.config.Platform.RegistrationMode
+	if effective, modeErr := (&AuthHandler{config: h.config, db: h.db}).registrationMode(ctx); modeErr != nil {
+		h.logger.Warn("failed to read effective registration_mode", zap.Error(modeErr))
+	} else {
+		registrationMode = effective
+	}
 	response := platformInfoResponse{
 		Name:              h.config.Platform.Name,
 		Description:       h.config.Platform.Description,
-		RegistrationMode:  h.config.Platform.RegistrationMode,
+		RegistrationMode:  registrationMode,
 		ScoringEnabled:    h.config.Platform.ScoringEnabled,
 		ScoreboardEnabled: h.config.Platform.ScoreboardEnabled,
 		ArenaEnabled:      arena,

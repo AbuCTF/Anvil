@@ -57,8 +57,8 @@ func TestParseAccessTokenAcceptsSupportedTokenTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			token := signTestToken(t, jwt.SigningMethodHS256, tt.claims, cfg.JWT.Secret)
-			if _, err := parseAccessToken(token, cfg); err != nil {
-				t.Fatalf("parseAccessToken() returned error: %v", err)
+			if _, err := ParseAccessToken(token, cfg); err != nil {
+				t.Fatalf("ParseAccessToken() returned error: %v", err)
 			}
 		})
 	}
@@ -69,8 +69,8 @@ func TestParseAccessTokenRejectsUnsupportedAlgorithm(t *testing.T) {
 	claims := Claims{UserID: uuid.New(), TokenType: "user"}
 	token := signTestToken(t, jwt.SigningMethodHS384, claims, cfg.JWT.Secret)
 
-	if _, err := parseAccessToken(token, cfg); err == nil {
-		t.Fatal("parseAccessToken() accepted an HS384 token")
+	if _, err := ParseAccessToken(token, cfg); err == nil {
+		t.Fatal("ParseAccessToken() accepted an HS384 token")
 	}
 }
 
@@ -85,8 +85,8 @@ func TestParseAccessTokenRejectsWrongIssuer(t *testing.T) {
 	}
 	token := signTestToken(t, jwt.SigningMethodHS256, claims, cfg.JWT.Secret)
 
-	if _, err := parseAccessToken(token, cfg); err == nil {
-		t.Fatal("parseAccessToken() accepted a token from another issuer")
+	if _, err := ParseAccessToken(token, cfg); err == nil {
+		t.Fatal("ParseAccessToken() accepted a token from another issuer")
 	}
 }
 
@@ -104,8 +104,8 @@ func TestParseAccessTokenRejectsInvalidTokenShape(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			token := signTestToken(t, jwt.SigningMethodHS256, tt.claims, cfg.JWT.Secret)
-			if _, err := parseAccessToken(token, cfg); err == nil {
-				t.Fatal("parseAccessToken() accepted invalid claims")
+			if _, err := ParseAccessToken(token, cfg); err == nil {
+				t.Fatal("ParseAccessToken() accepted invalid claims")
 			}
 		})
 	}
@@ -123,6 +123,21 @@ func TestGetUserIDRejectsUnexpectedContextType(t *testing.T) {
 	got := GetUserID(c)
 	if got == nil || *got != want {
 		t.Fatalf("GetUserID() = %v, want %v", got, want)
+	}
+}
+
+func TestHashAccessTokenIsStableAndDoesNotExposeToken(t *testing.T) {
+	token := "header.payload.signature"
+	first := HashAccessToken(token)
+	second := HashAccessToken(token)
+	if first != second {
+		t.Fatalf("hash changed between calls: %q != %q", first, second)
+	}
+	if first == token || len(first) != 64 {
+		t.Fatalf("unexpected access-token hash %q", first)
+	}
+	if first == HashAccessToken(token+"x") {
+		t.Fatal("different bearer tokens produced the same test hash")
 	}
 }
 

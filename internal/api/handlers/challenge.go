@@ -681,11 +681,22 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 		c.JSON(opErr.Status, gin.H{"error": opErr.Message})
 		return
 	}
+	var state string
+	_ = tx.QueryRow(ctx,
+		`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+		*teamID, chalID).Scan(&state)
 	var credits float64
 	_ = tx.QueryRow(ctx, `SELECT credits FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&credits)
 	if err := tx.Commit(ctx); err != nil {
 		h.logger.Error("failed to commit challenge open", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to launch challenge"})
+		return
+	}
+	if state == "solved" {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "solved", "credits": credits, "already_solved": true,
+			"message": "challenge is already solved",
+		})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "open", "credits": credits, "message": "challenge launched"})

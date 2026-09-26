@@ -918,7 +918,7 @@
 			try {
 				const res = await api.getAdminTeamSolves(id);
 				teamSolves[id] = res.solves || [];
-			} catch (e) {
+			} catch {
 				teamSolves[id] = [];
 			} finally {
 				solvesLoading[id] = false;
@@ -933,7 +933,7 @@
 		supportLoading = supportLoading;
 		try {
 			teamSupport[id] = await api.getAdminTeamSupport(id);
-		} catch (e) {
+		} catch {
 			teamSupport[id] = null;
 		} finally {
 			supportLoading[id] = false;
