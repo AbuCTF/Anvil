@@ -7,6 +7,7 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { instantTitle } from '$lib/time';
+	import { auth } from '$stores/auth';
 
 	interface Instance {
 		id: string;
@@ -21,6 +22,8 @@
 		max_extensions: number;
 		reset_count: number;
 		max_resets: number;
+		owner_user_id?: string;
+		launched_by?: string;
 	}
 
 	let instances: Instance[] = [];
@@ -262,6 +265,7 @@
 				{@const resetCount = instance.reset_count ?? 0}
 				{@const maxResets = instance.max_resets ?? 3}
 				{@const resetLimitReached = resetCount >= maxResets}
+				{@const mine = !instance.owner_user_id || instance.owner_user_id === $auth.user?.id}
 				<Card bodyClass="p-0">
 					<div slot="header" class="flex items-center gap-2.5 min-w-0 leading-none">
 						<span class="w-2 h-2 rounded-full shrink-0 {statusDot(instance.status)}"></span>
@@ -352,6 +356,7 @@
 						</div>
 					</div>
 
+					{#if mine}
 					<div class="px-4 py-3 sm:px-5 border-t border-stone-800 grid grid-cols-3 gap-2">
 						<button
 							on:click={() => extendInstance(instance.id)}
@@ -392,6 +397,11 @@
 							<span>Stop</span>
 						</button>
 					</div>
+					{:else}
+					<div class="px-4 py-3 sm:px-5 border-t border-stone-800 text-xs text-stone-500 leading-relaxed">
+						Launched by <span class="text-stone-300">{instance.launched_by || 'a teammate'}</span>. Only they can stop or revert it. To free the slot, abandon it on the <a href="/challenges/{instance.challenge_slug}" class="text-stone-300 underline underline-offset-2 hover:text-stone-100">challenge page</a>.
+					</div>
+					{/if}
 				</Card>
 			{/each}
 		</div>

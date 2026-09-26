@@ -56,6 +56,11 @@ type InstanceResponse struct {
 	MaxExtensions  int            `json:"max_extensions"`
 	ResetCount     int            `json:"reset_count"`
 	MaxResets      int            `json:"max_resets"`
+	// OwnerUserID / LaunchedBy attribute a team-listed instance to the teammate who
+	// launched it, so the instances page can label it and only offer stop/revert on
+	// the caller's own (the stop claim is still per-user).
+	OwnerUserID string `json:"owner_user_id,omitempty"`
+	LaunchedBy  string `json:"launched_by,omitempty"`
 	// Endpoints is set for k8s-instanced challenges: the player-facing URLs /
 	// connect strings. IPAddress/Ports stay empty in that mode.
 	Endpoints []instancer.Endpoint `json:"endpoints,omitempty"`
@@ -173,9 +178,11 @@ func (h *InstanceHandler) List(c *gin.Context) {
 			i.ip_address, i.assigned_ports, i.created_at, i.expires_at,
 			i.extensions_used, COALESCE(c.max_extensions, 3) as max_extensions,
 			COALESCE(i.reset_count, 0), COALESCE(i.max_resets, c.max_resets, 3),
-			c.name as challenge_name, c.slug as challenge_slug
+			c.name as challenge_name, c.slug as challenge_slug,
+			i.user_id, COALESCE(u.username, '')
 		FROM instances i
 		JOIN challenges c ON i.challenge_id = c.id
+		LEFT JOIN users u ON u.id = i.user_id
 		WHERE i.%s = $1
 		  AND i.status NOT IN ('stopped', 'failed', 'expired')
 		  AND i.expires_at > NOW()
@@ -204,6 +211,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 			&inst.ExtensionsUsed, &inst.MaxExtensions,
 			&inst.ResetCount, &inst.MaxResets,
 			&inst.ChallengeName, &inst.ChallengeSlug,
+			&inst.OwnerUserID, &inst.LaunchedBy,
 		); err != nil {
 			h.logger.Error("failed to scan instance", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch instances"})
