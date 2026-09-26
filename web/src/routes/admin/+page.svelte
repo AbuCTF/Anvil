@@ -2939,7 +2939,7 @@
 						<span class={labelCls}>Scoring</span>
 						<select bind:value={editingChallenge.scoring_mode} class="w-full {fieldCls}">
 							<option value="flag">Flag — solves by flag submission</option>
-							<option value="graded">Graded — an in-instance grader scores depth 0–1, best × points</option>
+							<option value="graded">Graded - an in-instance grader scores depth 0-1, best x points</option>
 						</select>
 					</label>
 				</div>

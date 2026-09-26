@@ -104,9 +104,9 @@
 	{:else if !race}
 		<p class="text-xs text-down">{error}</p>
 	{:else}
-		<div class="space-y-5">
+		<div class="grid gap-5 md:grid-cols-2">
 			<!-- own best -->
-			<div>
+			<div class="md:col-start-1 md:row-start-1">
 				<div class="flex items-end justify-between gap-3">
 					<div>
 						<p class="metadata-label text-stone-500 mb-1">Your best</p>
@@ -137,13 +137,13 @@
 					</div>
 				{/if}
 				{#if !race.own}
-					<p class="mt-3 text-xs text-stone-500 leading-relaxed">No score yet. Submit a solution through the challenge's own portal; its grader scores each run and your best counts.</p>
+					<p class="mt-3 text-xs text-stone-500 leading-relaxed">No score yet. Complete a graded run through the challenge service; verified progress appears here automatically.</p>
 				{/if}
 			</div>
 
 			<!-- evaluations -->
 			{#if ev}
-				<div class="flex items-center justify-between gap-3 rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-xs leading-none">
+				<div class="flex items-center justify-between gap-3 rounded-lg border border-stone-800 bg-stone-950 px-3 py-2 text-xs leading-none md:col-start-1 md:row-start-2">
 					<span class="inline-flex items-center gap-1.5 text-stone-400">
 						<OpticalIcon icon="mdi:gauge" size={13} box={14} className="text-stone-500" />
 						<span class="optical-label tabular-nums">
@@ -166,7 +166,7 @@
 			{/if}
 
 			<!-- the field -->
-			<div>
+			<div class="md:col-start-2 md:row-start-1 md:row-span-2 md:border-l md:border-stone-800 md:pl-5">
 				<div class="flex items-baseline justify-between mb-2">
 					<p class="metadata-label text-stone-500">Field</p>
 					<p class="text-[0.68rem] text-stone-600 tabular-nums">{fieldNote}</p>
@@ -196,7 +196,7 @@
 					</ol>
 				{/if}
 			</div>
-			{#if error}<p class="text-[0.68rem] text-warn">Live updates delayed: {error}</p>{/if}
+			{#if error}<p class="text-[0.68rem] text-warn md:col-span-2">Live updates delayed: {error}</p>{/if}
 		</div>
 	{/if}
 </Card>
