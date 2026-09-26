@@ -383,7 +383,9 @@ func containerPod(name, image string, args []string, ports []PortSpec, env map[s
 	var containerPorts, svcPorts []any
 	for _, p := range ports {
 		containerPorts = append(containerPorts, map[string]any{"containerPort": int64(p.Port)})
-		svcPorts = append(svcPorts, map[string]any{"port": int64(p.Port), "targetPort": int64(p.Port)})
+		// k8s requires a name on every port of a multi-port Service (a role with a
+		// public + an internal port, e.g. graded tiers). p<port> is a valid DNS-1035 label.
+		svcPorts = append(svcPorts, map[string]any{"name": fmt.Sprintf("p%d", p.Port), "port": int64(p.Port), "targetPort": int64(p.Port)})
 	}
 	var envList []any
 	for k, v := range env {
