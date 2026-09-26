@@ -36,7 +36,7 @@
 
 <a
 	href="/challenges/{challenge.slug}"
-	class="tile group flex h-full flex-col rounded-lg border p-4 transition-colors duration-150 {challenge.is_solved
+	class="tile group flex flex-col rounded-lg border p-4 transition-colors duration-150 {challenge.is_solved
 		? 'challenge-tile-solved'
 		: 'bg-stone-900/40 border-stone-800 hover:border-stone-700 hover:bg-stone-800/20'}"
 >
