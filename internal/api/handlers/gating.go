@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -148,4 +149,17 @@ func publicTeamSQL(alias string) string {
 // arena rows mirror real teams by id (koth native); hide mirrors of test teams.
 func publicGameTeamSQL(alias string) string {
 	return `NOT EXISTS (SELECT 1 FROM teams rt WHERE rt.id = ` + alias + `.id AND NOT ` + publicTeamSQL("rt") + `)`
+}
+
+// teamIsKothQA reports whether teamID is the one team allowed to enter a DRAFT KotH
+// arena for pre-drop QA: the arenas stay unpublished (hidden from the field) but this
+// team can buy in and play the real participant flow. Set via platform_settings
+// koth_qa_team_id; empty = nobody (normal published-only gate). Cleared after QA.
+func teamIsKothQA(ctx context.Context, db *database.DB, teamID string) bool {
+	var v string
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT value FROM platform_settings WHERE key = 'koth_qa_team_id'`).Scan(&v); err != nil {
+		return false
+	}
+	return v != "" && v == teamID
 }

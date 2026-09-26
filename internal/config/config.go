@@ -459,7 +459,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.scoring.defense_factor", 1.0)
 	v.SetDefault("game.scoring.sla_points", 10)
 	v.SetDefault("game.scoring.koth_hold", 5)
-	v.SetDefault("game.scoring.koth_rank", []int{12, 7, 4, 2, 1})
+	// quals KotH round-rank bonus: 2 to the top holder, 1 to second, nothing below.
+	// pinned here rather than via env because a []int does not round-trip through an
+	// env string reliably. finals overrides in its own config.
+	v.SetDefault("game.scoring.koth_rank", []int{2, 1, 0, 0, 0})
 	v.SetDefault("game.webhook.enabled", false)
 	v.SetDefault("game.webhook.url", "")
 	v.SetDefault("game.webhook.secret", "")

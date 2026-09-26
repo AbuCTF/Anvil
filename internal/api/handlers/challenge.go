@@ -733,7 +733,7 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 
 	// admins can enter a draft arena in preview; players only a published one.
 	statusCond := "status = 'published' AND (release_date IS NULL OR release_date <= NOW())"
-	if isAdmin {
+	if isAdmin || (teamID != nil && teamIsKothQA(ctx, h.db, teamID.String())) {
 		statusCond = "status IN ('published', 'draft')"
 	}
 	var chalID uuid.UUID
