@@ -1,0 +1,31 @@
+name: Justified
+slug: justified
+author: WebVerse (Leighlin Ramsay) x H7
+category: web
+difficulty: medium
+status: draft
+points: 150
+sub_description: |
+  Partner-hosted web challenge (WebVerse Labs). Open it here to get the link; your solve syncs back automatically.
+description: |
+  Web exploitation, in partnership with WebVerse Labs. This challenge is hosted on
+  WebVerse's own platform - play it there and your solve syncs back here
+  automatically. There is no flag to submit here.
+
+  Justified - Marlowe and Sons' Instant Cover Proof typesets your title page and hands
+  back a PDF plus the typesetter's log. Read what the typesetter reports back.
+
+  How to play:
+  1. Create a WebVerse account with the SAME email you registered with on H7CTF.
+     Progress syncs by email, so it must match your H7CTF account email exactly, or
+     your solve will not count here.
+  2. OPEN this challenge here BEFORE you solve it on WebVerse. Opening starts your
+     timer and is required for the solve to count.
+  3. Play the WebVerse event:
+     https://ctf.webverselabs-pro.com/e/YfQq-BkjAX1I9bECP5U9xcsY
+     (create a WebVerse account first at https://webverselabs-pro.com/signup)
+
+  Your solve syncs back here automatically, usually within a minute or two.
+flags:
+  - { type: static, name: Justified, flag: "H7CTF{webverse_justified_poller_scored_placeholder}", points: 150 }
+tags: [web, partner, webverse]

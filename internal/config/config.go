@@ -24,6 +24,28 @@ type Config struct {
 	ZeroPool    ZeroPoolConfig  `mapstructure:"zeropool"`
 	Discord     DiscordConfig   `mapstructure:"discord"`
 	Instancer   InstancerConfig `mapstructure:"instancer"`
+	WebVerse    WebVerseConfig  `mapstructure:"webverse"`
+}
+
+// WebVerseConfig drives the WebVerse Labs solve-sync poller. WebVerse is the
+// web-category sponsor: its 5 challenges are played on WebVerse's own platform and
+// scored here by polling their leaderboard export and capturing solves through the
+// normal economy path. Enabled is the master off switch (default false) so nothing
+// runs until the owner turns it on after prod + slug confirmation; a runtime
+// platform_settings key ('webverse_sync_enabled', default true) can pause it live.
+type WebVerseConfig struct {
+	Enabled      bool              `mapstructure:"enabled"`       // master switch; off => the worker never polls
+	DryRun       bool              `mapstructure:"dry_run"`       // fetch+parse+match+log only; never writes captures
+	BaseURL      string            `mapstructure:"base_url"`      // e.g. https://api.webverselabs-pro.com
+	ExportPath   string            `mapstructure:"export_path"`   // leaderboard-export path
+	Token        string            `mapstructure:"token"`         // authtoken (rotated); prefer TokenFile. never logged
+	TokenFile    string            `mapstructure:"token_file"`    // read the token from this file if set (trimmed)
+	AuthHeader   bool              `mapstructure:"auth_header"`   // try the token as an Authorization header first (query-param fallback)
+	PollInterval time.Duration     `mapstructure:"poll_interval"` // e.g. 60s
+	HTTPTimeout  time.Duration     `mapstructure:"http_timeout"`  // per-request timeout
+	EventEnd     string            `mapstructure:"event_end"`     // RFC3339; a solve after this doesn't count (empty => no upper bound)
+	ExpectSlug   string            `mapstructure:"expect_slug"`   // optional: warn if the export's event.slug differs
+	SlugMap      map[string]string `mapstructure:"slug_map"`      // WebVerse lab slug -> Anvil challenge slug
 }
 
 // InstancerConfig selects how docker challenges are launched. Backend "docker"
@@ -354,6 +376,29 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("instancer.hmac_secret", "")
 	v.SetDefault("instancer.base_domain", "h7tex.com")
 	v.SetDefault("instancer.timeout", "1h")
+
+	// webverse solve-sync poller. off by default (master switch). every key gets a
+	// default so the AllKeys env-bind loop binds ANVIL_WEBVERSE_* (esp. the token).
+	v.SetDefault("webverse.enabled", false)
+	v.SetDefault("webverse.dry_run", false)
+	v.SetDefault("webverse.base_url", "https://api.webverselabs-pro.com")
+	v.SetDefault("webverse.export_path", "/api/ctf/leaderboard-export")
+	v.SetDefault("webverse.token", "")
+	v.SetDefault("webverse.token_file", "")
+	v.SetDefault("webverse.auth_header", false)
+	v.SetDefault("webverse.poll_interval", "60s")
+	v.SetDefault("webverse.http_timeout", "20s")
+	v.SetDefault("webverse.event_end", "2026-09-27T15:30:00Z")
+	v.SetDefault("webverse.expect_slug", "YfQq-BkjAX1I9bECP5U9xcsY")
+	// WebVerse lab slug -> Anvil challenge slug. PENDING Leighlin's prod slug confirm;
+	// identity map for now, override via config.yaml (webverse.slug_map) with no redeploy of code.
+	v.SetDefault("webverse.slug_map", map[string]string{
+		"flux":        "flux",
+		"splice":      "splice",
+		"merged":      "merged",
+		"worldoutter": "worldoutter",
+		"justified":   "justified",
+	})
 
 	v.SetDefault("vpn.enabled", true)
 	v.SetDefault("vpn.interface", "wg0")

@@ -70,7 +70,8 @@ type ChallengeDetailResponse struct {
 	ReleaseDate     *time.Time            `json:"release_date,omitempty"`
 	InstanceTimeout *int                  `json:"instance_timeout,omitempty"`
 	MaxExtensions   *int                  `json:"max_extensions,omitempty"`
-	Status          string                `json:"status"` // draft, published, archived
+	Status          string                `json:"status"`        // draft, published, archived
+	PollerScored    bool                  `json:"poller_scored"` // solves sync from a partner platform; no local flag to submit
 	Economy         *ChallengeEconomyInfo `json:"economy,omitempty"`
 }
 
@@ -376,6 +377,14 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	}
 
 	ch.IsSolved = ch.UserSolves >= ch.TotalFlags && ch.TotalFlags > 0
+
+	// poller-scored (e.g. WebVerse Labs): only 'external' flags -> no local submission;
+	// the web hides the submit box and shows the partner note instead. best-effort.
+	if err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT COUNT(*) > 0 AND bool_and(flag_type = 'external') FROM flags WHERE challenge_id = $1`,
+		ch.ID).Scan(&ch.PollerScored); err != nil {
+		h.logger.Warn("failed to read poller_scored flag", zap.String("challenge_id", ch.ID), zap.Error(err))
+	}
 
 	if h.attachmentHdlr != nil {
 		attachments, err := h.attachmentHdlr.ListPublic(c, ch.ID)
@@ -997,6 +1006,26 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	} else if err != nil {
 		h.logger.Error("failed to query challenge for flag submission", zap.String("slug", slug), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+		return
+	}
+
+	// poller-scored challenges (e.g. WebVerse Labs) carry only an 'external' flag the
+	// player can't satisfy here: solves sync from the partner platform. Short-circuit
+	// before any attempt is recorded so there's no wrong-sub penalty and no lockout.
+	var pollerScored bool
+	if err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT COUNT(*) > 0 AND bool_and(flag_type = 'external') FROM flags WHERE challenge_id = $1`,
+		challengeID).Scan(&pollerScored); err != nil {
+		h.logger.Error("failed to check poller-scored flags", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
+		return
+	}
+	if pollerScored {
+		c.JSON(http.StatusOK, gin.H{
+			"correct":  false,
+			"external": true,
+			"message":  "This challenge is scored automatically from your WebVerse solves - there's no flag to submit here.",
+		})
 		return
 	}
 

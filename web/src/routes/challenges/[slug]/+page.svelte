@@ -258,6 +258,8 @@
 	let kothEntering = false;
 	let kothError = '';
 	$: isKoth = challenge?.arena_mode === 'shared';
+	// poller-scored (WebVerse Labs): no local flag to submit; solves sync from the partner platform
+	$: isExternal = !!challenge?.poller_scored;
 
 	async function enterArena() {
 		if (kothEntering) return;
@@ -1306,7 +1308,13 @@
 						</Card>
 					{/if}
 
-					{#if $auth.isAuthenticated && !locked && !isKoth}
+					{#if isExternal && $auth.isAuthenticated && !locked}
+						<Card title="Scored via WebVerse">
+							<p class="text-sm text-stone-400 leading-relaxed">This challenge is played on WebVerse's own platform. Sign up on WebVerse with the <span class="text-stone-200">same email</span> you registered with here, solve it there, and your solve syncs back automatically - there's no flag to submit here.</p>
+						</Card>
+					{/if}
+
+					{#if $auth.isAuthenticated && !locked && !isKoth && !isExternal}
 						<Card title="Submit Flag">
 							<form on:submit|preventDefault={submitFlag} class="space-y-3">
 								<input

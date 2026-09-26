@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/api"
+	"github.com/anvil-lab/anvil/internal/api/handlers"
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/game"
@@ -359,6 +360,10 @@ func main() {
 	gameCtx, gameCancel := context.WithCancel(context.Background())
 	go game.NewController(cfg.Game, db, logger).Run(gameCtx)
 
+	// webverse labs solve-sync poller — no-op unless webverse.enabled (master off switch).
+	webverseCtx, webverseCancel := context.WithCancel(context.Background())
+	go handlers.NewWebVersePoller(cfg, db, logger).Run(webverseCtx)
+
 	server := api.NewServer(cfg, db, containerSvc, instancerSvc, vmSvc, uploadSvc, storageSvc, vpnSvc, logger)
 
 	// extended timeouts for large file uploads
@@ -385,6 +390,7 @@ func main() {
 	sugar.Info("Shutting down server...")
 
 	gameCancel()
+	webverseCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
