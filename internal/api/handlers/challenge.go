@@ -1746,7 +1746,11 @@ func (h *ChallengeHandler) cleanupSolvedInstance(challengeID string, userID uuid
 		`SELECT i.id, COALESCE(i.container_id, ''), i.resource_type,
 		        i.vm_node_id, COALESCE(i.reserved_vcpu, 0), COALESCE(i.reserved_memory_mb, 0)
 		 FROM instances i
-		 WHERE i.user_id = $1 AND i.challenge_id = $2
+		 WHERE i.challenge_id = $2
+		   AND (i.user_id = $1 OR i.user_id IN (
+		         SELECT u.id FROM users u
+		         WHERE u.team_id = (SELECT team_id FROM users WHERE id = $1)
+		           AND (SELECT team_id FROM users WHERE id = $1) IS NOT NULL))
 		   AND i.status NOT IN ('stopped', 'failed', 'expired')
 		   AND i.expires_at > NOW()
 		 ORDER BY i.created_at DESC LIMIT 1`,
