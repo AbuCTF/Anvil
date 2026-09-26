@@ -86,8 +86,17 @@ func (h *GameAdminHandler) LaunchArena(c *gin.Context) {
 		CPULimit:    cpu,
 		MemoryLimit: mem,
 		Ports:       []instancer.PortSpec{{Port: arenaHTTPPort(portsJSON), Protocol: "tcp", Service: "http"}},
-		Flags:       map[string]string{"KOTH_ADMIN_TOKEN": secret},
-		Timeout:     720 * time.Hour, // long-lived: the arena runs the whole event
+		// KOTH_ADMIN_TOKEN: engine-only reset/status secret. KOTH_VERIFY_URL + KOTH_REQUIRE_SECRET:
+		// the write-gate - the target POSTs {token, rpc_secret} here to authorize each write, so a
+		// public token from /koth/status can't act for another team. Challenge id is baked into the
+		// URL so a token from another arena won't verify. Injected for every arena; targets that
+		// don't use the gate (e.g. GridWatch) simply ignore these vars.
+		Flags: map[string]string{
+			"KOTH_ADMIN_TOKEN":    secret,
+			"KOTH_VERIFY_URL":     fmt.Sprintf("http://anvil-api.anvil.svc.cluster.local:8080/api/v1/arena/koth/%s/verify", challengeID),
+			"KOTH_REQUIRE_SECRET": "true",
+		},
+		Timeout: 720 * time.Hour, // long-lived: the arena runs the whole event
 	})
 	if err != nil {
 		h.fail(c, "launch arena instance", err)

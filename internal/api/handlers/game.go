@@ -256,6 +256,43 @@ func (h *GameHandler) Hills(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"hills": hills})
 }
 
+// VerifyKoth is the arena write-gate check, called server-to-server by a KotH target
+// (e.g. the Hostile Takeover bridge) on each write: it confirms the (challenge, public
+// token, private secret) triple matches an issued buy-in, so a public token harvested
+// from /koth/status cannot act for another team. Unauthenticated by design - the secret
+// is the auth. The challenge id is in the path (baked into KOTH_VERIFY_URL at launch),
+// so a valid token issued for a DIFFERENT arena will not verify here.
+func (h *GameHandler) VerifyKoth(c *gin.Context) {
+	arena := c.Param("id")
+	if _, err := uuid.Parse(arena); err != nil {
+		c.JSON(http.StatusOK, gin.H{"valid": false})
+		return
+	}
+	var body struct {
+		Token     string `json:"token"`
+		RpcSecret string `json:"rpc_secret"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.Token == "" || body.RpcSecret == "" {
+		c.JSON(http.StatusOK, gin.H{"valid": false})
+		return
+	}
+	var teamID string
+	err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT team_id::text FROM koth_entries
+		 WHERE challenge_id = $1 AND token = $2 AND rpc_secret = $3`,
+		arena, body.Token, body.RpcSecret).Scan(&teamID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusOK, gin.H{"valid": false})
+		return
+	}
+	if err != nil {
+		h.logger.Error("koth verify", zap.Error(err))
+		c.JSON(http.StatusOK, gin.H{"valid": false})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"valid": true, "public_tag": body.Token, "team_id": teamID})
+}
+
 func (h *GameHandler) tickRound(ctx context.Context, query gameStateQuerier) (int, int, error) {
 	var tick, round int
 	if err := query.QueryRow(ctx, `SELECT COALESCE(MAX(tick_number), 0) FROM game_ticks`).Scan(&tick); err != nil {

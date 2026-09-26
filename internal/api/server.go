@@ -161,6 +161,9 @@ func (s *Server) setupRouter() {
 			public.GET("/arena/history", arenaRead.History)
 			public.GET("/arena/services", arenaRead.Services)
 			public.GET("/arena/events", arenaRead.Events)
+			// arena write-gate verify: called server-to-server by a KotH target to check a
+			// team's (token, secret) pair for that arena. Unauth - the secret is the auth.
+			public.POST("/arena/koth/:id/verify", arenaRead.VerifyKoth)
 		}
 
 		protected := v1.Group("")
