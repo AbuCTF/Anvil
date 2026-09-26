@@ -655,7 +655,10 @@ func (h *GameHandler) loadLiveState(ctx context.Context) ([]byte, string, error)
 // returns the whole arena snapshot in one response, so each viewer polls
 // a single endpoint instead of fanning out across six.
 func (h *GameHandler) State(c *gin.Context) {
-	if !h.config.Game.Enabled {
+	// pre-drop the arena stays hidden (arena_enabled false) so /arena/state doesn't leak
+	// the hills/controllers; it returns the same inactive shape as when the game is off.
+	arenaOpen, _ := boolSettingOrDefault(c.Request.Context(), h.db, "arena_enabled", false)
+	if !h.config.Game.Enabled || !arenaOpen {
 		body, etag, err := encodeGameState(gin.H{
 			"active":    false,
 			"status":    gin.H{"tick": 0, "round": 0, "tick_interval_seconds": int(h.config.Game.TickInterval.Seconds())},
