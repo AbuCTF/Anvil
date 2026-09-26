@@ -163,5 +163,15 @@ func teamIsKothQA(ctx context.Context, db *database.DB, teamID string) bool {
 		`SELECT value #>> '{}' FROM platform_settings WHERE key = 'koth_qa_team_id'`).Scan(&v); err != nil {
 		return false
 	}
-	return v != "" && v == teamID
+	if v == "" {
+		return false
+	}
+	// koth_qa_team_id may be a comma-separated allowlist (multiple QA teams for a
+	// multi-team contention test); each entry is a team id.
+	for _, id := range strings.Split(v, ",") {
+		if strings.TrimSpace(id) == teamID {
+			return true
+		}
+	}
+	return false
 }

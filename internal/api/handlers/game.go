@@ -149,6 +149,14 @@ func (h *GameHandler) off(c *gin.Context) bool {
 		c.JSON(http.StatusNotFound, gin.H{"error": "game not active"})
 		return true
 	}
+	// public arena reads stay hidden until the arena is opened (the koth drop), so the
+	// hills, controllers and standings don't leak the drop early to a direct probe. the
+	// engine polls game_koth_hills directly (not via these routes), so this is safe;
+	// arena_enabled flips true at the drop. staff use the admin arena flow, not these.
+	if open, _ := boolSettingOrDefault(c.Request.Context(), h.db, "arena_enabled", false); !open {
+		c.JSON(http.StatusNotFound, gin.H{"error": "arena not open"})
+		return true
+	}
 	return false
 }
 
