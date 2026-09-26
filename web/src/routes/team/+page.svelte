@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { api } from '$api';
 	import { auth } from '$stores/auth';
@@ -20,6 +20,11 @@
 	let copied = false;
 	let eco: any = null;
 	let convertAmt = '';
+	let conversionQuote: { points: number; credits: number; effective_rate: number } | null = null;
+	let quoteLoading = false;
+	let quoteError = '';
+	let quoteTimer: ReturnType<typeof setTimeout> | undefined;
+	let quoteGeneration = 0;
 
 	const inputClass =
 		'w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors';
@@ -93,18 +98,49 @@
 
 	async function convert() {
 		const pts = Number(convertAmt);
-		if (!pts || pts <= 0 || busy) return;
+		if (!pts || pts <= 0 || busy || !conversionQuote || conversionQuote.points !== pts) return;
+		if (!(await confirmDialog({
+			title: 'Convert team points',
+			message: `Spend ${pts.toLocaleString()} points for approximately ${conversionQuote.credits.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits? This cannot be undone.`,
+			confirmLabel: 'Convert',
+			danger: true
+		}))) return;
 		busy = true;
 		error = '';
 		try {
 			await api.convertPoints(pts);
 			convertAmt = '';
+			conversionQuote = null;
+			quoteError = '';
 			await load();
 		} catch (e: any) {
 			error = e?.message ?? 'convert failed';
 		} finally {
 			busy = false;
 		}
+	}
+
+	function scheduleConversionQuote(raw: string) {
+		if (quoteTimer) clearTimeout(quoteTimer);
+		const generation = ++quoteGeneration;
+		conversionQuote = null;
+		quoteError = '';
+		const points = Number(raw);
+		if (!Number.isFinite(points) || points <= 0) {
+			quoteLoading = false;
+			return;
+		}
+		quoteLoading = true;
+		quoteTimer = setTimeout(async () => {
+			try {
+				const quote = await api.quotePointConversion(points);
+				if (generation === quoteGeneration) conversionQuote = quote;
+			} catch (e: any) {
+				if (generation === quoteGeneration) quoteError = e?.message ?? 'Quote unavailable';
+			} finally {
+				if (generation === quoteGeneration) quoteLoading = false;
+			}
+		}, 250);
 	}
 
 	async function bailout() {
@@ -136,6 +172,9 @@
 	$: openNow = (eco?.open ?? []).filter((o: any) => o.status === 'open');
 
 	onMount(load);
+	onDestroy(() => {
+		if (quoteTimer) clearTimeout(quoteTimer);
+	});
 </script>
 
 <svelte:head><title>Team · Anvil</title></svelte:head>
@@ -226,10 +265,22 @@
 					</div>
 
 					<form on:submit|preventDefault={convert} class="mt-4 flex gap-2">
-						<input class={inputClass} type="number" min="1" bind:value={convertAmt} placeholder="Convert points → credits" aria-label="Points to convert to credits" />
-						<button type="submit" disabled={busy || !convertAmt} class="{primaryBtn} whitespace-nowrap">Convert</button>
+						<input class={inputClass} type="number" min="1" bind:value={convertAmt} on:input={(event) => scheduleConversionQuote((event.currentTarget as HTMLInputElement).value)} placeholder="Convert points → credits" aria-label="Points to convert to credits" />
+						<button type="submit" disabled={busy || !conversionQuote || conversionQuote.points !== Number(convertAmt)} class="{primaryBtn} whitespace-nowrap">Convert</button>
 					</form>
-					<p class="text-xs text-stone-600 mt-1">The conversion rate falls with each block, so converting back and forth loses value.</p>
+					{#if quoteLoading}
+						<p class="mt-1 text-xs text-stone-500">Calculating current quote…</p>
+					{:else if conversionQuote}
+						<p class="mt-1 text-xs text-stone-500">
+							{conversionQuote.points.toLocaleString()} points →
+							<span class="font-medium tabular-nums text-amber-500">{conversionQuote.credits.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits</span>
+							at {conversionQuote.effective_rate.toLocaleString(undefined, { maximumFractionDigits: 4 })} credits/point.
+						</p>
+					{:else if quoteError}
+						<p class="mt-1 text-xs text-down">{quoteError}</p>
+					{:else}
+						<p class="text-xs text-stone-600 mt-1">Enter an amount to see the current quote. The rate falls with each block.</p>
+					{/if}
 
 					{#if eco.credits < 50 && !eco.bailout_used && (eco.open ?? []).filter((o: any) => o.status === 'open').length === 0}
 						<button on:click={bailout} disabled={busy} class="mt-3 w-full rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-500 py-2 text-sm hover:bg-amber-500/20 disabled:opacity-40 transition-colors">

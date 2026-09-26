@@ -523,6 +523,11 @@ class ApiClient {
 		return this.request<{ status: string; expires_at: number }>(`/challenges/${slug}/extend`, { method: 'POST' });
 	}
 
+	async quoteChallengeExtension(slug: string) {
+		return this.request<{ cost: number; added_seconds: number; extensions_used: number; extensions_remaining: number }>(
+			`/economy/challenges/${slug}/extension-quote`, { cache: 'no-store' });
+	}
+
 	async economyBailout() {
 		return this.request<{ status: string }>('/economy/bailout', { method: 'POST' });
 	}
@@ -530,6 +535,11 @@ class ApiClient {
 	async convertPoints(points: number) {
 		return this.request<{ credits_gained: number; points_spent: number }>(
 			'/economy/convert', { method: 'POST', body: JSON.stringify({ points }) });
+	}
+
+	async quotePointConversion(points: number) {
+		return this.request<{ points: number; credits: number; effective_rate: number; blocks_used: number }>(
+			'/economy/convert/quote', { method: 'POST', body: JSON.stringify({ points }) });
 	}
 
 	// admin

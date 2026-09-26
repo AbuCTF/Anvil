@@ -187,10 +187,13 @@
 	let preStart = false;
 	let kickoffTimer: ReturnType<typeof setTimeout> | undefined;
 	$: phase = $eventClock.phase;
+	// The timer guard makes this finite; the callback changes preStart only after an API response.
+	// eslint-disable-next-line svelte/infinite-reactive-loop
 	$: if (preStart && phase === 'live') armKickoff(false);
 	function armKickoff(retry: boolean) {
 		if (kickoffTimer) return;
 		kickoffTimer = setTimeout(async () => {
+			// eslint-disable-next-line svelte/infinite-reactive-loop
 			await loadChallenge();
 			kickoffTimer = undefined;
 			if (preStart && phase === 'live') armKickoff(true);
@@ -202,6 +205,8 @@
 		const sentPhase = phase;
 		try {
 			challenge = await api.getChallenge(slug);
+			// These async response writes settle the guarded kickoff loop.
+			// eslint-disable-next-line svelte/infinite-reactive-loop
 			preStart = false;
 			editForm = {
 				name: challenge.name,
@@ -212,10 +217,12 @@
 			if (challenge.flags) {
 				editingFlags = challenge.flags.map((f: any) => ({ ...f, editing: false, newFlag: '' }));
 			}
+			await loadExtensionQuote();
 		} catch (e) {
 			// a failed go-live refetch (5xx, network) keeps waiting; only a real 404 ends it
 			const scheduled = e instanceof ApiError && e.details.phase === 'scheduled';
 			const missing = e instanceof ApiError && e.status === 404 && !scheduled;
+			// eslint-disable-next-line svelte/infinite-reactive-loop
 			preStart = !challenge && (scheduled || sentPhase === 'scheduled' || (preStart && !missing));
 			error = e instanceof Error ? e.message : 'Failed to load challenge';
 		} finally {
@@ -248,6 +255,8 @@
 
 	let ecoBusy = false;
 	let ecoError = '';
+	let extensionQuote: { cost: number; added_seconds: number; extensions_used: number; extensions_remaining: number } | null = null;
+	let extensionQuoteLoading = false;
 	$: locked = challenge?.economy?.enabled && !challenge.economy.launched;
 	// economy pays the live band value; flags weigh a share of it, not flat points
 	$: economyOn = !!challenge?.economy?.enabled;
@@ -270,6 +279,27 @@
 		} finally {
 			ecoBusy = false;
 		}
+	}
+
+	async function loadExtensionQuote() {
+		if (!slug || !challenge?.economy?.launched || challenge?.economy?.solved) {
+			extensionQuote = null;
+			return;
+		}
+		extensionQuoteLoading = true;
+		try {
+			extensionQuote = await api.quoteChallengeExtension(slug);
+		} catch {
+			extensionQuote = null;
+		} finally {
+			extensionQuoteLoading = false;
+		}
+	}
+
+	function extensionDuration(seconds: number): string {
+		if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+		if (seconds % 60 === 0) return `${seconds / 60}m`;
+		return `${seconds}s`;
 	}
 
 	const launchChallenge = () => ecoAction(() => api.openChallenge(slug!));
@@ -297,8 +327,36 @@
 			kothEntering = false;
 		}
 	}
-	const abandonChallenge = () => ecoAction(() => api.abandonChallenge(slug!));
-	const extendTimer = () => ecoAction(() => api.extendChallenge(slug!));
+	async function abandonChallenge() {
+		const launchCost = Number(challenge?.economy?.launch_cost || 0);
+		const refund = Number(challenge?.economy?.abandon_refund || 0);
+		const loss = launchCost - refund;
+		const money = (value: number) => Number.isInteger(value) ? value.toFixed(0) : value.toFixed(1);
+		const impact = launchCost > 0
+			? ` You will receive ${money(refund)} credits back and permanently lose ${money(loss)} credits.`
+			: '';
+		if (!(await confirmDialog({
+			title: 'Abandon challenge',
+			message: `Abandon this challenge?${impact} Its timer and any running instance will be discarded.`,
+			confirmLabel: 'Abandon',
+			danger: true
+		}))) return;
+		await ecoAction(() => api.abandonChallenge(slug!));
+	}
+	async function extendTimer() {
+		await loadExtensionQuote();
+		if (!extensionQuote) {
+			ecoError = 'The next extension price is unavailable.';
+			return;
+		}
+		if (!(await confirmDialog({
+			title: 'Extend challenge timer',
+			message: `Add ${extensionDuration(extensionQuote.added_seconds)} for ${extensionQuote.cost.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits? Extension prices rise after each purchase.`,
+			confirmLabel: 'Purchase extension',
+			danger: true
+		}))) return;
+		await ecoAction(() => api.extendChallenge(slug!));
+	}
 
 	async function submitFlag() {
 		if (!slug || !flagInput.trim()) return;
@@ -1338,10 +1396,18 @@
 										>{economyTimeRemaining || formatTimeRemaining(challenge.economy.expires_at)}</span>
 									</div>
 								{/if}
-								<div class="flex items-center justify-between border-t border-stone-800/60 pt-3">
+								<div class="flex flex-wrap items-center justify-between gap-2 border-t border-stone-800/60 pt-3">
 									<span class="text-sm text-stone-400"><span class="text-amber-500 font-semibold tabular-nums">{Math.floor(challenge.economy.credits)}</span> credits left</span>
-									<div class="flex gap-2">
-										<button on:click={extendTimer} disabled={ecoBusy} title="Add time for a credit cost that rises each extension" class="text-xs py-1.5 px-3 rounded-md border border-stone-800 text-stone-300 hover:bg-stone-800/40 disabled:opacity-40 transition-colors">Extend</button>
+									<div class="flex flex-wrap justify-end gap-2">
+										<button on:click={extendTimer} disabled={ecoBusy || extensionQuoteLoading || !extensionQuote} title={extensionQuote ? `Add ${extensionDuration(extensionQuote.added_seconds)} for ${extensionQuote.cost} credits` : 'No extension is currently available'} class="text-xs py-1.5 px-3 rounded-md border border-stone-800 text-stone-300 hover:bg-stone-800/40 disabled:opacity-40 transition-colors">
+											{#if extensionQuoteLoading}
+												Checking price…
+											{:else if extensionQuote}
+												Extend {extensionDuration(extensionQuote.added_seconds)} · {extensionQuote.cost.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits
+											{:else}
+												No extensions
+											{/if}
+										</button>
 										<button on:click={abandonChallenge} disabled={ecoBusy} title="Release the slot for a partial refund" class="text-xs py-1.5 px-3 rounded-md border border-down/30 bg-down/10 text-down hover:bg-down/20 disabled:opacity-40 transition-colors">Abandon</button>
 									</div>
 								</div>

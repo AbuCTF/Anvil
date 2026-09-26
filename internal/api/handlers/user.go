@@ -42,6 +42,37 @@ func teamBoardRank(ctx context.Context, db *database.DB, userID uuid.UUID) (rank
 	return rank, true, err
 }
 
+// teamBoardScore returns the same rounded score used by the team scoreboard.
+// Per-user total_score remains legacy capture bookkeeping and is not the
+// participant's ranking score in a team-ranked event.
+func teamBoardScore(ctx context.Context, db *database.DB, userID uuid.UUID) (score int, ok bool, err error) {
+	teamsMode, err := isTeamsMode(ctx, db)
+	if err != nil {
+		return 0, false, err
+	}
+	economyMode, err := isEconomyMode(ctx, db)
+	if err != nil {
+		return 0, false, err
+	}
+	if !teamsMode && !economyMode {
+		return 0, false, nil
+	}
+	if economyMode {
+		err = db.Pool.QueryRow(ctx, `
+			SELECT COALESCE(ROUND(COALESCE(ets.points, 0) + COALESCE(t.koth_score, 0)), 0)::int
+			FROM users u
+			LEFT JOIN teams t ON t.id = u.team_id
+			LEFT JOIN economy_team_score ets ON ets.team_id = t.id
+			WHERE u.id = $1`, userID).Scan(&score)
+	} else {
+		err = db.Pool.QueryRow(ctx, `
+			SELECT COALESCE(ROUND(COALESCE(t.total_score, 0) + COALESCE(t.koth_score, 0)), 0)::int
+			FROM users u LEFT JOIN teams t ON t.id = u.team_id
+			WHERE u.id = $1`, userID).Scan(&score)
+	}
+	return score, true, err
+}
+
 func currentUserRank(ctx context.Context, db *database.DB, userID uuid.UUID) (int, error) {
 	if rank, ok, err := teamBoardRank(ctx, db, userID); err != nil || ok {
 		return rank, err
@@ -116,6 +147,7 @@ type UserProfileResponse struct {
 	JoinedAt        int64   `json:"joined_at"`
 	TotalSolves     int     `json:"total_solves"`
 	TotalChallenges int     `json:"total_challenges"`
+	ScoreScope      string  `json:"score_scope"`
 }
 
 type UserStatsResponse struct {
@@ -129,6 +161,7 @@ type UserStatsResponse struct {
 	SolvesByDifficulty map[string]int `json:"solves_by_difficulty"`
 	SolvesByCategory   map[string]int `json:"solves_by_category"`
 	RecentActivity     []ActivityItem `json:"recent_activity"`
+	ScoreScope         string         `json:"score_scope"`
 }
 
 type ActivityItem struct {
@@ -212,12 +245,21 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 	}
 
 	profile.JoinedAt = createdAt.Unix()
+	profile.ScoreScope = "user"
 	if rank, ok, err := teamBoardRank(c.Request.Context(), h.db, uid); err != nil {
 		h.logger.Error("failed to get team rank", zap.String("user_id", uid.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch profile"})
 		return
 	} else if ok {
 		profile.Rank = rank
+	}
+	if score, ok, err := teamBoardScore(c.Request.Context(), h.db, uid); err != nil {
+		h.logger.Error("failed to get team score", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch profile"})
+		return
+	} else if ok {
+		profile.TotalScore = score
+		profile.ScoreScope = "team"
 	}
 
 	c.JSON(http.StatusOK, profile)
@@ -318,6 +360,7 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 	}
 
 	var stats UserStatsResponse
+	stats.ScoreScope = "user"
 	stats.SolvesByDifficulty = make(map[string]int)
 	stats.SolvesByCategory = make(map[string]int)
 
@@ -369,6 +412,14 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 		return
 	} else if ok {
 		stats.Rank = rank
+	}
+	if score, ok, err := teamBoardScore(c.Request.Context(), h.db, uid); err != nil {
+		h.logger.Error("failed to get team score", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
+	} else if ok {
+		stats.TotalScore = score
+		stats.ScoreScope = "team"
 	}
 
 	rows, err := h.db.Pool.Query(c.Request.Context(),
