@@ -199,15 +199,32 @@ func openChallengeEconomy(ctx context.Context, tx pgx.Tx, teamID, challengeID uu
 		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to expire stale opens"}
 	}
 
+	// count AND name the team's open challenges: static challenges and teammates'
+	// opens count toward the cap too, which players can't see, so name them in the
+	// error to kill the "i only have N open" confusion.
 	var openCount int
-	if err := tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM economy_challenge_state WHERE team_id = $1 AND status = 'open'`, teamID,
-	).Scan(&openCount); err != nil {
+	var openNames string
+	nrows, nerr := tx.Query(ctx,
+		`SELECT c.name FROM economy_challenge_state e JOIN challenges c ON c.id = e.challenge_id
+		 WHERE e.team_id = $1 AND e.status = 'open' ORDER BY e.opened_at`, teamID)
+	if nerr != nil {
 		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to check concurrency"}
 	}
+	for nrows.Next() {
+		var n string
+		if err := nrows.Scan(&n); err == nil {
+			openCount++
+			if openNames == "" {
+				openNames = n
+			} else {
+				openNames += ", " + n
+			}
+		}
+	}
+	nrows.Close()
 	if openCount >= cfg.ConcurrencyCap {
 		return &EconomyOpError{Status: http.StatusConflict,
-			Message: fmt.Sprintf("you already have %d challenges open (max %d); solve or abandon one first", openCount, cfg.ConcurrencyCap)}
+			Message: fmt.Sprintf("your team already has %d challenges open (max %d): %s. solve or abandon one to open another.", openCount, cfg.ConcurrencyCap, openNames)}
 	}
 
 	cid := challengeID
