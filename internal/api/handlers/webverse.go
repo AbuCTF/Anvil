@@ -452,6 +452,23 @@ func (p *WebVersePoller) captureOne(ctx context.Context, teamID, userID uuid.UUI
 		if openedAt == nil {
 			openedAt = &ot
 		}
+		// re-opening an ABANDONED challenge: claw back the abandon refund the team
+		// kept (0.3 x launch cost) so abandon-then-WebVerse-solve nets the same as a
+		// normal open-then-solve (no free-credit farm). floored at 0 so it never
+		// blocks the credit; expired and never-opened had no refund, so skip them.
+		if !noRow && status == "abandoned" {
+			if claw := p.econ.AbandonRefundFrac * launchCost(p.econ, meta.difficulty); claw > 0 {
+				cid := meta.challengeID
+				var bal float64
+				if e := tx.QueryRow(ctx,
+					`UPDATE economy_team_score SET credits = GREATEST(0, credits - $2), updated_at = NOW()
+					 WHERE team_id = $1 RETURNING credits`, teamID, claw).Scan(&bal); e == nil {
+					_, _ = tx.Exec(ctx,
+						`INSERT INTO economy_credit_events (team_id, kind, amount, balance_after, challenge_id)
+						 VALUES ($1, 'abandon_refund', $2, $3, $4)`, teamID, -claw, bal, cid)
+				}
+			}
+		}
 	}
 
 	// write the solve row so applyEconomySolve's teamFlagFrac sees a held flag.

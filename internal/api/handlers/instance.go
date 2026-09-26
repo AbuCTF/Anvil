@@ -1765,7 +1765,10 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		&inst.VMNodeID, &inst.ReservedVCPU, &inst.ReservedMemoryMB,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		c.JSON(http.StatusNotFound, gin.H{"error": "instance not found"})
+		// idempotent: the instance is already gone (reaped/cleaned). don't error -
+		// report success so the player can relaunch instead of getting stuck.
+		h.logger.Warn("stop on missing instance (idempotent success)", zap.String("instance_id", instanceID.String()), zap.String("user_id", uid.String()))
+		c.JSON(http.StatusOK, gin.H{"status": "stopped", "already_gone": true, "message": "instance already stopped"})
 		return
 	}
 	if err != nil {
@@ -1775,7 +1778,8 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 	}
 
 	if inst.Status == "stopped" || inst.Status == "stopping" || inst.Status == "expired" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "instance already stopped"})
+		// idempotent: already stopping/stopped/expired -> success, so relaunch is unblocked.
+		c.JSON(http.StatusOK, gin.H{"status": "stopped", "already_stopped": true, "message": "instance already stopped"})
 		return
 	}
 	inst.ID = instanceID
