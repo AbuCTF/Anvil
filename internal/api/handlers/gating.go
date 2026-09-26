@@ -157,8 +157,10 @@ func publicGameTeamSQL(alias string) string {
 // koth_qa_team_id; empty = nobody (normal published-only gate). Cleared after QA.
 func teamIsKothQA(ctx context.Context, db *database.DB, teamID string) bool {
 	var v string
+	// platform_settings.value is jsonb, so a string is stored quoted ("uuid"); #>> '{}'
+	// extracts the scalar as bare text so it compares to the raw team id.
 	if err := db.Pool.QueryRow(ctx,
-		`SELECT value FROM platform_settings WHERE key = 'koth_qa_team_id'`).Scan(&v); err != nil {
+		`SELECT value #>> '{}' FROM platform_settings WHERE key = 'koth_qa_team_id'`).Scan(&v); err != nil {
 		return false
 	}
 	return v != "" && v == teamID

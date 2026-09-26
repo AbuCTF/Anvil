@@ -215,10 +215,16 @@ func (c *Controller) runningTick(ctx context.Context) (int, bool, error) {
 }
 
 func (c *Controller) openTick(ctx context.Context, tick int) (bool, error) {
+	// cadence gate: every api replica runs a controller, so without this a new tick
+	// opens as fast as any replica's ticker fires (N replicas => N x speed). Only open
+	// a new tick when none has STARTED within the interval; an existing tick (resume, or
+	// a peer that just opened it) falls through to the status check below.
 	tag, err := c.db.Pool.Exec(ctx,
 		`INSERT INTO game_ticks (tick_number, started_at, status)
-		 VALUES ($1, NOW(), 'running')
-		 ON CONFLICT (tick_number) DO NOTHING`, tick)
+		 SELECT $1, NOW(), 'running'
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM game_ticks WHERE started_at > NOW() - make_interval(secs => $2))
+		 ON CONFLICT (tick_number) DO NOTHING`, tick, c.cfg.TickInterval.Seconds())
 	if err != nil {
 		return false, err
 	}
@@ -230,6 +236,9 @@ func (c *Controller) openTick(ctx context.Context, tick int) (bool, error) {
 	if err := c.db.Pool.QueryRow(ctx,
 		`SELECT status FROM game_ticks WHERE tick_number = $1`, tick,
 	).Scan(&status); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil // gated: too soon for a new tick, skip this cycle
+		}
 		return false, err
 	}
 	return status == "running", nil
