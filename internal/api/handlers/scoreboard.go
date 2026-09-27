@@ -583,8 +583,16 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		return
 	}
 
+	// while the board is frozen the standings are blinded: withhold the rows so live
+	// ranks can't be read (the frozen flag still drives the "hidden" banner). the
+	// count stays so the UI can say how many are competing; rows return at the reveal.
+	if frozen {
+		entries = []ScoreboardEntry{}
+		matchingUsers = 0
+	}
+
 	// trends (spark + rank delta) key on user_id; team boards skip them (team trends are a follow-up)
-	if !teamRanked {
+	if !teamRanked && !frozen {
 		if err := h.attachTrends(c.Request.Context(), tx, entries); err != nil {
 			h.respondQueryError(c, "failed to attach scoreboard trends", err)
 			return
@@ -1370,6 +1378,11 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 			h.respondQueryError(c, "matrix rows", err)
 			return
 		}
+	}
+	// blind the matrix rows while frozen too: the team rows carry ranks and per-team
+	// solve cells, so leaving them would leak the standings the freeze is meant to hide.
+	if frozen {
+		entries, matching = []ScoreboardEntry{}, 0
 	}
 	ids := make([]uuid.UUID, 0, len(entries))
 	for _, entry := range entries {
