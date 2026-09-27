@@ -629,21 +629,12 @@ func bailoutEconomy(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, cfg config
 	if used {
 		return &EconomyOpError{Status: http.StatusConflict, Message: "bailout already used"}
 	}
-	// a bailout is a last resort: only when the team can no longer afford the
-	// cheapest launch and holds no open. points-convertibility is no longer a
-	// blocker - a low-credit team gets the one-time top-up even if it holds points.
-	cheapest := cheapestLaunchCost(cfg)
-	if credits >= cheapest {
-		return &EconomyOpError{Status: http.StatusBadRequest, Message: "bailout is available only when you can no longer afford a launch"}
-	}
-	var openCount int
-	if err := tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM economy_challenge_state WHERE team_id = $1 AND status = 'open'`, teamID,
-	).Scan(&openCount); err != nil {
-		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to check open challenges"}
-	}
-	if openCount > 0 {
-		return &EconomyOpError{Status: http.StatusConflict, Message: "bailout is available only when you have no challenges open"}
+	// a bailout is a one-time top-up for any team running low on credits. the only
+	// gate is a low-credit balance; the one-time bailout_used flag above is what
+	// stops it being farmed. open challenges and points-convertibility no longer block it.
+	const bailoutCreditFloor = 100.0
+	if credits >= bailoutCreditFloor {
+		return &EconomyOpError{Status: http.StatusBadRequest, Message: "bailout is available only when your credits are low"}
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE economy_team_score SET bailout_used = TRUE WHERE team_id = $1`, teamID); err != nil {
