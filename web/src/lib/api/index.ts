@@ -544,6 +544,12 @@ class ApiClient {
 			'/economy/convert/quote', { method: 'POST', body: JSON.stringify({ points }) });
 	}
 
+	// credit -> point: only accepted while the board is frozen (final stretch)
+	async convertCredits(credits: number) {
+		return this.request<{ points_gained: number; credits_spent: number }>(
+			'/economy/convert-to-points', { method: 'POST', body: JSON.stringify({ credits }) });
+	}
+
 	// admin
 	async getAdminStats() {
 		return this.request<any>('/admin/stats');

@@ -25,6 +25,9 @@
 	let quoteError = '';
 	let quoteTimer: ReturnType<typeof setTimeout> | undefined;
 	let quoteGeneration = 0;
+	let creditsAmt = ''; // credits -> points (opens only while the board is frozen)
+	$: c2pRate = Number(eco?.c2p_rate ?? 0);
+	$: creditsPreview = Number(creditsAmt) > 0 ? Number(creditsAmt) * c2pRate : 0;
 
 	const inputClass =
 		'w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors';
@@ -171,6 +174,29 @@
 		}
 	}
 
+	async function convertCredits() {
+		const cr = Number(creditsAmt);
+		if (!cr || cr <= 0 || busy) return;
+		const gain = cr * c2pRate;
+		if (!(await confirmDialog({
+			title: 'Convert team credits',
+			message: `Convert ${cr.toLocaleString()} credits into ${gain.toLocaleString(undefined, { maximumFractionDigits: 2 })} points? This cannot be undone.`,
+			confirmLabel: 'Convert',
+			danger: true
+		}))) return;
+		busy = true;
+		error = '';
+		try {
+			await api.convertCredits(cr);
+			creditsAmt = '';
+			await load();
+		} catch (e: any) {
+			error = e?.message ?? 'convert failed';
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function copyCode() {
 		if (!team?.join_code) return;
 		try {
@@ -294,6 +320,26 @@
 						<p class="mt-1 text-xs text-down">{quoteError}</p>
 					{:else}
 						<p class="text-xs text-stone-600 mt-1">Enter an amount to see the current quote. The rate falls with each block.</p>
+					{/if}
+
+					{#if eco.frozen}
+						<div class="mt-5 border-t border-stone-800 pt-4">
+							<p class="metadata-label text-stone-400 mb-1">Final freeze: credits to points</p>
+							<p class="text-xs text-stone-500 mb-3">The board is frozen for the finish. Convert leftover credits back into ranking points at {c2pRate.toLocaleString(undefined, { maximumFractionDigits: 3 })} points per credit. Points to credits stays open above if you still want to open a challenge.</p>
+							<form on:submit|preventDefault={convertCredits} class="flex gap-2">
+								<input class={inputClass} type="number" min="1" max={Math.floor(eco.credits)} bind:value={creditsAmt} placeholder="Convert credits → points" aria-label="Credits to convert to points" />
+								<button type="submit" disabled={busy || !(Number(creditsAmt) > 0) || Number(creditsAmt) > eco.credits} class="{primaryBtn} whitespace-nowrap">Convert</button>
+							</form>
+							{#if creditsPreview > 0}
+								<p class="mt-1 text-xs text-stone-500">
+									{Number(creditsAmt).toLocaleString()} credits →
+									<span class="font-medium tabular-nums text-stone-100">{creditsPreview.toLocaleString(undefined, { maximumFractionDigits: 2 })} points</span>
+									at {c2pRate.toLocaleString(undefined, { maximumFractionDigits: 3 })} points/credit.
+								</p>
+							{:else}
+								<p class="text-xs text-stone-600 mt-1">Enter an amount to preview the points you would gain.</p>
+							{/if}
+						</div>
 					{/if}
 
 					{#if eco.credits < 50 && !eco.bailout_used && (eco.open ?? []).filter((o: any) => o.status === 'open').length === 0}

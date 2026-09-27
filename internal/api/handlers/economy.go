@@ -540,6 +540,38 @@ func convertPointsToCredits(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, po
 	return credits, nil
 }
 
+// convertCreditsToPoints turns leftover credits back into ranking points at a flat
+// rate. Unlike points->credits it does not diminish per block: it only opens during
+// the final freeze (see ConvertToPoints), so there is no in-play farming to damp.
+func convertCreditsToPoints(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, credits float64, cfg config.EconomyConfig) (float64, *EconomyOpError) {
+	if credits <= 0 {
+		return 0, &EconomyOpError{Status: http.StatusBadRequest, Message: "credits must be positive"}
+	}
+	if err := ensureTeamEconomy(ctx, tx, teamID, cfg); err != nil {
+		return 0, &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to prepare team economy"}
+	}
+	points := credits * cfg.C2PRate
+	// debit the credits row-locked and overdraw-guarded; a team asking for more than
+	// it holds gets applyCredit's "need N, have M" message back.
+	if _, err := applyCredit(ctx, tx, teamID, "c2p_convert", -credits, nil, nil); err != nil {
+		if opErr, ok := err.(*EconomyOpError); ok {
+			return 0, opErr
+		}
+		return 0, &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to debit credits"}
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE economy_team_score SET points = points + $2, updated_at = NOW() WHERE team_id = $1`,
+		teamID, points); err != nil {
+		return 0, &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to credit points"}
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO economy_point_events (team_id, challenge_id, kind, value_after)
+		 SELECT $1, NULL, 'c2p_convert_in', points FROM economy_team_score WHERE team_id = $1`, teamID); err != nil {
+		return 0, &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to log conversion"}
+	}
+	return points, nil
+}
+
 // cheapestLaunchCost is the lowest band launch cost - the price of the cheapest
 // action a team can take. A team below this (and unable to convert up to it) is
 // soft-locked, which is what the bailout rescues.
@@ -689,7 +721,9 @@ func (h *EconomyHandler) Balance(c *gin.Context) {
 		`SELECT COALESCE(credits,0), COALESCE(points,0), COALESCE(grant_issued,false), COALESCE(bailout_used,false)
 		 FROM economy_team_score WHERE team_id = $1`, teamID).Scan(&credits, &points, &grantIssued, &bailoutUsed)
 	if errors.Is(err, pgx.ErrNoRows) {
-		c.JSON(http.StatusOK, gin.H{"credits": 0, "points": 0, "grant_issued": false, "bailout_used": false, "open": []gin.H{}})
+		frozen, _ := boolSettingOrDefault(ctx, h.db, "scoreboard_frozen", false)
+		c.JSON(http.StatusOK, gin.H{"credits": 0, "points": 0, "grant_issued": false, "bailout_used": false, "open": []gin.H{},
+			"frozen": frozen, "c2p_rate": h.config.Economy.C2PRate})
 		return
 	}
 	if err != nil {
@@ -716,9 +750,11 @@ func (h *EconomyHandler) Balance(c *gin.Context) {
 			}
 		}
 	}
+	frozen, _ := boolSettingOrDefault(ctx, h.db, "scoreboard_frozen", false)
 	c.JSON(http.StatusOK, gin.H{
 		"credits": credits, "points": points, "grant_issued": grantIssued,
 		"bailout_used": bailoutUsed, "open": open,
+		"frozen": frozen, "c2p_rate": h.config.Economy.C2PRate,
 	})
 }
 
@@ -764,6 +800,49 @@ func (h *EconomyHandler) Convert(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"credits_gained": gained, "points_spent": req.Points})
 }
 
+// ConvertToPoints sells leftover credits for ranking points at the flat c2p rate.
+// It opens only while the board is frozen (the final stretch) so credits cannot be
+// farmed into rank during play; the roundtrip guard keeps it lossy either way.
+func (h *EconomyHandler) ConvertToPoints(c *gin.Context) {
+	teamID, ok := h.econContext(c)
+	if !ok {
+		return
+	}
+	ctx := c.Request.Context()
+	frozen, err := boolSettingOrDefault(ctx, h.db, "scoreboard_frozen", false)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "conversion unavailable"})
+		return
+	}
+	if !frozen {
+		c.JSON(http.StatusForbidden, gin.H{"error": "converting credits to points opens during the final freeze"})
+		return
+	}
+	var req struct {
+		Credits float64 `json:"credits" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Credits <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "a positive credits amount is required"})
+		return
+	}
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "conversion failed"})
+		return
+	}
+	defer tx.Rollback(ctx)
+	gained, opErr := convertCreditsToPoints(ctx, tx, teamID, req.Credits, h.config.Economy)
+	if opErr != nil {
+		c.JSON(opErr.Status, gin.H{"error": opErr.Message})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "conversion failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"points_gained": gained, "credits_spent": req.Credits})
+}
+
 func (h *EconomyHandler) runTx(c *gin.Context, op func(tx pgx.Tx) *EconomyOpError) {
 	ctx := c.Request.Context()
 	tx, err := h.db.Pool.Begin(ctx)
@@ -783,47 +862,22 @@ func (h *EconomyHandler) runTx(c *gin.Context, op func(tx pgx.Tx) *EconomyOpErro
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// freeze converts every team's leftover credits to points and blinds the board.
+// Freeze blinds the public scoreboard for the final stretch. It no longer auto-converts
+// anyone's credits: credit->point opens to players the moment the board freezes (see
+// ConvertToPoints), so both conversion directions stay a per-team choice, not a forced
+// whole-field sweep at one fixed rate.
 func (h *EconomyHandler) Freeze(c *gin.Context) {
 	ctx := c.Request.Context()
-	rate := h.config.Economy.C2PRate
-	tx, err := h.db.Pool.Begin(ctx)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "freeze failed"})
-		return
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO economy_credit_events (team_id, kind, amount, balance_after)
-		 SELECT team_id, 'c2p_freeze', -credits, 0 FROM economy_team_score WHERE credits > 0`); err != nil {
-		h.logger.Error("freeze: credit log failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "freeze failed"})
-		return
-	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO economy_point_events (team_id, challenge_id, kind, value_after)
-		 SELECT team_id, NULL, 'freeze_convert_in', points + credits * $1 FROM economy_team_score WHERE credits > 0`, rate); err != nil {
-		h.logger.Error("freeze: point log failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "freeze failed"})
-		return
-	}
-	tag, err := tx.Exec(ctx,
-		`UPDATE economy_team_score SET points = points + credits * $1, credits = 0, updated_at = NOW() WHERE credits > 0`, rate)
-	if err != nil {
-		h.logger.Error("freeze: convert failed", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "freeze failed"})
-		return
-	}
-	if _, err := tx.Exec(ctx,
+	if _, err := h.db.Pool.Exec(ctx,
 		`UPDATE platform_settings SET value = 'true'::jsonb, updated_at = NOW() WHERE key = 'scoreboard_frozen'`); err != nil {
 		h.logger.Error("freeze: flag set failed", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "freeze failed"})
 		return
 	}
-	if err := tx.Commit(ctx); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "freeze failed"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"status": "frozen", "teams_converted": tag.RowsAffected(), "c2p_rate": rate})
+	c.JSON(http.StatusOK, gin.H{
+		"status":       "frozen",
+		"board_hidden": true,
+		"c2p_rate":     h.config.Economy.C2PRate,
+		"note":         "board blinded; credit<->point conversion is in players' hands via the team economy panels",
+	})
 }

@@ -227,6 +227,7 @@ func (s *Server) setupRouter() {
 				economyRoutes.POST("/convert/quote", economyHandler.QuoteConvert)
 				economyRoutes.POST("/bailout", economyHandler.Bailout)
 				economyRoutes.POST("/convert", economyHandler.Convert)
+				economyRoutes.POST("/convert-to-points", economyHandler.ConvertToPoints) // credit -> point, opens during the final freeze
 			}
 
 			instances := protected.Group("/instances")
@@ -427,7 +428,7 @@ func (s *Server) setupRouter() {
 				settings.PUT("", settingsHandler.Update)
 			}
 
-			// economy freeze flip: auto-convert leftover credits + blind board
+			// economy freeze flip: blind the board (players convert credits<->points themselves)
 			admin.POST("/economy/freeze", handlers.NewEconomyHandler(s.config, s.db, s.logger).Freeze)
 
 			admin.GET("/audit", handlers.NewAuditHandler(s.db, s.logger).List)

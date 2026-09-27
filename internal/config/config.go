@@ -136,16 +136,16 @@ func (c Config) Validate() error {
 	}
 	// ledger economy invariant #7 (round-trips lose value) — the only runtime
 	// config-load guard per ctf26-1/metrics.py. validated in every environment.
+	// the roundtrip guard stays hard: points -> credits -> points must lose value
+	// so there is no profit loop. the old full-grant<mid-tier sub-check modelled the
+	// automatic freeze that converted every team's whole grant at once; credit->point
+	// is now a manual, per-team choice that only opens during the final freeze, so a
+	// team converts its own leftover, not an auto full grant, and that sub-check no
+	// longer describes the deployed flow.
 	if c.Economy.P2CBase > 0 && c.Economy.C2PRate > 0 {
 		roundtrip := c.Economy.P2CBase * c.Economy.C2PRate
 		if roundtrip >= 1.0 {
 			return fmt.Errorf("economy invariant #7 violated: roundtrip product %.4f must be < 1", roundtrip)
-		}
-		if len(c.Economy.Ceilings) > 1 {
-			fullGrantToPoints := c.Economy.Grant * c.Economy.C2PRate
-			if midTier := c.Economy.Ceilings[1]; fullGrantToPoints >= midTier {
-				return fmt.Errorf("economy invariant #7 violated: converting the full grant yields %.1f pts, must be < one mid-tier value %.1f", fullGrantToPoints, midTier)
-			}
 		}
 	}
 	return nil
@@ -355,7 +355,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("economy.p2c_base", 1.0)
 	v.SetDefault("economy.p2c_rate_decay", 0.7)
 	v.SetDefault("economy.p2c_min_rate", 0.05)
-	v.SetDefault("economy.c2p_rate", 0.015)
+	v.SetDefault("economy.c2p_rate", 0.1)
 
 	v.SetDefault("zeropool.base_url", "")
 	v.SetDefault("zeropool.api_key", "")
