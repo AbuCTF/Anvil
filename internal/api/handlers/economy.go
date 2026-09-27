@@ -619,25 +619,22 @@ func bailoutEconomy(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, cfg config
 	if err := ensureTeamEconomy(ctx, tx, teamID, cfg); err != nil {
 		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to prepare team economy"}
 	}
-	var credits, points float64
-	var blocks int
+	var credits float64
 	var used bool
 	if err := tx.QueryRow(ctx,
-		`SELECT credits, points, p2c_blocks, bailout_used FROM economy_team_score WHERE team_id = $1 FOR UPDATE`, teamID,
-	).Scan(&credits, &points, &blocks, &used); err != nil {
+		`SELECT credits, bailout_used FROM economy_team_score WHERE team_id = $1 FOR UPDATE`, teamID,
+	).Scan(&credits, &used); err != nil {
 		return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to read balance"}
 	}
 	if used {
 		return &EconomyOpError{Status: http.StatusConflict, Message: "bailout already used"}
 	}
 	// a bailout is a last resort: only when the team can no longer afford the
-	// cheapest launch, can't get there by converting points, and holds no open.
+	// cheapest launch and holds no open. points-convertibility is no longer a
+	// blocker - a low-credit team gets the one-time top-up even if it holds points.
 	cheapest := cheapestLaunchCost(cfg)
 	if credits >= cheapest {
 		return &EconomyOpError{Status: http.StatusBadRequest, Message: "bailout is available only when you can no longer afford a launch"}
-	}
-	if credits+maxConvertibleCredits(points, blocks, cfg) >= cheapest {
-		return &EconomyOpError{Status: http.StatusBadRequest, Message: "convert your points to credits first - bailout is a last resort"}
 	}
 	var openCount int
 	if err := tx.QueryRow(ctx,
