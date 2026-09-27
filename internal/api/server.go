@@ -152,15 +152,19 @@ func (s *Server) setupRouter() {
 
 			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
 
-			// arena (attack-defense + koth) read endpoints
+			// arena (attack-defense + koth) read endpoints. OptionalAuth so a logged-in
+			// admin is recognised and can preview the arena before the drop (arena_enabled
+			// false still hides it from everyone else).
 			arenaRead := handlers.NewGameHandler(s.config, s.db, s.logger)
-			public.GET("/arena/state", arenaRead.State)
-			public.GET("/arena/scoreboard", arenaRead.Scoreboard)
-			public.GET("/arena/hills", arenaRead.Hills)
-			public.GET("/arena/status", arenaRead.Status)
-			public.GET("/arena/history", arenaRead.History)
-			public.GET("/arena/services", arenaRead.Services)
-			public.GET("/arena/events", arenaRead.Events)
+			arenaReads := public.Group("")
+			arenaReads.Use(middleware.OptionalAuth(s.config, s.db))
+			arenaReads.GET("/arena/state", arenaRead.State)
+			arenaReads.GET("/arena/scoreboard", arenaRead.Scoreboard)
+			arenaReads.GET("/arena/hills", arenaRead.Hills)
+			arenaReads.GET("/arena/status", arenaRead.Status)
+			arenaReads.GET("/arena/history", arenaRead.History)
+			arenaReads.GET("/arena/services", arenaRead.Services)
+			arenaReads.GET("/arena/events", arenaRead.Events)
 			// arena write-gate verify: called server-to-server by a KotH target to check a
 			// team's (token, secret) pair for that arena. Unauth - the secret is the auth.
 			public.POST("/arena/koth/:id/verify", arenaRead.VerifyKoth)
@@ -318,6 +322,8 @@ func (s *Server) setupRouter() {
 				teamsAdmin.POST("/:id/rotate-code", adminTeamsHandler.RotateCode)
 				teamsAdmin.GET("/:id/solves", adminTeamsHandler.Solves)
 				teamsAdmin.GET("/:id/support", adminTeamsHandler.Support)
+				teamsAdmin.GET("/:id/credit-events", adminTeamsHandler.CreditEvents)
+				teamsAdmin.POST("/:id/credit", adminTeamsHandler.ApplyCredit)
 			}
 
 			gameAdmin := admin.Group("/arena")

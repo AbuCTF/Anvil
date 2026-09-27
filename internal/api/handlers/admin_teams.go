@@ -27,6 +27,106 @@ func NewAdminTeamsHandler(cfg *config.Config, db *database.DB, logger *zap.Logge
 	return &AdminTeamsHandler{config: cfg, db: db, logger: logger}
 }
 
+// CreditEvents returns a team's credit ledger (economy_credit_events), newest first,
+// so support can confirm a refund/bonus landed and see the spends around it. Read-only.
+func (h *AdminTeamsHandler) CreditEvents(c *gin.Context) {
+	teamID := c.Param("id")
+	if _, err := uuid.Parse(teamID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid team id"})
+		return
+	}
+	events := []gin.H{}
+	rows, err := h.db.Pool.Query(c.Request.Context(),
+		`SELECT id, kind, amount, balance_after, challenge_id, instance_id, created_at
+		 FROM economy_credit_events WHERE team_id = $1 ORDER BY id DESC LIMIT 200`, teamID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read credit events"})
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var kind string
+		var amount, balanceAfter float64
+		var challengeID, instanceID *uuid.UUID
+		var createdAt time.Time
+		if rows.Scan(&id, &kind, &amount, &balanceAfter, &challengeID, &instanceID, &createdAt) == nil {
+			e := gin.H{"id": id, "kind": kind, "amount": amount, "balance_after": balanceAfter, "created_at": createdAt.Unix()}
+			if challengeID != nil {
+				e["challenge_id"] = challengeID.String()
+			}
+			if instanceID != nil {
+				e["instance_id"] = instanceID.String()
+			}
+			events = append(events, e)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"events": events})
+}
+
+// ApplyCredit adjusts a team's credits (refunds, bonuses, goodwill) atomically and
+// writes the audit row, reusing the exact applyCredit path that spends use. Credits
+// only - points/rank are never touched. Staff-only; every call is logged with the actor.
+func (h *AdminTeamsHandler) ApplyCredit(c *gin.Context) {
+	teamID := c.Param("id")
+	tid, err := uuid.Parse(teamID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid team id"})
+		return
+	}
+	var body struct {
+		Kind   string  `json:"kind"`
+		Amount float64 `json:"amount"`
+		Note   string  `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	body.Kind = strings.TrimSpace(body.Kind)
+	if body.Kind == "" || body.Amount == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "kind and non-zero amount required"})
+		return
+	}
+	if body.Amount < -20000 || body.Amount > 20000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "amount out of range (+/-20000)"})
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "tx begin failed"})
+		return
+	}
+	defer tx.Rollback(ctx)
+	newBal, err := applyCredit(ctx, tx, tid, body.Kind, body.Amount, nil, nil)
+	if err != nil {
+		var opErr *EconomyOpError
+		if errors.As(err, &opErr) {
+			c.JSON(opErr.Status, gin.H{"error": opErr.Message})
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "team has no economy record"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "apply credit failed"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "commit failed"})
+		return
+	}
+	h.logger.Info("admin credit applied",
+		zap.String("actor", c.GetString("username")),
+		zap.String("team_id", teamID),
+		zap.String("kind", body.Kind),
+		zap.Float64("amount", body.Amount),
+		zap.Float64("balance_after", newBal),
+		zap.String("note", body.Note))
+	c.JSON(http.StatusOK, gin.H{"team_id": teamID, "kind": body.Kind, "amount": body.Amount, "balance_after": newBal})
+}
+
 func unixOrNil(t *time.Time) *int64 {
 	if t == nil {
 		return nil

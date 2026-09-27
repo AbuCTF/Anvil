@@ -154,6 +154,9 @@ func (h *GameHandler) off(c *gin.Context) bool {
 	// engine polls game_koth_hills directly (not via these routes), so this is safe;
 	// arena_enabled flips true at the drop. staff use the admin arena flow, not these.
 	if open, _ := boolSettingOrDefault(c.Request.Context(), h.db, "arena_enabled", false); !open {
+		if c.GetString("role") == "admin" {
+			return false // staff preview the arena before the drop
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": "arena not open"})
 		return true
 	}
@@ -695,6 +698,9 @@ func (h *GameHandler) State(c *gin.Context) {
 	// pre-drop the arena stays hidden (arena_enabled false) so /arena/state doesn't leak
 	// the hills/controllers; it returns the same inactive shape as when the game is off.
 	arenaOpen, _ := boolSettingOrDefault(c.Request.Context(), h.db, "arena_enabled", false)
+	if c.GetString("role") == "admin" && h.config.Game.Enabled {
+		arenaOpen = true // staff preview the live arena before the drop
+	}
 	if !h.config.Game.Enabled || !arenaOpen {
 		body, etag, err := encodeGameState(gin.H{
 			"active":    false,
