@@ -633,7 +633,7 @@ func bailoutEconomy(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, cfg config
 	// gate is a low-credit balance; the one-time bailout_used flag above is what
 	// stops it being farmed. open challenges and points-convertibility no longer block it.
 	const bailoutCreditFloor = 100.0
-	if credits >= bailoutCreditFloor {
+	if credits > bailoutCreditFloor {
 		return &EconomyOpError{Status: http.StatusBadRequest, Message: "bailout is available only when your credits are low"}
 	}
 	if _, err := tx.Exec(ctx,
