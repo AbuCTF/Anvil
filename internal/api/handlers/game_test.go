@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,15 +18,88 @@ import (
 )
 
 func requestGameState(handler *GameHandler, etag string) *httptest.ResponseRecorder {
+	return requestGameStateAs(handler, etag, "")
+}
+
+func requestGameStateAs(handler *GameHandler, etag, role string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/arena/state", nil)
+	if role != "" {
+		ctx.Set("role", role)
+	}
 	if etag != "" {
 		ctx.Request.Header.Set("If-None-Match", etag)
 	}
 	handler.State(ctx)
 	ctx.Writer.WriteHeaderNow()
 	return recorder
+}
+
+func TestStaffPreviewIncludesHiddenTeamsWithoutPopulatingPublicCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var includeHidden bool
+	var loads atomic.Int32
+	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
+	handler.arenaOpen = func(context.Context) (bool, error) { return false, nil }
+	handler.stateLoad = func(_ context.Context, include bool) ([]byte, string, error) {
+		loads.Add(1)
+		includeHidden = include
+		return encodeGameState(gin.H{
+			"active":    true,
+			"standings": []gameStanding{{TeamID: "qa", Team: "zz-qa-codex", Koth: 12, Total: 12}},
+		})
+	}
+
+	preview := requestGameStateAs(handler, "", "admin")
+	if preview.Code != http.StatusOK || preview.Header().Get("X-Anvil-Cache") != "PREVIEW" {
+		t.Fatalf("preview response = %d %q, want 200 PREVIEW", preview.Code, preview.Header().Get("X-Anvil-Cache"))
+	}
+	if !includeHidden {
+		t.Fatal("staff preview did not request hidden QA teams")
+	}
+	if got := preview.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("preview Cache-Control = %q, want no-store", got)
+	}
+	if !json.Valid(preview.Body.Bytes()) || !bytes.Contains(preview.Body.Bytes(), []byte("zz-qa-codex")) {
+		t.Fatalf("preview body does not contain QA standing: %s", preview.Body.String())
+	}
+	handler.stateMu.Lock()
+	cached := len(handler.stateCache.body)
+	handler.stateMu.Unlock()
+	if cached != 0 {
+		t.Fatal("staff-only preview entered the shared public cache")
+	}
+
+	public := requestGameState(handler, "")
+	if public.Code != http.StatusOK || public.Header().Get("X-Anvil-Cache") != "IDLE" {
+		t.Fatalf("public response = %d %q, want 200 IDLE", public.Code, public.Header().Get("X-Anvil-Cache"))
+	}
+	if bytes.Contains(public.Body.Bytes(), []byte("zz-qa-codex")) {
+		t.Fatal("public inactive response leaked the QA team")
+	}
+	if loads.Load() != 1 {
+		t.Fatalf("live loads = %d, want only the staff preview load", loads.Load())
+	}
+}
+
+func TestOpenArenaAdminUsesFilteredPublicCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var includeHidden bool
+	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
+	handler.arenaOpen = func(context.Context) (bool, error) { return true, nil }
+	handler.stateLoad = func(_ context.Context, include bool) ([]byte, string, error) {
+		includeHidden = include
+		return encodeGameState(gin.H{"active": true, "standings": []gameStanding{}})
+	}
+
+	response := requestGameStateAs(handler, "", "admin")
+	if response.Code != http.StatusOK || response.Header().Get("X-Anvil-Cache") != "MISS" {
+		t.Fatalf("response = %d %q, want 200 MISS", response.Code, response.Header().Get("X-Anvil-Cache"))
+	}
+	if includeHidden {
+		t.Fatal("open arena admin request included hidden QA teams")
+	}
 }
 
 func liveStateBody(t *testing.T, tick int) ([]byte, string) {
@@ -108,7 +182,7 @@ func TestLiveGameStateMissHitRevalidateAndRefresh(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var loads atomic.Int32
 	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
-	handler.stateLoad = func(context.Context) ([]byte, string, error) {
+	handler.stateLoad = func(context.Context, bool) ([]byte, string, error) {
 		body, etag := liveStateBody(t, int(loads.Add(1)))
 		return body, etag, nil
 	}
@@ -152,7 +226,7 @@ func TestLiveGameStateCoalescesConcurrentMisses(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
-	handler.stateLoad = func(context.Context) ([]byte, string, error) {
+	handler.stateLoad = func(context.Context, bool) ([]byte, string, error) {
 		loads.Add(1)
 		once.Do(func() { close(entered) })
 		<-release
@@ -193,7 +267,7 @@ func TestLiveGameStateBoundsAndSurfacesStaleFallback(t *testing.T) {
 	body, etag := liveStateBody(t, 7)
 	loadErr := errors.New("database unavailable")
 	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
-	handler.stateLoad = func(context.Context) ([]byte, string, error) { return nil, "", loadErr }
+	handler.stateLoad = func(context.Context, bool) ([]byte, string, error) { return nil, "", loadErr }
 	handler.stateCache = gameStateCacheEntry{
 		body:      body,
 		etag:      etag,
