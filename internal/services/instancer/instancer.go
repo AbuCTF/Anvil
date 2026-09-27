@@ -67,6 +67,7 @@ type LaunchSpec struct {
 	Containers  []ContainerSpec // non-empty => multi-container; supersedes Image/Ports/Flags
 	Timeout     time.Duration
 	Privesc     bool // single-container: relax securityContext (allowPrivilegeEscalation:true / no_new_privs off)
+	Egress      bool // single-container: open outbound (internet + control-plane) - e.g. a KotH arena that posts to the write-gate verify URL
 }
 
 // ContainerSpec is one role in a multi-container challenge. It becomes one pod
@@ -435,7 +436,7 @@ func buildPods(spec LaunchSpec) []any {
 		if spec.Tag != "" {
 			image += ":" + spec.Tag
 		}
-		return []any{containerPod("main", image, nil, spec.Ports, spec.Flags, spec.CPULimit, spec.MemoryLimit, false, spec.Privesc)}
+		return []any{containerPod("main", image, nil, spec.Ports, spec.Flags, spec.CPULimit, spec.MemoryLimit, spec.Egress, spec.Privesc)}
 	}
 	var pods []any
 	for _, c := range spec.Containers {

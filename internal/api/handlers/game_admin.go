@@ -86,6 +86,10 @@ func (h *GameAdminHandler) LaunchArena(c *gin.Context) {
 		CPULimit:    cpu,
 		MemoryLimit: mem,
 		Ports:       []instancer.PortSpec{{Port: arenaHTTPPort(portsJSON), Protocol: "tcp", Service: "http"}},
+		// The arena posts {token, rpc_secret} to KOTH_VERIFY_URL (anvil-api, in-cluster) to
+		// authorize each write, so it needs outbound to the control plane; default-deny blocks
+		// it otherwise and the write-gate can't verify.
+		Egress: true,
 		// KOTH_ADMIN_TOKEN: engine-only reset/status secret. KOTH_VERIFY_URL + KOTH_REQUIRE_SECRET:
 		// the write-gate - the target POSTs {token, rpc_secret} here to authorize each write, so a
 		// public token from /koth/status can't act for another team. Challenge id is baked into the
