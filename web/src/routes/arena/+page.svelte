@@ -130,8 +130,13 @@
 			controller.abort();
 		}, REQUEST_TIMEOUT_MS);
 		try {
+			// send the access token when present so staff can preview the arena before the
+			// drop (server grants admins the live state pre-open; players/anon see inactive).
+			const previewToken =
+				typeof localStorage !== 'undefined' ? localStorage.getItem('accessToken') : null;
 			const res = await fetch(`${API_BASE}/api/v1/arena/state`, {
-				signal: controller.signal
+				signal: controller.signal,
+				headers: previewToken ? { Authorization: `Bearer ${previewToken}` } : {}
 			});
 			if (res.status === 404) {
 				applyInactiveState();
