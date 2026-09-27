@@ -39,7 +39,9 @@
 	];
 
 	// route guard: a disabled feature's URL redirects home, so hidden != reachable.
-	$: if (browser && $platformInfo) {
+	// wait for auth to settle first, else an admin cold-loading /arena is bounced
+	// before isAdmin resolves.
+	$: if (browser && $platformInfo && !$auth.isLoading) {
 		const p = $page.url.pathname;
 		const blocked =
 			(p.startsWith('/arena') && !$platformInfo.arena_enabled && !isAdmin) ||
