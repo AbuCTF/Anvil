@@ -620,8 +620,12 @@ const maxSubmittedFlagLength = 4096
 
 // economy launch/open gate: charge launch cost, take a concurrency slot, start the band timer, and mark the challenge open for the team (enables submission, reveals the full challenge). container challenges also open via start-instance; this covers opening in general, incl. static-download challenges with no instance.
 func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
-	if phase, staff := eventPlayState(c, h.db); !staff && phase == "scheduled" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "the competition hasn't started yet"})
+	if phase, staff := eventPlayState(c, h.db); !staff && (phase == "scheduled" || phase == "ended") {
+		msg := "the competition hasn't started yet"
+		if phase == "ended" {
+			msg = "the event has ended - challenges are closed"
+		}
+		c.JSON(http.StatusForbidden, gin.H{"error": msg})
 		return
 	}
 	uid, ok := contextUserID(c)
@@ -735,8 +739,12 @@ func (h *ChallengeHandler) arenaConnectURL(ctx context.Context, chalID uuid.UUID
 // capped, points-only hold-time to the unified board. Idempotent — a team that
 // already entered gets its token back, no re-charge.
 func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
-	if phase, staff := eventPlayState(c, h.db); !staff && phase == "scheduled" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "the competition hasn't started yet"})
+	if phase, staff := eventPlayState(c, h.db); !staff && (phase == "scheduled" || phase == "ended") {
+		msg := "the competition hasn't started yet"
+		if phase == "ended" {
+			msg = "the event has ended - challenges are closed"
+		}
+		c.JSON(http.StatusForbidden, gin.H{"error": msg})
 		return
 	}
 	uid, ok := contextUserID(c)
@@ -787,7 +795,7 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		token := "koth_" + hex.EncodeToString(sum[:])[:32]
 		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": token, "credits": 0,
 			"connect_url": h.arenaConnectURL(ctx, chalID),
-			"message": "admin preview - same token each time; not charged, and won't score (no team)"})
+			"message":     "admin preview - same token each time; not charged, and won't score (no team)"})
 		return
 	}
 
@@ -1566,12 +1574,9 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// is final — give feedback without recording a scoring solve. staff are past
 	// this (submitStaff) so they can still verify scoring after the event.
 	if submitPhase == "ended" && !submitStaff {
-		c.JSON(http.StatusOK, gin.H{
-			"correct":   true,
-			"practice":  true,
-			"flag_name": matchedFlag.Name,
-			"points":    0,
-			"message":   "Correct! The event has ended, so this is practice and isn't scored.",
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "the event has ended - submissions are closed",
+			"ended": true,
 		})
 		return
 	}

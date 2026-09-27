@@ -250,7 +250,7 @@
 		{:else}
 		{#if eventPhase === 'ended'}
 			<div class="mb-6 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 text-sm text-amber-500">
-				The event has ended. Challenges stay open for practice, but solves are no longer scored and the scoreboard is final.
+				The event has ended. Challenges are now closed and submissions are no longer accepted. Thanks for playing - final results will be published soon.
 			</div>
 		{/if}
 			{#if isStaff && eventPhase === 'scheduled'}
