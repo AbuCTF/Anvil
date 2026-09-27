@@ -632,8 +632,11 @@ func bailoutEconomy(ctx context.Context, tx pgx.Tx, teamID uuid.UUID, cfg config
 	// a bailout is a one-time top-up for any team running low on credits. the only
 	// gate is a low-credit balance; the one-time bailout_used flag above is what
 	// stops it being farmed. open challenges and points-convertibility no longer block it.
+	// gate on the floored balance so it matches the whole-number credits players see in
+	// the UI: conversions/refunds leave fractional credits (e.g. 100.108 shows as "100"),
+	// and a team that reads 100 should qualify, not be blocked by an invisible 0.108.
 	const bailoutCreditFloor = 100.0
-	if credits > bailoutCreditFloor {
+	if math.Floor(credits) > bailoutCreditFloor {
 		return &EconomyOpError{Status: http.StatusBadRequest, Message: "bailout is available only when your credits are low"}
 	}
 	if _, err := tx.Exec(ctx,

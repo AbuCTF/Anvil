@@ -342,7 +342,7 @@
 						</div>
 					{/if}
 
-					{#if eco.credits <= 100 && !eco.bailout_used}
+					{#if Math.floor(eco.credits) <= 100 && !eco.bailout_used}
 						<button on:click={bailout} disabled={busy} class="mt-3 w-full rounded-md border border-amber-500/30 bg-amber-500/10 text-amber-500 py-2 text-sm hover:bg-amber-500/20 disabled:opacity-40 transition-colors">
 							Request bailout
 						</button>
