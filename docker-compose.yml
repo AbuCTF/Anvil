@@ -126,6 +126,7 @@ services:
       - NODE_ENV=production
       - SHUTDOWN_TIMEOUT=25
       - PUBLIC_API_URL=${PUBLIC_API_URL:?PUBLIC_API_URL is required}
+      - PUBLIC_UPLOAD_URL=${PUBLIC_UPLOAD_URL:-}
     ports:
       - "${ANVIL_WEB_BIND:-127.0.0.1:3000}:3000"
     depends_on:

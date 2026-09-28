@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 import { auth } from '$stores/auth';
 import { get } from 'svelte/store';
-import { API_BASE } from '$lib/config';
+import { API_BASE, UPLOAD_BASE } from '$lib/config';
 
 export type ApiErrorDetails = Record<string, unknown>;
 
@@ -130,16 +130,10 @@ class ApiClient {
 
 	constructor(baseUrl: string) {
 		this.baseUrl = baseUrl;
-		// dedicated upload domain for large files bypasses the Cloudflare 100MB limit;
-		// upload.{domain} is DNS-only (grey cloud) so it goes direct to origin
-		if (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) {
-			this.uploadUrl = baseUrl;
-		} else if (browser) {
-			const parts = window.location.hostname.split('.').slice(-2).join('.');
-			this.uploadUrl = `https://upload.${parts}`;
-		} else {
-			this.uploadUrl = baseUrl;
-		}
+		// PUBLIC_UPLOAD_URL lets self-hosted/non-apex deployments keep uploads on
+		// their own origin. Without it, preserve the production upload.{domain}
+		// convention used to bypass Cloudflare's request-size limit.
+		this.uploadUrl = UPLOAD_BASE;
 	}
 
 	private getAuthToken(): string | null {
