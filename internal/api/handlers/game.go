@@ -364,10 +364,15 @@ type historySeries struct {
 
 func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]*historySeries, error) {
 	rows, err := query.Query(ctx,
+		// Only chart teams that actually scored: a KotH field is mostly teams that never
+		// touched a hill, and 100+ dead-flat zero lines bury the handful that raced. Fallback
+		// to everyone while nobody has scored yet, so a live arena isn't a blank graph at t0.
 		`SELECT t.id, t.name, s.tick_number, s.total
 		 FROM game_score_snapshots s JOIN game_teams t ON t.id = s.team_id
 		 WHERE t.is_nop = false AND t.status = 'active' AND `+gameTeamVisibilitySQL("t", includeHidden)+`
 		   AND s.tick_number > (SELECT COALESCE(MAX(tick_number), 0) - $1 FROM game_score_snapshots)
+		   AND (t.id IN (SELECT team_id FROM game_score_snapshots WHERE total > 0)
+		        OR NOT EXISTS (SELECT 1 FROM game_score_snapshots WHERE total > 0))
 		 ORDER BY t.name, t.id, s.tick_number`, arenaHistoryTickLimit)
 	if err != nil {
 		return nil, err
