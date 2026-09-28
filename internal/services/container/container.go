@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -395,11 +396,41 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 func (s *Service) StopInstance(ctx context.Context, containerID string) error {
 	timeout := 10 // seconds
 	if _, err := s.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil
+		}
 		s.logger.Warn("ContainerStop returned error; force-removing anyway",
 			zap.String("container", containerID), zap.Error(err))
 	}
 	_, err := s.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	if cerrdefs.IsNotFound(err) {
+		return nil
+	}
+	if err != nil && (cerrdefs.IsConflict(err) || strings.Contains(strings.ToLower(err.Error()), "removal of container") && strings.Contains(strings.ToLower(err.Error()), "already in progress")) {
+		return s.waitForContainerRemoval(ctx, containerID, err)
+	}
 	return err
+}
+
+func (s *Service) waitForContainerRemoval(ctx context.Context, containerID string, originalErr error) error {
+	waitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		_, err := s.client.ContainerInspect(waitCtx, containerID, client.ContainerInspectOptions{})
+		if cerrdefs.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		select {
+		case <-waitCtx.Done():
+			return originalErr
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Service) StartInstance(ctx context.Context, containerID string) error {
