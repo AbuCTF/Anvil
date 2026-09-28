@@ -934,6 +934,15 @@ func (h *InstanceHandler) provisionInstance(
 			}
 		}
 	} else {
+		if len(plan.services) > 0 {
+			err := errors.New("the Docker runtime provider does not support multi-container challenges")
+			h.persistCreateFailure(ctx, instanceID, err)
+			return nil, newInstanceOperationError(
+				http.StatusNotImplemented,
+				"this challenge requires a multi-container-capable runtime provider",
+				err,
+			)
+		}
 		containerReq := container.CreateInstanceRequest{
 			InstanceID:    instanceID,
 			ChallengeSlug: challenge.Slug,
