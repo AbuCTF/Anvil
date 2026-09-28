@@ -1950,6 +1950,23 @@ func (h *InstanceHandler) Stop(c *gin.Context) {
 		return
 	}
 	if result.RowsAffected() != 1 {
+		// A successful solve auto-stops the same runtime in the background. If that
+		// cleanup won the race after this request claimed the row, the desired end
+		// state has already been reached and Stop remains idempotent.
+		var concurrentStatus string
+		stateErr := tx.QueryRow(ctx,
+			`SELECT status FROM instances WHERE id = $1 AND user_id = $2`,
+			instanceID, uid,
+		).Scan(&concurrentStatus)
+		if errors.Is(stateErr, pgx.ErrNoRows) ||
+			(stateErr == nil && (concurrentStatus == "stopped" || concurrentStatus == "expired")) {
+			c.JSON(http.StatusOK, gin.H{
+				"status":          "stopped",
+				"already_stopped": true,
+				"message":         "instance already stopped",
+			})
+			return
+		}
 		h.logger.Error("instance deletion affected an unexpected number of rows", zap.String("instance_id", instanceID.String()), zap.Int64("rows_affected", result.RowsAffected()))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete instance"})
 		return
