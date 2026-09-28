@@ -63,7 +63,7 @@ func (c *Controller) Run(ctx context.Context) {
 	if running, ok, err := c.runningTick(ctx); err != nil {
 		c.logger.Error("game engine failed to read running tick", zap.Error(err))
 		return
-	} else if ok {
+	} else if ok && c.tickingAllowed(ctx) {
 		if err := c.runTick(ctx, running); err != nil && ctx.Err() == nil {
 			c.logger.Error("resume tick failed", zap.Int("tick", running), zap.Error(err))
 		}
@@ -78,6 +78,14 @@ func (c *Controller) Run(ctx context.Context) {
 			c.logger.Info("game engine stopped")
 			return
 		case <-ticker.C:
+			// dormant when KotH is off (the stop signal) or the event has ended: keep the
+			// loop alive so arena reads still work, but advance no tick - otherwise the engine
+			// runs past the close, advancing rounds and writing score snapshots against dead
+			// arenas, which pollutes the arena graph. Flipping koth_native_enabled back on
+			// resumes ticking live, no restart.
+			if !c.tickingAllowed(ctx) {
+				continue
+			}
 			next, err := c.nextTick(ctx)
 			if err != nil {
 				c.logger.Error("game engine failed to choose next tick", zap.Error(err))
@@ -88,6 +96,28 @@ func (c *Controller) Run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// tickingAllowed reports whether the engine should advance a tick right now. It goes
+// dormant when KotH native scoring is disabled (stop.sh sets koth_native_enabled=false at
+// the close) or the event's end_at has passed. The controller's Run loop only starts when
+// game.enabled is true, and the arena read endpoints are gated on that same flag - so we
+// cannot simply turn game.enabled off to stop ticking without also hiding the arena view.
+// This decouples the two: game.enabled stays true (arena stays visible, frozen at its last
+// tick), while the loop advances nothing once the event is over.
+func (c *Controller) tickingAllowed(ctx context.Context) bool {
+	if !c.kothNativeEnabled(ctx) {
+		return false
+	}
+	var endStr string
+	if err := c.db.Pool.QueryRow(ctx,
+		`SELECT COALESCE(value #>> '{}', '') FROM platform_settings WHERE key = 'event.end_at'`,
+	).Scan(&endStr); err == nil && endStr != "" {
+		if end, perr := time.Parse(time.RFC3339, endStr); perr == nil && !time.Now().Before(end) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Controller) runTick(parent context.Context, tick int) error {
