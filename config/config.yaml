@@ -37,9 +37,17 @@ jwt:
 container:
   network_name: anvil-challenges
   network_subnet: "172.20.0.0/16"
+  network_internal: false
   default_timeout: 2h
   max_per_user: 2
   cleanup_interval: 5m
+  # Optional single-host routing. When enabled, Anvil gives each HTTP challenge
+  # a deterministic hostname and emits Traefik Docker labels. A host reverse
+  # proxy can terminate TLS and forward the wildcard namespace to Traefik.
+  http_routing: false
+  http_base_domain: ""
+  http_external_port: 443
+  http_external_scheme: https
   labels:
     managed-by: anvil
 

@@ -33,6 +33,37 @@ func TestValidateAllowsDevelopmentDefaultJWTSecret(t *testing.T) {
 	}
 }
 
+func TestValidateContainerHTTPRouting(t *testing.T) {
+	valid := Config{Environment: "development"}
+	valid.Container.HTTPRouting = true
+	valid.Container.HTTPBaseDomain = "instances.demo.example.org"
+	valid.Container.HTTPExternalPort = 443
+	valid.Container.HTTPExternalScheme = "https"
+	valid.Instancer.HMACSecret = "0123456789abcdef0123456789abcdef"
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate() rejected valid HTTP routing config: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing domain", mutate: func(c *Config) { c.Container.HTTPBaseDomain = "" }},
+		{name: "weak identity secret", mutate: func(c *Config) { c.Instancer.HMACSecret = "short" }},
+		{name: "invalid port", mutate: func(c *Config) { c.Container.HTTPExternalPort = 0 }},
+		{name: "invalid scheme", mutate: func(c *Config) { c.Container.HTTPExternalScheme = "ftp" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := valid
+			tt.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() accepted invalid HTTP routing config")
+			}
+		})
+	}
+}
+
 func TestLoadWithoutConfigUsesValidDurations(t *testing.T) {
 	t.Chdir(t.TempDir())
 

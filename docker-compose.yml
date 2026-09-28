@@ -15,7 +15,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "${ANVIL_POSTGRES_BIND:-127.0.0.1:5432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U anvil -d anvil"]
       interval: 10s
@@ -62,8 +62,22 @@ services:
       - ANVIL_ZEROPOOL_BASE_URL=${ANVIL_ZEROPOOL_BASE_URL:-}
       - ANVIL_ZEROPOOL_API_KEY=${ANVIL_ZEROPOOL_API_KEY:-}
       - ANVIL_ZEROPOOL_EVENT_SLUG=${ANVIL_ZEROPOOL_EVENT_SLUG:-h7ctf-2026}
+      - ANVIL_CONTAINER_NETWORK_NAME=${ANVIL_CONTAINER_NETWORK_NAME:-anvil-challenges}
+      - ANVIL_CONTAINER_NETWORK_SUBNET=${ANVIL_CONTAINER_NETWORK_SUBNET:-172.20.0.0/16}
+      - ANVIL_CONTAINER_NETWORK_INTERNAL=${ANVIL_CONTAINER_NETWORK_INTERNAL:-false}
+      - ANVIL_CONTAINER_HTTP_ROUTING=${ANVIL_CONTAINER_HTTP_ROUTING:-false}
+      - ANVIL_CONTAINER_HTTP_BASE_DOMAIN=${ANVIL_CONTAINER_HTTP_BASE_DOMAIN:-}
+      - ANVIL_CONTAINER_HTTP_EXTERNAL_PORT=${ANVIL_CONTAINER_HTTP_EXTERNAL_PORT:-443}
+      - ANVIL_CONTAINER_HTTP_EXTERNAL_SCHEME=${ANVIL_CONTAINER_HTTP_EXTERNAL_SCHEME:-https}
+      - ANVIL_INSTANCER_BACKEND=${ANVIL_INSTANCER_BACKEND:-docker}
+      - ANVIL_INSTANCER_HMAC_SECRET=${ANVIL_INSTANCER_HMAC_SECRET:-}
+      - ANVIL_INSTANCER_BASE_DOMAIN=${ANVIL_INSTANCER_BASE_DOMAIN:-h7tex.com}
+      - ANVIL_PLATFORM_NAME=${ANVIL_PLATFORM_NAME:-Anvil}
+      - ANVIL_PLATFORM_REGISTRATION_MODE=${ANVIL_PLATFORM_REGISTRATION_MODE:-open}
+      - ANVIL_GAME_ENABLED=${ANVIL_GAME_ENABLED:-false}
+      - ANVIL_WEBVERSE_ENABLED=${ANVIL_WEBVERSE_ENABLED:-false}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "${ANVIL_API_BIND:-127.0.0.1:8080}:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOME}/.ssh:/root/.ssh:ro
@@ -79,6 +93,29 @@ services:
     stop_grace_period: 35s
     restart: unless-stopped
 
+  challenge-router:
+    image: traefik:v3.6
+    container_name: anvil-challenge-router
+    profiles: ["http-routing"]
+    network_mode: host
+    command:
+      - --entrypoints.web.address=${ANVIL_CONTAINER_ROUTER_LISTEN:-127.0.0.1:18082}
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.watch=true
+      - --api.dashboard=false
+      - --log.level=INFO
+      - --accesslog=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    logging: *default-logging
+    restart: unless-stopped
+
   web:
     build:
       context: ./web
@@ -90,7 +127,7 @@ services:
       - SHUTDOWN_TIMEOUT=25
       - PUBLIC_API_URL=${PUBLIC_API_URL:?PUBLIC_API_URL is required}
     ports:
-      - "127.0.0.1:3000:3000"
+      - "${ANVIL_WEB_BIND:-127.0.0.1:3000}:3000"
     depends_on:
       api:
         condition: service_healthy

@@ -958,8 +958,29 @@ func (h *InstanceHandler) provisionInstance(
 				containerReq.ExposedPorts = append(containerReq.ExposedPorts, container.ExposedPort{
 					Port:     pc.Port,
 					Protocol: proto,
+					Service:  pc.Service,
 				})
 			}
+		}
+
+		if h.config != nil && h.config.Container.HTTPRouting && hasHTTPPort(plan.portConfig) {
+			baseDomain := strings.Trim(strings.TrimSpace(h.config.Container.HTTPBaseDomain), ".")
+			if baseDomain == "" {
+				err := errors.New("container HTTP routing is enabled without a base domain")
+				h.persistCreateFailure(ctx, instanceID, err)
+				return nil, newInstanceOperationError(http.StatusInternalServerError, "instance routing is not configured", err)
+			}
+			if h.instancerSvc == nil {
+				err := errors.New("instance identity service unavailable")
+				h.persistCreateFailure(ctx, instanceID, err)
+				return nil, newInstanceOperationError(http.StatusInternalServerError, "instance routing is not configured", err)
+			}
+			ownerID, err := h.k8sOwnerID(ctx, uid)
+			if err != nil {
+				h.persistCreateFailure(ctx, instanceID, fmt.Errorf("resolve instance owner: %w", err))
+				return nil, newInstanceOperationError(http.StatusInternalServerError, "failed to resolve instance owner", err)
+			}
+			containerReq.PublicHTTPHost = fmt.Sprintf("%s.%s", h.instancerSvc.InstanceID(ownerID, challenge.ID), baseDomain)
 		}
 
 		envVars, err := h.generateAndStoreDynamicFlags(ctx, instanceID, uid, challenge.ID)
@@ -984,12 +1005,27 @@ func (h *InstanceHandler) provisionInstance(
 
 		resourceID = containerInfo.ContainerID
 		instanceIP = containerInfo.IPAddress
+		if containerInfo.PublicHost != "" {
+			instanceIP = containerInfo.PublicHost
+		}
 
 		portMappings = make(map[string]int)
 		for i, ep := range containerReq.ExposedPorts {
 			svcType := "tcp"
 			if i < len(plan.portConfig) && plan.portConfig[i].Service != "" {
 				svcType = plan.portConfig[i].Service
+			}
+			if containerInfo.PublicHost != "" && isHTTPService(ep.Protocol, ep.Service) {
+				externalPort := h.config.Container.HTTPExternalPort
+				if externalPort <= 0 {
+					externalPort = 443
+				}
+				externalScheme := strings.ToLower(strings.TrimSpace(h.config.Container.HTTPExternalScheme))
+				if externalScheme != "http" && externalScheme != "https" {
+					externalScheme = "https"
+				}
+				portMappings[fmt.Sprintf("%d/%s", externalPort, externalScheme)] = externalPort
+				continue
 			}
 			portMappings[fmt.Sprintf("%d/%s", ep.Port, svcType)] = ep.Port
 		}
@@ -1036,6 +1072,21 @@ func (h *InstanceHandler) provisionInstance(
 		MaxResets:     challenge.MaxResets,
 		Endpoints:     k8sEndpoints,
 	}, nil
+}
+
+func isHTTPService(protocol, service string) bool {
+	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	service = strings.ToLower(strings.TrimSpace(service))
+	return protocol == "http" || protocol == "https" || service == "http" || service == "https"
+}
+
+func hasHTTPPort(ports []instancePortConfig) bool {
+	for _, port := range ports {
+		if isHTTPService(port.Protocol, port.Service) {
+			return true
+		}
+	}
+	return false
 }
 
 type instanceRowQuerier interface {

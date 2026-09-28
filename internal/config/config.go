@@ -134,6 +134,21 @@ func (c Config) Validate() error {
 			return fmt.Errorf("jwt.secret must be at least 32 bytes and non-default in production")
 		}
 	}
+	if c.Container.HTTPRouting {
+		if strings.Trim(strings.TrimSpace(c.Container.HTTPBaseDomain), ".") == "" {
+			return fmt.Errorf("container.http_base_domain is required when HTTP routing is enabled")
+		}
+		if len([]byte(strings.TrimSpace(c.Instancer.HMACSecret))) < 32 {
+			return fmt.Errorf("instancer.hmac_secret must be at least 32 bytes when container HTTP routing is enabled")
+		}
+		if c.Container.HTTPExternalPort < 1 || c.Container.HTTPExternalPort > 65535 {
+			return fmt.Errorf("container.http_external_port must be between 1 and 65535")
+		}
+		scheme := strings.ToLower(strings.TrimSpace(c.Container.HTTPExternalScheme))
+		if scheme != "http" && scheme != "https" {
+			return fmt.Errorf("container.http_external_scheme must be http or https")
+		}
+	}
 	// ledger economy invariant #7 (round-trips lose value) — the only runtime
 	// config-load guard per ctf26-1/metrics.py. validated in every environment.
 	// the roundtrip guard stays hard: points -> credits -> points must lose value
@@ -190,12 +205,17 @@ type JWTConfig struct {
 }
 
 type ContainerConfig struct {
-	NetworkName     string            `mapstructure:"network_name"`
-	NetworkSubnet   string            `mapstructure:"network_subnet"`
-	DefaultTimeout  time.Duration     `mapstructure:"default_timeout"`
-	MaxPerUser      int               `mapstructure:"max_per_user"`
-	CleanupInterval time.Duration     `mapstructure:"cleanup_interval"`
-	Labels          map[string]string `mapstructure:"labels"`
+	NetworkName        string            `mapstructure:"network_name"`
+	NetworkSubnet      string            `mapstructure:"network_subnet"`
+	NetworkInternal    bool              `mapstructure:"network_internal"`
+	DefaultTimeout     time.Duration     `mapstructure:"default_timeout"`
+	MaxPerUser         int               `mapstructure:"max_per_user"`
+	CleanupInterval    time.Duration     `mapstructure:"cleanup_interval"`
+	Labels             map[string]string `mapstructure:"labels"`
+	HTTPRouting        bool              `mapstructure:"http_routing"`
+	HTTPBaseDomain     string            `mapstructure:"http_base_domain"`
+	HTTPExternalPort   int               `mapstructure:"http_external_port"`
+	HTTPExternalScheme string            `mapstructure:"http_external_scheme"`
 }
 
 type VPNConfig struct {
@@ -377,10 +397,15 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("container.network_name", "anvil-challenges")
 	v.SetDefault("container.network_subnet", "172.20.0.0/16")
+	v.SetDefault("container.network_internal", false)
 	v.SetDefault("container.default_timeout", "2h")
 	v.SetDefault("container.max_per_user", 2)
 	v.SetDefault("container.cleanup_interval", "5m")
 	v.SetDefault("container.labels", map[string]string{})
+	v.SetDefault("container.http_routing", false)
+	v.SetDefault("container.http_base_domain", "")
+	v.SetDefault("container.http_external_port", 443)
+	v.SetDefault("container.http_external_scheme", "https")
 
 	v.SetDefault("instancer.backend", "docker")
 	v.SetDefault("instancer.hmac_secret", "")

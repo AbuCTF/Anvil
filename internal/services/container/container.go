@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -112,7 +114,8 @@ func challengeNetworkCreateOptions(cfg config.ContainerConfig) (client.NetworkCr
 		return client.NetworkCreateOptions{}, fmt.Errorf("invalid container network subnet %q: %w", cfg.NetworkSubnet, err)
 	}
 	return client.NetworkCreateOptions{
-		Driver: "bridge",
+		Driver:   "bridge",
+		Internal: cfg.NetworkInternal,
 		IPAM: &network.IPAM{
 			Config: []network.IPAMConfig{
 				{
@@ -139,17 +142,85 @@ type CreateInstanceRequest struct {
 	MemoryLimit     string
 	Labels          map[string]string
 	EnvironmentVars []string
+	PublicHTTPHost  string
 }
 
 type ExposedPort struct {
 	Port     int
 	Protocol string
+	Service  string
 }
 
 type CreateInstanceResponse struct {
 	ContainerID   string
 	ContainerName string
 	IPAddress     string
+	PublicHost    string
+}
+
+var dnsLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
+
+func validHostname(host string) bool {
+	host = strings.TrimSuffix(strings.TrimSpace(host), ".")
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !dnsLabelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func transportProtocol(protocol string) string {
+	switch strings.ToLower(strings.TrimSpace(protocol)) {
+	case "", "tcp", "http", "https":
+		return "tcp"
+	case "udp":
+		return "udp"
+	case "sctp":
+		return "sctp"
+	default:
+		return protocol
+	}
+}
+
+func isHTTPPort(port ExposedPort) bool {
+	service := strings.ToLower(strings.TrimSpace(port.Service))
+	protocol := strings.ToLower(strings.TrimSpace(port.Protocol))
+	return service == "http" || service == "https" || protocol == "http" || protocol == "https"
+}
+
+func httpRoutingLabels(routerName, host string, ports []ExposedPort) (map[string]string, error) {
+	if !validHostname(host) {
+		return nil, fmt.Errorf("invalid HTTP route hostname %q", host)
+	}
+	var target *ExposedPort
+	for i := range ports {
+		if isHTTPPort(ports[i]) {
+			target = &ports[i]
+			break
+		}
+	}
+	if target == nil {
+		return nil, fmt.Errorf("HTTP routing requested for a challenge without an HTTP port")
+	}
+	if target.Port < 1 || target.Port > 65535 {
+		return nil, fmt.Errorf("invalid HTTP target port %d", target.Port)
+	}
+
+	labels := map[string]string{
+		"traefik.enable": "true",
+		fmt.Sprintf("traefik.http.routers.%s.entrypoints", routerName):               "web",
+		fmt.Sprintf("traefik.http.routers.%s.rule", routerName):                      fmt.Sprintf("Host(`%s`)", host),
+		fmt.Sprintf("traefik.http.routers.%s.service", routerName):                   routerName,
+		fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.port", routerName): fmt.Sprintf("%d", target.Port),
+	}
+	if strings.EqualFold(target.Service, "https") || strings.EqualFold(target.Protocol, "https") {
+		labels[fmt.Sprintf("traefik.http.services.%s.loadbalancer.server.scheme", routerName)] = "https"
+	}
+	return labels, nil
 }
 
 func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest) (*CreateInstanceResponse, error) {
@@ -171,10 +242,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 
 	exposedPorts := make(network.PortSet)
 	for _, p := range req.ExposedPorts {
-		protocol := p.Protocol
-		if protocol == "" {
-			protocol = "tcp"
-		}
+		protocol := transportProtocol(p.Protocol)
 		containerPort, err := network.ParsePort(fmt.Sprintf("%d/%s", p.Port, protocol))
 		if err != nil {
 			return nil, fmt.Errorf("invalid exposed port: %w", err)
@@ -193,9 +261,24 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}
 	labels["anvil.instance.id"] = req.InstanceID.String()
 	labels["anvil.challenge.slug"] = req.ChallengeSlug
+	if req.PublicHTTPHost != "" {
+		routeLabels, err := httpRoutingLabels(containerName, req.PublicHTTPHost, req.ExposedPorts)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range routeLabels {
+			labels[k] = v
+		}
+	}
 
-	cpuLimit, _ := parseCPULimit(req.CPULimit)
-	memoryLimit, _ := parseMemoryLimit(req.MemoryLimit)
+	cpuLimit, err := parseCPULimit(req.CPULimit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CPU limit: %w", err)
+	}
+	memoryLimit, err := parseMemoryLimit(req.MemoryLimit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid memory limit: %w", err)
+	}
 
 	// Build platform spec for cross-arch emulation (e.g. amd64 image on arm64 host)
 	var platform *ocispec.Platform
@@ -304,6 +387,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		ContainerID:   resp.ID,
 		ContainerName: containerName,
 		IPAddress:     ipAddress,
+		PublicHost:    req.PublicHTTPHost,
 	}, nil
 }
 
@@ -519,13 +603,23 @@ func getRegistryAuth(image string) string {
 
 // parseCPULimit parses CPU limit string to nanocpus
 func parseCPULimit(limit string) (int64, error) {
+	limit = strings.TrimSpace(strings.ToLower(limit))
 	if limit == "" {
 		return 0, nil
 	}
-	var cpus float64
-	_, err := fmt.Sscanf(limit, "%f", &cpus)
+	if strings.HasSuffix(limit, "m") {
+		milliCPU, err := strconv.ParseInt(strings.TrimSuffix(limit, "m"), 10, 64)
+		if err != nil || milliCPU <= 0 {
+			return 0, fmt.Errorf("must be a positive CPU count or millicpu value")
+		}
+		return milliCPU * 1_000_000, nil
+	}
+	cpus, err := strconv.ParseFloat(limit, 64)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("must be a CPU count: %w", err)
+	}
+	if cpus <= 0 {
+		return 0, fmt.Errorf("must be positive")
 	}
 	return int64(cpus * 1e9), nil
 }
@@ -536,25 +630,41 @@ func parseMemoryLimit(limit string) (int64, error) {
 		return 0, nil
 	}
 
-	limit = strings.ToLower(limit)
-	var value int64
-	var unit string
-
-	_, err := fmt.Sscanf(limit, "%d%s", &value, &unit)
+	limit = strings.TrimSpace(strings.ToLower(limit))
+	units := []struct {
+		suffix     string
+		multiplier int64
+	}{
+		{"gib", 1024 * 1024 * 1024},
+		{"gb", 1024 * 1024 * 1024},
+		{"gi", 1024 * 1024 * 1024},
+		{"g", 1024 * 1024 * 1024},
+		{"mib", 1024 * 1024},
+		{"mb", 1024 * 1024},
+		{"mi", 1024 * 1024},
+		{"m", 1024 * 1024},
+		{"kib", 1024},
+		{"kb", 1024},
+		{"ki", 1024},
+		{"k", 1024},
+	}
+	multiplier := int64(1)
+	valueText := limit
+	for _, unit := range units {
+		if strings.HasSuffix(limit, unit.suffix) {
+			multiplier = unit.multiplier
+			valueText = strings.TrimSpace(strings.TrimSuffix(limit, unit.suffix))
+			break
+		}
+	}
+	value, err := strconv.ParseInt(valueText, 10, 64)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("must be an integer byte quantity: %w", err)
 	}
-
-	switch unit {
-	case "k", "kb":
-		return value * 1024, nil
-	case "m", "mb":
-		return value * 1024 * 1024, nil
-	case "g", "gb":
-		return value * 1024 * 1024 * 1024, nil
-	default:
-		return value, nil
+	if value <= 0 {
+		return 0, fmt.Errorf("must be positive")
 	}
+	return value * multiplier, nil
 }
 
 // HealthCheck checks container health
