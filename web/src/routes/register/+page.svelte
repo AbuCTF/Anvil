@@ -10,8 +10,12 @@
 	// when registration is handled off-platform, send direct visits there too
 	onMount(async () => {
 		await loadPlatformInfo();
-		const url = get(platformInfo)?.register_url;
+		const info = get(platformInfo);
+		const url = info?.register_url;
 		if (url) window.location.href = url;
+		else if (info?.registration_mode === 'disabled' || info?.registration_mode === 'token') {
+			await goto('/login', { replaceState: true });
+		}
 	});
 
 	let username = '';

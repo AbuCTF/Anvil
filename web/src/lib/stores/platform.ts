@@ -27,6 +27,13 @@ export async function loadPlatformInfo() {
 // otherwise anvil's own signup page.
 export const registerHref = derived(platformInfo, ($i) => $i?.register_url || '/register');
 
+// An external registration URL remains valid when Anvil's own signup endpoint
+// is disabled/token-only. Without one, only open and invite modes have a usable
+// self-service registration page.
+export const registrationAvailable = derived(platformInfo, ($i) =>
+	!!$i && (!!$i.register_url || $i.registration_mode === 'open' || $i.registration_mode === 'invite')
+);
+
 // whether the signed-in user is on a team (teams mode); null = unknown.
 export const hasTeam = writable<boolean | null>(null);
 
