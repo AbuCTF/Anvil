@@ -23,6 +23,11 @@ export async function loadPlatformInfo() {
 	}
 }
 
+export async function refreshPlatformInfo() {
+	started = false;
+	await loadPlatformInfo();
+}
+
 // where "register" links point: the external registration site when configured,
 // otherwise anvil's own signup page.
 export const registerHref = derived(platformInfo, ($i) => $i?.register_url || '/register');

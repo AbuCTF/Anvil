@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/mail"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -1017,6 +1019,10 @@ func (h *SettingsHandler) List(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load settings"})
 		return
 	}
+	if managed, _ := settings["event.profile_managed"].(bool); !managed && h.config != nil {
+		settings["platform_name"] = h.config.Platform.Name
+		settings["platform_description"] = h.config.Platform.Description
+	}
 
 	c.JSON(http.StatusOK, gin.H{"settings": settings})
 }
@@ -1126,6 +1132,18 @@ func validatePlatformSetting(key string, value interface{}) error {
 		}
 		return nil
 	}
+	stringValue := func(minimum, maximum int) (string, error) {
+		text, ok := value.(string)
+		if !ok {
+			return "", fmt.Errorf("Invalid value for %s: expected text", key)
+		}
+		text = strings.TrimSpace(text)
+		length := len([]rune(text))
+		if length < minimum || length > maximum {
+			return "", fmt.Errorf("Invalid value for %s: expected %d to %d characters", key, minimum, maximum)
+		}
+		return text, nil
+	}
 
 	switch key {
 	case "instance.max_per_user":
@@ -1138,8 +1156,52 @@ func validatePlatformSetting(key string, value interface{}) error {
 		return intRange(30, 480)
 	case "cooldown.easy_minutes", "cooldown.medium_minutes", "cooldown.hard_minutes", "cooldown.insane_minutes":
 		return intRange(0, 120)
-	case "platform.require_vpn", "scoreboard_enabled", "teams_mode", "economy_mode", "arena_enabled", "market_pulse_enabled":
+	case "platform.require_vpn", "scoreboard_enabled", "teams_mode", "economy_mode", "arena_enabled", "market_pulse_enabled", "event.profile_managed", "event.setup_completed":
 		return boolValue()
+	case "platform_name":
+		_, err := stringValue(1, 100)
+		return err
+	case "platform_description":
+		_, err := stringValue(0, 280)
+		return err
+	case "event.slug":
+		text, err := stringValue(1, 64)
+		if err != nil {
+			return err
+		}
+		for index, char := range text {
+			if (char < 'a' || char > 'z') && (char < '0' || char > '9') && (char != '-' || index == 0 || index == len(text)-1) {
+				return errors.New("Invalid value for event.slug: use lowercase letters, numbers, and internal hyphens")
+			}
+		}
+	case "event.timezone":
+		text, err := stringValue(1, 100)
+		if err != nil {
+			return err
+		}
+		if _, err := time.LoadLocation(text); err != nil {
+			return errors.New("Invalid value for event.timezone: expected an IANA timezone")
+		}
+	case "event.contact_email":
+		text, err := stringValue(0, 254)
+		if err != nil || text == "" {
+			return err
+		}
+		address, err := mail.ParseAddress(text)
+		if err != nil || !strings.EqualFold(address.Address, text) {
+			return errors.New("Invalid value for event.contact_email")
+		}
+	case "event.rules_url", "event.privacy_url", "event.terms_url":
+		text, err := stringValue(0, 1000)
+		if err != nil || text == "" {
+			return err
+		}
+		parsed, err := url.Parse(text)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+			return fmt.Errorf("Invalid value for %s: expected an HTTPS URL", key)
+		}
+	case "branding.logo_key", "branding.logo_mime":
+		return errors.New("Branding storage settings are read-only")
 	case "registration_mode":
 		mode, ok := value.(string)
 		if !ok || !isRegistrationMode(strings.ToLower(strings.TrimSpace(mode))) {

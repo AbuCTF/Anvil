@@ -28,6 +28,13 @@ export type EventPhase = 'scheduled' | 'live' | 'ended';
 export interface PlatformInfoResponse {
 	name: string;
 	description: string;
+	slug: string;
+	timezone: string;
+	contact_email?: string;
+	logo_url?: string;
+	rules_url?: string;
+	privacy_url?: string;
+	terms_url?: string;
 	registration_mode: string;
 	scoring_enabled: boolean;
 	scoreboard_enabled: boolean;
@@ -329,7 +336,8 @@ class ApiClient {
 		endpoint: string,
 		formData: FormData,
 		token: string,
-		onProgress?: (progress: number) => void
+		onProgress?: (progress: number) => void,
+		baseUrl = this.uploadUrl
 	): Promise<{ status: number; body: string }> {
 		return new Promise((resolve, reject) => {
 			const xhr = new XMLHttpRequest();
@@ -343,7 +351,7 @@ class ApiClient {
 			xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
 			xhr.addEventListener('abort', () => reject(new Error('Upload cancelled')));
 
-			xhr.open('POST', `${this.uploadUrl}/api/v1${endpoint}`);
+			xhr.open('POST', `${baseUrl}/api/v1${endpoint}`);
 			xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 			xhr.send(formData);
 		});
@@ -352,7 +360,8 @@ class ApiClient {
 	private async uploadFormData<T>(
 		endpoint: string,
 		formData: FormData,
-		onProgress?: (progress: number) => void
+		onProgress?: (progress: number) => void,
+		baseUrl = this.uploadUrl
 	): Promise<T> {
 		let token = this.getAuthToken();
 		if (!token) {
@@ -360,12 +369,12 @@ class ApiClient {
 			throw new Error('Authentication required');
 		}
 
-		let response = await this.sendFormData(endpoint, formData, token, onProgress);
+		let response = await this.sendFormData(endpoint, formData, token, onProgress, baseUrl);
 		if (response.status === 401 && browser) {
 			const refreshedToken = await auth.refreshAccessToken();
 			if (refreshedToken) {
 				token = refreshedToken;
-				response = await this.sendFormData(endpoint, formData, token, onProgress);
+				response = await this.sendFormData(endpoint, formData, token, onProgress, baseUrl);
 			} else {
 				auth.clearAuth();
 				window.location.href = '/login';
@@ -1040,6 +1049,16 @@ class ApiClient {
 			method: 'PUT',
 			body: JSON.stringify({ settings })
 		});
+	}
+
+	async uploadBrandLogo(file: File) {
+		const form = new FormData();
+		form.append('logo', file);
+		return this.uploadFormData<{ logo_url: string; logo_key: string; logo_mime: string }>('/admin/branding/logo', form, undefined, this.baseUrl);
+	}
+
+	async deleteBrandLogo() {
+		return this.request<{ success: boolean }>('/admin/branding/logo', { method: 'DELETE' });
 	}
 
 	async uploadOvaChallenge(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {

@@ -14,6 +14,7 @@
 	import { loadPlatformInfo, registerHref, registrationAvailable, platformInfo, hasTeam } from '$lib/stores/platform';
 	import RankBadge from '$lib/components/RankBadge.svelte';
 	import DialogHost from '$lib/components/DialogHost.svelte';
+	import BrandLogo from '$lib/components/BrandLogo.svelte';
 
 	let mobileMenuOpen = false;
 	let userMenuOpen = false;
@@ -208,7 +209,7 @@
 		<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10">
 			<div class="grid h-16 grid-cols-[auto_1fr_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
 				<a href="/" class="col-start-1 row-start-1 flex shrink-0 items-center justify-self-start">
-					<img src="/logo.png" alt="Anvil" class="h-10 w-auto" />
+					<BrandLogo className="h-10 w-auto max-w-36 sm:max-w-44" />
 				</a>
 
 				<div class="col-start-2 row-start-1 hidden items-center justify-self-center lg:flex">

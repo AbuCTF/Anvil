@@ -9,7 +9,8 @@
 	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
 	import { formatLocalDateLong, formatLocalDateTime, formatLocalDateTimeWithZone, instantTitle, viewerTimeZone } from '$lib/time';
 	import { confirmDialog, alertDialog, promptDialog } from '$lib/stores/dialog';
-	import { platformInfo } from '$lib/stores/platform';
+	import { platformInfo, refreshPlatformInfo } from '$lib/stores/platform';
+	import EventSetup from '$lib/components/admin/EventSetup.svelte';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -647,11 +648,17 @@
 	async function savePlatformSettings() {
 		if (settingsError || eventWindowError || historyEndError) return;
 		savingSettings = true;
+		settingsError = '';
 		try {
-			await api.updatePlatformSettings(platformSettings);
+			const writableSettings = { ...platformSettings };
+			delete writableSettings['branding.logo_key'];
+			delete writableSettings['branding.logo_mime'];
+			await api.updatePlatformSettings(writableSettings);
 			settingsChanged = false;
+			await refreshPlatformInfo();
 		} catch (e) {
-			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to save settings' });
+			settingsError = e instanceof Error ? e.message : 'Failed to save settings';
+			alertDialog({ title: 'Error', message: settingsError });
 		} finally {
 			savingSettings = false;
 		}
@@ -660,6 +667,7 @@
 	function updateSetting(key: string, value: any) {
 		platformSettings = { ...platformSettings, [key]: value };
 		settingsChanged = true;
+		settingsError = '';
 	}
 
 	function handleNumberInput(e: Event, key: string) {
@@ -1197,6 +1205,7 @@
 
 	const TABS = [
 		{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard-outline' },
+		{ id: 'event', label: 'Event', icon: 'mdi:calendar-star' },
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
 		{ id: 'users', label: 'Users', icon: 'mdi:account-group-outline' },
 		{ id: 'teams', label: 'Teams', icon: 'mdi:account-multiple-outline' },
@@ -1321,7 +1330,17 @@
 				</div>
 			{/if}
 
-			{#if activeTab === 'challenges'}
+			{#if activeTab === 'event'}
+				<EventSetup
+					settings={platformSettings}
+					{challenges}
+					saving={savingSettings}
+					changed={settingsChanged}
+					error={settingsError}
+					update={updateSetting}
+					save={savePlatformSettings}
+				/>
+			{:else if activeTab === 'challenges'}
 				{#if categoriesError}
 					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-warn/20 bg-warn/5 px-4 py-3 text-sm text-warn" aria-live="polite">
 						<span>Categories could not be loaded: {categoriesError}</span>

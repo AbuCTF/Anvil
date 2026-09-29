@@ -108,6 +108,7 @@ func (s *Server) setupRouter() {
 		public := v1.Group("")
 		{
 			public.GET("/info", handlers.NewPlatformHandler(s.config, s.db, s.logger).GetInfo)
+			public.GET("/branding/logo", handlers.NewBrandingHandler(s.db, s.storageSvc, s.logger).Logo)
 
 			auth := public.Group("/auth")
 			{
@@ -310,6 +311,13 @@ func (s *Server) setupRouter() {
 		admin.Use(middleware.Auth(s.config, s.db))
 		admin.Use(middleware.RequireRole("admin"))
 		{
+			branding := admin.Group("/branding")
+			{
+				brandingHandler := handlers.NewBrandingHandler(s.db, s.storageSvc, s.logger)
+				branding.POST("/logo", brandingHandler.UploadLogo)
+				branding.DELETE("/logo", brandingHandler.DeleteLogo)
+			}
+
 			announcements := admin.Group("/announcements")
 			{
 				notificationHandler := handlers.NewNotificationHandler(s.db, s.logger)

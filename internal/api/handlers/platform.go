@@ -26,6 +26,13 @@ const eventClockGracePeriod = 48 * time.Hour
 type platformInfoResponse struct {
 	Name               string                         `json:"name"`
 	Description        string                         `json:"description"`
+	Slug               string                         `json:"slug"`
+	Timezone           string                         `json:"timezone"`
+	ContactEmail       string                         `json:"contact_email,omitempty"`
+	LogoURL            string                         `json:"logo_url,omitempty"`
+	RulesURL           string                         `json:"rules_url,omitempty"`
+	PrivacyURL         string                         `json:"privacy_url,omitempty"`
+	TermsURL           string                         `json:"terms_url,omitempty"`
 	RegistrationMode   string                         `json:"registration_mode"`
 	ScoringEnabled     bool                           `json:"scoring_enabled"`
 	ScoreboardEnabled  bool                           `json:"scoreboard_enabled"`
@@ -63,18 +70,37 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("failed to read market_pulse_enabled", zap.Error(err))
 	}
+	scoring, err := boolSettingOrDefault(ctx, h.db, "scoring_enabled", h.config.Platform.ScoringEnabled)
+	if err != nil {
+		h.logger.Warn("failed to read scoring_enabled", zap.Error(err))
+	}
+	scoreboard, err := boolSettingOrDefault(ctx, h.db, "scoreboard_enabled", h.config.Platform.ScoreboardEnabled)
+	if err != nil {
+		h.logger.Warn("failed to read scoreboard_enabled", zap.Error(err))
+	}
 	registrationMode := h.config.Platform.RegistrationMode
 	if effective, modeErr := (&AuthHandler{config: h.config, db: h.db}).registrationMode(ctx); modeErr != nil {
 		h.logger.Warn("failed to read effective registration_mode", zap.Error(modeErr))
 	} else {
 		registrationMode = effective
 	}
+	profile, err := loadEventProfile(ctx, h.db, h.config.Platform.Name, h.config.Platform.Description)
+	if err != nil {
+		h.logger.Warn("failed to read event profile", zap.Error(err))
+	}
 	response := platformInfoResponse{
-		Name:               h.config.Platform.Name,
-		Description:        h.config.Platform.Description,
+		Name:               profile.Name,
+		Description:        profile.Description,
+		Slug:               profile.Slug,
+		Timezone:           profile.Timezone,
+		ContactEmail:       profile.ContactEmail,
+		LogoURL:            profile.LogoURL,
+		RulesURL:           profile.RulesURL,
+		PrivacyURL:         profile.PrivacyURL,
+		TermsURL:           profile.TermsURL,
 		RegistrationMode:   registrationMode,
-		ScoringEnabled:     h.config.Platform.ScoringEnabled,
-		ScoreboardEnabled:  h.config.Platform.ScoreboardEnabled,
+		ScoringEnabled:     scoring,
+		ScoreboardEnabled:  scoreboard,
 		ArenaEnabled:       arena,
 		EconomyEnabled:     economy,
 		MarketPulseEnabled: pulse,
@@ -102,6 +128,53 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	// server timestamp corrects client clock drift; do not cache it.
 	c.Header("Cache-Control", "no-store")
 	c.JSON(http.StatusOK, response)
+}
+
+type eventProfile struct {
+	Name, Description, Slug, Timezone, ContactEmail, LogoURL, RulesURL, PrivacyURL, TermsURL string
+}
+
+func loadEventProfile(ctx context.Context, db *database.DB, defaultName, defaultDescription string) (eventProfile, error) {
+	profile := eventProfile{Name: defaultName, Description: defaultDescription, Slug: "anvil-event", Timezone: "UTC"}
+	var logoKey string
+	var managed bool
+	err := db.Pool.QueryRow(ctx, `
+		SELECT
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'platform_name'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'platform_description'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.slug'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.timezone'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.contact_email'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'branding.logo_key'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.rules_url'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.privacy_url'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.terms_url'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.profile_managed'), 'false')::boolean
+		FROM platform_settings
+		WHERE key IN ('platform_name', 'platform_description', 'event.slug', 'event.timezone',
+			'event.contact_email', 'branding.logo_key', 'event.rules_url', 'event.privacy_url', 'event.terms_url',
+			'event.profile_managed')
+	`).Scan(&profile.Name, &profile.Description, &profile.Slug, &profile.Timezone, &profile.ContactEmail,
+		&logoKey, &profile.RulesURL, &profile.PrivacyURL, &profile.TermsURL, &managed)
+	if err != nil {
+		return profile, err
+	}
+	if !managed || profile.Name == "" {
+		profile.Name = defaultName
+	}
+	if !managed {
+		profile.Description = defaultDescription
+	}
+	if profile.Slug == "" {
+		profile.Slug = "anvil-event"
+	}
+	if profile.Timezone == "" {
+		profile.Timezone = "UTC"
+	}
+	if logoKey != "" {
+		profile.LogoURL = "/api/v1/branding/logo?v=" + strings.TrimPrefix(logoKey, "branding/logos/")
+	}
+	return profile, nil
 }
 
 func (h *PlatformHandler) eventWindow(ctx context.Context) (*time.Time, *time.Time, error) {

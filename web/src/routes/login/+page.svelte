@@ -9,6 +9,7 @@
 		registerHref,
 		registrationAvailable
 	} from '$lib/stores/platform';
+	import BrandLogo from '$lib/components/BrandLogo.svelte';
 
 	// SSO login goes through the H7 portal (magic-link there → "Enter competition" → SSO back to Anvil).
 	// NOT the registration landing (2026.h7tex.com), which dead-ends a returning user.
@@ -60,15 +61,15 @@
 </script>
 
 <svelte:head>
-	<title>Sign in - Anvil</title>
+	<title>Sign in · {$platformInfo?.name ?? 'Anvil'}</title>
 </svelte:head>
 
 <div class="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-12">
 	<div class="w-full max-w-sm">
 		<div class="text-center mb-6">
-			<img src="/logo.png" alt="Anvil" class="h-9 w-auto mx-auto mb-4" />
+			<BrandLogo className="h-9 w-auto max-w-56 mx-auto mb-4" />
 			<h1 class="text-2xl font-semibold text-stone-100 tracking-tight">Welcome Back</h1>
-			<p class="text-sm text-stone-500 mt-1.5">Sign in with your Anvil account.</p>
+			<p class="text-sm text-stone-500 mt-1.5">Sign in to {$platformInfo?.name ?? 'Anvil'}.</p>
 		</div>
 
 		<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-5 sm:p-6">

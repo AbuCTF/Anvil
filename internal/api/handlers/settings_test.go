@@ -31,6 +31,21 @@ func TestValidatePlatformSetting(t *testing.T) {
 		{name: "empty score history cutoff", key: "scoreboard.history_end_at", value: ""},
 		{name: "invalid score history cutoff", key: "scoreboard.history_end_at", value: "midnight", wantErr: true},
 		{name: "legacy setting remains writable", key: "platform_name", value: "Anvil"},
+		{name: "empty event name", key: "platform_name", value: "", wantErr: true},
+		{name: "event slug", key: "event.slug", value: "kpmg-cyber-challenge-2026"},
+		{name: "uppercase event slug", key: "event.slug", value: "KPMG-2026", wantErr: true},
+		{name: "edge hyphen event slug", key: "event.slug", value: "-kpmg", wantErr: true},
+		{name: "event timezone", key: "event.timezone", value: "Asia/Kolkata"},
+		{name: "bad event timezone", key: "event.timezone", value: "India/Somewhere", wantErr: true},
+		{name: "event contact", key: "event.contact_email", value: "ctf@example.com"},
+		{name: "empty event contact", key: "event.contact_email", value: ""},
+		{name: "bad event contact", key: "event.contact_email", value: "hello", wantErr: true},
+		{name: "rules url", key: "event.rules_url", value: "https://example.com/rules"},
+		{name: "empty rules url", key: "event.rules_url", value: ""},
+		{name: "insecure rules url", key: "event.rules_url", value: "http://example.com/rules", wantErr: true},
+		{name: "setup completion", key: "event.setup_completed", value: true},
+		{name: "managed event profile", key: "event.profile_managed", value: true},
+		{name: "branding storage key is protected", key: "branding.logo_key", value: "other/object", wantErr: true},
 	}
 
 	for _, tt := range tests {
