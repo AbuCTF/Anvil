@@ -1464,7 +1464,7 @@
 		{:else if error}
 			<EmptyState icon="mdi:alert-circle-outline" text={error} />
 		{:else}
-			<div class="border-b border-stone-800 mb-8 overflow-x-auto">
+			<div class="scrollbar-hidden border-b border-stone-800 mb-8 overflow-x-auto">
 				<div class="flex gap-1 min-w-max">
 					{#each TABS as tab}
 						<button
