@@ -140,7 +140,7 @@
 			on:click={() => (open = !open)}
 		>
 			<span
-				class="relative top-[0.5px] block h-2 w-2 flex-none rounded-full {phase === 'live' ? 'live-dot bg-amber-500' : phase === 'scheduled' ? 'bg-info' : 'bg-stone-600'}"
+				class="block h-1.5 w-1.5 flex-none rounded-full {phase === 'live' ? 'live-dot bg-amber-500' : phase === 'scheduled' ? 'bg-info' : 'bg-stone-600'}"
 				aria-hidden="true"
 			></span>
 			<span class="metadata-label optical-label hidden text-stone-500 2xl:inline">{phaseLabel}</span>

@@ -84,8 +84,14 @@ func (h *AdminTeamsHandler) ApplyCredit(c *gin.Context) {
 		return
 	}
 	body.Kind = strings.TrimSpace(body.Kind)
-	if body.Kind == "" || body.Amount == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "kind and non-zero amount required"})
+	body.Note = strings.TrimSpace(body.Note)
+	allowedKinds := map[string]bool{"admin_bonus": true, "admin_refund": true, "admin_penalty": true, "admin_correction": true}
+	if !allowedKinds[body.Kind] || body.Amount == 0 || body.Note == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "valid kind, non-zero amount, and audit note required"})
+		return
+	}
+	if len([]rune(body.Note)) > 500 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "audit note must be 500 characters or fewer"})
 		return
 	}
 	if body.Amount < -20000 || body.Amount > 20000 {
@@ -111,6 +117,22 @@ func (h *AdminTeamsHandler) ApplyCredit(c *gin.Context) {
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "apply credit failed"})
+		return
+	}
+	actorID, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	auditValues, _ := json.Marshal(gin.H{
+		"kind": body.Kind, "amount": body.Amount, "balance_after": newBal, "note": body.Note,
+	})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent)
+		VALUES ($1, 'team_credit_adjusted', 'team', $2, $3::jsonb, $4, $5)`,
+		actorID, tid, auditValues, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		h.logger.Error("failed to audit admin credit", zap.String("team_id", teamID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to audit credit adjustment"})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -139,7 +161,7 @@ func unixOrNil(t *time.Time) *int64 {
 // ?sort=score|created|name orders the result (score is the default).
 func (h *AdminTeamsHandler) List(c *gin.Context) {
 	q := strings.TrimSpace(c.Query("q"))
-	order := "t.total_score DESC, t.created_at DESC"
+	order := "COALESCE(ets.points, t.total_score::numeric) DESC, t.created_at DESC"
 	switch c.Query("sort") {
 	case "created":
 		order = "t.created_at DESC"
@@ -148,18 +170,47 @@ func (h *AdminTeamsHandler) List(c *gin.Context) {
 	}
 
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
-		SELECT t.id, t.name, t.join_code, t.total_score, t.max_members,
-		       t.join_expires_at, t.created_at, cu.username,
+		SELECT t.id, t.name, t.join_code,
+		       COALESCE(ets.points, t.total_score::numeric) AS authoritative_score,
+		       t.total_score AS legacy_score, COALESCE(ets.points, 0), COALESCE(ets.credits, 0),
+		       t.max_members, t.join_expires_at, t.created_at, cu.username,
 		       COUNT(m.id) AS member_count,
 		       COALESCE(
 		           json_agg(json_build_object('id', m.id, 'username', m.username) ORDER BY m.username)
 		           FILTER (WHERE m.id IS NOT NULL), '[]'
-		       ) AS members
+		       ) AS members,
+		       GREATEST(COALESCE(es.challenge_solves, 0), COALESCE(rs.challenge_solves, 0)),
+		       COALESCE(rs.flag_solves, 0), COALESCE(sa.submissions, 0),
+		       COALESCE(sa.correct_submissions, 0), COALESCE(sa.wrong_submissions, 0),
+		       COALESCE(sa.ip_count, 0), GREATEST(rs.last_solve, sa.last_submission)
 		FROM teams t
 		LEFT JOIN users m ON m.team_id = t.id
 		LEFT JOIN users cu ON cu.id = t.created_by
+		LEFT JOIN economy_team_score ets ON ets.team_id = t.id
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*)::int AS challenge_solves
+			FROM economy_challenge_state e
+			WHERE e.team_id = t.id AND e.holds_solve
+		) es ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(DISTINCT s.challenge_id)::int AS challenge_solves,
+			       COUNT(DISTINCT s.flag_id)::int AS flag_solves, MAX(s.solved_at) AS last_solve
+			FROM solves s JOIN users su ON su.id = s.user_id
+			WHERE su.team_id = t.id
+		) rs ON true
+		LEFT JOIN LATERAL (
+			SELECT COUNT(*)::int AS submissions,
+			       COUNT(*) FILTER (WHERE s.is_correct)::int AS correct_submissions,
+			       COUNT(*) FILTER (WHERE NOT s.is_correct)::int AS wrong_submissions,
+			       COUNT(DISTINCT s.ip_address) FILTER (WHERE s.ip_address IS NOT NULL)::int AS ip_count,
+			       MAX(s.created_at) AS last_submission
+			FROM submissions s JOIN users su ON su.id = s.user_id
+			WHERE su.team_id = t.id
+		) sa ON true
 		WHERE ($1 = '' OR t.name ILIKE '%' || $1 || '%')
-		GROUP BY t.id, cu.username
+		GROUP BY t.id, cu.username, ets.points, ets.credits, es.challenge_solves,
+		         rs.challenge_solves, rs.flag_solves, rs.last_solve, sa.submissions,
+		         sa.correct_submissions, sa.wrong_submissions, sa.ip_count, sa.last_submission
 		ORDER BY `+order, q)
 	if err != nil {
 		h.logger.Error("failed to list teams", zap.Error(err))
@@ -172,14 +223,17 @@ func (h *AdminTeamsHandler) List(c *gin.Context) {
 	for rows.Next() {
 		var id, name, joinCode string
 		var createdBy *string
-		var totalScore, memberCount int
+		var authoritativeScore, ledgerPoints, ledgerCredits float64
+		var legacyScore, memberCount, challengeSolves, flagSolves, submissions, correctSubmissions, wrongSubmissions, ipCount int
 		var maxMembers *int
 		var joinExpires *time.Time
+		var lastActivity *time.Time
 		var createdAt time.Time
 		var membersJSON []byte
 
-		if err := rows.Scan(&id, &name, &joinCode, &totalScore, &maxMembers,
-			&joinExpires, &createdAt, &createdBy, &memberCount, &membersJSON); err != nil {
+		if err := rows.Scan(&id, &name, &joinCode, &authoritativeScore, &legacyScore, &ledgerPoints, &ledgerCredits, &maxMembers,
+			&joinExpires, &createdAt, &createdBy, &memberCount, &membersJSON,
+			&challengeSolves, &flagSolves, &submissions, &correctSubmissions, &wrongSubmissions, &ipCount, &lastActivity); err != nil {
 			h.logger.Error("failed to scan team", zap.Error(err))
 			continue
 		}
@@ -190,16 +244,26 @@ func (h *AdminTeamsHandler) List(c *gin.Context) {
 		}
 
 		teams = append(teams, gin.H{
-			"id":              id,
-			"name":            name,
-			"join_code":       joinCode,
-			"total_score":     totalScore,
-			"max_members":     maxMembers,
-			"join_expires_at": unixOrNil(joinExpires),
-			"created_at":      createdAt.Unix(),
-			"created_by":      createdBy,
-			"member_count":    memberCount,
-			"members":         members,
+			"id":                  id,
+			"name":                name,
+			"join_code":           joinCode,
+			"total_score":         authoritativeScore,
+			"legacy_score":        legacyScore,
+			"ledger_points":       ledgerPoints,
+			"ledger_credits":      ledgerCredits,
+			"challenge_solves":    challengeSolves,
+			"flag_solves":         flagSolves,
+			"submission_count":    submissions,
+			"correct_submissions": correctSubmissions,
+			"wrong_submissions":   wrongSubmissions,
+			"ip_count":            ipCount,
+			"last_activity_at":    unixOrNil(lastActivity),
+			"max_members":         maxMembers,
+			"join_expires_at":     unixOrNil(joinExpires),
+			"created_at":          createdAt.Unix(),
+			"created_by":          createdBy,
+			"member_count":        memberCount,
+			"members":             members,
 		})
 	}
 
@@ -263,6 +327,299 @@ func (h *AdminTeamsHandler) Get(c *gin.Context) {
 		"created_by":      createdBy,
 		"member_count":    memberCount,
 		"members":         members,
+	})
+}
+
+func (h *AdminTeamsHandler) Detail(c *gin.Context) {
+	teamID := c.Param("id")
+	if _, err := uuid.Parse(teamID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid team id"})
+		return
+	}
+	ctx := c.Request.Context()
+
+	var name, joinCode string
+	var createdBy *string
+	var maxMembers *int
+	var joinExpires *time.Time
+	var createdAt time.Time
+	var legacyScore int
+	var points, credits float64
+	var bailoutUsed, grantIssued bool
+	err := h.db.Pool.QueryRow(ctx, `
+		SELECT t.name, t.join_code, t.max_members, t.join_expires_at, t.created_at,
+		       cu.username, t.total_score, COALESCE(ets.points, 0), COALESCE(ets.credits, 0),
+		       COALESCE(ets.bailout_used, false), COALESCE(ets.grant_issued, false)
+		FROM teams t
+		LEFT JOIN users cu ON cu.id = t.created_by
+		LEFT JOIN economy_team_score ets ON ets.team_id = t.id
+		WHERE t.id = $1`, teamID).Scan(&name, &joinCode, &maxMembers, &joinExpires,
+		&createdAt, &createdBy, &legacyScore, &points, &credits, &bailoutUsed, &grantIssued)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "team not found"})
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to fetch team dossier", zap.String("team_id", teamID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch team"})
+		return
+	}
+
+	members := []gin.H{}
+	memberRows, err := h.db.Pool.Query(ctx, `
+		SELECT u.id, u.username, u.email, u.display_name, u.role::text, u.status::text,
+		       COALESCE(u.total_score, 0), u.email_verified, u.last_login_at, u.last_login_ip,
+		       u.created_at,
+		       (SELECT COUNT(DISTINCT s.challenge_id) FROM solves s WHERE s.user_id = u.id)::int,
+		       (SELECT COUNT(*) FROM solves s WHERE s.user_id = u.id)::int,
+		       (SELECT COUNT(*) FROM submissions s WHERE s.user_id = u.id)::int,
+		       (SELECT COUNT(*) FROM submissions s WHERE s.user_id = u.id AND s.is_correct)::int,
+		       (SELECT COUNT(*) FROM submissions s WHERE s.user_id = u.id AND NOT s.is_correct)::int
+		FROM users u WHERE u.team_id = $1 ORDER BY LOWER(u.username)`, teamID)
+	if err != nil {
+		h.logger.Error("failed to fetch team members", zap.String("team_id", teamID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch team members"})
+		return
+	}
+	for memberRows.Next() {
+		var id, username, role, status string
+		var email, displayName, lastLoginIP *string
+		var score, challengeSolves, flagSolves, submissions, correct, wrong int
+		var emailVerified bool
+		var lastLogin *time.Time
+		var joinedAt time.Time
+		if err := memberRows.Scan(&id, &username, &email, &displayName, &role, &status,
+			&score, &emailVerified, &lastLogin, &lastLoginIP, &joinedAt, &challengeSolves,
+			&flagSolves, &submissions, &correct, &wrong); err != nil {
+			memberRows.Close()
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch team members"})
+			return
+		}
+		members = append(members, gin.H{
+			"id": id, "username": username, "email": email, "display_name": displayName,
+			"role": role, "status": status, "score": score, "email_verified": emailVerified,
+			"last_login_at": unixOrNil(lastLogin), "last_login_ip": lastLoginIP,
+			"joined_at": joinedAt.Unix(), "challenge_solves": challengeSolves,
+			"flag_solves": flagSolves, "submission_count": submissions,
+			"correct_submissions": correct, "wrong_submissions": wrong,
+		})
+	}
+	memberRows.Close()
+
+	submissions := []gin.H{}
+	submissionRows, err := h.db.Pool.Query(ctx, `
+		SELECT s.id, u.id, u.username, c.id, c.name, c.slug, f.name, s.instance_id,
+		       s.submitted_flag, s.is_correct, COALESCE(s.points_awarded, 0),
+		       s.ip_address, LEFT(COALESCE(s.user_agent, ''), 500), s.created_at
+		FROM submissions s
+		JOIN users u ON u.id = s.user_id
+		JOIN challenges c ON c.id = s.challenge_id
+		LEFT JOIN flags f ON f.id = s.flag_id
+		WHERE u.team_id = $1
+		ORDER BY s.created_at DESC LIMIT 500`, teamID)
+	if err == nil {
+		for submissionRows.Next() {
+			var id, userID, username, challengeID, challengeName, challengeSlug, submittedFlag, userAgent string
+			var flagName, instanceID, ipAddress *string
+			var correct bool
+			var awarded int
+			var submittedAt time.Time
+			if submissionRows.Scan(&id, &userID, &username, &challengeID, &challengeName,
+				&challengeSlug, &flagName, &instanceID, &submittedFlag, &correct, &awarded,
+				&ipAddress, &userAgent, &submittedAt) == nil {
+				submissions = append(submissions, gin.H{
+					"id": id, "user_id": userID, "username": username,
+					"challenge_id": challengeID, "challenge_name": challengeName,
+					"challenge_slug": challengeSlug, "flag_name": flagName,
+					"instance_id": instanceID, "flag_fingerprint": hashFlag(submittedFlag)[:16],
+					"flag_length": len(submittedFlag), "correct": correct, "points": awarded,
+					"ip_address": ipAddress, "user_agent": userAgent, "submitted_at": submittedAt.Unix(),
+				})
+			}
+		}
+		submissionRows.Close()
+	}
+
+	accessIPs := []gin.H{}
+	ipRows, err := h.db.Pool.Query(ctx, `
+		WITH observations AS (
+			SELECT u.id AS user_id, u.username, s.ip_address, s.created_at AS seen_at, 'submission'::text AS source
+			FROM submissions s JOIN users u ON u.id = s.user_id
+			WHERE u.team_id = $1 AND s.ip_address IS NOT NULL
+			UNION ALL
+			SELECT u.id, u.username, se.ip_address, se.created_at, 'session'::text
+			FROM sessions se JOIN users u ON u.id = se.user_id
+			WHERE u.team_id = $1 AND se.ip_address IS NOT NULL
+			UNION ALL
+			SELECT u.id, u.username, u.last_login_ip, u.last_login_at, 'last_login'::text
+			FROM users u WHERE u.team_id = $1 AND u.last_login_ip IS NOT NULL AND u.last_login_at IS NOT NULL
+		)
+		SELECT user_id, username, ip_address, COUNT(*)::int, MIN(seen_at), MAX(seen_at),
+		       ARRAY_AGG(DISTINCT source ORDER BY source)
+		FROM observations
+		GROUP BY user_id, username, ip_address
+		ORDER BY MAX(seen_at) DESC LIMIT 500`, teamID)
+	if err == nil {
+		for ipRows.Next() {
+			var userID, username, ipAddress string
+			var count int
+			var firstSeen, lastSeen time.Time
+			var sources []string
+			if ipRows.Scan(&userID, &username, &ipAddress, &count, &firstSeen, &lastSeen, &sources) == nil {
+				accessIPs = append(accessIPs, gin.H{
+					"user_id": userID, "username": username, "ip_address": ipAddress,
+					"events": count, "first_seen_at": firstSeen.Unix(), "last_seen_at": lastSeen.Unix(),
+					"sources": sources,
+				})
+			}
+		}
+		ipRows.Close()
+	}
+
+	instanceHistory := []gin.H{}
+	instanceRows, err := h.db.Pool.Query(ctx, `
+		SELECT i.id, c.id, c.name, c.slug, u.id, u.username, i.status::text,
+		       COALESCE(i.ip_address, ''), i.created_at, i.started_at, i.expires_at, i.stopped_at,
+		       COALESCE(i.error_message, ''), COALESCE(i.container_id, '') <> ''
+		FROM instances i
+		JOIN challenges c ON c.id = i.challenge_id
+		LEFT JOIN users u ON u.id = i.user_id
+		WHERE i.team_id = $1 OR (i.team_id IS NULL AND u.team_id = $1)
+		ORDER BY i.created_at DESC LIMIT 500`, teamID)
+	if err == nil {
+		for instanceRows.Next() {
+			var id, challengeID, challengeName, challengeSlug, status, target, errorMessage string
+			var userID, username *string
+			var createdAt time.Time
+			var startedAt, expiresAt, stoppedAt *time.Time
+			var hasRuntime bool
+			if instanceRows.Scan(&id, &challengeID, &challengeName, &challengeSlug, &userID,
+				&username, &status, &target, &createdAt, &startedAt, &expiresAt, &stoppedAt,
+				&errorMessage, &hasRuntime) == nil {
+				row := gin.H{"id": id, "challenge_id": challengeID, "challenge_name": challengeName,
+					"challenge_slug": challengeSlug, "user_id": userID, "username": username,
+					"status": status, "target": target, "created_at": createdAt.Unix(),
+					"error_message": errorMessage, "has_runtime": hasRuntime}
+				if startedAt != nil {
+					row["started_at"] = startedAt.Unix()
+				}
+				if expiresAt != nil {
+					row["expires_at"] = expiresAt.Unix()
+				}
+				if stoppedAt != nil {
+					row["stopped_at"] = stoppedAt.Unix()
+				}
+				instanceHistory = append(instanceHistory, row)
+			}
+		}
+		instanceRows.Close()
+	}
+
+	solves := []gin.H{}
+	if solveRows, queryErr := h.db.Pool.Query(ctx, `
+		SELECT c.id, c.name, c.slug, f.name, s.user_id, u.username, s.points_awarded, s.solved_at
+		FROM solves s
+		JOIN users u ON u.id = s.user_id AND u.team_id = $1
+		JOIN challenges c ON c.id = s.challenge_id
+		LEFT JOIN flags f ON f.id = s.flag_id
+		ORDER BY s.solved_at DESC LIMIT 500`, teamID); queryErr == nil {
+		for solveRows.Next() {
+			var challengeID, challengeName, challengeSlug, solverID, solverUsername string
+			var flagName *string
+			var awarded int
+			var solvedAt time.Time
+			if solveRows.Scan(&challengeID, &challengeName, &challengeSlug, &flagName,
+				&solverID, &solverUsername, &awarded, &solvedAt) == nil {
+				solves = append(solves, gin.H{
+					"challenge_id": challengeID, "challenge_name": challengeName,
+					"challenge_slug": challengeSlug, "flag_name": flagName,
+					"solver_id": solverID, "solver_username": solverUsername,
+					"points": awarded, "solved_at": solvedAt.Unix(),
+				})
+			}
+		}
+		solveRows.Close()
+	}
+
+	creditEvents := []gin.H{}
+	if eventRows, queryErr := h.db.Pool.Query(ctx, `
+		SELECT id, kind, amount, balance_after, challenge_id, instance_id, created_at
+		FROM economy_credit_events WHERE team_id = $1 ORDER BY id DESC LIMIT 500`, teamID); queryErr == nil {
+		for eventRows.Next() {
+			var id int64
+			var kind string
+			var amount, balanceAfter float64
+			var challengeID, instanceID *uuid.UUID
+			var eventAt time.Time
+			if eventRows.Scan(&id, &kind, &amount, &balanceAfter, &challengeID, &instanceID, &eventAt) == nil {
+				event := gin.H{"id": id, "kind": kind, "amount": amount, "balance_after": balanceAfter, "created_at": eventAt.Unix()}
+				if challengeID != nil {
+					event["challenge_id"] = challengeID.String()
+				}
+				if instanceID != nil {
+					event["instance_id"] = instanceID.String()
+				}
+				creditEvents = append(creditEvents, event)
+			}
+		}
+		eventRows.Close()
+	}
+
+	opens := []gin.H{}
+	openCount := 0
+	if openRows, queryErr := h.db.Pool.Query(ctx, `
+		SELECT c.name, c.slug, e.status::text, e.opened_at, e.expires_at,
+		       ((c.resource_type = 'docker' AND COALESCE(c.container_image,'') <> '')
+		         OR EXISTS (SELECT 1 FROM challenge_resources cr WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active))
+		FROM economy_challenge_state e JOIN challenges c ON c.id = e.challenge_id
+		WHERE e.team_id = $1 AND e.status IN ('open','solved')
+		ORDER BY e.status::text, e.opened_at`, teamID); queryErr == nil {
+		for openRows.Next() {
+			var challengeName, challengeSlug, state string
+			var openedAt, expiresAt *time.Time
+			var hasInstance bool
+			if openRows.Scan(&challengeName, &challengeSlug, &state, &openedAt, &expiresAt, &hasInstance) == nil {
+				if state == "open" {
+					openCount++
+				}
+				open := gin.H{"name": challengeName, "slug": challengeSlug, "status": state, "has_instance": hasInstance}
+				if openedAt != nil {
+					open["opened_at"] = openedAt.Unix()
+				}
+				if expiresAt != nil {
+					open["expires_at"] = expiresAt.Unix()
+				}
+				opens = append(opens, open)
+			}
+		}
+		openRows.Close()
+	}
+
+	var challengeSolves, flagSolves, submissionCount int
+	_ = h.db.Pool.QueryRow(ctx, `
+		SELECT GREATEST(
+		         (SELECT COUNT(*) FROM economy_challenge_state WHERE team_id = $1 AND holds_solve),
+		         (SELECT COUNT(DISTINCT s.challenge_id) FROM solves s JOIN users u ON u.id = s.user_id WHERE u.team_id = $1)
+		       )::int,
+		       (SELECT COUNT(DISTINCT s.flag_id) FROM solves s JOIN users u ON u.id = s.user_id WHERE u.team_id = $1)::int,
+		       (SELECT COUNT(*) FROM submissions s JOIN users u ON u.id = s.user_id WHERE u.team_id = $1)::int`, teamID,
+	).Scan(&challengeSolves, &flagSolves, &submissionCount)
+	teamUUID, _ := uuid.Parse(teamID)
+	audit, _ := adminEntityAudit(ctx, h.db, "team", teamUUID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"team": gin.H{
+			"id": teamID, "name": name, "join_code": joinCode, "max_members": maxMembers,
+			"join_expires_at": unixOrNil(joinExpires), "created_at": createdAt.Unix(), "created_by": createdBy,
+			"legacy_score": legacyScore, "total_score": points, "ledger_points": points,
+			"ledger_credits": credits, "bailout_used": bailoutUsed, "grant_issued": grantIssued,
+			"member_count": len(members), "challenge_solves": challengeSolves,
+			"flag_solves": flagSolves, "submission_count": submissionCount,
+		},
+		"members": members, "submissions": submissions, "access_ips": accessIPs,
+		"instances": instanceHistory, "solves": solves, "credit_events": creditEvents,
+		"support": gin.H{"opens": opens, "open_count": openCount, "concurrency_cap": h.config.Economy.ConcurrencyCap},
+		"audit":   audit,
 	})
 }
 

@@ -120,6 +120,7 @@ func TestAttachmentHandlersRejectMalformedIDsBeforeDatabaseAccess(t *testing.T) 
 		params gin.Params
 	}{
 		{name: "list", handle: handler.List, params: gin.Params{{Key: "id", Value: "bad"}}},
+		{name: "external link", handle: handler.CreateLink, params: gin.Params{{Key: "id", Value: "bad"}}},
 		{name: "delete challenge", handle: handler.Delete, params: gin.Params{{Key: "id", Value: "bad"}, {Key: "attachment_id", Value: uuid.NewString()}}},
 		{name: "delete attachment", handle: handler.Delete, params: gin.Params{{Key: "id", Value: uuid.NewString()}, {Key: "attachment_id", Value: "bad"}}},
 		{name: "download", handle: handler.Download, params: gin.Params{{Key: "attachment_id", Value: "bad"}}},
@@ -132,6 +133,33 @@ func TestAttachmentHandlersRejectMalformedIDsBeforeDatabaseAccess(t *testing.T) 
 
 			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want %d", response.Code, http.StatusBadRequest)
+			}
+		})
+	}
+}
+
+func TestCreateAttachmentLinkRejectsUnsafeMetadataBeforeDatabaseAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := &AttachmentHandler{}
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{name: "relative URL", body: `{"name":"files.zip","url":"/internal/files.zip"}`},
+		{name: "unsupported scheme", body: `{"name":"files.zip","url":"file:///etc/passwd"}`},
+		{name: "invalid checksum", body: `{"name":"files.zip","url":"https://cdn.example/files.zip","sha256":"not-a-digest"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, response := testHandlerContext(http.MethodPost, "/api/v1/admin/challenges/id/attachments/link")
+			ctx.Params = gin.Params{{Key: "id", Value: uuid.NewString()}}
+			ctx.Set("user_id", uuid.New())
+			ctx.Request.Header.Set("Content-Type", "application/json")
+			ctx.Request.Body = ioNopCloser{Reader: strings.NewReader(test.body)}
+
+			handler.CreateLink(ctx)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusBadRequest, response.Body.String())
 			}
 		})
 	}

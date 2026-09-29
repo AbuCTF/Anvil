@@ -714,7 +714,7 @@ func (h *EconomyHandler) Balance(c *gin.Context) {
 	if errors.Is(err, pgx.ErrNoRows) {
 		frozen, _ := boolSettingOrDefault(ctx, h.db, "scoreboard_frozen", false)
 		c.JSON(http.StatusOK, gin.H{"credits": 0, "points": 0, "grant_issued": false, "bailout_used": false, "open": []gin.H{},
-			"frozen": frozen, "c2p_rate": h.config.Economy.C2PRate})
+			"frozen": frozen, "c2p_rate": h.config.Economy.C2PRate, "concurrency_cap": h.config.Economy.ConcurrencyCap})
 		return
 	}
 	if err != nil {
@@ -745,7 +745,7 @@ func (h *EconomyHandler) Balance(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"credits": credits, "points": points, "grant_issued": grantIssued,
 		"bailout_used": bailoutUsed, "open": open,
-		"frozen": frozen, "c2p_rate": h.config.Economy.C2PRate,
+		"frozen": frozen, "c2p_rate": h.config.Economy.C2PRate, "concurrency_cap": h.config.Economy.ConcurrencyCap,
 	})
 }
 

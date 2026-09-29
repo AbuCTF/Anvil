@@ -1380,6 +1380,7 @@
 											{instanceAction === 'stopping' ? 'Stopping…' : 'Stop'}
 										</button>
 									</div>
+									<p class="text-[11px] leading-relaxed text-stone-600">Runtime start, stop and extension controls are free. The separate solve-window extension below is the action that spends Ledger credits.</p>
 								</div>
 							{:else if cooldownInfo}
 								<div class="text-center py-4">
@@ -1402,6 +1403,12 @@
 											Start Instance
 										{/if}
 									</button>
+									{#if creatingInstance}
+										<div class="mt-3 overflow-hidden rounded-full bg-stone-900"><div class="h-1 w-2/3 animate-pulse rounded-full bg-amber-500/70"></div></div>
+										<p class="mt-2 text-xs text-stone-500">Allocating an isolated network and starting the service. This does not spend credits.</p>
+									{:else}
+										<p class="mt-2 text-xs text-stone-600">Starting and stopping the runtime is free. Challenge opening and paid solve-window extensions are Ledger actions.</p>
+									{/if}
 								</div>
 							{/if}
 						</Card>

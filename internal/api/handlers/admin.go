@@ -135,13 +135,17 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	var username, role, status string
-	var email, displayName, teamID, teamName *string
+	var email, displayName, avatarURL, bio, teamID, teamName *string
 	var totalScore int
+	var emailVerified bool
+	var createdAt, updatedAt time.Time
 	if err := h.db.Pool.QueryRow(ctx,
-		`SELECT u.username, u.email, u.display_name, u.role, u.status, COALESCE(u.total_score,0),
+		`SELECT u.username, u.email, u.display_name, u.avatar_url, u.bio, u.role, u.status,
+		        COALESCE(u.total_score,0), u.email_verified, u.created_at, u.updated_at,
 		        u.team_id::text, t.name
 		 FROM users u LEFT JOIN teams t ON t.id = u.team_id WHERE u.id = $1`, userID,
-	).Scan(&username, &email, &displayName, &role, &status, &totalScore, &teamID, &teamName); err != nil {
+	).Scan(&username, &email, &displayName, &avatarURL, &bio, &role, &status, &totalScore,
+		&emailVerified, &createdAt, &updatedAt, &teamID, &teamName); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
@@ -220,8 +224,8 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 
 	submissions := []gin.H{}
 	if rows, err := h.db.Pool.Query(ctx,
-		`SELECT s.id, c.name, c.slug, f.name, s.submitted_flag, s.is_correct,
-		        COALESCE(s.points_awarded, 0), s.ip_address, s.created_at
+		`SELECT s.id, c.name, c.slug, f.name, s.instance_id, s.submitted_flag, s.is_correct,
+		        COALESCE(s.points_awarded, 0), s.ip_address, LEFT(COALESCE(s.user_agent, ''), 500), s.created_at
 		 FROM submissions s
 		 JOIN challenges c ON c.id = s.challenge_id
 		 LEFT JOIN flags f ON f.id = s.flag_id
@@ -229,18 +233,19 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 		 ORDER BY s.created_at DESC LIMIT 200`, userID); err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var id, challengeName, challengeSlug, submittedFlag string
-			var flagName, ipAddress *string
+			var id, challengeName, challengeSlug, submittedFlag, userAgent string
+			var flagName, instanceID, ipAddress *string
 			var correct bool
 			var points int
 			var createdAt time.Time
-			if rows.Scan(&id, &challengeName, &challengeSlug, &flagName, &submittedFlag,
-				&correct, &points, &ipAddress, &createdAt) == nil {
+			if rows.Scan(&id, &challengeName, &challengeSlug, &flagName, &instanceID, &submittedFlag,
+				&correct, &points, &ipAddress, &userAgent, &createdAt) == nil {
 				submissions = append(submissions, gin.H{
 					"id": id, "challenge_name": challengeName, "challenge_slug": challengeSlug,
 					"flag_name": flagName, "flag_fingerprint": hashFlag(submittedFlag)[:16],
 					"flag_length": len(submittedFlag), "correct": correct, "points": points,
-					"ip_address": ipAddress, "submitted_at": createdAt.Unix(),
+					"instance_id": instanceID, "ip_address": ipAddress, "user_agent": userAgent,
+					"submitted_at": createdAt.Unix(),
 				})
 			}
 		}
@@ -251,15 +256,101 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 		lastLogin["at"] = lastLoginAt.Unix()
 	}
 
+	sessions := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx,
+		`SELECT id, ip_address, LEFT(COALESCE(user_agent, ''), 500), created_at, expires_at
+		 FROM sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`, userID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, userAgent string
+			var ipAddress *string
+			var sessionCreated, expiresAt time.Time
+			if rows.Scan(&id, &ipAddress, &userAgent, &sessionCreated, &expiresAt) == nil {
+				sessions = append(sessions, gin.H{"id": id, "ip_address": ipAddress,
+					"user_agent": userAgent, "created_at": sessionCreated.Unix(),
+					"expires_at": expiresAt.Unix(), "active": expiresAt.After(time.Now())})
+			}
+		}
+	}
+
+	accessIPs := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		WITH observations AS (
+			SELECT ip_address, created_at AS seen_at, 'submission'::text AS source
+			FROM submissions WHERE user_id = $1 AND ip_address IS NOT NULL
+			UNION ALL
+			SELECT ip_address, created_at, 'session'::text
+			FROM sessions WHERE user_id = $1 AND ip_address IS NOT NULL
+			UNION ALL
+			SELECT last_login_ip, last_login_at, 'last_login'::text
+			FROM users WHERE id = $1 AND last_login_ip IS NOT NULL AND last_login_at IS NOT NULL
+		)
+		SELECT ip_address, COUNT(*)::int, MIN(seen_at), MAX(seen_at), ARRAY_AGG(DISTINCT source ORDER BY source)
+		FROM observations GROUP BY ip_address ORDER BY MAX(seen_at) DESC`, userID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var ipAddress string
+			var count int
+			var firstSeen, lastSeen time.Time
+			var sources []string
+			if rows.Scan(&ipAddress, &count, &firstSeen, &lastSeen, &sources) == nil {
+				accessIPs = append(accessIPs, gin.H{"ip_address": ipAddress, "events": count,
+					"first_seen_at": firstSeen.Unix(), "last_seen_at": lastSeen.Unix(), "sources": sources})
+			}
+		}
+	}
+
+	warnings := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT n.id, n.body, n.severity, n.pinned, n.created_by, COALESCE(a.username, ''),
+		       n.publish_at, r.read_at, r.dismissed_at, n.cancelled_at
+		FROM notification_items n
+		LEFT JOIN users a ON a.id = n.created_by
+		LEFT JOIN notification_receipts r ON r.item_id = n.id AND r.user_id = $1
+		WHERE n.user_id = $1 AND n.event_type = 'organizer.warning'
+		ORDER BY n.publish_at DESC LIMIT 200`, userID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, body, severity, actor string
+			var actorID *uuid.UUID
+			var pinned bool
+			var publishedAt time.Time
+			var readAt, dismissedAt, cancelledAt *time.Time
+			if rows.Scan(&id, &body, &severity, &pinned, &actorID, &actor, &publishedAt, &readAt, &dismissedAt, &cancelledAt) == nil {
+				entry := gin.H{"id": id, "body": body, "severity": severity, "pinned": pinned,
+					"actor_id": actorID, "actor": actor, "published_at": publishedAt.Unix()}
+				if readAt != nil {
+					entry["read_at"] = readAt.Unix()
+				}
+				if dismissedAt != nil {
+					entry["dismissed_at"] = dismissedAt.Unix()
+				}
+				if cancelledAt != nil {
+					entry["cancelled_at"] = cancelledAt.Unix()
+				}
+				warnings = append(warnings, entry)
+			}
+		}
+	}
+
+	userUUID, _ := uuid.Parse(userID)
+	audit, _ := adminEntityAudit(ctx, h.db, "user", userUUID)
+
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{"id": userID, "username": username, "email": email, "display_name": displayName,
+			"avatar_url": avatarURL, "bio": bio, "email_verified": emailVerified,
 			"role": role, "status": status, "total_score": totalScore, "solve_count": solveCount,
 			"submission_count": submissionCount, "correct_submissions": correctSubmissions,
-			"wrong_submissions": submissionCount - correctSubmissions, "last_login": lastLogin},
+			"wrong_submissions": submissionCount - correctSubmissions, "last_login": lastLogin,
+			"created_at": createdAt.Unix(), "updated_at": updatedAt.Unix()},
 		"team":        team,
 		"instances":   instances,
 		"solves":      solves,
 		"submissions": submissions,
+		"sessions":    sessions,
+		"access_ips":  accessIPs,
+		"warnings":    warnings,
+		"audit":       audit,
 	})
 }
 
@@ -653,6 +744,109 @@ type ContainerService struct {
 	MemoryLimit string            `json:"memory_limit"`
 }
 
+var containerServiceName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+
+func validateChallengeRequest(req *CreateChallengeRequest, creating bool) error {
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || len([]rune(req.Name)) > 200 {
+		return errors.New("name must be between 1 and 200 characters")
+	}
+	switch req.Difficulty {
+	case "easy", "medium", "hard", "insane":
+	default:
+		return errors.New("difficulty must be easy, medium, hard, or insane")
+	}
+	if req.BasePoints < 0 || req.BasePoints > 1_000_000 {
+		return errors.New("base_points must be between 0 and 1000000")
+	}
+	if req.ScoringMode != "" && req.ScoringMode != "flag" && req.ScoringMode != "graded" {
+		return errors.New("scoring_mode must be flag or graded")
+	}
+	if req.ArenaMode != "" && req.ArenaMode != "per_team" && req.ArenaMode != "shared" {
+		return errors.New("arena_mode must be per_team or shared")
+	}
+	seenPorts := map[string]bool{}
+	for _, port := range req.ExposedPorts {
+		if port.Port < 1 || port.Port > 65535 {
+			return fmt.Errorf("exposed port %d is outside 1-65535", port.Port)
+		}
+		protocol := strings.ToLower(strings.TrimSpace(port.Protocol))
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		if protocol != "tcp" && protocol != "udp" {
+			return fmt.Errorf("exposed port %d has an unsupported protocol", port.Port)
+		}
+		service := strings.ToLower(strings.TrimSpace(port.Service))
+		if service != "" && service != "tcp" && service != "http" {
+			return fmt.Errorf("exposed port %d has an unsupported service", port.Port)
+		}
+		key := fmt.Sprintf("%d/%s", port.Port, protocol)
+		if seenPorts[key] {
+			return fmt.Errorf("exposed port %s is duplicated", key)
+		}
+		seenPorts[key] = true
+	}
+	serviceNames := map[string]bool{}
+	for index := range req.Services {
+		service := &req.Services[index]
+		service.Name = strings.ToLower(strings.TrimSpace(service.Name))
+		if !containerServiceName.MatchString(service.Name) {
+			return fmt.Errorf("service %d needs a DNS-safe name", index+1)
+		}
+		if serviceNames[service.Name] {
+			return fmt.Errorf("service name %q is duplicated", service.Name)
+		}
+		serviceNames[service.Name] = true
+		if strings.TrimSpace(service.Image) == "" && strings.TrimSpace(req.ContainerImage) == "" {
+			return fmt.Errorf("service %q needs an image", service.Name)
+		}
+		for _, port := range service.Ports {
+			if port.Port < 1 || port.Port > 65535 {
+				return fmt.Errorf("service %q has a port outside 1-65535", service.Name)
+			}
+			if port.Service != "" && port.Service != "tcp" && port.Service != "http" {
+				return fmt.Errorf("service %q has an unsupported route type", service.Name)
+			}
+		}
+	}
+	if creating {
+		for index := range req.Flags {
+			flag := &req.Flags[index]
+			flag.Name = strings.TrimSpace(flag.Name)
+			if flag.Name == "" {
+				return fmt.Errorf("flag %d needs a name", index+1)
+			}
+			if flag.Points < 0 || flag.Points > 1_000_000 {
+				return fmt.Errorf("flag %q has invalid points", flag.Name)
+			}
+			if flag.FlagType == "" {
+				flag.FlagType = "static"
+			}
+			switch flag.FlagType {
+			case "static":
+				if flag.Flag == "" {
+					return fmt.Errorf("flag %q needs a value", flag.Name)
+				}
+			case "regex":
+				if flag.Flag == "" {
+					return fmt.Errorf("flag %q needs a regular expression", flag.Name)
+				}
+				if _, err := regexp.Compile(flag.Flag); err != nil {
+					return fmt.Errorf("flag %q has an invalid regular expression", flag.Name)
+				}
+			case "dynamic":
+				if strings.TrimSpace(flag.DynamicFlagPrefix) == "" {
+					return fmt.Errorf("flag %q needs a dynamic prefix", flag.Name)
+				}
+			default:
+				return fmt.Errorf("flag %q has an unsupported type", flag.Name)
+			}
+		}
+	}
+	return nil
+}
+
 func (h *AdminChallengeHandler) List(c *gin.Context) {
 	query := `
 		SELECT c.id, c.name, c.slug, c.description, c.difficulty, c.status, c.base_points,
@@ -661,7 +855,13 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 		       c.container_image, c.container_tag, c.container_platform,
 		       c.cpu_limit, c.memory_limit, c.exposed_ports,
 		       c.instance_timeout, c.max_extensions, c.cooldown_minutes,
-		       c.author_name, c.scoring_mode
+		       c.author_name, c.scoring_mode, c.sub_description, c.container_spec,
+		       c.privesc, c.arena_mode, c.release_date, c.total_attempts,
+		       c.economy_solve_count, c.supports_docker, c.supports_vm,
+		       c.vm_timeout_minutes, c.vm_max_extensions, c.vm_extension_minutes,
+		       (SELECT cr.vm_template_id::text FROM challenge_resources cr
+		        WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active
+		        ORDER BY cr.created_at DESC LIMIT 1)
 		FROM challenges c
 		LEFT JOIN categories cat ON cat.id = c.category_id
 		ORDER BY c.created_at DESC
@@ -678,30 +878,43 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 	var challenges []gin.H
 	for rows.Next() {
 		var ch struct {
-			ID                string
-			Name              string
-			Slug              string
-			Description       *string
-			Difficulty        string
-			Status            string
-			BasePoints        int
-			TotalSolves       int
-			TotalFlags        int
-			ResourceType      string
-			CreatedAt         time.Time
-			CategoryID        *string
-			CategoryName      *string
-			ContainerImage    *string
-			ContainerTag      *string
-			ContainerPlatform *string
-			CPULimit          *string
-			MemoryLimit       *string
-			ExposedPorts      []byte
-			InstanceTimeout   *int
-			MaxExtensions     *int
-			CooldownMinutes   *int
-			AuthorName        *string
-			ScoringMode       string
+			ID                 string
+			Name               string
+			Slug               string
+			Description        *string
+			Difficulty         string
+			Status             string
+			BasePoints         int
+			TotalSolves        int
+			TotalFlags         int
+			ResourceType       string
+			CreatedAt          time.Time
+			CategoryID         *string
+			CategoryName       *string
+			ContainerImage     *string
+			ContainerTag       *string
+			ContainerPlatform  *string
+			CPULimit           *string
+			MemoryLimit        *string
+			ExposedPorts       []byte
+			InstanceTimeout    *int
+			MaxExtensions      *int
+			CooldownMinutes    *int
+			AuthorName         *string
+			ScoringMode        string
+			SubDescription     *string
+			ContainerSpec      []byte
+			Privesc            bool
+			ArenaMode          string
+			ReleaseDate        *time.Time
+			TotalAttempts      int
+			EconomySolves      int
+			SupportsDocker     bool
+			SupportsVM         bool
+			VMTimeoutMinutes   *int
+			VMMaxExtensions    *int
+			VMExtensionMinutes *int
+			VMTemplateID       *string
 		}
 
 		if err := rows.Scan(
@@ -711,7 +924,10 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			&ch.ContainerImage, &ch.ContainerTag, &ch.ContainerPlatform,
 			&ch.CPULimit, &ch.MemoryLimit, &ch.ExposedPorts,
 			&ch.InstanceTimeout, &ch.MaxExtensions, &ch.CooldownMinutes,
-			&ch.AuthorName, &ch.ScoringMode,
+			&ch.AuthorName, &ch.ScoringMode, &ch.SubDescription, &ch.ContainerSpec,
+			&ch.Privesc, &ch.ArenaMode, &ch.ReleaseDate, &ch.TotalAttempts,
+			&ch.EconomySolves, &ch.SupportsDocker, &ch.SupportsVM,
+			&ch.VMTimeoutMinutes, &ch.VMMaxExtensions, &ch.VMExtensionMinutes, &ch.VMTemplateID,
 		); err != nil {
 			h.logger.Warn("failed to scan challenge row", zap.Error(err))
 			continue
@@ -721,32 +937,58 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 		if len(ch.ExposedPorts) > 0 {
 			_ = json.Unmarshal(ch.ExposedPorts, &exposedPorts)
 		}
+		services := []ContainerService{}
+		if len(ch.ContainerSpec) > 0 {
+			_ = json.Unmarshal(ch.ContainerSpec, &services)
+		}
+		deliveryType := "container"
+		if ch.ResourceType == "vm" {
+			deliveryType = "vm"
+		} else if len(services) > 0 {
+			deliveryType = "multi"
+		} else if ch.ContainerImage == nil || strings.TrimSpace(*ch.ContainerImage) == "" {
+			deliveryType = "static"
+		}
 
 		challenges = append(challenges, gin.H{
-			"id":                 ch.ID,
-			"name":               ch.Name,
-			"slug":               ch.Slug,
-			"description":        ch.Description,
-			"difficulty":         ch.Difficulty,
-			"status":             ch.Status,
-			"base_points":        ch.BasePoints,
-			"total_solves":       ch.TotalSolves,
-			"total_flags":        ch.TotalFlags,
-			"resource_type":      ch.ResourceType,
-			"created_at":         ch.CreatedAt.Unix(),
-			"category_id":        ch.CategoryID,
-			"category_name":      ch.CategoryName,
-			"container_image":    ch.ContainerImage,
-			"container_tag":      ch.ContainerTag,
-			"container_platform": ch.ContainerPlatform,
-			"cpu_limit":          ch.CPULimit,
-			"memory_limit":       ch.MemoryLimit,
-			"exposed_ports":      exposedPorts,
-			"instance_timeout":   ch.InstanceTimeout,
-			"max_extensions":     ch.MaxExtensions,
-			"cooldown_minutes":   ch.CooldownMinutes,
-			"author_name":        ch.AuthorName,
-			"scoring_mode":       ch.ScoringMode,
+			"id":                   ch.ID,
+			"name":                 ch.Name,
+			"slug":                 ch.Slug,
+			"description":          ch.Description,
+			"difficulty":           ch.Difficulty,
+			"status":               ch.Status,
+			"base_points":          ch.BasePoints,
+			"total_solves":         ch.TotalSolves,
+			"total_flags":          ch.TotalFlags,
+			"resource_type":        ch.ResourceType,
+			"created_at":           ch.CreatedAt.Unix(),
+			"category_id":          ch.CategoryID,
+			"category_name":        ch.CategoryName,
+			"container_image":      ch.ContainerImage,
+			"container_tag":        ch.ContainerTag,
+			"container_platform":   ch.ContainerPlatform,
+			"cpu_limit":            ch.CPULimit,
+			"memory_limit":         ch.MemoryLimit,
+			"exposed_ports":        exposedPorts,
+			"instance_timeout":     ch.InstanceTimeout,
+			"max_extensions":       ch.MaxExtensions,
+			"cooldown_minutes":     ch.CooldownMinutes,
+			"author_name":          ch.AuthorName,
+			"scoring_mode":         ch.ScoringMode,
+			"sub_description":      ch.SubDescription,
+			"services":             services,
+			"privesc":              ch.Privesc,
+			"arena_mode":           ch.ArenaMode,
+			"release_date":         unixOrNil(ch.ReleaseDate),
+			"total_attempts":       ch.TotalAttempts,
+			"economy_solve_count":  ch.EconomySolves,
+			"supports_docker":      ch.SupportsDocker,
+			"supports_vm":          ch.SupportsVM,
+			"vm_timeout_minutes":   ch.VMTimeoutMinutes,
+			"vm_max_extensions":    ch.VMMaxExtensions,
+			"vm_extension_minutes": ch.VMExtensionMinutes,
+			"vm_template_id":       ch.VMTemplateID,
+			"delivery_type":        deliveryType,
 		})
 	}
 
@@ -777,11 +1019,13 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 		return
 	}
 
-	challengeSlug := slug.Make(req.Name)
-
 	challengeType := req.ChallengeType
 	if challengeType == "" {
 		challengeType = "docker" // default
+	}
+	if challengeType != "docker" && challengeType != "vm" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "challenge_type must be docker or vm"})
+		return
 	}
 
 	resourceType := "docker"
@@ -814,6 +1058,15 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	if req.BasePoints == 0 {
 		req.BasePoints = 100
 	}
+	if challengeType == "vm" && len(req.Services) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "VM challenges cannot define container services"})
+		return
+	}
+	if err := validateChallengeRequest(&req, true); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	challengeSlug := slug.Make(req.Name)
 
 	// category_id takes precedence over category (name) when both are supplied
 	if req.Category != "" && req.CategoryID == nil {
@@ -860,6 +1113,10 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	)
 	if err != nil {
 		h.logger.Error("failed to create challenge", zap.Error(err))
+		if postgresErrorCode(err) == "23505" {
+			c.JSON(http.StatusConflict, gin.H{"error": "a challenge with this name or slug already exists"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create challenge: " + err.Error()})
 		return
 	}
@@ -1261,6 +1518,260 @@ func (h *AdminChallengeHandler) Get(c *gin.Context) {
 	})
 }
 
+func (h *AdminChallengeHandler) Detail(c *gin.Context) {
+	challengeID := c.Param("id")
+	if _, err := uuid.Parse(challengeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge id"})
+		return
+	}
+	ctx := c.Request.Context()
+	var name, slugValue string
+	if err := h.db.Pool.QueryRow(ctx, `SELECT name, slug FROM challenges WHERE id = $1`, challengeID).Scan(&name, &slugValue); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+		}
+		return
+	}
+
+	stats := gin.H{}
+	var submissionCount, correctSubmissions, wrongSubmissions, uniqueUsers, uniqueTeams int
+	var instanceCount, runningInstances, failedInstances, openTeams, solvedTeams, flagCount, hintCount, attachmentCount int
+	var creditsSpent float64
+	if err := h.db.Pool.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM submissions WHERE challenge_id = $1)::int,
+			(SELECT COUNT(*) FROM submissions WHERE challenge_id = $1 AND is_correct)::int,
+			(SELECT COUNT(*) FROM submissions WHERE challenge_id = $1 AND NOT is_correct)::int,
+			(SELECT COUNT(DISTINCT user_id) FROM submissions WHERE challenge_id = $1 AND user_id IS NOT NULL)::int,
+			(SELECT COUNT(DISTINCT u.team_id) FROM submissions s JOIN users u ON u.id = s.user_id WHERE s.challenge_id = $1 AND u.team_id IS NOT NULL)::int,
+			(SELECT COUNT(*) FROM instances WHERE challenge_id = $1)::int,
+			(SELECT COUNT(*) FROM instances WHERE challenge_id = $1 AND status IN ('pending','creating','running','stopping'))::int,
+			(SELECT COUNT(*) FROM instances WHERE challenge_id = $1 AND status = 'failed')::int,
+			(SELECT COUNT(*) FROM economy_challenge_state WHERE challenge_id = $1 AND status = 'open')::int,
+			(SELECT COUNT(*) FROM economy_challenge_state WHERE challenge_id = $1 AND holds_solve)::int,
+			(SELECT COUNT(*) FROM flags WHERE challenge_id = $1)::int,
+			(SELECT COUNT(*) FROM hints WHERE challenge_id = $1)::int,
+			(SELECT COUNT(*) FROM challenge_attachments WHERE challenge_id = $1)::int,
+			COALESCE((SELECT SUM(-amount) FROM economy_credit_events WHERE challenge_id = $1 AND amount < 0), 0)
+	`, challengeID).Scan(&submissionCount, &correctSubmissions, &wrongSubmissions, &uniqueUsers,
+		&uniqueTeams, &instanceCount, &runningInstances, &failedInstances, &openTeams,
+		&solvedTeams, &flagCount, &hintCount, &attachmentCount, &creditsSpent); err != nil {
+		h.logger.Error("failed to fetch challenge stats", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge activity"})
+		return
+	}
+	stats = gin.H{
+		"submissions": submissionCount, "correct_submissions": correctSubmissions,
+		"wrong_submissions": wrongSubmissions, "unique_users": uniqueUsers,
+		"unique_teams": uniqueTeams, "instances": instanceCount,
+		"running_instances": runningInstances, "failed_instances": failedInstances,
+		"open_teams": openTeams, "solved_teams": solvedTeams, "flags": flagCount,
+		"hints": hintCount, "attachments": attachmentCount, "credits_spent": creditsSpent,
+	}
+
+	submissions := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT s.id, u.id, u.username, t.id, t.name, f.name, s.instance_id,
+		       s.submitted_flag, s.is_correct, COALESCE(s.points_awarded, 0),
+		       s.ip_address, LEFT(COALESCE(s.user_agent, ''), 500), s.created_at
+		FROM submissions s
+		LEFT JOIN users u ON u.id = s.user_id
+		LEFT JOIN teams t ON t.id = u.team_id
+		LEFT JOIN flags f ON f.id = s.flag_id
+		WHERE s.challenge_id = $1 ORDER BY s.created_at DESC LIMIT 500`, challengeID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, submittedFlag, userAgent string
+			var userID, username, teamID, teamName, flagName, instanceID, ipAddress *string
+			var correct bool
+			var points int
+			var submittedAt time.Time
+			if rows.Scan(&id, &userID, &username, &teamID, &teamName, &flagName, &instanceID,
+				&submittedFlag, &correct, &points, &ipAddress, &userAgent, &submittedAt) == nil {
+				submissions = append(submissions, gin.H{
+					"id": id, "user_id": userID, "username": username, "team_id": teamID,
+					"team_name": teamName, "flag_name": flagName, "instance_id": instanceID,
+					"flag_fingerprint": hashFlag(submittedFlag)[:16], "flag_length": len(submittedFlag),
+					"correct": correct, "points": points, "ip_address": ipAddress,
+					"user_agent": userAgent, "submitted_at": submittedAt.Unix(),
+				})
+			}
+		}
+	}
+
+	solves := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT s.id, u.id, u.username, t.id, t.name, f.id, f.name,
+		       s.points_awarded, s.solved_at
+		FROM solves s
+		LEFT JOIN users u ON u.id = s.user_id
+		LEFT JOIN teams t ON t.id = u.team_id
+		LEFT JOIN flags f ON f.id = s.flag_id
+		WHERE s.challenge_id = $1 ORDER BY s.solved_at DESC LIMIT 500`, challengeID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var userID, username, teamID, teamName, flagID, flagName *string
+			var points int
+			var solvedAt time.Time
+			if rows.Scan(&id, &userID, &username, &teamID, &teamName, &flagID, &flagName,
+				&points, &solvedAt) == nil {
+				solves = append(solves, gin.H{
+					"id": id, "user_id": userID, "username": username, "team_id": teamID,
+					"team_name": teamName, "flag_id": flagID, "flag_name": flagName,
+					"points": points, "solved_at": solvedAt.Unix(),
+				})
+			}
+		}
+	}
+
+	instances := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT i.id, u.id, u.username, COALESCE(i.team_id, u.team_id), t.name,
+		       i.status::text, COALESCE(i.ip_address, ''), i.created_at, i.started_at,
+		       i.expires_at, i.stopped_at, COALESCE(i.error_message, ''),
+		       COALESCE(i.container_id, '') <> '', i.extensions_used, i.reset_count
+		FROM instances i
+		LEFT JOIN users u ON u.id = i.user_id
+		LEFT JOIN teams t ON t.id = COALESCE(i.team_id, u.team_id)
+		WHERE i.challenge_id = $1 ORDER BY i.created_at DESC LIMIT 500`, challengeID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, status, target, errorMessage string
+			var userID, username, teamID, teamName *string
+			var createdAt time.Time
+			var startedAt, expiresAt, stoppedAt *time.Time
+			var hasRuntime bool
+			var extensions, resets int
+			if rows.Scan(&id, &userID, &username, &teamID, &teamName, &status, &target,
+				&createdAt, &startedAt, &expiresAt, &stoppedAt, &errorMessage, &hasRuntime,
+				&extensions, &resets) == nil {
+				row := gin.H{"id": id, "user_id": userID, "username": username,
+					"team_id": teamID, "team_name": teamName, "status": status, "target": target,
+					"created_at": createdAt.Unix(), "error_message": errorMessage,
+					"has_runtime": hasRuntime, "extensions_used": extensions, "reset_count": resets}
+				if startedAt != nil {
+					row["started_at"] = startedAt.Unix()
+				}
+				if expiresAt != nil {
+					row["expires_at"] = expiresAt.Unix()
+				}
+				if stoppedAt != nil {
+					row["stopped_at"] = stoppedAt.Unix()
+				}
+				instances = append(instances, row)
+			}
+		}
+	}
+
+	economy := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT e.team_id, t.name, e.status, e.opened_at, e.expires_at, e.extensions_used,
+		       e.wrong_subs, e.holds_solve, e.current_value, e.frac
+		FROM economy_challenge_state e JOIN teams t ON t.id = e.team_id
+		WHERE e.challenge_id = $1 ORDER BY COALESCE(e.opened_at, 'epoch'::timestamptz) DESC
+		LIMIT 500`, challengeID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var teamID, teamName, status string
+			var openedAt, expiresAt *time.Time
+			var extensions, wrongSubs int
+			var holds bool
+			var value, fraction float64
+			if rows.Scan(&teamID, &teamName, &status, &openedAt, &expiresAt, &extensions,
+				&wrongSubs, &holds, &value, &fraction) == nil {
+				row := gin.H{"team_id": teamID, "team_name": teamName, "status": status,
+					"extensions_used": extensions, "wrong_submissions": wrongSubs,
+					"holds_solve": holds, "current_value": value, "fraction": fraction}
+				if openedAt != nil {
+					row["opened_at"] = openedAt.Unix()
+				}
+				if expiresAt != nil {
+					row["expires_at"] = expiresAt.Unix()
+				}
+				economy = append(economy, row)
+			}
+		}
+	}
+
+	flags := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT id, name, description, points, sort_order, flag_type, dynamic_flag_prefix,
+		       total_solves, first_blood_at
+		FROM flags WHERE challenge_id = $1 ORDER BY sort_order, created_at`, challengeID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, flagName, flagType string
+			var description, dynamicPrefix *string
+			var flagPoints, sortOrder, totalSolves int
+			var firstBloodAt *time.Time
+			if rows.Scan(&id, &flagName, &description, &flagPoints, &sortOrder, &flagType,
+				&dynamicPrefix, &totalSolves, &firstBloodAt) == nil {
+				flags = append(flags, gin.H{
+					"id": id, "name": flagName, "description": description, "points": flagPoints,
+					"sort_order": sortOrder, "flag_type": flagType, "dynamic_flag_prefix": dynamicPrefix,
+					"total_solves": totalSolves, "first_blood_at": unixOrNil(firstBloodAt),
+				})
+			}
+		}
+	}
+
+	hints := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT id, flag_id, content, cost, sort_order, unlock_after_attempts, unlock_after_time, created_at
+		FROM hints WHERE challenge_id = $1 ORDER BY sort_order, created_at`, challengeID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, content string
+			var flagID *uuid.UUID
+			var cost, sortOrder int
+			var unlockAttempts, unlockTime *int
+			var hintCreated time.Time
+			if rows.Scan(&id, &flagID, &content, &cost, &sortOrder, &unlockAttempts, &unlockTime, &hintCreated) == nil {
+				hints = append(hints, gin.H{
+					"id": id, "flag_id": flagID, "content": content, "cost": cost,
+					"sort_order": sortOrder, "unlock_after_attempts": unlockAttempts,
+					"unlock_after_time": unlockTime, "created_at": hintCreated.Unix(),
+				})
+			}
+		}
+	}
+
+	attachments := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT id, filename, file_size, COALESCE(content_type, ''), description,
+		       sort_order, url, sha256, created_at
+		FROM challenge_attachments WHERE challenge_id = $1 ORDER BY sort_order, created_at`, challengeID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, filename, contentType string
+			var description, externalURL, checksum *string
+			var fileSize int64
+			var sortOrder int
+			var attachmentCreated time.Time
+			if rows.Scan(&id, &filename, &fileSize, &contentType, &description, &sortOrder,
+				&externalURL, &checksum, &attachmentCreated) == nil {
+				attachments = append(attachments, gin.H{
+					"id": id, "filename": filename, "file_size": fileSize, "content_type": contentType,
+					"description": description, "sort_order": sortOrder, "url": externalURL,
+					"sha256": checksum, "created_at": attachmentCreated.Unix(),
+				})
+			}
+		}
+	}
+	challengeUUID, _ := uuid.Parse(challengeID)
+	audit, _ := adminEntityAudit(ctx, h.db, "challenge", challengeUUID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"challenge": gin.H{"id": challengeID, "name": name, "slug": slugValue},
+		"stats":     stats, "submissions": submissions, "solves": solves,
+		"instances": instances, "economy": economy, "flags": flags, "hints": hints,
+		"attachments": attachments, "audit": audit,
+	})
+}
+
 func (h *AdminChallengeHandler) Update(c *gin.Context) {
 	challengeID := c.Param("id")
 
@@ -1284,6 +1795,23 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "resource_type must be docker or vm"})
 		return
 	}
+	if *req.ResourceType == "vm" && len(req.Services) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "VM challenges cannot define container services"})
+		return
+	}
+	if err := validateChallengeRequest(&req, false); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var containerSpec []byte
+	if len(req.Services) > 0 {
+		var marshalErr error
+		containerSpec, marshalErr = json.Marshal(req.Services)
+		if marshalErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid container services"})
+			return
+		}
+	}
 
 	ctx := c.Request.Context()
 	tx, err := h.db.Pool.Begin(ctx)
@@ -1302,12 +1830,15 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 				base_points = $5, instance_timeout = $6, max_extensions = $7,
 				vm_timeout_minutes = $8, vm_max_extensions = $9, vm_extension_minutes = $10,
 				cooldown_minutes = $11, author_name = $12, resource_type = $13,
-				supports_vm = true, supports_docker = false, updated_at = NOW()
-			WHERE id = $14`,
+				supports_vm = true, supports_docker = false, sub_description = $14,
+				container_spec = NULL, privesc = false,
+				arena_mode = COALESCE(NULLIF($15, ''), arena_mode), updated_at = NOW()
+			WHERE id = $16`,
 			req.Name, req.Description, req.Difficulty, req.CategoryID,
 			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 			req.VMTimeoutMinutes, req.VMMaxExtensions, req.VMExtensionMinutes,
-			req.CooldownMinutes, req.AuthorName, req.ResourceType, challengeID,
+			req.CooldownMinutes, req.AuthorName, req.ResourceType,
+			subDescriptionOrNil(req.SubDescription), req.ArenaMode, challengeID,
 		)
 		if err != nil {
 			h.logger.Error("failed to update VM challenge", zap.Error(err))
@@ -1362,13 +1893,16 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 				cpu_limit = $8, memory_limit = $9, exposed_ports = $10,
 				base_points = $11, instance_timeout = $12, max_extensions = $13,
 				cooldown_minutes = $14, author_name = $15, resource_type = 'docker',
-				supports_vm = false, supports_docker = true, updated_at = NOW()
-			WHERE id = $16`,
+				supports_vm = false, supports_docker = true, sub_description = $16,
+				container_spec = $17, privesc = $18,
+				arena_mode = COALESCE(NULLIF($19, ''), arena_mode), updated_at = NOW()
+			WHERE id = $20`,
 			req.Name, req.Description, req.Difficulty, req.CategoryID,
 			req.ContainerImage, req.ContainerTag, req.ContainerPlatform,
 			req.CPULimit, req.MemoryLimit, portsJSON,
 			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
-			req.CooldownMinutes, req.AuthorName, challengeID,
+			req.CooldownMinutes, req.AuthorName, subDescriptionOrNil(req.SubDescription),
+			nilIfEmpty(containerSpec), req.Privesc, req.ArenaMode, challengeID,
 		)
 		if err == nil && result.RowsAffected() == 0 {
 			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})

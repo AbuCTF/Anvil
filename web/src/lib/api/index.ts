@@ -859,6 +859,10 @@ class ApiClient {
 		return this.request<any>(`/admin/teams/${id}`);
 	}
 
+	async getAdminTeamDetail(id: string) {
+		return this.request<any>(`/admin/teams/${id}/detail`, { cache: 'no-store' });
+	}
+
 	async updateAdminTeam(id: string, data: any) {
 		return this.request<any>(`/admin/teams/${id}`, {
 			method: 'PATCH',
@@ -903,6 +907,13 @@ class ApiClient {
 		return this.request<{ events: any[] }>(`/admin/teams/${id}/credit-events`);
 	}
 
+	async applyAdminTeamCredit(id: string, data: { kind: string; amount: number; note: string }) {
+		return this.request<{ team_id: string; kind: string; amount: number; balance_after: number }>(`/admin/teams/${id}/credit`, {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
+	}
+
 	async updateAdminCategory(id: string, data: { name?: string; description?: string; color?: string }) {
 		return this.request<any>(`/admin/categories/${id}`, {
 			method: 'PUT',
@@ -919,6 +930,10 @@ class ApiClient {
 			method: 'POST',
 			body: JSON.stringify(data)
 		});
+	}
+
+	async getAdminChallengeDetail(challengeId: string) {
+		return this.request<any>(`/admin/challenges/${challengeId}/detail`, { cache: 'no-store' });
 	}
 
 	async updateAdminChallenge(challengeId: string, data: any) {
@@ -1032,6 +1047,13 @@ class ApiClient {
 		onProgress?: (progress: number) => void
 	): Promise<any> {
 		return this.uploadFormData(`/admin/challenges/${challengeId}/attachments`, formData, onProgress);
+	}
+
+	async createAttachmentLink(challengeId: string, data: { name: string; url: string; sha256?: string; description?: string; sort_order?: number }) {
+		return this.request<any>(`/admin/challenges/${challengeId}/attachments/link`, {
+			method: 'POST',
+			body: JSON.stringify(data)
+		});
 	}
 
 	async deleteAttachment(challengeId: string, attachmentId: string) {

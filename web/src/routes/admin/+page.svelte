@@ -13,6 +13,8 @@
 	import EventSetup from '$lib/components/admin/EventSetup.svelte';
 	import DataWorkspace from '$lib/components/admin/DataWorkspace.svelte';
 	import LaunchWorkspace from '$lib/components/admin/LaunchWorkspace.svelte';
+	import TeamDossier from '$lib/components/admin/TeamDossier.svelte';
+	import ChallengeDossier from '$lib/components/admin/ChallengeDossier.svelte';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -29,6 +31,15 @@
 	let selectedUserSeed: any = null;
 	let userDetailLoading = false;
 	let userDetailError = '';
+	let selectedTeamDetail: any = null;
+	let selectedTeamSeed: any = null;
+	let teamDetailLoading = false;
+	let teamDetailError = '';
+	let teamCreditAdjusting = false;
+	let selectedChallengeDetail: any = null;
+	let selectedChallengeSeed: any = null;
+	let challengeDetailLoading = false;
+	let challengeDetailError = '';
 
 	let infraStats: any = null;
 	let nodes: any[] = [];
@@ -103,6 +114,8 @@
 	let newChallenge = {
 		name: '',
 		description: '',
+		sub_description: '',
+		author_name: '',
 		category: '',
 		category_id: '',
 		newCategoryName: '',
@@ -111,12 +124,18 @@
 		flag: '',
 		flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 		type: 'container',
+		scoring_mode: 'flag',
+		arena_mode: 'per_team',
+		privesc: false,
 		docker_image: '',
 		container_platform: '',
 		exposed_ports: [{ port: 1337, protocol: 'tcp', service: 'tcp' }],
+		services: [] as any[],
 		ova_url: '',
 		vm_template_id: '',
 		vm_source: 'template',
+		vm_vcpu: 1,
+		vm_memory_mb: 1024,
 		files: [],
 		instance_timeout: 120,
 		max_extensions: 3,
@@ -146,6 +165,8 @@
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key !== 'Escape') return;
 		if (selectedUserSeed) { selectedUserSeed = null; selectedUserDetail = null; }
+		else if (selectedTeamSeed) { selectedTeamSeed = null; selectedTeamDetail = null; }
+		else if (selectedChallengeSeed) { selectedChallengeSeed = null; selectedChallengeDetail = null; }
 		else if (showCreateModal) showCreateModal = false;
 		else if (showEditModal) { showEditModal = false; editingChallenge = null; }
 		else if (showNodeModal) showNodeModal = false;
@@ -181,6 +202,51 @@
 
 	function removeFlag(index: number) {
 		newChallenge.flags = newChallenge.flags.filter((_, i) => i !== index);
+	}
+
+	function blankService(index = 0) {
+		return {
+			name: index === 0 ? 'app' : `service-${index + 1}`,
+			image: '', tag: 'latest', command_text: '', env_text: '', public: index === 0,
+			egress: false, cpu_limit: '1', memory_limit: '512Mi',
+			ports: [{ port: index === 0 ? 8080 : 5432, protocol: 'tcp', service: index === 0 ? 'http' : 'tcp', internal: index !== 0 }]
+		};
+	}
+
+	function addService() {
+		newChallenge.services = [...newChallenge.services, blankService(newChallenge.services.length)];
+	}
+
+	function removeService(index: number) {
+		newChallenge.services = newChallenge.services.filter((_, i) => i !== index);
+	}
+
+	function servicePayload(service: any) {
+		const env = Object.fromEntries((service.env_text || '').split('\n').map((line: string) => line.trim()).filter(Boolean).map((line: string) => {
+			const separator = line.indexOf('=');
+			return separator < 1 ? [line, ''] : [line.slice(0, separator).trim(), line.slice(separator + 1)];
+		}));
+		return {
+			name: service.name.trim(), image: service.image.trim(), tag: service.tag.trim() || 'latest',
+			command: (service.command_text || '').split('\n').map((line: string) => line.trim()).filter(Boolean),
+			public: !!service.public, egress: !!service.egress, env,
+			cpu_limit: service.cpu_limit || '1', memory_limit: service.memory_limit || '512Mi',
+			ports: (service.ports || []).filter((port: any) => Number(port.port) > 0).map((port: any) => ({
+				port: Number(port.port), protocol: port.protocol || 'tcp', service: port.service || 'tcp', internal: !!port.internal
+			}))
+		};
+	}
+
+	function deliveryLabel(challenge: any) {
+		if (challenge.delivery_type === 'multi') return 'Multi-service';
+		if (challenge.delivery_type === 'static') return 'Static / files';
+		return resourceLabel(challenge.resource_type);
+	}
+
+	function deliveryIcon(challenge: any) {
+		if (challenge.delivery_type === 'multi') return 'mdi:server-network';
+		if (challenge.delivery_type === 'static') return 'mdi:file-download-outline';
+		return resourceIcon(challenge.resource_type);
 	}
 
 	function removeEditPort(index: number) {
@@ -248,6 +314,16 @@
 			author_name: challenge.author_name || '',
 			category_id: challenge.category_id || '',
 			scoring_mode: challenge.scoring_mode || 'flag',
+			delivery_type: challenge.delivery_type || (challenge.resource_type === 'vm' ? 'vm' : challenge.container_image ? 'container' : 'static'),
+			sub_description: challenge.sub_description || '',
+			arena_mode: challenge.arena_mode || 'per_team',
+			privesc: !!challenge.privesc,
+			services: (challenge.services || []).map((service: any) => ({
+				...service,
+				command_text: (service.command || []).join('\n'),
+				env_text: Object.entries(service.env || {}).map(([key, value]) => `${key}=${value}`).join('\n'),
+				ports: service.ports || []
+			}))
 		};
 		editTab = 'settings';
 		editFlags = []; editHints = []; editAttachments = [];
@@ -262,6 +338,7 @@
 	let editFlags: any[] = [];
 	let editHints: any[] = [];
 	let editAttachments: any[] = [];
+	let externalHandout = { name: '', url: '', sha256: '', description: '' };
 	let subLoading = false;
 	let subUploading = false;
 	let subError = '';
@@ -432,6 +509,36 @@
 			input.value = '';
 		}
 	}
+
+	async function addExternalHandout() {
+		if (!editingChallenge || !externalHandout.name.trim() || !externalHandout.url.trim()) return;
+		subError = '';
+		subUploading = true;
+		try {
+			await api.createAttachmentLink(editingChallenge.id, {
+				name: externalHandout.name.trim(),
+				url: externalHandout.url.trim(),
+				sha256: externalHandout.sha256.trim(),
+				description: externalHandout.description.trim()
+			});
+			const response = await api.listAttachments(editingChallenge.id);
+			editAttachments = response?.attachments ?? [];
+			externalHandout = { name: '', url: '', sha256: '', description: '' };
+			flash('External handout added');
+		} catch (e) {
+			subError = e instanceof Error ? e.message : 'Failed to add external handout';
+		} finally {
+			subUploading = false;
+		}
+	}
+
+	function addEditService() {
+		editingChallenge.services = [...(editingChallenge.services || []), blankService(editingChallenge.services?.length || 0)];
+	}
+
+	function removeEditService(index: number) {
+		editingChallenge.services = (editingChallenge.services || []).filter((_service: any, serviceIndex: number) => serviceIndex !== index);
+	}
 	async function deleteEditAttachment(a: any) {
 		subError = '';
 		try {
@@ -454,17 +561,21 @@
 		if (!editingChallenge) return;
 		actionLoading = editingChallenge.id;
 		try {
+			const delivery = editingChallenge.delivery_type || (editingChallenge.resource_type === 'vm' ? 'vm' : 'container');
 			const payload: any = {
 				name: editingChallenge.name,
 				description: editingChallenge.description,
+				sub_description: editingChallenge.sub_description || '',
 				difficulty: editingChallenge.difficulty,
 				base_points: editingChallenge.base_points,
-				resource_type: editingChallenge.resource_type,
+				resource_type: delivery === 'vm' ? 'vm' : 'docker',
 				author_name: editingChallenge.author_name || '',
 				instance_timeout: editingChallenge.instance_timeout,
 				max_extensions: editingChallenge.max_extensions,
 				cooldown_minutes: editingChallenge.cooldown_minutes,
 				scoring_mode: editingChallenge.scoring_mode || 'flag',
+				arena_mode: delivery === 'static' ? 'per_team' : editingChallenge.arena_mode || 'per_team',
+				privesc: (delivery === 'container' || delivery === 'multi') && !!editingChallenge.privesc,
 			};
 
 			// category: send category_id (may be empty string to clear it) or fall back to name
@@ -474,19 +585,25 @@
 				payload.category = editingChallenge.category_name;
 			}
 
-			if (editingChallenge.resource_type !== 'vm') {
-				payload.container_image = editingChallenge.container_image;
+			if (delivery !== 'vm') {
+				payload.container_image = delivery === 'container' ? editingChallenge.container_image : '';
 				payload.container_tag = editingChallenge.container_tag || 'latest';
 				payload.container_platform = editingChallenge.container_platform;
 				payload.cpu_limit = editingChallenge.cpu_limit;
 				payload.memory_limit = editingChallenge.memory_limit;
-				if (Array.isArray(editingChallenge.exposed_ports)) {
+				if (delivery === 'container' && Array.isArray(editingChallenge.exposed_ports)) {
 					payload.exposed_ports = editingChallenge.exposed_ports.filter((p: any) => p.port > 0);
+				} else {
+					payload.exposed_ports = [];
 				}
+				payload.services = delivery === 'multi' ? (editingChallenge.services || []).map(servicePayload) : [];
 			}
 
-			if (editingChallenge.resource_type === 'vm' && editingChallenge.vm_template_id) {
-				payload.vm_template_id = editingChallenge.vm_template_id;
+			if (delivery === 'vm') {
+				payload.vm_template_id = editingChallenge.vm_template_id || null;
+				payload.vm_timeout_minutes = editingChallenge.vm_timeout_minutes;
+				payload.vm_max_extensions = editingChallenge.vm_max_extensions;
+				payload.vm_extension_minutes = editingChallenge.vm_extension_minutes;
 			}
 
 			await api.updateAdminChallenge(editingChallenge.id, payload);
@@ -923,6 +1040,50 @@
 		}
 	}
 
+	async function openTeamDetail(team: any) {
+		selectedTeamSeed = team;
+		selectedTeamDetail = null;
+		teamDetailError = '';
+		teamDetailLoading = true;
+		try {
+			selectedTeamDetail = await api.getAdminTeamDetail(team.id);
+		} catch (e) {
+			teamDetailError = e instanceof Error ? e.message : 'Failed to load team details';
+		} finally {
+			teamDetailLoading = false;
+		}
+	}
+
+	async function adjustTeamCredit(event: CustomEvent<{ amount: number; kind: string; note: string }>) {
+		if (!selectedTeamSeed || teamCreditAdjusting) return;
+		teamCreditAdjusting = true;
+		teamDetailError = '';
+		try {
+			const result = await api.applyAdminTeamCredit(selectedTeamSeed.id, event.detail);
+			const seed = { ...selectedTeamSeed, ledger_credits: result.balance_after };
+			selectedTeamSeed = seed;
+			await Promise.all([openTeamDetail(seed), loadTeams()]);
+		} catch (e) {
+			teamDetailError = e instanceof Error ? e.message : 'Failed to adjust team credits';
+		} finally {
+			teamCreditAdjusting = false;
+		}
+	}
+
+	async function openChallengeDetail(challenge: any) {
+		selectedChallengeSeed = challenge;
+		selectedChallengeDetail = null;
+		challengeDetailError = '';
+		challengeDetailLoading = true;
+		try {
+			selectedChallengeDetail = await api.getAdminChallengeDetail(challenge.id);
+		} catch (e) {
+			challengeDetailError = e instanceof Error ? e.message : 'Failed to load challenge details';
+		} finally {
+			challengeDetailLoading = false;
+		}
+	}
+
 	async function warnParticipant(userId: string, username: string) {
 		const message = await promptDialog({
 			title: `Warn ${username}`,
@@ -971,17 +1132,6 @@
 		const name = await promptDialog({ message: 'New team name:', defaultValue: team.name });
 		if (name === null || name.trim() === team.name) return;
 		await teamUpdate(team.id, { name: name.trim() });
-	}
-
-	async function editTeamScore(team: any) {
-		const raw = await promptDialog({ message: 'Total score:', defaultValue: String(team.total_score ?? 0) });
-		if (raw === null) return;
-		const score = parseInt(raw.trim(), 10);
-		if (Number.isNaN(score)) {
-			alertDialog({ title: 'Error', message: 'Score must be an integer' });
-			return;
-		}
-		await teamUpdate(team.id, { total_score: score });
 	}
 
 	async function editTeamMax(team: any) {
@@ -1053,22 +1203,6 @@
 	function toggleTeamExpand(id: string) {
 		expandedTeams[id] = !expandedTeams[id];
 		expandedTeams = expandedTeams;
-	}
-
-	async function toggleTeamDossier(team: any) {
-		const close = expandedTeams[team.id] || expandedSolves[team.id] || expandedSupport[team.id];
-		if (close) {
-			expandedTeams[team.id] = false;
-			expandedSolves[team.id] = false;
-			expandedSupport[team.id] = false;
-			expandedTeams = expandedTeams;
-			expandedSolves = expandedSolves;
-			expandedSupport = expandedSupport;
-			return;
-		}
-		expandedTeams[team.id] = true;
-		expandedTeams = expandedTeams;
-		await Promise.all([toggleSolvesExpand(team.id), toggleSupportExpand(team.id)]);
 	}
 
 	async function toggleSolvesExpand(id: string) {
@@ -1157,23 +1291,39 @@
 
 		try {
 			let createdChallengeId: string | undefined;
+			const common = {
+				name: newChallenge.name,
+				description: newChallenge.description,
+				sub_description: newChallenge.sub_description,
+				author_name: newChallenge.author_name,
+				difficulty: newChallenge.difficulty,
+				base_points: newChallenge.base_points,
+				scoring_mode: newChallenge.scoring_mode,
+				arena_mode: newChallenge.type === 'download' ? 'per_team' : newChallenge.arena_mode,
+				privesc: newChallenge.type === 'container' || newChallenge.type === 'multi' ? newChallenge.privesc : false,
+				...(categoryId ? { category_id: categoryId } : {}),
+				...(categoryName ? { category: categoryName } : {}),
+				flags: newChallenge.flags.map((flag, index) => ({
+					name: flag.name, flag: flag.flag, points: Number(flag.points) || 0,
+					sort_order: index + 1, flag_type: flag.flag_type || 'static',
+					dynamic_flag_prefix: flag.dynamic_flag_prefix || ''
+				}))
+			};
 
 			if (newChallenge.type === 'ova') {
 				// OVA challenges must reference an already-converted template (Infrastructure →
 				// Templates). Direct-in-modal OVA upload is gone: it produced dead challenges.
 				if (newChallenge.vm_source === 'template' && newChallenge.vm_template_id) {
 					const result = await api.createAdminChallenge({
-						name: newChallenge.name,
-						description: newChallenge.description,
-						difficulty: newChallenge.difficulty,
-						base_points: newChallenge.base_points,
-						...(categoryId ? { category_id: categoryId } : {}),
-						...(categoryName ? { category: categoryName } : {}),
+						...common,
 						challenge_type: 'vm',
 						vm_template_id: newChallenge.vm_template_id,
-						vcpu: 1,
-						memory_mb: 1024,
-						flags: newChallenge.flags
+						vcpu: newChallenge.vm_vcpu,
+						memory_mb: newChallenge.vm_memory_mb,
+						vm_timeout_minutes: newChallenge.vm_timeout_minutes,
+						vm_max_extensions: newChallenge.vm_max_extensions,
+						vm_extension_minutes: newChallenge.vm_extension_minutes,
+						cooldown_minutes: newChallenge.cooldown_minutes
 					});
 					createdChallengeId = result?.id;
 				} else {
@@ -1183,25 +1333,14 @@
 				// container and download-only are both resource_type "docker"; a download-only
 				// challenge has no image + no ports (files are added as attachments).
 				const isDownload = newChallenge.type === 'download';
+				const isMulti = newChallenge.type === 'multi';
 				const result = await api.createAdminChallenge({
-					name: newChallenge.name,
-					description: newChallenge.description,
-					difficulty: newChallenge.difficulty,
-					base_points: newChallenge.base_points,
-					...(categoryId ? { category_id: categoryId } : {}),
-					...(categoryName ? { category: categoryName } : {}),
+					...common,
 					challenge_type: 'docker',
-					container_image: isDownload ? '' : newChallenge.docker_image,
+					container_image: isDownload || isMulti ? '' : newChallenge.docker_image,
 					container_platform: isDownload ? '' : newChallenge.container_platform,
-					exposed_ports: isDownload ? [] : newChallenge.exposed_ports.filter(p => p.port > 0),
-					flags: newChallenge.flags.map((f, i) => ({
-						name: f.name,
-						flag: f.flag,
-						points: f.points,
-						sort_order: i + 1,
-						flag_type: f.flag_type || 'static',
-						dynamic_flag_prefix: f.dynamic_flag_prefix || ''
-					})),
+					exposed_ports: isDownload || isMulti ? [] : newChallenge.exposed_ports.filter(p => p.port > 0),
+					services: isMulti ? newChallenge.services.map(servicePayload) : [],
 					...(isDownload ? {} : {
 						instance_timeout: newChallenge.instance_timeout,
 						max_extensions: newChallenge.max_extensions,
@@ -1236,6 +1375,8 @@
 			newChallenge = {
 				name: '',
 				description: '',
+				sub_description: '',
+				author_name: '',
 				category: '',
 				category_id: '',
 				newCategoryName: '',
@@ -1244,12 +1385,18 @@
 				flag: '',
 				flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 				type: 'container',
+				scoring_mode: 'flag',
+				arena_mode: 'per_team',
+				privesc: false,
 				docker_image: '',
 				container_platform: '',
 				exposed_ports: [{ port: 1337, protocol: 'tcp', service: 'tcp' }],
+				services: [],
 				ova_url: '',
 				vm_template_id: '',
 				vm_source: 'template',
+				vm_vcpu: 1,
+				vm_memory_mb: 1024,
 				files: [],
 				instance_timeout: 120,
 				max_extensions: 3,
@@ -1441,11 +1588,11 @@
 							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
 								<div class="flex items-start justify-between gap-3 mb-3">
 									<div class="min-w-0">
-										<a href="/challenges/{challenge.slug}" class="text-sm font-medium text-stone-200 hover:text-amber-400 transition-colors">{challenge.name}</a>
+										<button type="button" on:click={() => openChallengeDetail(challenge)} class="text-left text-sm font-medium text-stone-200 hover:text-amber-400 transition-colors" title="Open challenge dossier">{challenge.name}</button>
 										<div class="flex items-center flex-wrap gap-1.5 mt-1.5 leading-none">
 											<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}"><span class="badge-label">{challenge.difficulty}</span></span>
-											<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
-												<OpticalIcon icon={resourceIcon(challenge.resource_type)} size={12} box={12} /><span class="badge-label">{resourceLabel(challenge.resource_type)}</span>
+										<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
+											<OpticalIcon icon={deliveryIcon(challenge)} size={12} box={12} /><span class="badge-label">{deliveryLabel(challenge)}</span>
 											</span>
 										</div>
 									</div>
@@ -1522,7 +1669,7 @@
 										{#each challenges as challenge}
 											<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
 												<td class="px-4 py-2.5">
-													<a href="/challenges/{challenge.slug}" class="text-stone-200 hover:text-amber-400 transition-colors">{challenge.name}</a>
+													<button type="button" on:click={() => openChallengeDetail(challenge)} class="text-left text-stone-200 hover:text-amber-400 transition-colors" title="Open challenge dossier">{challenge.name}</button>
 													{#if challenge.scoring_mode === 'graded'}
 														<span class="ml-1.5 inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[0.65rem] leading-none text-amber-500 align-middle" title="Graded challenge">
 															<OpticalIcon icon="mdi:gauge" size={11} box={11} /><span class="badge-label">Graded</span>
@@ -1533,8 +1680,8 @@
 													<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}"><span class="badge-label">{challenge.difficulty}</span></span>
 												</td>
 												<td class="px-4 py-2.5">
-													<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
-														<OpticalIcon icon={resourceIcon(challenge.resource_type)} size={12} box={12} /><span class="badge-label">{resourceLabel(challenge.resource_type)}</span>
+											<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
+												<OpticalIcon icon={deliveryIcon(challenge)} size={12} box={12} /><span class="badge-label">{deliveryLabel(challenge)}</span>
 													</span>
 												</td>
 												<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">{challenge.base_points}</td>
@@ -1753,12 +1900,13 @@
 					<Card title="Teams" bodyClass="">
 						<span slot="meta" class="text-stone-500 text-xs tabular-nums">{teams.length}</span>
 						<div class="overflow-x-auto">
-							<table class="w-full min-w-[820px] text-sm">
+							<table class="w-full min-w-[900px] text-sm">
 								<thead>
 									<tr class="metadata-label text-stone-500 border-b border-stone-800">
 										<th class="px-4 py-2.5 text-left">Team</th>
 										<th class="px-4 py-2.5 text-right">Members</th>
-										<th class="px-4 py-2.5 text-right">Score</th>
+									<th class="px-4 py-2.5 text-right">Solved</th>
+									<th class="px-4 py-2.5 text-right">Ledger</th>
 										<th class="px-4 py-2.5 text-right hidden md:table-cell">Max</th>
 										<th class="px-4 py-2.5 text-left hidden md:table-cell">Join code</th>
 										<th class="px-4 py-2.5 text-right hidden lg:table-cell">Created</th>
@@ -1769,15 +1917,18 @@
 									{#each teams as team}
 										<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
 											<td class="px-4 py-2.5">
-											<button class="text-stone-200 hover:text-amber-400 hover:underline text-left" on:click={() => toggleTeamDossier(team)} title="Open team details">{team.name}</button>
+											<button class="text-stone-200 hover:text-amber-400 hover:underline text-left" on:click={() => openTeamDetail(team)} title="Open full team dossier">{team.name}</button>
 											</td>
 											<td class="px-4 py-2.5 text-right tabular-nums">
 												<button class="text-stone-300 hover:underline" on:click={() => toggleTeamExpand(team.id)} title="Show members">
 													{team.member_count}{expandedTeams[team.id] ? ' ▾' : ' ▸'}
 												</button>
 											</td>
-											<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">
-												<button class="hover:underline" on:click={() => editTeamScore(team)} title="Edit score">{team.total_score ?? 0}</button>
+										<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">
+											{team.challenge_solves ?? 0}
+										</td>
+										<td class="px-4 py-2.5 text-right text-amber-500 tabular-nums" title={`Legacy score: ${team.legacy_score ?? 0}`}>
+											{Math.round(team.ledger_points ?? team.total_score ?? 0).toLocaleString()}
 											</td>
 											<td class="px-4 py-2.5 text-right text-stone-400 tabular-nums hidden md:table-cell">
 												<button class="hover:underline" on:click={() => editTeamMax(team)} title="Edit max members">{team.max_members == null ? '∞' : team.max_members}</button>
@@ -1801,7 +1952,7 @@
 										</tr>
 										{#if expandedTeams[team.id]}
 											<tr class="border-b border-stone-800/60 bg-stone-900/30">
-												<td class="px-4 py-3" colspan="7">
+											<td class="px-4 py-3" colspan="8">
 													<div class="space-y-2">
 														{#if team.members && team.members.length}
 															{#each team.members as member}
@@ -1829,7 +1980,7 @@
 										{/if}
 										{#if expandedSolves[team.id]}
 											<tr class="border-b border-stone-800/60 bg-stone-900/30">
-												<td class="px-4 py-3" colspan="7">
+											<td class="px-4 py-3" colspan="8">
 													{#if solvesLoading[team.id]}
 														<p class="text-xs text-stone-500">Loading solves...</p>
 													{:else if teamSolves[team.id] && teamSolves[team.id].length}
@@ -1863,7 +2014,7 @@
 										{/if}
 										{#if expandedSupport[team.id]}
 											<tr class="border-b border-stone-800/60 bg-stone-900/30">
-												<td class="px-4 py-3" colspan="7">
+											<td class="px-4 py-3" colspan="8">
 													{#if supportLoading[team.id]}
 														<p class="text-xs text-stone-500">Loading support view...</p>
 													{:else if teamSupport[team.id]}
@@ -2824,7 +2975,10 @@
 								<div><p class="metadata-label text-stone-600">Role</p><p class="mt-1 text-stone-300">{detail.user.role}</p></div>
 								<div><p class="metadata-label text-stone-600">Last login</p><p class="mt-1 text-stone-300">{detail.user.last_login?.at ? formatLocalDateTimeWithZone(detail.user.last_login.at, 'seconds') : 'Never'}</p></div>
 								<div><p class="metadata-label text-stone-600">Last IP</p><p class="mt-1 font-mono text-stone-300">{detail.user.last_login?.ip_address ?? '-'}</p></div>
+								<div><p class="metadata-label text-stone-600">Joined</p><p class="mt-1 text-stone-300">{formatLocalDateTimeWithZone(detail.user.created_at, 'seconds')}</p></div>
+								<div><p class="metadata-label text-stone-600">Email</p><p class="mt-1 text-stone-300">{detail.user.email_verified ? 'Verified' : 'Unverified'}</p></div>
 								<div class="col-span-2"><p class="metadata-label text-stone-600">Team</p><p class="mt-1 text-stone-300">{detail.team?.name ?? 'No team'}{detail.team ? ` · ${Math.floor(detail.team.credits ?? 0)} credits · ${Math.round(detail.team.points ?? 0)} Ledger points` : ''}</p></div>
+								{#if detail.user.bio}<div class="col-span-2"><p class="metadata-label text-stone-600">Bio</p><p class="mt-1 whitespace-pre-wrap text-stone-400">{detail.user.bio}</p></div>{/if}
 							</div>
 						</Card>
 						<Card title={`Instance history (${detail.instances?.length ?? 0})`} bodyClass="p-0">
@@ -2835,6 +2989,19 @@
 									{/each}
 								</div>
 							{:else}<EmptyState icon="mdi:cube-off-outline" text="No instance history." />{/if}
+						</Card>
+					</div>
+
+					<div class="mt-4 grid gap-4 lg:grid-cols-2">
+						<Card title={`IP activity (${detail.access_ips?.length ?? 0})`} bodyClass="p-0">
+							{#if detail.access_ips?.length}
+								<div class="max-h-64 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.access_ips as row}<div class="flex items-start justify-between gap-3 px-4 py-3 text-xs"><div><p class="font-mono text-stone-300">{row.ip_address}</p><p class="mt-1 text-stone-600">{row.sources?.join(', ')} · {row.events} events</p></div><div class="text-right text-stone-600"><p>{formatLocalDateTimeWithZone(row.last_seen_at, 'seconds')}</p><p class="mt-1">first {formatLocalDateTimeWithZone(row.first_seen_at, 'seconds')}</p></div></div>{/each}</div>
+							{:else}<EmptyState icon="mdi:ip-network-outline" text="No IP activity." />{/if}
+						</Card>
+						<Card title={`Session history (${detail.sessions?.length ?? 0})`} bodyClass="p-0">
+							{#if detail.sessions?.length}
+								<div class="max-h-64 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.sessions as session}<div class="px-4 py-3 text-xs"><div class="flex items-center justify-between gap-3"><p class="font-mono text-stone-300">{session.ip_address || 'No IP'}</p><span class={session.active ? 'text-up' : 'text-stone-600'}>{session.active ? 'active' : 'expired'}</span></div><p class="mt-1 truncate text-stone-600" title={session.user_agent}>{session.user_agent || 'Unknown client'}</p><p class="mt-1 text-stone-600">{formatLocalDateTimeWithZone(session.created_at, 'seconds')}</p></div>{/each}</div>
+							{:else}<EmptyState icon="mdi:login-variant" text="No sessions." />{/if}
 						</Card>
 					</div>
 
@@ -2853,10 +3020,42 @@
 							{#if detail.submissions?.length}
 								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
 									{#each detail.submissions as submission}
-										<div class="flex items-start justify-between gap-3 px-4 py-3 text-xs"><div><p class="text-stone-300">{submission.challenge_name}{submission.flag_name ? ` · ${submission.flag_name}` : ''}</p><p class="mt-1 font-mono text-stone-600">sha256:{submission.flag_fingerprint} · {submission.flag_length} chars · {submission.ip_address ?? '-'}</p><p class="mt-1 text-stone-600" title={instantTitle(submission.submitted_at, 'seconds')}>{formatLocalDateTimeWithZone(submission.submitted_at, 'seconds')}</p></div><span class="shrink-0 {submission.correct ? 'text-up' : 'text-down'}">{submission.correct ? 'correct' : 'wrong'}</span></div>
+									<div class="flex items-start justify-between gap-3 px-4 py-3 text-xs"><div class="min-w-0"><p class="text-stone-300">{submission.challenge_name}{submission.flag_name ? ` · ${submission.flag_name}` : ''}</p><p class="mt-1 font-mono text-stone-600">sha256:{submission.flag_fingerprint} · {submission.flag_length} chars · {submission.ip_address ?? '-'}</p>{#if submission.instance_id}<p class="mt-1 break-all font-mono text-stone-700">instance {submission.instance_id}</p>{/if}<p class="mt-1 truncate text-stone-600" title={submission.user_agent}>{submission.user_agent || 'Unknown client'}</p><p class="mt-1 text-stone-600" title={instantTitle(submission.submitted_at, 'seconds')}>{formatLocalDateTimeWithZone(submission.submitted_at, 'seconds')}</p></div><span class="shrink-0 {submission.correct ? 'text-up' : 'text-down'}">{submission.correct ? 'correct' : 'wrong'}</span></div>
 									{/each}
 								</div>
 							{:else}<EmptyState icon="mdi:form-textbox-password" text="No submissions." />{/if}
+						</Card>
+					</div>
+
+					<div class="mt-4 grid items-start gap-4 lg:grid-cols-2">
+						<Card title={`Organizer warnings (${detail.warnings?.length ?? 0})`} bodyClass="p-0">
+							{#if detail.warnings?.length}
+								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
+									{#each detail.warnings as warning}
+										<div class="px-4 py-3 text-xs">
+											<div class="flex flex-wrap items-center justify-between gap-2">
+												<span class="font-medium text-warn">{warning.cancelled_at ? 'Cancelled warning' : warning.dismissed_at ? 'Dismissed warning' : warning.read_at ? 'Read warning' : 'Unread warning'}</span>
+												<span class="text-stone-600">{formatLocalDateTimeWithZone(warning.published_at, 'seconds')}</span>
+											</div>
+											<p class="mt-2 whitespace-pre-wrap break-words text-stone-300">{warning.body}</p>
+											<p class="mt-2 text-stone-600">Issued by {warning.actor || 'system'}{warning.pinned ? ' · pinned' : ''}</p>
+										</div>
+									{/each}
+								</div>
+							{:else}<EmptyState icon="mdi:message-alert-outline" text="No organizer warnings." />{/if}
+						</Card>
+						<Card title={`Administrative history (${detail.audit?.length ?? 0})`} bodyClass="p-0">
+							{#if detail.audit?.length}
+								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
+									{#each detail.audit as event}
+										<div class="px-4 py-3 text-xs">
+											<div class="flex flex-wrap items-center justify-between gap-2"><p class="font-medium text-stone-300">{event.action.replaceAll('_', ' ')}</p><span class="text-stone-600">{formatLocalDateTimeWithZone(event.created_at, 'seconds')}</span></div>
+											<p class="mt-1 text-stone-600">{event.actor || 'System'} · {event.ip_address || 'No IP'}</p>
+											{#if event.new_values}<pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded bg-stone-950 p-2 font-mono text-[10px] text-stone-500">{JSON.stringify(event.new_values, null, 2)}</pre>{/if}
+										</div>
+									{/each}
+								</div>
+							{:else}<EmptyState icon="mdi:clipboard-text-clock-outline" text="No administrative changes." />{/if}
 						</Card>
 					</div>
 				{/if}
@@ -2865,10 +3064,34 @@
 	</div>
 {/if}
 
+{#if selectedTeamSeed}
+	<TeamDossier
+		seed={selectedTeamSeed}
+		detail={selectedTeamDetail}
+		loading={teamDetailLoading}
+		error={teamDetailError}
+		adjusting={teamCreditAdjusting}
+		on:close={() => { selectedTeamSeed = null; selectedTeamDetail = null; }}
+		on:user={(event) => { const member = event.detail; selectedTeamSeed = null; selectedTeamDetail = null; void openUserDetail(member); }}
+		on:credit={adjustTeamCredit}
+	/>
+{/if}
+
+{#if selectedChallengeSeed}
+	<ChallengeDossier
+		seed={selectedChallengeSeed}
+		detail={selectedChallengeDetail}
+		loading={challengeDetailLoading}
+		error={challengeDetailError}
+		on:close={() => { selectedChallengeSeed = null; selectedChallengeDetail = null; }}
+		on:edit={() => { const challenge = selectedChallengeSeed; selectedChallengeSeed = null; selectedChallengeDetail = null; openEditModal(challenge); }}
+	/>
+{/if}
+
 {#if showCreateModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
 		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showCreateModal = false}></button>
-		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-2xl max-h-[90vh] flex flex-col" role="dialog" aria-modal="true">
+		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-5xl max-h-[94vh] flex flex-col" role="dialog" aria-modal="true">
 			<div class="p-6 border-b border-stone-800 flex-shrink-0">
 				<div class="flex items-center justify-between mb-4">
 					<h2 class="text-lg font-semibold text-stone-100 flex items-center gap-2">
@@ -2880,14 +3103,22 @@
 					</button>
 				</div>
 
-				<div class="flex gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md">
+				<div class="grid grid-cols-2 gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md sm:grid-cols-4">
 					<button
 						type="button"
 						on:click={() => newChallenge.type = 'container'}
 						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'container' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 					>
 						<Icon icon="mdi:docker" class="w-3.5 h-3.5 shrink-0" />
-						Docker Container
+						Container
+					</button>
+					<button
+						type="button"
+						on:click={() => { newChallenge.type = 'multi'; if (!newChallenge.services.length) newChallenge.services = [blankService(0), blankService(1)]; }}
+						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'multi' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
+					>
+						<Icon icon="mdi:server-network" class="w-3.5 h-3.5 shrink-0" />
+						Multi-service
 					</button>
 					<button
 						type="button"
@@ -2895,7 +3126,7 @@
 						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'download' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 					>
 						<Icon icon="mdi:file-download-outline" class="w-3.5 h-3.5 shrink-0" />
-						Download only
+						Static / files
 					</button>
 					<button
 						type="button"
@@ -2903,7 +3134,7 @@
 						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'ova' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 					>
 						<Icon icon="mdi:desktop-classic" class="w-3.5 h-3.5 shrink-0" />
-						VM (OVA)
+						VM
 					</button>
 				</div>
 			</div>
@@ -3006,14 +3237,60 @@
 								placeholder="Challenge description..."
 							></textarea>
 						</label>
+
+						<label class="block md:col-span-2">
+							<span class={labelCls}>Pre-launch summary</span>
+							<input type="text" bind:value={newChallenge.sub_description} maxlength="255" class="w-full {fieldCls}" placeholder="A short spoiler-free line shown before a team spends credits" />
+						</label>
+
+						<label class="block">
+							<span class={labelCls}>Author</span>
+							<input type="text" bind:value={newChallenge.author_name} class="w-full {fieldCls}" placeholder="Author or team name" />
+						</label>
+
+						<label class="block">
+							<span class={labelCls}>Scoring model</span>
+							<select bind:value={newChallenge.scoring_mode} class="w-full {fieldCls}">
+								<option value="flag">Flags</option>
+								<option value="graded">Relative grading (0–100%)</option>
+							</select>
+						</label>
+
+						<label class="block md:col-span-2">
+							<span class={labelCls}>Target topology</span>
+							<select bind:value={newChallenge.arena_mode} class="w-full {fieldCls}" disabled={newChallenge.type === 'download'}>
+								<option value="per_team">Isolated per team</option>
+								<option value="shared">Shared arena / KotH target</option>
+							</select>
+							<p class="mt-1.5 text-xs text-stone-600">Attack-defense services are configured in Arena; this chooses whether this challenge provisions per team or as one contested target.</p>
+						</label>
 					</div>
 
-					{#if newChallenge.type === 'container' || newChallenge.type === 'download'}
+					{#if newChallenge.type === 'container' || newChallenge.type === 'multi' || newChallenge.type === 'download'}
 						<div class="pt-4 border-t border-stone-800 space-y-5">
 							{#if newChallenge.type === 'download'}
 								<div class="flex items-start gap-2 py-2.5 px-3 bg-stone-900/40 border border-stone-800 rounded-md text-stone-400 text-xs">
 									<Icon icon="mdi:information-outline" class="w-4 h-4 shrink-0 mt-0.5" />
 									A download-only challenge has no container - add the challenge files as attachments below, and a flag.
+								</div>
+							{/if}
+							{#if newChallenge.type === 'multi'}
+								<div class="flex items-start gap-2 rounded-md border border-info/20 bg-info/[0.06] px-3 py-2.5 text-xs text-stone-400">
+									<Icon icon="mdi:server-network" class="mt-0.5 h-4 w-4 shrink-0 text-info" />
+									<div><p class="font-medium text-stone-300">Compose-style challenge</p><p class="mt-1">Each role gets its own image, environment, network policy and ports. Public roles receive player routes; internal roles are reachable only by service name.</p></div>
+								</div>
+								<div class="space-y-3">
+									<div class="flex items-center justify-between"><span class="metadata-label text-stone-400">Service roles</span><button type="button" on:click={addService} class="text-xs text-stone-400 hover:text-stone-200">+ Add service</button></div>
+									{#each newChallenge.services as service, serviceIndex}
+										<div class="space-y-3 rounded-lg border border-stone-800 bg-stone-900/20 p-4">
+										<div class="grid gap-2 sm:grid-cols-[9rem_1fr_7rem_auto]"><input bind:value={service.name} required class="min-w-0 font-mono {fieldCls}" placeholder="app" /><input bind:value={service.image} required class="min-w-0 font-mono {fieldCls}" placeholder="ghcr.io/org/image" /><input bind:value={service.tag} class="min-w-0 font-mono {fieldCls}" placeholder="latest" /><button type="button" on:click={() => removeService(serviceIndex)} disabled={newChallenge.services.length === 1} class="justify-self-start p-2 text-stone-600 hover:text-down disabled:opacity-30 sm:justify-self-auto"><Icon icon="mdi:trash-can-outline" class="h-4 w-4" /></button></div>
+											<div class="grid gap-3 sm:grid-cols-2"><label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={service.public} class="accent-amber-500" /> Public route</label><label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={service.egress} class="accent-amber-500" /> Internet egress</label></div>
+											<div class="grid gap-3 sm:grid-cols-2"><label><span class={labelCls}>CPU</span><input bind:value={service.cpu_limit} class="w-full {fieldCls}" placeholder="1" /></label><label><span class={labelCls}>Memory</span><input bind:value={service.memory_limit} class="w-full {fieldCls}" placeholder="512Mi" /></label></div>
+											<div><div class="mb-2 flex items-center justify-between"><span class={labelCls}>Ports</span><button type="button" on:click={() => service.ports = [...service.ports, { port: 0, protocol: 'tcp', service: 'tcp', internal: !service.public }]} class="text-xs text-stone-500 hover:text-stone-300">+ Port</button></div>{#each service.ports as port, portIndex}<div class="mb-2 flex flex-wrap items-center gap-2"><input type="number" bind:value={port.port} min="1" max="65535" class="w-24 {fieldCls}" /><select bind:value={port.service} class="min-w-36 flex-1 {fieldCls}"><option value="http">HTTP</option><option value="tcp">TCP</option></select><label class="flex items-center gap-1 text-xs text-stone-500"><input type="checkbox" bind:checked={port.internal} class="accent-amber-500" /> Internal only</label><button type="button" on:click={() => service.ports = service.ports.filter((_: any, index: number) => index !== portIndex)} class="p-1 text-stone-600 hover:text-down"><Icon icon="mdi:close" class="h-4 w-4" /></button></div>{/each}</div>
+										<div class="grid gap-3 sm:grid-cols-2"><label><span class={labelCls}>Command arguments</span><textarea bind:value={service.command_text} rows="3" class="w-full font-mono {fieldCls}" placeholder="One argument per line&#10;--serve&#10;0.0.0.0"></textarea></label><label><span class={labelCls}>Environment</span><textarea bind:value={service.env_text} rows="3" class="w-full font-mono {fieldCls}" placeholder="KEY=value&#10;INTERNAL_URL=http://db:5432"></textarea></label></div>
+										</div>
+									{/each}
+									<label class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/20 px-3 py-2.5 text-xs text-stone-400"><input type="checkbox" bind:checked={newChallenge.privesc} class="accent-amber-500" /><span>Enable controlled SUID / privilege-escalation behavior for the service set.</span></label>
 								</div>
 							{/if}
 							{#if newChallenge.type === 'container'}
@@ -3073,10 +3350,12 @@
 									{/each}
 								</div>
 								<p class="text-stone-500 text-xs mt-1.5">
-									Enter the port your container listens on internally (e.g. 5001). Users connect via VPN directly to the container's bridge IP on this port.
-									Choose <strong class="text-stone-400">TCP</strong> for netcat-style services or <strong class="text-stone-400">HTTP</strong> for web challenges (shows a clickable URL).
+									Enter the internal listening port. Anvil publishes a routed TCP endpoint or a wildcard HTTPS hostname without exposing the container network.
 								</p>
 							</div>
+							{#if newChallenge.type === 'container'}
+								<label class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/20 px-3 py-2.5 text-xs text-stone-400"><input type="checkbox" bind:checked={newChallenge.privesc} class="accent-amber-500" /><span>Enable controlled SUID / privilege-escalation behavior. Capabilities remain dropped; use only for boot-to-root challenges that require it.</span></label>
+							{/if}
 							{/if}
 
 							<div>
@@ -3091,10 +3370,10 @@
 								<div class="space-y-3">
 									{#each newChallenge.flags as fl, i}
 										<div class="p-3 bg-stone-950 border border-stone-800 rounded-md space-y-2">
-											<div class="flex items-center gap-2">
-												<input type="text" bind:value={fl.name} class="flex-1 {fieldCls}" placeholder="Flag name" />
+										<div class="flex flex-wrap items-center gap-2">
+											<input type="text" bind:value={fl.name} required class="min-w-40 flex-1 {fieldCls}" placeholder="Flag name" />
 												<input type="number" bind:value={fl.points} min="0" class="w-20 tabular-nums {fieldCls}" placeholder="pts" />
-												<select bind:value={fl.flag_type} class="{fieldCls}">
+											<select bind:value={fl.flag_type} class="min-w-28 flex-1 sm:flex-none {fieldCls}">
 													<option value="static">Static</option>
 													<option value="regex">Regex</option>
 													<option value="dynamic">Dynamic</option>
@@ -3106,22 +3385,23 @@
 												{/if}
 											</div>
 											{#if fl.flag_type === 'static'}
-												<input type="text" bind:value={fl.flag} class="w-full font-mono {fieldCls}" placeholder="flag&#123;value&#125;" />
-											{:else if fl.flag_type === 'regex'}
-												<input type="text" bind:value={fl.flag} class="w-full font-mono {fieldCls}" placeholder="H7CTF&#123;[a-f0-9-]+&#125; - container generates flag, regex validates" />
+											<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="flag&#123;value&#125;" />
+										{:else if fl.flag_type === 'regex'}
+											<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="H7CTF&#123;[a-f0-9-]+&#125; - container generates flag, regex validates" />
 												<p class="text-stone-600 text-xs mt-1">Duplicate submissions across users trigger flag-share alerts in Audit</p>
 											{:else}
-												<input type="text" bind:value={fl.dynamic_flag_prefix} class="w-full font-mono {fieldCls}" placeholder="Prefix (e.g. H7CTF) - generates H7CTF&#123;uuid&#125; per user" />
+											<input type="text" bind:value={fl.dynamic_flag_prefix} required class="w-full font-mono {fieldCls}" placeholder="Prefix (e.g. H7CTF) - generates H7CTF&#123;uuid&#125; per user" />
 											{/if}
 										</div>
 									{/each}
 								</div>
+								<p class="mt-2 text-xs tabular-nums {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0) === Number(newChallenge.base_points) ? 'text-stone-600' : 'text-warn'}">Flag total: {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0)} / {newChallenge.base_points} base points{newChallenge.scoring_mode === 'graded' ? ' · graded scoring uses the best reported fraction' : ''}</p>
 							</div>
 
-							{#if newChallenge.type === 'container'}
+							{#if newChallenge.type === 'container' || newChallenge.type === 'multi'}
 							<div>
 								<span class="metadata-label block text-stone-400 mb-3">Instance Settings</span>
-								<div class="grid grid-cols-3 gap-3">
+								<div class="grid gap-3 sm:grid-cols-3">
 									<label class="block">
 										<span class="metadata-label block text-stone-500 mb-1">Timeout (min)</span>
 										<input type="number" bind:value={newChallenge.instance_timeout} min="1" class="w-full {fieldCls} tabular-nums" />
@@ -3217,6 +3497,15 @@
 								</div>
 							{/if}
 
+							<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+								<label class="block"><span class={labelCls}>vCPU reservation</span><input type="number" bind:value={newChallenge.vm_vcpu} min="1" max="64" class="w-full {fieldCls} tabular-nums" /></label>
+								<label class="block"><span class={labelCls}>Memory (MB)</span><input type="number" bind:value={newChallenge.vm_memory_mb} min="256" step="256" class="w-full {fieldCls} tabular-nums" /></label>
+								<label class="block"><span class={labelCls}>Run time (min)</span><input type="number" bind:value={newChallenge.vm_timeout_minutes} min="1" class="w-full {fieldCls} tabular-nums" /></label>
+								<label class="block"><span class={labelCls}>Max extensions</span><input type="number" bind:value={newChallenge.vm_max_extensions} min="0" class="w-full {fieldCls} tabular-nums" /></label>
+								<label class="block"><span class={labelCls}>Extension (min)</span><input type="number" bind:value={newChallenge.vm_extension_minutes} min="1" class="w-full {fieldCls} tabular-nums" /></label>
+								<label class="block"><span class={labelCls}>Reset cooldown (min)</span><input type="number" bind:value={newChallenge.cooldown_minutes} min="0" class="w-full {fieldCls} tabular-nums" /></label>
+							</div>
+
 							<div>
 								<div class="flex items-center justify-between mb-3">
 									<span class="metadata-label block text-stone-400">Flags <span class="font-mono tracking-normal tabular-nums">({newChallenge.flags.length})</span></span>
@@ -3228,11 +3517,11 @@
 								<div class="space-y-3">
 									{#each newChallenge.flags as flag, i}
 										<div class="bg-stone-950 border border-stone-800 rounded-md p-4">
-											<div class="flex items-center gap-3 mb-3">
+										<div class="flex flex-wrap items-center gap-3 mb-3">
 												<input
 													type="text"
 													bind:value={flag.name}
-													class="flex-1 {fieldCls}"
+											class="min-w-40 flex-1 {fieldCls}"
 													placeholder="Flag name (e.g., User Flag)"
 												/>
 												<input
@@ -3275,7 +3564,7 @@
 						{#if pendingAttachments.length > 0}
 							<div class="space-y-2">
 								{#each pendingAttachments as attachment, i}
-									<div class="flex items-center gap-2 p-2 bg-stone-950 border border-stone-800 rounded-md">
+									<div class="flex flex-wrap items-center gap-2 p-2 bg-stone-950 border border-stone-800 rounded-md">
 										<Icon icon="mdi:file-outline" class="w-4 h-4 text-stone-400 shrink-0" />
 										<div class="min-w-0 flex-1">
 											<p class="text-xs text-stone-300 truncate">{attachment.file.name}</p>
@@ -3285,7 +3574,7 @@
 											type="text"
 											bind:value={attachment.description}
 											placeholder="Description (optional)"
-											class="flex-1 min-w-0 px-2 py-1 bg-stone-950 border border-stone-800 rounded text-xs text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-500"
+										class="basis-full sm:basis-auto flex-1 min-w-0 px-2 py-1 bg-stone-950 border border-stone-800 rounded text-xs text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-500"
 										/>
 										<button
 											type="button"
@@ -3342,12 +3631,12 @@
 {#if showEditModal && editingChallenge}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
 		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => { showEditModal = false; editingChallenge = null; }}></button>
-		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true">
+		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-5xl max-h-[94vh] overflow-y-auto" role="dialog" aria-modal="true">
 			<div class="px-6 py-4 border-b border-stone-800 flex items-center justify-between sticky top-0 bg-stone-950 z-10">
 				<div>
 					<h2 class="text-lg font-semibold text-stone-100">Edit Challenge</h2>
 					<p class="text-xs text-stone-500 mt-0.5">
-						{editingChallenge.resource_type === 'vm' ? 'Virtual Machine' : 'Docker'} ·
+						{editingChallenge.delivery_type === 'vm' ? 'Virtual machine' : editingChallenge.delivery_type === 'multi' ? 'Multi-service' : editingChallenge.delivery_type === 'static' ? 'Static / files' : 'Container'} ·
 						<span class="{editingChallenge.status === 'published' ? 'text-up' : 'text-warn'}">{editingChallenge.status}</span>
 						· {editingChallenge.slug}
 					</p>
@@ -3357,7 +3646,7 @@
 				</button>
 			</div>
 
-			<div class="px-6 border-b border-stone-800 flex gap-1 bg-stone-950">
+			<div class="px-3 sm:px-6 border-b border-stone-800 flex gap-1 bg-stone-950 overflow-x-auto">
 				{#each [{ id: 'settings', label: 'Settings', n: 0 }, { id: 'flags', label: 'Flags', n: editFlags.length }, { id: 'hints', label: 'Hints', n: editHints.length }, { id: 'files', label: 'Files', n: editAttachments.length }, ...(editingChallenge.scoring_mode === 'graded' ? [{ id: 'grading', label: 'Grading', n: 0 }] : [])] as t}
 					<button type="button" on:click={() => openEditTab(t.id as typeof editTab)} class="px-3.5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors {editTab === t.id ? 'border-amber-500 text-stone-100' : 'border-transparent text-stone-500 hover:text-stone-300'}">
 						{t.label}{#if t.n}<span class="ml-1.5 text-xs tabular-nums {editTab === t.id ? 'text-amber-500' : 'text-stone-600'}">{t.n}</span>{/if}
@@ -3369,7 +3658,7 @@
 			{#if subNote}<div class="mx-6 mt-4 px-3 py-2 rounded-md bg-up/10 border border-up/30 text-up text-xs">{subNote}</div>{/if}
 
 			{#if editTab === 'settings'}
-			<form on:submit|preventDefault={handleEditChallenge} class="p-6 space-y-5">
+				<form on:submit|preventDefault={handleEditChallenge} class="p-4 sm:p-6 space-y-5">
 
 				<label class="block">
 					<span class={labelCls}>Name *</span>
@@ -3381,7 +3670,12 @@
 					<textarea bind:value={editingChallenge.description} rows="4" class="w-full {fieldCls} resize-none"></textarea>
 				</label>
 
-				<div class="grid grid-cols-2 gap-4">
+				<label class="block">
+					<span class={labelCls}>Pre-launch summary</span>
+					<input type="text" bind:value={editingChallenge.sub_description} maxlength="255" class="w-full {fieldCls}" placeholder="A spoiler-free summary shown before a team spends credits" />
+				</label>
+
+				<div class="grid gap-4 sm:grid-cols-2">
 					<label class="block">
 						<span class={labelCls}>Category</span>
 						{#if categories.length > 0}
@@ -3412,23 +3706,36 @@
 						<span class={labelCls}>Author Name</span>
 						<input type="text" bind:value={editingChallenge.author_name} placeholder="e.g. abu" class="w-full {fieldCls}" />
 					</label>
-					<label class="block col-span-2">
+					<label class="block sm:col-span-2">
 						<span class={labelCls}>Scoring</span>
 						<select bind:value={editingChallenge.scoring_mode} class="w-full {fieldCls}">
 							<option value="flag">Flag — solves by flag submission</option>
 							<option value="graded">Graded - an in-instance grader scores depth 0-1, best x points</option>
 						</select>
 					</label>
+					<label class="block">
+						<span class={labelCls}>Delivery</span>
+						<select bind:value={editingChallenge.delivery_type} on:change={() => editingChallenge.resource_type = editingChallenge.delivery_type === 'vm' ? 'vm' : 'docker'} class="w-full {fieldCls}">
+							<option value="container">Single container</option>
+							<option value="multi">Multi-service</option>
+							<option value="static">Static / files only</option>
+							<option value="vm">Virtual machine</option>
+						</select>
+					</label>
+					<label class="block">
+						<span class={labelCls}>Topology</span>
+						<select bind:value={editingChallenge.arena_mode} disabled={editingChallenge.delivery_type === 'static'} class="w-full {fieldCls}"><option value="per_team">Isolated per team</option><option value="shared">Shared arena / KotH</option></select>
+					</label>
 				</div>
 
-				{#if editingChallenge.resource_type !== 'vm'}
+				{#if editingChallenge.delivery_type === 'container'}
 					<div class="border border-stone-800 rounded-lg p-4 space-y-4">
-						<h3 class="metadata-label text-stone-400">Container Settings</h3>
+						<div class="flex items-center justify-between gap-3"><h3 class="metadata-label text-stone-400">Container runtime</h3><label class="flex items-center gap-2 text-xs text-stone-500"><input type="checkbox" bind:checked={editingChallenge.privesc} class="accent-amber-500" /> Controlled privesc</label></div>
 
-						<div class="grid grid-cols-3 gap-3">
-							<label class="block col-span-2">
+						<div class="grid gap-3 sm:grid-cols-3">
+							<label class="block sm:col-span-2">
 								<span class={labelCls}>Docker Image</span>
-								<input type="text" bind:value={editingChallenge.container_image} placeholder="ghcr.io/org/image" class="w-full font-mono {fieldCls}" />
+								<input type="text" bind:value={editingChallenge.container_image} required placeholder="ghcr.io/org/image" class="w-full font-mono {fieldCls}" />
 							</label>
 							<label class="block">
 								<span class={labelCls}>Tag</span>
@@ -3436,7 +3743,7 @@
 							</label>
 						</div>
 
-						<div class="grid grid-cols-3 gap-3">
+						<div class="grid gap-3 sm:grid-cols-3">
 							<label class="block">
 								<span class={labelCls}>Platform</span>
 								<input type="text" bind:value={editingChallenge.container_platform} placeholder="linux/amd64" class="w-full font-mono {fieldCls}" />
@@ -3463,7 +3770,7 @@
 								</button>
 							</div>
 							{#each (editingChallenge.exposed_ports || []) as ep, i}
-								<div class="flex items-center gap-2 mb-2">
+								<div class="flex flex-wrap items-center gap-2 mb-2">
 									<input type="number" bind:value={ep.port} placeholder="Port" min="1" max="65535" class="w-20 font-mono tabular-nums {fieldCls}" />
 									<select bind:value={ep.service} class="flex-1 {fieldCls}">
 										<option value="tcp">TCP - nc (netcat)</option>
@@ -3481,10 +3788,27 @@
 							<p class="text-stone-600 text-xs mt-1">Port your container listens on internally. TCP shows <code class="text-stone-500">nc host port</code>; HTTP shows a clickable URL.</p>
 						</div>
 					</div>
+				{:else if editingChallenge.delivery_type === 'multi'}
+					<div class="space-y-4 rounded-lg border border-stone-800 p-4">
+						<div class="flex items-center justify-between gap-3"><div><h3 class="metadata-label text-stone-400">Service roles</h3><p class="mt-1 text-xs text-stone-600">Public roles receive player routes. Internal roles are reachable only through the isolated challenge network.</p></div><button type="button" on:click={addEditService} class="shrink-0 text-xs text-stone-400 hover:text-stone-200">+ Add service</button></div>
+						{#each editingChallenge.services || [] as service, serviceIndex}
+							<div class="space-y-3 rounded-lg border border-stone-800 bg-stone-900/20 p-3 sm:p-4">
+								<div class="grid gap-2 sm:grid-cols-[9rem_1fr_7rem_auto]"><input bind:value={service.name} required class="min-w-0 font-mono {fieldCls}" placeholder="app" /><input bind:value={service.image} required class="min-w-0 font-mono {fieldCls}" placeholder="ghcr.io/org/image" /><input bind:value={service.tag} class="min-w-0 font-mono {fieldCls}" placeholder="latest" /><button type="button" on:click={() => removeEditService(serviceIndex)} class="justify-self-start p-2 text-stone-600 hover:text-down sm:justify-self-auto"><Icon icon="mdi:trash-can-outline" class="h-4 w-4" /></button></div>
+								<div class="grid gap-3 sm:grid-cols-2"><label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={service.public} class="accent-amber-500" /> Public route</label><label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={service.egress} class="accent-amber-500" /> Internet egress</label></div>
+								<div class="grid gap-3 sm:grid-cols-2"><label><span class={labelCls}>CPU</span><input bind:value={service.cpu_limit} class="w-full {fieldCls}" placeholder="1" /></label><label><span class={labelCls}>Memory</span><input bind:value={service.memory_limit} class="w-full {fieldCls}" placeholder="512Mi" /></label></div>
+								<div><div class="mb-2 flex items-center justify-between"><span class={labelCls}>Ports</span><button type="button" on:click={() => service.ports = [...(service.ports || []), { port: 0, protocol: 'tcp', service: 'tcp', internal: !service.public }]} class="text-xs text-stone-500 hover:text-stone-300">+ Port</button></div>{#each service.ports || [] as port, portIndex}<div class="mb-2 flex flex-wrap items-center gap-2"><input type="number" bind:value={port.port} min="1" max="65535" class="w-24 {fieldCls}" /><select bind:value={port.service} class="min-w-32 flex-1 {fieldCls}"><option value="http">HTTP</option><option value="tcp">TCP</option></select><label class="flex items-center gap-1 text-xs text-stone-500"><input type="checkbox" bind:checked={port.internal} class="accent-amber-500" /> Internal</label><button type="button" on:click={() => service.ports = service.ports.filter((_port: any, index: number) => index !== portIndex)} class="p-1 text-stone-600 hover:text-down"><Icon icon="mdi:close" class="h-4 w-4" /></button></div>{/each}</div>
+								<div class="grid gap-3 sm:grid-cols-2"><label><span class={labelCls}>Command arguments</span><textarea bind:value={service.command_text} rows="3" class="w-full font-mono {fieldCls}" placeholder="One argument per line"></textarea></label><label><span class={labelCls}>Environment</span><textarea bind:value={service.env_text} rows="3" class="w-full font-mono {fieldCls}" placeholder="KEY=value"></textarea></label></div>
+							</div>
+						{/each}
+						{#if !(editingChallenge.services || []).length}<button type="button" on:click={addEditService} class="w-full rounded-md border border-dashed border-stone-700 p-5 text-sm text-stone-500 hover:border-stone-600 hover:text-stone-300">Add the first service role</button>{/if}
+						<label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={editingChallenge.privesc} class="accent-amber-500" /> Enable controlled SUID / privilege-escalation behavior for this service set</label>
+					</div>
+				{:else if editingChallenge.delivery_type === 'static'}
+					<div class="flex items-start gap-3 rounded-lg border border-info/20 bg-info/[0.05] p-4 text-sm text-stone-400"><Icon icon="mdi:file-download-outline" class="mt-0.5 h-5 w-5 shrink-0 text-info" /><div><p class="font-medium text-stone-300">Static / files-only delivery</p><p class="mt-1 text-xs leading-relaxed text-stone-500">No runtime will be provisioned. Add downloadable handouts in the Files tab and configure validation in Flags.</p></div></div>
 				{/if}
 
-				{#if editingChallenge.resource_type === 'vm'}
-					<div class="border border-stone-800 rounded-lg p-4">
+				{#if editingChallenge.delivery_type === 'vm'}
+					<div class="border border-stone-800 rounded-lg p-4 space-y-4">
 						<h3 class="metadata-label text-stone-400 mb-3">VM Settings</h3>
 						<label class="block">
 							<span class={labelCls}>VM Template</span>
@@ -3495,14 +3819,20 @@
 								{/each}
 							</select>
 						</label>
+						<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+							<label><span class={labelCls}>Run time (min)</span><input type="number" bind:value={editingChallenge.vm_timeout_minutes} min="1" class="w-full {fieldCls} tabular-nums" /></label>
+							<label><span class={labelCls}>Max extensions</span><input type="number" bind:value={editingChallenge.vm_max_extensions} min="0" class="w-full {fieldCls} tabular-nums" /></label>
+							<label><span class={labelCls}>Extension (min)</span><input type="number" bind:value={editingChallenge.vm_extension_minutes} min="1" class="w-full {fieldCls} tabular-nums" /></label>
+						</div>
 					</div>
 				{/if}
 
+				{#if editingChallenge.delivery_type !== 'static'}
 				<div class="border border-stone-800 rounded-lg p-4 space-y-3">
-					<h3 class="metadata-label text-stone-400">Instance Settings</h3>
-					<div class="grid grid-cols-3 gap-3">
+					<div><h3 class="metadata-label text-stone-400">Instance lifecycle</h3><p class="mt-1 text-xs text-stone-600">Starting, stopping and restarting infrastructure does not charge teams. Opening, paid extensions and configured economy actions do.</p></div>
+					<div class="grid gap-3 sm:grid-cols-3">
 						<label class="block">
-							<span class={labelCls}>Timeout (min)</span>
+							<span class={labelCls}>{editingChallenge.delivery_type === 'vm' ? 'Compatibility timeout' : 'Timeout (min)'}</span>
 							<input type="number" bind:value={editingChallenge.instance_timeout} min="1" class="w-full {fieldCls} tabular-nums" />
 						</label>
 						<label class="block">
@@ -3515,6 +3845,7 @@
 						</label>
 					</div>
 				</div>
+				{/if}
 
 				<div class="flex gap-3 pt-2">
 					<button type="submit" disabled={actionLoading === editingChallenge.id} class="flex-1 {btnPrimary}">
@@ -3661,23 +3992,30 @@
 			{/if}
 
 			{#if editTab === 'files'}
-				<div class="p-6 space-y-3">
+				<div class="p-4 sm:p-6 space-y-5">
 					{#if subLoading}
 						<p class="text-stone-500 text-sm">Loading…</p>
 					{:else}
-						{#each editAttachments as a (a.id)}
-							<div class="border border-stone-800 rounded-lg p-3 flex items-center gap-3">
-								<Icon icon="mdi:file-outline" class="w-4 h-4 text-stone-500 shrink-0" />
-								<span class="flex-1 text-sm text-stone-200 truncate">{a.filename}</span>
-								<span class="text-xs text-stone-500 tabular-nums">{humanSize(a.file_size)}</span>
-								<button type="button" on:click={() => deleteEditAttachment(a)} title="Delete file" class="p-1.5 text-stone-600 hover:text-down transition-colors"><Icon icon="mdi:trash-can-outline" class="w-4 h-4" /></button>
+						<div>
+							<div class="mb-2 flex items-center justify-between gap-3"><div><p class="text-sm font-medium text-stone-300">Challenge handouts</p><p class="mt-1 text-xs text-stone-600">Managed uploads are checksummed while streaming. External links suit large artifacts hosted in your own bucket or CDN.</p></div><label class="shrink-0 inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-stone-700 px-3 py-2 text-xs text-stone-300 hover:bg-stone-800/40"><Icon icon="mdi:upload" class="h-4 w-4" /> {subUploading ? 'Uploading…' : 'Upload'}<input type="file" multiple on:change={uploadEditAttachment} disabled={subUploading} class="hidden" /></label></div>
+							<div class="space-y-2">
+								{#each editAttachments as a (a.id)}
+									<div class="flex items-start gap-3 rounded-lg border border-stone-800 p-3">
+										<Icon icon={a.url ? 'mdi:link-variant' : 'mdi:file-outline'} class="mt-0.5 h-4 w-4 shrink-0 text-stone-500" />
+										<div class="min-w-0 flex-1"><div class="flex flex-wrap items-center gap-x-2 gap-y-1"><span class="truncate text-sm text-stone-200">{a.filename}</span><span class="text-[10px] uppercase tracking-wide text-stone-600">{a.url ? 'External' : 'Managed'} · {humanSize(a.file_size)}</span></div>{#if a.description}<p class="mt-1 text-xs text-stone-500">{a.description}</p>{/if}<p class="mt-1 truncate font-mono text-[10px] text-stone-700" title={a.sha256}>{a.sha256 ? `sha256:${a.sha256}` : 'Checksum not supplied'}{a.url ? ` · ${a.url}` : ''}</p></div>
+										<button type="button" on:click={() => deleteEditAttachment(a)} title="Delete file" class="p-1.5 text-stone-600 hover:text-down transition-colors"><Icon icon="mdi:trash-can-outline" class="w-4 h-4" /></button>
+									</div>
+								{/each}
+								{#if !editAttachments.length}<div class="rounded-lg border border-dashed border-stone-800 p-6 text-center text-sm text-stone-600">No handouts attached.</div>{/if}
 							</div>
-						{/each}
-						{#if !editAttachments.length}<p class="text-stone-600 text-sm">No files attached.</p>{/if}
-						<label class="inline-flex items-center gap-1.5 text-sm text-stone-400 hover:text-stone-200 transition-colors cursor-pointer">
-							<Icon icon="mdi:upload" class="w-4 h-4" /> {subUploading ? 'Uploading…' : 'Upload file'}
-							<input type="file" multiple on:change={uploadEditAttachment} disabled={subUploading} class="hidden" />
-						</label>
+						</div>
+
+						<form on:submit|preventDefault={addExternalHandout} class="space-y-3 rounded-lg border border-stone-800 bg-stone-900/20 p-4">
+							<div><p class="text-sm font-medium text-stone-300">Add external handout</p><p class="mt-1 text-xs text-stone-600">Anvil records metadata and redirects downloads; it never fetches the administrator-supplied URL.</p></div>
+							<div class="grid gap-3 sm:grid-cols-2"><label><span class={labelCls}>Filename</span><input bind:value={externalHandout.name} required maxlength="255" placeholder="challenge-files.zip" class="w-full {fieldCls}" /></label><label><span class={labelCls}>HTTPS URL</span><input type="url" bind:value={externalHandout.url} required placeholder="https://cdn.example.com/challenge-files.zip" class="w-full {fieldCls}" /></label></div>
+							<div class="grid gap-3 sm:grid-cols-[1fr_auto]"><label><span class={labelCls}>SHA-256 <span class="normal-case tracking-normal text-stone-700">(recommended)</span></span><input bind:value={externalHandout.sha256} pattern="[A-Fa-f0-9]{64}" maxlength="64" placeholder="64 hexadecimal characters" class="w-full font-mono {fieldCls}" /></label><button type="submit" disabled={subUploading || !externalHandout.name.trim() || !externalHandout.url.trim()} class="self-end {btnPrimary}">Add link</button></div>
+							<label><span class={labelCls}>Description</span><input bind:value={externalHandout.description} maxlength="1000" placeholder="Optional player-facing note" class="w-full {fieldCls}" /></label>
+						</form>
 					{/if}
 				</div>
 			{/if}

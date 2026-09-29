@@ -162,6 +162,12 @@
 
 	async function bailout() {
 		if (busy) return;
+		if (!(await confirmDialog({
+			title: 'Claim one-time bailout',
+			message: 'This emergency credit top-up can only be claimed once by your team. Continue?',
+			confirmLabel: 'Claim bailout',
+			danger: true
+		}))) return;
 		busy = true;
 		error = '';
 		try {
@@ -210,6 +216,7 @@
 
 	// challenges currently holding one of the team's 3 open slots (solved ones are excluded)
 	$: openNow = (eco?.open ?? []).filter((o: any) => o.status === 'open');
+	$: openCap = Number(eco?.concurrency_cap ?? 3);
 
 	onMount(load);
 	onDestroy(() => {
@@ -219,7 +226,7 @@
 
 <svelte:head><title>Team · Anvil</title></svelte:head>
 
-<div class="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8 py-8">
+<div class="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-8">
 	<PageHeader title="Team" subtitle="Your team's roster, join code, and standing." />
 
 	{#if !$auth.isAuthenticated}
@@ -248,12 +255,12 @@
 		{#if team}
 			<Card title={team.name}>
 				<svelte:fragment slot="meta">
-					<span class="text-xs text-stone-500">{(team.members ?? []).length} member{(team.members ?? []).length === 1 ? '' : 's'}</span>
+					<div class="flex items-center gap-3"><span class="text-xs text-stone-500">{(team.members ?? []).length} member{(team.members ?? []).length === 1 ? '' : 's'}</span><a href="/team/{team.id}" class="text-xs text-stone-400 hover:text-stone-200">Public profile</a></div>
 				</svelte:fragment>
 
 				<div class="grid gap-4 sm:grid-cols-2">
 					<div>
-						<p class="metadata-label text-stone-500 mb-1">Team Score</p>
+						<p class="metadata-label text-stone-500 mb-1">Ledger score</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums">{team.total_score ?? 0}</p>
 					</div>
 					<div>
@@ -293,52 +300,29 @@
 
 			{#if eco}
 				<Card title="Economy" className="mt-4">
-					<div class="grid gap-4 sm:grid-cols-2">
-						<div>
-							<p class="metadata-label text-stone-500 mb-1">Credits</p>
-							<p class="text-2xl font-semibold text-amber-500 tabular-nums">{Math.floor(eco.credits)}</p>
-						</div>
-						<div>
-							<p class="metadata-label text-stone-500 mb-1">Points</p>
-							<p class="text-2xl font-semibold text-stone-100 tabular-nums">{Math.round(eco.points)}</p>
-						</div>
+					{#if eco.frozen}
+						<div class="mb-5 flex items-start gap-3 rounded-lg border border-warn/25 bg-warn/[0.07] p-4"><Icon icon="mdi:snowflake" class="mt-0.5 h-5 w-5 shrink-0 text-warn" /><div><p class="text-sm font-medium text-stone-200">Final scoreboard freeze is active</p><p class="mt-1 text-xs leading-relaxed text-stone-500">Public ranks are blinded until organizers reveal the result. Your private Ledger remains visible here, and this is the only phase where leftover credits can be settled into points.</p></div></div>
+					{/if}
+					<div class="grid gap-3 sm:grid-cols-3">
+						<div class="rounded-lg border border-stone-800 bg-stone-950 p-4"><p class="metadata-label text-stone-500 mb-1">Credits</p><p class="text-2xl font-semibold text-amber-500 tabular-nums">{Number(eco.credits).toLocaleString(undefined, { maximumFractionDigits: 3 })}</p></div>
+						<div class="rounded-lg border border-stone-800 bg-stone-950 p-4"><p class="metadata-label text-stone-500 mb-1">Points</p><p class="text-2xl font-semibold text-stone-100 tabular-nums">{Math.round(eco.points)}</p></div>
+						<div class="rounded-lg border border-stone-800 bg-stone-950 p-4"><p class="metadata-label text-stone-500 mb-1">Open slots</p><p class="text-2xl font-semibold text-stone-100 tabular-nums">{openNow.length}<span class="text-base font-normal text-stone-600"> / {openCap}</span></p></div>
 					</div>
 
-					<form on:submit|preventDefault={convert} class="mt-4 flex gap-2">
-						<input class={inputClass} type="number" min="1" bind:value={convertAmt} on:input={(event) => scheduleConversionQuote((event.currentTarget as HTMLInputElement).value)} placeholder="Convert points → credits" aria-label="Points to convert to credits" />
-						<button type="submit" disabled={busy || !conversionQuote || conversionQuote.points !== Number(convertAmt)} class="{primaryBtn} whitespace-nowrap">Convert</button>
-					</form>
-					{#if quoteLoading}
-						<p class="mt-1 text-xs text-stone-500">Calculating current quote…</p>
-					{:else if conversionQuote}
-						<p class="mt-1 text-xs text-stone-500">
-							{conversionQuote.points.toLocaleString()} points →
-							<span class="font-medium tabular-nums text-amber-500">{conversionQuote.credits.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits</span>
-							at {conversionQuote.effective_rate.toLocaleString(undefined, { maximumFractionDigits: 4 })} credits/point.
-						</p>
-					{:else if quoteError}
-						<p class="mt-1 text-xs text-down">{quoteError}</p>
-					{:else}
-						<p class="text-xs text-stone-600 mt-1">Enter an amount to see the current quote. The rate falls with each block.</p>
-					{/if}
+					<div class="mt-5 border-t border-stone-800 pt-4">
+						<div class="mb-3"><p class="text-sm font-medium text-stone-300">Points to credits</p><p class="mt-1 text-xs text-stone-600">Buy operating capital during play. The marginal rate falls in blocks, so Anvil binds the preview to the confirmation.</p></div>
+						<form on:submit|preventDefault={convert} class="flex flex-col gap-2 sm:flex-row">
+							<input class={inputClass} type="number" min="1" max={Math.floor(eco.points)} bind:value={convertAmt} on:input={(event) => scheduleConversionQuote((event.currentTarget as HTMLInputElement).value)} placeholder="Points to convert" aria-label="Points to convert to credits" />
+							<button type="submit" disabled={busy || Number(convertAmt) > Number(eco.points) || !conversionQuote || conversionQuote.points !== Number(convertAmt)} class="{primaryBtn} whitespace-nowrap">Review & convert</button>
+						</form>
+						{#if quoteLoading}<p class="mt-1 text-xs text-stone-500">Calculating current quote…</p>{:else if conversionQuote}<p class="mt-1 text-xs text-stone-500">{conversionQuote.points.toLocaleString()} points → <span class="font-medium tabular-nums text-amber-500">{conversionQuote.credits.toLocaleString(undefined, { maximumFractionDigits: 3 })} credits</span> at {conversionQuote.effective_rate.toLocaleString(undefined, { maximumFractionDigits: 4 })} credits/point.</p>{:else if quoteError}<p class="mt-1 text-xs text-down">{quoteError}</p>{:else}<p class="mt-1 text-xs text-stone-600">Enter an amount to see the current quote.</p>{/if}
+					</div>
 
 					{#if eco.frozen}
 						<div class="mt-5 border-t border-stone-800 pt-4">
-							<p class="metadata-label text-stone-400 mb-1">Final freeze: credits to points</p>
-							<p class="text-xs text-stone-500 mb-3">The board is frozen for the finish. Convert leftover credits back into ranking points at {c2pRate.toLocaleString(undefined, { maximumFractionDigits: 3 })} points per credit. Points to credits stays open above if you still want to open a challenge.</p>
-							<form on:submit|preventDefault={convertCredits} class="flex gap-2">
-								<input class={inputClass} type="number" min="1" max={Math.floor(eco.credits)} bind:value={creditsAmt} placeholder="Convert credits → points" aria-label="Credits to convert to points" />
-								<button type="submit" disabled={busy || !(Number(creditsAmt) > 0) || Number(creditsAmt) > eco.credits} class="{primaryBtn} whitespace-nowrap">Convert</button>
-							</form>
-							{#if creditsPreview > 0}
-								<p class="mt-1 text-xs text-stone-500">
-									{Number(creditsAmt).toLocaleString()} credits →
-									<span class="font-medium tabular-nums text-stone-100">{creditsPreview.toLocaleString(undefined, { maximumFractionDigits: 2 })} points</span>
-									at {c2pRate.toLocaleString(undefined, { maximumFractionDigits: 3 })} points/credit.
-								</p>
-							{:else}
-								<p class="text-xs text-stone-600 mt-1">Enter an amount to preview the points you would gain.</p>
-							{/if}
+							<div class="mb-3 flex flex-wrap items-start justify-between gap-2"><div><p class="text-sm font-medium text-stone-300">Credits to points</p><p class="mt-1 text-xs text-stone-500">Settle unused credits at {c2pRate.toLocaleString(undefined, { maximumFractionDigits: 3 })} points per credit. This is irreversible.</p></div><button type="button" on:click={() => creditsAmt = String(Math.floor(Number(eco.credits) * 1000) / 1000)} class="text-xs text-stone-500 hover:text-stone-300">Use max</button></div>
+							<form on:submit|preventDefault={convertCredits} class="flex flex-col gap-2 sm:flex-row"><input class={inputClass} type="number" min="0.001" step="0.001" max={eco.credits} bind:value={creditsAmt} placeholder="Credits to settle" aria-label="Credits to convert to points" /><button type="submit" disabled={busy || !(Number(creditsAmt) > 0) || Number(creditsAmt) > eco.credits} class="{primaryBtn} whitespace-nowrap">Review & settle</button></form>
+							{#if creditsPreview > 0}<p class="mt-1 text-xs text-stone-500">{Number(creditsAmt).toLocaleString()} credits → <span class="font-medium tabular-nums text-stone-100">{creditsPreview.toLocaleString(undefined, { maximumFractionDigits: 2 })} points</span> at {c2pRate.toLocaleString(undefined, { maximumFractionDigits: 3 })} points/credit.</p>{:else}<p class="mt-1 text-xs text-stone-600">Enter an amount to preview the points you would gain.</p>{/if}
 						</div>
 					{/if}
 
@@ -351,8 +335,8 @@
 				</Card>
 
 				{#if openNow.length}
-					<Card title="Open now ({openNow.length}/3)" className="mt-4">
-						<p class="text-xs text-stone-500 mb-3">These count toward your 3 open limit (static challenges and any teammate's opens count too). Solve or abandon one to open another.</p>
+					<Card title="Open now ({openNow.length}/{openCap})" className="mt-4">
+						<p class="text-xs text-stone-500 mb-3">These count toward your team’s {openCap}-challenge limit. Static challenges and every teammate’s opens share the same slots. Solve or abandon one to free capacity.</p>
 						<ul class="space-y-2">
 							{#each openNow as o}
 								<li class="flex items-center justify-between rounded-md border border-stone-800 bg-stone-950 px-3 py-2">
