@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.uber.org/zap"
@@ -32,6 +34,29 @@ type Service struct {
 
 	networkID string
 	portMu    sync.Mutex
+}
+
+// SwarmNodeInfo is the manager's live view of a Docker runtime node. It is
+// deliberately separate from vm_nodes so container capacity can never be
+// selected accidentally by the libvirt scheduler.
+type SwarmNodeInfo struct {
+	ID               string
+	Name             string
+	Hostname         string
+	IPAddress        string
+	Status           string
+	Availability     string
+	Architecture     string
+	Manager          bool
+	Leader           bool
+	TotalVCPU        int
+	UsedVCPU         int
+	TotalMemoryMB    int
+	UsedMemoryMB     int
+	TotalDiskGB      int
+	ActiveWorkloads  int
+	MaximumWorkloads int
+	CreatedAt        time.Time
 }
 
 const interContainerCommunicationOption = "com.docker.network.bridge.enable_icc"
@@ -88,6 +113,92 @@ func (s *Service) Status() string {
 		return "disconnected"
 	}
 	return "connected"
+}
+
+// SwarmNodes returns Docker runtime capacity directly from the Swarm manager.
+// A standalone Docker daemon has no runtime nodes and is not an error.
+func (s *Service) SwarmNodes(ctx context.Context) ([]SwarmNodeInfo, error) {
+	if s == nil || s.client == nil {
+		return nil, nil
+	}
+	info, err := s.client.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("inspect Docker runtime: %w", err)
+	}
+	if info.Info.Swarm.LocalNodeState != swarm.LocalNodeStateActive || !info.Info.Swarm.ControlAvailable {
+		return nil, nil
+	}
+
+	nodeResult, err := s.client.NodeList(ctx, client.NodeListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list Swarm nodes: %w", err)
+	}
+	taskResult, err := s.client.TaskList(ctx, client.TaskListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list Swarm tasks: %w", err)
+	}
+
+	type usage struct {
+		nanoCPU int64
+		memory  int64
+		active  int
+	}
+	byNode := make(map[string]usage)
+	for _, task := range taskResult.Items {
+		if task.NodeID == "" || task.DesiredState != swarm.TaskStateRunning {
+			continue
+		}
+		current := byNode[task.NodeID]
+		current.active++
+		if task.Spec.Resources != nil && task.Spec.Resources.Reservations != nil {
+			current.nanoCPU += task.Spec.Resources.Reservations.NanoCPUs
+			current.memory += task.Spec.Resources.Reservations.MemoryBytes
+		}
+		byNode[task.NodeID] = current
+	}
+
+	nodes := make([]SwarmNodeInfo, 0, len(nodeResult.Items))
+	for _, node := range nodeResult.Items {
+		if node.Spec.Labels["anvil.runtime"] != "docker" {
+			continue
+		}
+		u := byNode[node.ID]
+		name := strings.TrimSpace(node.Spec.Labels["anvil.node"])
+		if name == "" {
+			name = node.Description.Hostname
+		}
+		diskGB, _ := strconv.Atoi(node.Spec.Labels["anvil.disk_gb"])
+		maxWorkloads, _ := strconv.Atoi(node.Spec.Labels["anvil.max_workloads"])
+		if maxWorkloads < 1 {
+			maxWorkloads = max(1, int(node.Description.Resources.MemoryBytes/(512*1024*1024)))
+		}
+		nodes = append(nodes, SwarmNodeInfo{
+			ID:               node.ID,
+			Name:             name,
+			Hostname:         node.Description.Hostname,
+			IPAddress:        node.Status.Addr,
+			Status:           string(node.Status.State),
+			Availability:     string(node.Spec.Availability),
+			Architecture:     node.Description.Platform.Architecture,
+			Manager:          node.ManagerStatus != nil,
+			Leader:           node.ManagerStatus != nil && node.ManagerStatus.Leader,
+			TotalVCPU:        int(node.Description.Resources.NanoCPUs / 1_000_000_000),
+			UsedVCPU:         int((u.nanoCPU + 999_999_999) / 1_000_000_000),
+			TotalMemoryMB:    int(node.Description.Resources.MemoryBytes / (1024 * 1024)),
+			UsedMemoryMB:     int((u.memory + 1024*1024 - 1) / (1024 * 1024)),
+			TotalDiskGB:      diskGB,
+			ActiveWorkloads:  u.active,
+			MaximumWorkloads: maxWorkloads,
+			CreatedAt:        node.CreatedAt,
+		})
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].Leader != nodes[j].Leader {
+			return nodes[i].Leader
+		}
+		return nodes[i].Name < nodes[j].Name
+	})
+	return nodes, nil
 }
 
 func (s *Service) ensureNetwork(ctx context.Context) error {

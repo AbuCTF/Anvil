@@ -1797,14 +1797,14 @@
 						<p class="text-xs text-stone-400 mt-1 tabular-nums">{infraStats?.resources?.memory_gb?.available || 0} GB free</p>
 					</div>
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-						<p class="metadata-label text-stone-500">Running VMs</p>
-						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">{infraStats?.vms?.running || 0}</p>
-						<p class="text-xs text-stone-400 mt-1 tabular-nums">of {infraStats?.vms?.total || 0} total</p>
+						<p class="metadata-label text-stone-500">Running Instances</p>
+						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">{infraStats?.instances?.running || 0}</p>
+						<p class="text-xs text-stone-400 mt-1 tabular-nums">of {infraStats?.instances?.total || 0} active</p>
 					</div>
 				</div>
 
 				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-					<Card title="VM Nodes" bodyClass="">
+					<Card title="Runtime Nodes" bodyClass="">
 						<span slot="meta" class="text-stone-500 text-xs tabular-nums">{nodes.length} nodes</span>
 						{#if nodes.length === 0}
 							<EmptyState icon="mdi:server-off" text="No nodes configured.">
@@ -1823,20 +1823,23 @@
 												{#if node.is_primary}
 													<span class="text-[0.7rem] text-amber-500/90 border border-amber-500/30 px-1.5 py-0.5 rounded-full shrink-0">primary</span>
 												{/if}
+												<span class="text-[0.7rem] text-stone-500 border border-stone-700 px-1.5 py-0.5 rounded-full shrink-0">{node.runtime || 'vm'}{node.architecture ? ` · ${node.architecture}` : ''}</span>
 											</div>
-											<button
-												on:click={() => deleteNode(node.id)}
-												disabled={actionLoading === node.id}
-												class="text-stone-500 hover:text-down transition-colors disabled:opacity-50 shrink-0"
-												title="Delete node"
-											>
-												<Icon icon="mdi:trash-can-outline" class="w-4 h-4" />
-											</button>
+											{#if node.can_delete !== false}
+												<button
+													on:click={() => deleteNode(node.id)}
+													disabled={actionLoading === node.id}
+													class="text-stone-500 hover:text-down transition-colors disabled:opacity-50 shrink-0"
+													title="Delete node"
+												>
+													<Icon icon="mdi:trash-can-outline" class="w-4 h-4" />
+												</button>
+											{/if}
 										</div>
 										<div class="text-xs text-stone-500 tabular-nums">
 											<span>{node.ip_address}</span>
 											<span class="mx-2 text-stone-700">•</span>
-											<span>{node.active_vms}/{node.max_vms} VMs</span>
+											<span>{node.active_vms}/{node.max_vms} {node.runtime === 'docker' ? 'workloads' : 'VMs'}</span>
 											<span class="mx-2 text-stone-700">•</span>
 											<span>{node.used_vcpu}/{node.total_vcpu} vCPU</span>
 										</div>

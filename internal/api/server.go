@@ -449,7 +449,7 @@ func (s *Server) setupRouter() {
 
 			nodes := admin.Group("/nodes")
 			{
-				nodeHandler := handlers.NewNodeHandler(s.config, s.db, s.logger)
+				nodeHandler := handlers.NewNodeHandler(s.config, s.db, s.containerSvc, s.logger)
 				nodes.GET("", nodeHandler.List)
 				nodes.POST("", nodeHandler.Create)
 				nodes.GET("/:id", nodeHandler.Get)
@@ -459,7 +459,7 @@ func (s *Server) setupRouter() {
 
 			infrastructure := admin.Group("/infrastructure")
 			{
-				nodeHandler := handlers.NewNodeHandler(s.config, s.db, s.logger)
+				nodeHandler := handlers.NewNodeHandler(s.config, s.db, s.containerSvc, s.logger)
 				infrastructure.GET("/stats", nodeHandler.GetInfrastructureStats)
 
 				templateHandler := handlers.NewVMTemplateHandler(s.config, s.db, s.logger)

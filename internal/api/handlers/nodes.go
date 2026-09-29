@@ -11,6 +11,7 @@ import (
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
+	containerservice "github.com/anvil-lab/anvil/internal/services/container"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,13 +19,14 @@ import (
 )
 
 type NodeHandler struct {
-	config *config.Config
-	db     *database.DB
-	logger *zap.Logger
+	config       *config.Config
+	db           *database.DB
+	containerSvc *containerservice.Service
+	logger       *zap.Logger
 }
 
-func NewNodeHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *NodeHandler {
-	return &NodeHandler{config: cfg, db: db, logger: logger}
+func NewNodeHandler(cfg *config.Config, db *database.DB, containerSvc *containerservice.Service, logger *zap.Logger) *NodeHandler {
+	return &NodeHandler{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
 }
 
 func (h *NodeHandler) ready(c *gin.Context) bool {
@@ -58,6 +60,11 @@ type NodeResponse struct {
 	LastHeartbeat *int64  `json:"last_heartbeat,omitempty"`
 	Region        *string `json:"region,omitempty"`
 	Provider      *string `json:"provider,omitempty"`
+	Runtime       string  `json:"runtime"`
+	Architecture  string  `json:"architecture,omitempty"`
+	Availability  string  `json:"availability,omitempty"`
+	Manager       bool    `json:"manager"`
+	CanDelete     bool    `json:"can_delete"`
 	CreatedAt     int64   `json:"created_at"`
 }
 
@@ -106,6 +113,8 @@ func (h *NodeHandler) List(c *gin.Context) {
 		}
 		n.Region = region
 		n.Provider = provider
+		n.Runtime = "vm"
+		n.CanDelete = true
 		n.CreatedAt = createdAt.Unix()
 
 		nodes = append(nodes, n)
@@ -118,6 +127,44 @@ func (h *NodeHandler) List(c *gin.Context) {
 
 	if nodes == nil {
 		nodes = []NodeResponse{}
+	}
+	if h.containerSvc != nil {
+		dockerNodes, dockerErr := h.containerSvc.SwarmNodes(c.Request.Context())
+		if dockerErr != nil {
+			h.logger.Warn("failed to discover Docker runtime nodes", zap.Error(dockerErr))
+		} else {
+			for _, node := range dockerNodes {
+				status := node.Status
+				if node.Status == "ready" && node.Availability == "active" {
+					status = "online"
+				} else if node.Availability == "drain" {
+					status = "draining"
+				}
+				provider := "oci"
+				nodes = append(nodes, NodeResponse{
+					ID:            node.ID,
+					Name:          node.Name,
+					Hostname:      node.Hostname,
+					IPAddress:     node.IPAddress,
+					Status:        status,
+					IsPrimary:     node.Leader,
+					TotalVCPU:     node.TotalVCPU,
+					UsedVCPU:      node.UsedVCPU,
+					TotalMemoryMB: node.TotalMemoryMB,
+					UsedMemoryMB:  node.UsedMemoryMB,
+					TotalDiskGB:   node.TotalDiskGB,
+					ActiveVMs:     node.ActiveWorkloads,
+					MaxVMs:        node.MaximumWorkloads,
+					Provider:      &provider,
+					Runtime:       "docker",
+					Architecture:  node.Architecture,
+					Availability:  node.Availability,
+					Manager:       node.Manager,
+					CanDelete:     false,
+					CreatedAt:     node.CreatedAt.Unix(),
+				})
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -170,6 +217,8 @@ func (h *NodeHandler) Get(c *gin.Context) {
 	}
 	n.Region = region
 	n.Provider = provider
+	n.Runtime = "vm"
+	n.CanDelete = true
 	n.CreatedAt = createdAt.Unix()
 
 	c.JSON(http.StatusOK, n)
@@ -532,16 +581,18 @@ func (h *NodeHandler) GetInfrastructureStats(c *gin.Context) {
 		return
 	}
 	var stats struct {
-		TotalNodes     int
-		OnlineNodes    int
-		TotalVCPU      int
-		UsedVCPU       int
-		TotalMemoryGB  int
-		UsedMemoryGB   int
-		TotalVMs       int
-		RunningVMs     int
-		VMTemplates    int
-		PendingUploads int
+		TotalNodes       int
+		OnlineNodes      int
+		TotalVCPU        int
+		UsedVCPU         int
+		TotalMemoryMB    int
+		UsedMemoryMB     int
+		TotalVMs         int
+		RunningVMs       int
+		VMTemplates      int
+		PendingUploads   int
+		TotalInstances   int
+		RunningInstances int
 	}
 
 	err := h.db.Pool.QueryRow(c.Request.Context(), `
@@ -550,22 +601,43 @@ func (h *NodeHandler) GetInfrastructureStats(c *gin.Context) {
 			(SELECT COUNT(*) FROM vm_nodes WHERE status = 'online'),
 			(SELECT COALESCE(SUM(total_vcpu), 0) FROM vm_nodes),
 			(SELECT COALESCE(SUM(used_vcpu), 0) FROM vm_nodes),
-			(SELECT COALESCE(SUM(total_memory_mb), 0) / 1024 FROM vm_nodes),
-			(SELECT COALESCE(SUM(used_memory_mb), 0) / 1024 FROM vm_nodes),
+			(SELECT COALESCE(SUM(total_memory_mb), 0) FROM vm_nodes),
+			(SELECT COALESCE(SUM(used_memory_mb), 0) FROM vm_nodes),
 			(SELECT COUNT(*) FROM instances i JOIN challenges c ON c.id = i.challenge_id WHERE c.resource_type = 'vm'),
 			(SELECT COUNT(*) FROM instances i JOIN challenges c ON c.id = i.challenge_id WHERE c.resource_type = 'vm' AND i.status = 'running'),
 			(SELECT COUNT(*) FROM vm_templates WHERE is_active = true),
-			(SELECT COUNT(*) FROM uploads WHERE status IN ('pending', 'uploading', 'processing'))
+			(SELECT COUNT(*) FROM uploads WHERE status IN ('pending', 'uploading', 'processing')),
+			(SELECT COUNT(*) FROM instances WHERE status NOT IN ('stopped', 'failed', 'expired')),
+			(SELECT COUNT(*) FROM instances WHERE status = 'running')
 	`).Scan(
 		&stats.TotalNodes, &stats.OnlineNodes, &stats.TotalVCPU, &stats.UsedVCPU,
-		&stats.TotalMemoryGB, &stats.UsedMemoryGB, &stats.TotalVMs, &stats.RunningVMs,
-		&stats.VMTemplates, &stats.PendingUploads,
+		&stats.TotalMemoryMB, &stats.UsedMemoryMB, &stats.TotalVMs, &stats.RunningVMs,
+		&stats.VMTemplates, &stats.PendingUploads, &stats.TotalInstances, &stats.RunningInstances,
 	)
 	if err != nil {
 		h.logError("failed to load infrastructure stats", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch infrastructure stats"})
 		return
 	}
+	if h.containerSvc != nil {
+		dockerNodes, dockerErr := h.containerSvc.SwarmNodes(c.Request.Context())
+		if dockerErr != nil {
+			h.logger.Warn("failed to load Docker runtime capacity", zap.Error(dockerErr))
+		} else {
+			for _, node := range dockerNodes {
+				stats.TotalNodes++
+				if node.Status == "ready" && node.Availability == "active" {
+					stats.OnlineNodes++
+				}
+				stats.TotalVCPU += node.TotalVCPU
+				stats.UsedVCPU += node.UsedVCPU
+				stats.TotalMemoryMB += node.TotalMemoryMB
+				stats.UsedMemoryMB += node.UsedMemoryMB
+			}
+		}
+	}
+	totalMemoryGB := math.Round(float64(stats.TotalMemoryMB)/102.4) / 10
+	usedMemoryGB := math.Round(float64(stats.UsedMemoryMB)/102.4) / 10
 
 	c.JSON(http.StatusOK, gin.H{
 		"nodes": gin.H{
@@ -579,14 +651,18 @@ func (h *NodeHandler) GetInfrastructureStats(c *gin.Context) {
 				"available": stats.TotalVCPU - stats.UsedVCPU,
 			},
 			"memory_gb": gin.H{
-				"total":     stats.TotalMemoryGB,
-				"used":      stats.UsedMemoryGB,
-				"available": stats.TotalMemoryGB - stats.UsedMemoryGB,
+				"total":     totalMemoryGB,
+				"used":      usedMemoryGB,
+				"available": math.Max(totalMemoryGB-usedMemoryGB, 0),
 			},
 		},
 		"vms": gin.H{
 			"total":   stats.TotalVMs,
 			"running": stats.RunningVMs,
+		},
+		"instances": gin.H{
+			"total":   stats.TotalInstances,
+			"running": stats.RunningInstances,
 		},
 		"templates":       stats.VMTemplates,
 		"pending_uploads": stats.PendingUploads,
