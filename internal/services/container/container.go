@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -30,6 +32,7 @@ type Service struct {
 	logger *zap.Logger
 
 	networkID string
+	portMu    sync.Mutex
 }
 
 const interContainerCommunicationOption = "com.docker.network.bridge.enable_icc"
@@ -143,7 +146,7 @@ type CreateInstanceRequest struct {
 	MemoryLimit     string
 	Labels          map[string]string
 	EnvironmentVars []string
-	PublicHTTPHost  string
+	PublicHost      string
 }
 
 type ExposedPort struct {
@@ -153,10 +156,11 @@ type ExposedPort struct {
 }
 
 type CreateInstanceResponse struct {
-	ContainerID   string
-	ContainerName string
-	IPAddress     string
-	PublicHost    string
+	ContainerID    string
+	ContainerName  string
+	IPAddress      string
+	PublicHost     string
+	PublishedPorts map[string]int
 }
 
 var dnsLabelPattern = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
@@ -191,6 +195,58 @@ func isHTTPPort(port ExposedPort) bool {
 	service := strings.ToLower(strings.TrimSpace(port.Service))
 	protocol := strings.ToLower(strings.TrimSpace(port.Protocol))
 	return service == "http" || service == "https" || protocol == "http" || protocol == "https"
+}
+
+func isRawTCPPort(port ExposedPort) bool {
+	return !isHTTPPort(port) && transportProtocol(port.Protocol) == "tcp"
+}
+
+func hasHTTPExposedPort(ports []ExposedPort) bool {
+	for _, port := range ports {
+		if isHTTPPort(port) {
+			return true
+		}
+	}
+	return false
+}
+
+func nextAvailableTCPPort(minPort, maxPort int, used map[int]struct{}, available func(int) bool) (int, error) {
+	for port := minPort; port <= maxPort; port++ {
+		if _, exists := used[port]; exists {
+			continue
+		}
+		if available != nil && !available(port) {
+			continue
+		}
+		used[port] = struct{}{}
+		return port, nil
+	}
+	return 0, fmt.Errorf("TCP instance port pool %d-%d is exhausted", minPort, maxPort)
+}
+
+func hostTCPPortAvailable(port int) bool {
+	listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = listener.Close()
+	return true
+}
+
+func (s *Service) usedDockerTCPPorts(ctx context.Context) (map[int]struct{}, error) {
+	result, err := s.client.ContainerList(ctx, client.ContainerListOptions{})
+	if err != nil {
+		return nil, err
+	}
+	used := make(map[int]struct{})
+	for _, item := range result.Items {
+		for _, port := range item.Ports {
+			if port.Type == "tcp" && port.PublicPort != 0 {
+				used[int(port.PublicPort)] = struct{}{}
+			}
+		}
+	}
+	return used, nil
 }
 
 func httpRoutingLabels(routerName, host string, ports []ExposedPort) (map[string]string, error) {
@@ -262,8 +318,11 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}
 	labels["anvil.instance.id"] = req.InstanceID.String()
 	labels["anvil.challenge.slug"] = req.ChallengeSlug
-	if req.PublicHTTPHost != "" {
-		routeLabels, err := httpRoutingLabels(containerName, req.PublicHTTPHost, req.ExposedPorts)
+	if req.PublicHost != "" && !validHostname(req.PublicHost) {
+		return nil, fmt.Errorf("invalid public hostname %q", req.PublicHost)
+	}
+	if req.PublicHost != "" && hasHTTPExposedPort(req.ExposedPorts) {
+		routeLabels, err := httpRoutingLabels(containerName, req.PublicHost, req.ExposedPorts)
 		if err != nil {
 			return nil, err
 		}
@@ -302,6 +361,13 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	hostCfg := &container.HostConfig{
 		NetworkMode:  container.NetworkMode(s.config.NetworkName),
 		PortBindings: network.PortMap{},
+		LogConfig: container.LogConfig{
+			Type: "json-file",
+			Config: map[string]string{
+				"max-size": "10m",
+				"max-file": "3",
+			},
+		},
 		Resources: container.Resources{
 			NanoCPUs: cpuLimit,
 			Memory:   memoryLimit,
@@ -310,6 +376,46 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 			Name:              "on-failure",
 			MaximumRetryCount: 3,
 		},
+	}
+
+	publishedPorts := make(map[string]int)
+	hasPublicTCP := false
+	for _, port := range req.ExposedPorts {
+		if isRawTCPPort(port) {
+			hasPublicTCP = hasPublicTCP || s.config.TCPRouting
+		}
+	}
+	if hasPublicTCP {
+		s.portMu.Lock()
+		defer s.portMu.Unlock()
+
+		used, err := s.usedDockerTCPPorts(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list published Docker ports: %w", err)
+		}
+		for _, exposed := range req.ExposedPorts {
+			if !isRawTCPPort(exposed) {
+				continue
+			}
+			containerPort, err := network.ParsePort(fmt.Sprintf("%d/tcp", exposed.Port))
+			if err != nil {
+				return nil, fmt.Errorf("invalid TCP port: %w", err)
+			}
+			hostPort, err := nextAvailableTCPPort(
+				s.config.TCPPortMin,
+				s.config.TCPPortMax,
+				used,
+				hostTCPPortAvailable,
+			)
+			if err != nil {
+				return nil, err
+			}
+			hostCfg.PortBindings[containerPort] = []network.PortBinding{{
+				HostIP:   netip.MustParseAddr("0.0.0.0"),
+				HostPort: strconv.Itoa(hostPort),
+			}}
+			publishedPorts[fmt.Sprintf("%d/tcp", exposed.Port)] = hostPort
+		}
 	}
 
 	createOptions := client.ContainerCreateOptions{
@@ -385,10 +491,11 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	)
 
 	return &CreateInstanceResponse{
-		ContainerID:   resp.ID,
-		ContainerName: containerName,
-		IPAddress:     ipAddress,
-		PublicHost:    req.PublicHTTPHost,
+		ContainerID:    resp.ID,
+		ContainerName:  containerName,
+		IPAddress:      ipAddress,
+		PublicHost:     req.PublicHost,
+		PublishedPorts: publishedPorts,
 	}, nil
 }
 

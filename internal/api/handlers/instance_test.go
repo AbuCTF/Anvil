@@ -68,6 +68,22 @@ func TestBooleanSettingValues(t *testing.T) {
 	}
 }
 
+func TestInstancePortRoutingClassification(t *testing.T) {
+	ports := []instancePortConfig{
+		{Port: 8080, Protocol: "http", Service: "http"},
+		{Port: 1337, Protocol: "tcp", Service: "tcp"},
+	}
+	if !hasHTTPPort(ports) {
+		t.Fatal("hasHTTPPort() = false, want true")
+	}
+	if !hasRawTCPPort(ports) {
+		t.Fatal("hasRawTCPPort() = false, want true")
+	}
+	if hasRawTCPPort([]instancePortConfig{{Port: 5353, Protocol: "udp", Service: "dns"}}) {
+		t.Fatal("hasRawTCPPort() classified UDP as raw TCP")
+	}
+}
+
 func TestValidateRevertState(t *testing.T) {
 	runtimeID := "runtime-1"
 	emptyRuntimeID := "  "

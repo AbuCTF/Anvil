@@ -149,6 +149,20 @@ func (c Config) Validate() error {
 			return fmt.Errorf("container.http_external_scheme must be http or https")
 		}
 	}
+	if c.Container.TCPRouting {
+		if strings.Trim(strings.TrimSpace(c.Container.TCPBaseDomain), ".") == "" {
+			return fmt.Errorf("container.tcp_base_domain is required when TCP routing is enabled")
+		}
+		if len([]byte(strings.TrimSpace(c.Instancer.HMACSecret))) < 32 {
+			return fmt.Errorf("instancer.hmac_secret must be at least 32 bytes when container TCP routing is enabled")
+		}
+		if c.Container.TCPPortMin < 1024 || c.Container.TCPPortMin > 65535 {
+			return fmt.Errorf("container.tcp_port_min must be between 1024 and 65535")
+		}
+		if c.Container.TCPPortMax < c.Container.TCPPortMin || c.Container.TCPPortMax > 65535 {
+			return fmt.Errorf("container.tcp_port_max must be between tcp_port_min and 65535")
+		}
+	}
 	// ledger economy invariant #7 (round-trips lose value) — the only runtime
 	// config-load guard per ctf26-1/metrics.py. validated in every environment.
 	// the roundtrip guard stays hard: points -> credits -> points must lose value
@@ -216,6 +230,10 @@ type ContainerConfig struct {
 	HTTPBaseDomain     string            `mapstructure:"http_base_domain"`
 	HTTPExternalPort   int               `mapstructure:"http_external_port"`
 	HTTPExternalScheme string            `mapstructure:"http_external_scheme"`
+	TCPRouting         bool              `mapstructure:"tcp_routing"`
+	TCPBaseDomain      string            `mapstructure:"tcp_base_domain"`
+	TCPPortMin         int               `mapstructure:"tcp_port_min"`
+	TCPPortMax         int               `mapstructure:"tcp_port_max"`
 }
 
 type VPNConfig struct {
@@ -406,6 +424,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("container.http_base_domain", "")
 	v.SetDefault("container.http_external_port", 443)
 	v.SetDefault("container.http_external_scheme", "https")
+	v.SetDefault("container.tcp_routing", false)
+	v.SetDefault("container.tcp_base_domain", "")
+	v.SetDefault("container.tcp_port_min", 30000)
+	v.SetDefault("container.tcp_port_max", 30199)
 
 	v.SetDefault("instancer.backend", "docker")
 	v.SetDefault("instancer.hmac_secret", "")

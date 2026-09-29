@@ -64,6 +64,38 @@ func TestValidateContainerHTTPRouting(t *testing.T) {
 	}
 }
 
+func TestValidateContainerTCPRouting(t *testing.T) {
+	valid := Config{Environment: "development"}
+	valid.Container.TCPRouting = true
+	valid.Container.TCPBaseDomain = "instances.demo.example.org"
+	valid.Container.TCPPortMin = 30000
+	valid.Container.TCPPortMax = 30199
+	valid.Instancer.HMACSecret = "0123456789abcdef0123456789abcdef"
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate() rejected valid TCP routing config: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{name: "missing domain", mutate: func(c *Config) { c.Container.TCPBaseDomain = "" }},
+		{name: "weak identity secret", mutate: func(c *Config) { c.Instancer.HMACSecret = "short" }},
+		{name: "privileged minimum", mutate: func(c *Config) { c.Container.TCPPortMin = 1023 }},
+		{name: "minimum above maximum", mutate: func(c *Config) { c.Container.TCPPortMin = 30200 }},
+		{name: "maximum above port range", mutate: func(c *Config) { c.Container.TCPPortMax = 65536 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := valid
+			tt.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate() accepted invalid TCP routing config")
+			}
+		})
+	}
+}
+
 func TestLoadWithoutConfigUsesValidDurations(t *testing.T) {
 	t.Chdir(t.TempDir())
 

@@ -972,13 +972,32 @@ func (h *InstanceHandler) provisionInstance(
 			}
 		}
 
-		if h.config != nil && h.config.Container.HTTPRouting && hasHTTPPort(plan.portConfig) {
-			baseDomain := strings.Trim(strings.TrimSpace(h.config.Container.HTTPBaseDomain), ".")
+		hasHTTP := hasHTTPPort(plan.portConfig)
+		hasTCP := hasRawTCPPort(plan.portConfig)
+		baseDomain := ""
+		if h.config != nil && h.config.Container.HTTPRouting && hasHTTP {
+			baseDomain = strings.Trim(strings.TrimSpace(h.config.Container.HTTPBaseDomain), ".")
 			if baseDomain == "" {
 				err := errors.New("container HTTP routing is enabled without a base domain")
 				h.persistCreateFailure(ctx, instanceID, err)
 				return nil, newInstanceOperationError(http.StatusInternalServerError, "instance routing is not configured", err)
 			}
+		}
+		if h.config != nil && h.config.Container.TCPRouting && hasTCP {
+			tcpDomain := strings.Trim(strings.TrimSpace(h.config.Container.TCPBaseDomain), ".")
+			if tcpDomain == "" {
+				err := errors.New("container TCP routing is enabled without a base domain")
+				h.persistCreateFailure(ctx, instanceID, err)
+				return nil, newInstanceOperationError(http.StatusInternalServerError, "instance routing is not configured", err)
+			}
+			if baseDomain != "" && baseDomain != tcpDomain {
+				err := errors.New("mixed HTTP and TCP instances require the same Docker base domain")
+				h.persistCreateFailure(ctx, instanceID, err)
+				return nil, newInstanceOperationError(http.StatusInternalServerError, "instance routing is not configured", err)
+			}
+			baseDomain = tcpDomain
+		}
+		if baseDomain != "" {
 			if h.instancerSvc == nil {
 				err := errors.New("instance identity service unavailable")
 				h.persistCreateFailure(ctx, instanceID, err)
@@ -989,7 +1008,7 @@ func (h *InstanceHandler) provisionInstance(
 				h.persistCreateFailure(ctx, instanceID, fmt.Errorf("resolve instance owner: %w", err))
 				return nil, newInstanceOperationError(http.StatusInternalServerError, "failed to resolve instance owner", err)
 			}
-			containerReq.PublicHTTPHost = fmt.Sprintf("%s.%s", h.instancerSvc.InstanceID(ownerID, challenge.ID), baseDomain)
+			containerReq.PublicHost = fmt.Sprintf("%s.%s", h.instancerSvc.InstanceID(ownerID, challenge.ID), baseDomain)
 		}
 
 		envVars, err := h.generateAndStoreDynamicFlags(ctx, instanceID, uid, challenge.ID)
@@ -1034,6 +1053,10 @@ func (h *InstanceHandler) provisionInstance(
 					externalScheme = "https"
 				}
 				portMappings[fmt.Sprintf("%d/%s", externalPort, externalScheme)] = externalPort
+				continue
+			}
+			if externalPort, ok := containerInfo.PublishedPorts[fmt.Sprintf("%d/tcp", ep.Port)]; ok {
+				portMappings[fmt.Sprintf("%d/%s", externalPort, svcType)] = externalPort
 				continue
 			}
 			portMappings[fmt.Sprintf("%d/%s", ep.Port, svcType)] = ep.Port
@@ -1092,6 +1115,19 @@ func isHTTPService(protocol, service string) bool {
 func hasHTTPPort(ports []instancePortConfig) bool {
 	for _, port := range ports {
 		if isHTTPService(port.Protocol, port.Service) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRawTCPPort(ports []instancePortConfig) bool {
+	for _, port := range ports {
+		if isHTTPService(port.Protocol, port.Service) {
+			continue
+		}
+		protocol := strings.ToLower(strings.TrimSpace(port.Protocol))
+		if protocol == "" || protocol == "tcp" {
 			return true
 		}
 	}

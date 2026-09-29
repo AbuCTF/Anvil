@@ -1,6 +1,6 @@
 # Single-host Docker deployment
 
-This profile runs Anvil, PostgreSQL, and HTTP challenge instances on one Docker host. It is intended for demonstrations, small private events, development, and installations that do not need Kubernetes scheduling.
+This profile runs Anvil, PostgreSQL, and HTTP or raw-TCP challenge instances on one Docker host. It is intended for demonstrations, small private events, development, and installations that do not need Kubernetes scheduling.
 
 It does not expose the Docker API over TCP. The API talks to the local Unix socket, and an optional Traefik process discovers only containers that Anvil explicitly labels.
 
@@ -11,9 +11,10 @@ It does not expose the Docker API over TCP. The API talks to the local Unix sock
 - Per-user or per-team dynamic flags
 - CPU, memory, reset, extension, and expiry controls
 - Deterministic wildcard hostnames for HTTP challenges
+- Direct host-port publication for raw-TCP challenges, including protocols that rely on TCP half-close
 - Automatic route recovery after the challenge router restarts
 
-The current Docker provider does not yet implement Kubernetes-style multi-container challenge specifications or public raw-TCP routing. The admin UI should not advertise those capabilities for a Docker-only installation until provider capability discovery is implemented.
+The current Docker provider does not yet implement Kubernetes-style multi-container challenge specifications or public UDP routing. The admin UI should not advertise those capabilities for a Docker-only installation until provider capability discovery is implemented.
 
 ## Requirements
 
@@ -21,6 +22,7 @@ The current Docker provider does not yet implement Kubernetes-style multi-contai
 - A DNS name for the platform
 - A separate wildcard DNS namespace for HTTP challenge instances
 - A TLS certificate covering both names
+- A dedicated public TCP port range allowed by both the host firewall and the provider firewall when raw-TCP challenges are enabled
 - A reverse proxy already listening on public ports 80 and 443, or permission to install one
 - Images compatible with the host CPU architecture
 - At least 4 vCPU, 8 GiB RAM, and enough disk for the selected challenge images
@@ -63,6 +65,10 @@ ANVIL_CONTAINER_HTTP_BASE_DOMAIN=instances.demo.example.org
 ANVIL_CONTAINER_HTTP_EXTERNAL_PORT=443
 ANVIL_CONTAINER_HTTP_EXTERNAL_SCHEME=https
 ANVIL_CONTAINER_ROUTER_LISTEN=127.0.0.1:18082
+ANVIL_CONTAINER_TCP_ROUTING=true
+ANVIL_CONTAINER_TCP_BASE_DOMAIN=instances.demo.example.org
+ANVIL_CONTAINER_TCP_PORT_MIN=30000
+ANVIL_CONTAINER_TCP_PORT_MAX=30199
 
 ANVIL_VPN_ENABLED=false
 ANVIL_SSO_ENABLED=false
@@ -71,6 +77,8 @@ ANVIL_WEBVERSE_ENABLED=false
 ```
 
 Use a subnet that does not overlap the host, VPN, Compose, or organization networks. `network_internal=true` is appropriate for challenges that do not need outbound access.
+
+The TCP pool is shared by all running Docker challenge instances. Size it for the maximum number of simultaneously exposed raw-TCP services, not merely the number of challenges. Allow that same range in the cloud security list or NSG and the host firewall. DNS only maps the deterministic hostname to the host; it does not open the published ports.
 
 ## 2. Start the private stack
 
@@ -144,6 +152,17 @@ exposed_ports:
   - { port: 8080, protocol: http, service: http }
 ```
 
+A raw-TCP challenge uses the same deterministic hostname and receives a unique public port from the configured pool:
+
+```yaml
+cpu_limit: "0.5"
+memory_limit: 256Mi
+exposed_ports:
+  - { port: 1337, protocol: tcp, service: tcp }
+```
+
+The player-facing command is `nc <instance-hostname> <allocated-port>`. Anvil publishes the container port directly through Docker instead of putting a stream proxy in the data path, so services that read until client EOF and reply afterward retain TCP half-close behavior.
+
 Before a demo or event, verify the image architecture:
 
 ```bash
@@ -173,8 +192,9 @@ Keep the original export private and mode `0600`. Use a separately generated san
 docker compose ps
 curl --fail http://127.0.0.1:18080/health
 curl --fail -H 'Host: <instance-hostname>' http://127.0.0.1:18082/
+nc -vz <instance-hostname> <allocated-tcp-port>
 docker ps --filter label=managed-by=anvil
-docker inspect <challenge-container> --format '{{json .HostConfig.Resources}}'
+docker inspect <challenge-container> --format '{{json .HostConfig.Resources}} {{json .HostConfig.PortBindings}}'
 ```
 
 Validate two separate teams, dynamic flag isolation, route cleanup after stop and expiry, router restart recovery, stack restart persistence, and the health of unrelated services on the host.

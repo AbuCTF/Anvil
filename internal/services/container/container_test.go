@@ -90,6 +90,50 @@ func TestTransportProtocolNormalizesApplicationProtocols(t *testing.T) {
 	}
 }
 
+func TestRawTCPPortClassification(t *testing.T) {
+	tests := []struct {
+		name string
+		port ExposedPort
+		want bool
+	}{
+		{name: "tcp", port: ExposedPort{Port: 1337, Protocol: "tcp", Service: "tcp"}, want: true},
+		{name: "implicit tcp", port: ExposedPort{Port: 1337}, want: true},
+		{name: "http service", port: ExposedPort{Port: 8080, Protocol: "tcp", Service: "http"}, want: false},
+		{name: "http protocol", port: ExposedPort{Port: 8080, Protocol: "http"}, want: false},
+		{name: "udp", port: ExposedPort{Port: 5353, Protocol: "udp", Service: "dns"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isRawTCPPort(tt.port); got != tt.want {
+				t.Fatalf("isRawTCPPort(%#v) = %t, want %t", tt.port, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNextAvailableTCPPort(t *testing.T) {
+	used := map[int]struct{}{30000: {}}
+	available := func(port int) bool { return port != 30001 }
+
+	got, err := nextAvailableTCPPort(30000, 30003, used, available)
+	if err != nil {
+		t.Fatalf("nextAvailableTCPPort() error = %v", err)
+	}
+	if got != 30002 {
+		t.Fatalf("nextAvailableTCPPort() = %d, want 30002", got)
+	}
+	if _, ok := used[30002]; !ok {
+		t.Fatal("nextAvailableTCPPort() did not reserve selected port")
+	}
+}
+
+func TestNextAvailableTCPPortExhausted(t *testing.T) {
+	used := map[int]struct{}{30000: {}, 30001: {}}
+	if _, err := nextAvailableTCPPort(30000, 30001, used, nil); err == nil {
+		t.Fatal("nextAvailableTCPPort() error = nil, want exhausted error")
+	}
+}
+
 func TestParseResourceLimits(t *testing.T) {
 	cpuTests := map[string]int64{
 		"0.5":  500_000_000,
