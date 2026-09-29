@@ -2,7 +2,6 @@ package container
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -78,27 +77,26 @@ func swarmHTTPRouteDocument(routerName, host, scheme string, publishedPort int) 
 		return nil, fmt.Errorf("invalid published HTTP port %d", publishedPort)
 	}
 
-	document := map[string]any{
-		"http": map[string]any{
-			"routers": map[string]any{
-				routerName: map[string]any{
-					"entryPoints": []string{"web"},
-					"rule":        fmt.Sprintf("Host(`%s`)", host),
-					"service":     routerName,
-				},
-			},
-			"services": map[string]any{
-				routerName: map[string]any{
-					"loadBalancer": map[string]any{
-						"servers": []map[string]string{{
-							"url": fmt.Sprintf("%s://127.0.0.1:%d", scheme, publishedPort),
-						}},
-					},
-				},
-			},
-		},
-	}
-	return json.MarshalIndent(document, "", "  ")
+	rule := fmt.Sprintf("Host(`%s`)", host)
+	return []byte(fmt.Sprintf(
+		"http:\n"+
+			"  routers:\n"+
+			"    %s:\n"+
+			"      entryPoints:\n"+
+			"        - web\n"+
+			"      rule: %q\n"+
+			"      service: %s\n"+
+			"  services:\n"+
+			"    %s:\n"+
+			"      loadBalancer:\n"+
+			"        servers:\n"+
+			"          - url: %q\n",
+		routerName,
+		rule,
+		routerName,
+		routerName,
+		fmt.Sprintf("%s://127.0.0.1:%d", scheme, publishedPort),
+	)), nil
 }
 
 func swarmRoutePath(routesPath, networkName string) (string, error) {
@@ -108,7 +106,7 @@ func swarmRoutePath(routesPath, networkName string) (string, error) {
 	if !safeSwarmObjectName.MatchString(networkName) {
 		return "", fmt.Errorf("invalid Swarm network name %q", networkName)
 	}
-	return filepath.Join(routesPath, networkName+".json"), nil
+	return filepath.Join(routesPath, networkName+".yaml"), nil
 }
 
 func writeFileAtomically(path string, data []byte, mode os.FileMode) error {

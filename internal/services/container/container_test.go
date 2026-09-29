@@ -1,7 +1,6 @@
 package container
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,13 +58,6 @@ func TestSwarmHTTPRouteDocument(t *testing.T) {
 	)
 	if err != nil {
 		t.Fatalf("swarmHTTPRouteDocument() error = %v", err)
-	}
-	var decoded map[string]any
-	if err := json.Unmarshal(document, &decoded); err != nil {
-		t.Fatalf("route document is not valid JSON: %v", err)
-	}
-	if !json.Valid(document) {
-		t.Fatal("route document is invalid JSON")
 	}
 	text := string(document)
 	for _, expected := range []string{
