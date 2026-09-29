@@ -32,6 +32,7 @@ type platformInfoResponse struct {
 	EconomyEnabled    bool             `json:"economy_enabled"`
 	TeamsMode         bool             `json:"teams_mode"`
 	VPNEnabled        bool             `json:"vpn_enabled"`
+	SSOEnabled        bool             `json:"sso_enabled"`
 	DiscordWalkin     bool             `json:"discord_walkin"`
 	RegisterURL       string           `json:"register_url,omitempty"`
 	ServerTime        time.Time        `json:"server_time"`
@@ -71,6 +72,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		EconomyEnabled:    economy,
 		TeamsMode:         teams,
 		VPNEnabled:        h.config.VPN.Enabled,
+		SSOEnabled:        h.config.SSO.Enabled && strings.TrimSpace(h.config.SSO.SharedSecret) != "",
 		DiscordWalkin:     h.config.Discord.Enabled && h.config.Discord.ClientID != "",
 		RegisterURL:       h.config.Platform.RegisterURL,
 		ServerTime:        now,

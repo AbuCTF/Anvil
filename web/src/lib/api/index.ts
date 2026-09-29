@@ -35,6 +35,7 @@ export interface PlatformInfoResponse {
 	economy_enabled: boolean;
 	teams_mode: boolean;
 	vpn_enabled: boolean;
+	sso_enabled: boolean;
 	discord_walkin: boolean;
 	register_url?: string;
 	server_time: string;
