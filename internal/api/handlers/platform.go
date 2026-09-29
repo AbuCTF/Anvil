@@ -23,20 +23,21 @@ type publicEventInfo struct {
 const eventClockGracePeriod = 48 * time.Hour
 
 type platformInfoResponse struct {
-	Name              string           `json:"name"`
-	Description       string           `json:"description"`
-	RegistrationMode  string           `json:"registration_mode"`
-	ScoringEnabled    bool             `json:"scoring_enabled"`
-	ScoreboardEnabled bool             `json:"scoreboard_enabled"`
-	ArenaEnabled      bool             `json:"arena_enabled"`
-	EconomyEnabled    bool             `json:"economy_enabled"`
-	TeamsMode         bool             `json:"teams_mode"`
-	VPNEnabled        bool             `json:"vpn_enabled"`
-	SSOEnabled        bool             `json:"sso_enabled"`
-	DiscordWalkin     bool             `json:"discord_walkin"`
-	RegisterURL       string           `json:"register_url,omitempty"`
-	ServerTime        time.Time        `json:"server_time"`
-	Event             *publicEventInfo `json:"event,omitempty"`
+	Name               string           `json:"name"`
+	Description        string           `json:"description"`
+	RegistrationMode   string           `json:"registration_mode"`
+	ScoringEnabled     bool             `json:"scoring_enabled"`
+	ScoreboardEnabled  bool             `json:"scoreboard_enabled"`
+	ArenaEnabled       bool             `json:"arena_enabled"`
+	EconomyEnabled     bool             `json:"economy_enabled"`
+	MarketPulseEnabled bool             `json:"market_pulse_enabled"`
+	TeamsMode          bool             `json:"teams_mode"`
+	VPNEnabled         bool             `json:"vpn_enabled"`
+	SSOEnabled         bool             `json:"sso_enabled"`
+	DiscordWalkin      bool             `json:"discord_walkin"`
+	RegisterURL        string           `json:"register_url,omitempty"`
+	ServerTime         time.Time        `json:"server_time"`
+	Event              *publicEventInfo `json:"event,omitempty"`
 }
 
 func (h *PlatformHandler) GetInfo(c *gin.Context) {
@@ -56,6 +57,10 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("failed to read economy_mode", zap.Error(err))
 	}
+	pulse, err := boolSettingOrDefault(ctx, h.db, "market_pulse_enabled", false)
+	if err != nil {
+		h.logger.Warn("failed to read market_pulse_enabled", zap.Error(err))
+	}
 	registrationMode := h.config.Platform.RegistrationMode
 	if effective, modeErr := (&AuthHandler{config: h.config, db: h.db}).registrationMode(ctx); modeErr != nil {
 		h.logger.Warn("failed to read effective registration_mode", zap.Error(modeErr))
@@ -63,19 +68,20 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		registrationMode = effective
 	}
 	response := platformInfoResponse{
-		Name:              h.config.Platform.Name,
-		Description:       h.config.Platform.Description,
-		RegistrationMode:  registrationMode,
-		ScoringEnabled:    h.config.Platform.ScoringEnabled,
-		ScoreboardEnabled: h.config.Platform.ScoreboardEnabled,
-		ArenaEnabled:      arena,
-		EconomyEnabled:    economy,
-		TeamsMode:         teams,
-		VPNEnabled:        h.config.VPN.Enabled,
-		SSOEnabled:        h.config.SSO.Enabled && strings.TrimSpace(h.config.SSO.SharedSecret) != "",
-		DiscordWalkin:     h.config.Discord.Enabled && h.config.Discord.ClientID != "",
-		RegisterURL:       h.config.Platform.RegisterURL,
-		ServerTime:        now,
+		Name:               h.config.Platform.Name,
+		Description:        h.config.Platform.Description,
+		RegistrationMode:   registrationMode,
+		ScoringEnabled:     h.config.Platform.ScoringEnabled,
+		ScoreboardEnabled:  h.config.Platform.ScoreboardEnabled,
+		ArenaEnabled:       arena,
+		EconomyEnabled:     economy,
+		MarketPulseEnabled: pulse,
+		TeamsMode:          teams,
+		VPNEnabled:         h.config.VPN.Enabled,
+		SSOEnabled:         h.config.SSO.Enabled && strings.TrimSpace(h.config.SSO.SharedSecret) != "",
+		DiscordWalkin:      h.config.Discord.Enabled && h.config.Discord.ClientID != "",
+		RegisterURL:        h.config.Platform.RegisterURL,
+		ServerTime:         now,
 	}
 
 	startAt, endAt, err := h.eventWindow(c.Request.Context())

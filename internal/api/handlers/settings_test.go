@@ -19,6 +19,8 @@ func TestValidatePlatformSetting(t *testing.T) {
 		{name: "oversized extension", key: "instance.extension_minutes", value: float64(1441), wantErr: true},
 		{name: "scoreboard boolean", key: "scoreboard_enabled", value: true},
 		{name: "scoreboard string", key: "scoreboard_enabled", value: "true", wantErr: true},
+		{name: "market pulse boolean", key: "market_pulse_enabled", value: true},
+		{name: "market pulse string", key: "market_pulse_enabled", value: "true", wantErr: true},
 		{name: "registration mode", key: "registration_mode", value: "invite"},
 		{name: "bad registration mode", key: "registration_mode", value: "yes", wantErr: true},
 		{name: "event timestamp", key: "event.start_at", value: "2026-09-13T12:30:00+05:30"},

@@ -25,6 +25,7 @@
 	// shape (Arena, Teams, VPN, Scoreboard) and both the tabs and the routes follow.
 	$: navigation = [
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
+		...($platformInfo?.economy_enabled && $platformInfo?.market_pulse_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Pulse', href: '/pulse', icon: 'mdi:pulse' }] : []),
 		...($platformInfo?.scoreboard_enabled !== false ? [{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' }] : []),
 		...(($platformInfo?.arena_enabled || isAdmin) ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
@@ -45,6 +46,7 @@
 		const p = $page.url.pathname;
 		const blocked =
 			(p.startsWith('/arena') && !$platformInfo.arena_enabled && !isAdmin) ||
+			(p.startsWith('/pulse') && (!$platformInfo.economy_enabled || !$platformInfo.market_pulse_enabled)) ||
 			(p.startsWith('/team') && !$platformInfo.teams_mode) ||
 			(p.startsWith('/vpn') && !$platformInfo.vpn_enabled) ||
 			(p.startsWith('/scoreboard') && $platformInfo.scoreboard_enabled === false);
@@ -54,6 +56,7 @@
 	const iconMetrics: Record<string, { size: number }> = {
 		'mdi:flag': { size: 15.5 },
 		'mdi:trophy': { size: 13.5 },
+		'mdi:pulse': { size: 14.5 },
 		'mdi:account-group': { size: 15 },
 		'mdi:sword-cross': { size: 14 },
 		'mdi:server': { size: 12.75 },

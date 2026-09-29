@@ -1138,7 +1138,7 @@ func validatePlatformSetting(key string, value interface{}) error {
 		return intRange(30, 480)
 	case "cooldown.easy_minutes", "cooldown.medium_minutes", "cooldown.hard_minutes", "cooldown.insane_minutes":
 		return intRange(0, 120)
-	case "platform.require_vpn", "scoreboard_enabled", "teams_mode", "economy_mode", "arena_enabled":
+	case "platform.require_vpn", "scoreboard_enabled", "teams_mode", "economy_mode", "arena_enabled", "market_pulse_enabled":
 		return boolValue()
 	case "registration_mode":
 		mode, ok := value.(string)

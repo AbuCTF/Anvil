@@ -33,6 +33,7 @@ export interface PlatformInfoResponse {
 	scoreboard_enabled: boolean;
 	arena_enabled: boolean;
 	economy_enabled: boolean;
+	market_pulse_enabled: boolean;
 	teams_mode: boolean;
 	vpn_enabled: boolean;
 	sso_enabled: boolean;
@@ -45,6 +46,63 @@ export interface PlatformInfoResponse {
 		visible_until: string;
 		phase: EventPhase;
 	};
+}
+
+export interface MarketPulseResponse {
+	policy: {
+		generated_at: string;
+		source_cutoff: string;
+		cadence_seconds: number;
+		delay_seconds: number;
+		min_anonymity: number;
+		field_hidden: boolean;
+		field_hidden_reason?: string;
+	};
+	team: {
+		credits: number;
+		points: number;
+		grant_issued: boolean;
+		bailout_used: boolean;
+		open_slots_used: number;
+		open_slots_total: number;
+		p2c_blocks_used: number;
+		next_p2c_rate: number;
+		settlement_exposure: number;
+		affordability: Array<{
+			difficulty: string;
+			cost: number;
+			affordable: boolean;
+			count: number;
+		}>;
+		open: Array<{
+			slug: string;
+			name: string;
+			difficulty: string;
+			expires_at?: string;
+			wrong_submissions: number;
+			current_value: number;
+			extensions_used: number;
+			next_extension_cost?: number;
+		}>;
+	};
+	field: Array<{
+		slug: string;
+		name: string;
+		category: string;
+		difficulty: string;
+		scoring_mode: string;
+		solve_band: string;
+		heat: string;
+		direction: string;
+		signal_quality: string;
+		released_at?: string;
+	}>;
+	notices: Array<{
+		kind: string;
+		severity: string;
+		message: string;
+		href?: string;
+	}>;
 }
 
 // graded (relative-score) challenges: the team's depth race on one challenge
@@ -492,6 +550,10 @@ class ApiClient {
 			credits: number; points: number; grant_issued: boolean; bailout_used: boolean;
 			open: Array<{ slug: string; name: string; status: string; expires_at: string | null; wrong_subs: number; value: number }>;
 		}>('/economy/me');
+	}
+
+	async getMarketPulse(options: RequestInit = {}) {
+		return this.request<MarketPulseResponse>('/economy/pulse', { cache: 'no-store', ...options });
 	}
 
 	async openChallenge(slug: string) {

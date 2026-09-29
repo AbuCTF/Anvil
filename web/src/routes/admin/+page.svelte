@@ -2250,6 +2250,18 @@
 									<option value="false">Off (standard scoring)</option>
 								</select>
 							</label>
+							<label class="block">
+								<span class={labelCls}>Market Pulse</span>
+								<select
+									value={String(platformSettings.market_pulse_enabled ?? false)}
+									on:change={(e) => handleSelectChange(e, 'market_pulse_enabled')}
+									class="w-full {fieldCls}"
+								>
+									<option value="true">Enabled (delayed, anonymous signals)</option>
+									<option value="false">Disabled</option>
+								</select>
+								<p class="mt-1.5 text-xs text-stone-500">Requires Economy. Exact team state stays private; field activity is delayed and bucketed.</p>
+							</label>
 							<div class="md:col-span-2 mt-1 border-t border-stone-800/70 pt-4">
 								<div class="mb-3 flex items-start justify-between gap-3">
 									<div>
