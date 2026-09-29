@@ -1145,7 +1145,7 @@ func validatePlatformSetting(key string, value interface{}) error {
 		if !ok || !isRegistrationMode(strings.ToLower(strings.TrimSpace(mode))) {
 			return errors.New("Invalid value for registration_mode")
 		}
-	case "event.start_at", "event.end_at":
+	case "event.start_at", "event.end_at", "scoreboard.history_end_at":
 		text, ok := value.(string)
 		if !ok {
 			return fmt.Errorf("Invalid value for %s: expected an RFC3339 timestamp", key)

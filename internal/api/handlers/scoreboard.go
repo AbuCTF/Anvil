@@ -784,7 +784,55 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 		h.respondQueryError(c, "failed to fetch history", err)
 		return
 	}
-	h.respondCacheableJSON(c, "history", 5*time.Second, gin.H{"series": series, "teams": teamRanked})
+	historyEnd, err := scoreboardHistoryEnd(ctx, h.db)
+	if err != nil {
+		h.respondQueryError(c, "failed to read scoreboard history cutoff", err)
+		return
+	}
+	h.respondCacheableJSON(c, "history", 5*time.Second, gin.H{
+		"series": series,
+		"teams":  teamRanked,
+		"end_at": historyEnd,
+	})
+}
+
+// scoreboardHistoryEnd decouples a historical chart from the active event
+// window used by a sales/demo environment. Ordinary events leave the override
+// empty and inherit event.end_at.
+func scoreboardHistoryEnd(ctx context.Context, db *database.DB) (*time.Time, error) {
+	var override string
+	err := db.Pool.QueryRow(ctx, `
+		SELECT COALESCE((
+			SELECT value #>> '{}'
+			FROM platform_settings
+			WHERE key = 'scoreboard.history_end_at'
+		), '')
+	`).Scan(&override)
+	if err != nil {
+		return nil, fmt.Errorf("query scoreboard history cutoff: %w", err)
+	}
+
+	if parsed, err := parseOptionalRFC3339(override); err != nil || parsed != nil {
+		return parsed, err
+	}
+	_, eventEnd, err := loadEventWindow(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return eventEnd, nil
+}
+
+func parseOptionalRFC3339(raw string) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse scoreboard history cutoff: %w", err)
+	}
+	utc := parsed.UTC()
+	return &utc, nil
 }
 
 var userHistoryQuery = `

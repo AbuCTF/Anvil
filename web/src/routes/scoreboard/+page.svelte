@@ -90,6 +90,7 @@
   const lastURL: Record<View, string> = { standings: "", matrix: "" };
   let historyETag = "";
   let historyRaw: HistorySeries[] = [];
+  let historyEnd: number | null = null;
 
   let search = "";
   let sortKey: "rank" | "name" = "rank";
@@ -199,6 +200,7 @@
       }
       const history = await response.json();
       historyRaw = history.series ?? [];
+      historyEnd = seconds(history.end_at);
       historyETag = nextETag;
     } catch {
       if (!requestController?.signal.aborted) {
@@ -331,7 +333,7 @@
     const firstX = Math.min(...points.map((point) => point.x));
     const lastX = Math.max(...points.map((point) => point.x));
     const origin = eventStart != null && eventStart < firstX ? eventStart : firstX;
-    const now = Math.min(Date.now() / 1000, eventEnd ?? Infinity);
+    const now = Math.min(Date.now() / 1000, historyEnd ?? eventEnd ?? Infinity);
     const edge = Math.max(lastX, now);
     const used = new Set<string>();
     return historyRaw.map((series) => {

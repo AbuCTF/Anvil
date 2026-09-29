@@ -81,7 +81,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	startAt, endAt, err := h.eventWindow(c.Request.Context())
 	if err != nil {
 		h.logger.Warn("failed to load public event window", zap.Error(err))
-	} else if startAt != nil && endAt != nil && eventClockVisible(now, *endAt) {
+	} else if startAt != nil && endAt != nil {
 		response.Event = &publicEventInfo{
 			StartAt:      *startAt,
 			EndAt:        *endAt,

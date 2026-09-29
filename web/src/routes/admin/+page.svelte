@@ -568,7 +568,7 @@
 	}
 
 	async function savePlatformSettings() {
-		if (settingsError || eventWindowError) return;
+		if (settingsError || eventWindowError || historyEndError) return;
 		savingSettings = true;
 		try {
 			await api.updatePlatformSettings(platformSettings);
@@ -608,7 +608,7 @@
 		return local.toISOString().slice(0, 16);
 	}
 
-	function handleEventTimeInput(e: Event, key: 'event.start_at' | 'event.end_at') {
+	function handleEventTimeInput(e: Event, key: 'event.start_at' | 'event.end_at' | 'scoreboard.history_end_at') {
 		const value = (e.target as HTMLInputElement).value;
 		updateSetting(key, value ? new Date(value).toISOString() : '');
 	}
@@ -626,6 +626,13 @@
 	}
 
 	$: eventWindowError = validateEventWindow(platformSettings['event.start_at'], platformSettings['event.end_at']);
+	$: historyEndError = (() => {
+		const value = platformSettings['scoreboard.history_end_at'];
+		if (value == null || value === '') return '';
+		return typeof value === 'string' && Number.isFinite(Date.parse(value))
+			? ''
+			: 'Enter a valid score history cutoff.';
+	})();
 
 	function numberSetting(key: string, fallback: number, min: number, max: number): number {
 		const value = Number(platformSettings[key]);
@@ -2015,7 +2022,7 @@
 				<div class="space-y-6 {settingsError ? 'pointer-events-none select-none opacity-40' : ''}" aria-disabled={settingsError ? 'true' : undefined}>
 					{#if settingsChanged}
 						<div class="flex justify-end">
-							<button on:click={savePlatformSettings} disabled={savingSettings || !!eventWindowError} class={btnPrimary}>
+							<button on:click={savePlatformSettings} disabled={savingSettings || !!eventWindowError || !!historyEndError} class={btnPrimary}>
 								{#if savingSettings}
 									<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
 								{:else}
@@ -2282,6 +2289,27 @@
 								{#if eventWindowError}
 									<p class="mt-2 text-xs text-down" aria-live="polite">{eventWindowError}</p>
 								{/if}
+								<div class="mt-4 border-t border-stone-800/70 pt-4">
+									<div class="mb-2 flex items-start justify-between gap-3">
+										<div>
+											<span class={labelCls}>Score history cutoff</span>
+											<p class="mt-1 text-xs text-stone-500">Leave blank to follow the CTF end. Use this when presenting an imported event with a separate interactive demo window.</p>
+										</div>
+										{#if platformSettings['scoreboard.history_end_at']}
+											<button type="button" on:click={() => updateSetting('scoreboard.history_end_at', '')} class="shrink-0 text-xs text-stone-500 transition-colors hover:text-stone-300">Clear</button>
+										{/if}
+									</div>
+									<input
+										type="datetime-local"
+										step="60"
+										value={datetimeLocalValue(platformSettings['scoreboard.history_end_at'])}
+										on:input={(e) => handleEventTimeInput(e, 'scoreboard.history_end_at')}
+										class="w-full {fieldCls} tabular-nums"
+									/>
+									{#if historyEndError}
+										<p class="mt-2 text-xs text-down" aria-live="polite">{historyEndError}</p>
+									{/if}
+								</div>
 							</div>
 						</div>
 					</Card>

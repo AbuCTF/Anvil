@@ -25,6 +25,9 @@ func TestValidatePlatformSetting(t *testing.T) {
 		{name: "empty event timestamp", key: "event.end_at", value: ""},
 		{name: "event timestamp wrong type", key: "event.start_at", value: float64(42), wantErr: true},
 		{name: "invalid event timestamp", key: "event.end_at", value: "tomorrow", wantErr: true},
+		{name: "score history cutoff", key: "scoreboard.history_end_at", value: "2026-09-27T18:30:00Z"},
+		{name: "empty score history cutoff", key: "scoreboard.history_end_at", value: ""},
+		{name: "invalid score history cutoff", key: "scoreboard.history_end_at", value: "midnight", wantErr: true},
 		{name: "legacy setting remains writable", key: "platform_name", value: "Anvil"},
 	}
 
@@ -35,6 +38,22 @@ func TestValidatePlatformSetting(t *testing.T) {
 				t.Fatalf("validatePlatformSetting(%q, %#v) error = %v, wantErr %v", tt.key, tt.value, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestParseOptionalRFC3339(t *testing.T) {
+	if parsed, err := parseOptionalRFC3339("  "); err != nil || parsed != nil {
+		t.Fatalf("empty cutoff = (%v, %v), want (nil, nil)", parsed, err)
+	}
+	parsed, err := parseOptionalRFC3339("2026-09-28T00:00:00+05:30")
+	if err != nil {
+		t.Fatalf("valid cutoff: %v", err)
+	}
+	if got := parsed.Format(time.RFC3339); got != "2026-09-27T18:30:00Z" {
+		t.Fatalf("normalized cutoff = %s", got)
+	}
+	if _, err := parseOptionalRFC3339("midnight"); err == nil {
+		t.Fatal("invalid cutoff error = nil")
 	}
 }
 
