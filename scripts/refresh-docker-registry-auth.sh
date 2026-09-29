@@ -14,5 +14,4 @@ if [[ -z "${gcloud_bin}" || ! -x "${gcloud_bin}" ]]; then
 fi
 
 install -d -m 700 "${config_dir}"
-"${gcloud_bin}" auth print-access-token |
-  docker --config "${config_dir}" login +    --username oauth2accesstoken +    --password-stdin +    "https://${registry}" >/dev/null
+"${gcloud_bin}" auth print-access-token | docker --config "${config_dir}" login --username oauth2accesstoken --password-stdin "https://${registry}" >/dev/null
