@@ -36,6 +36,7 @@
 	let teamDetailLoading = false;
 	let teamDetailError = '';
 	let teamCreditAdjusting = false;
+	let teamDossierAction = '';
 	let selectedChallengeDetail: any = null;
 	let selectedChallengeSeed: any = null;
 	let challengeDetailLoading = false;
@@ -61,14 +62,6 @@
 	let teamsError = '';
 	let teamsQuery = '';
 	let teamsSort = 'score';
-	let expandedTeams: Record<string, boolean> = {};
-	let addMemberInput: Record<string, string> = {};
-	let expandedSolves: Record<string, boolean> = {};
-	let teamSolves: Record<string, any[]> = {};
-	let solvesLoading: Record<string, boolean> = {};
-	let expandedSupport: Record<string, boolean> = {};
-	let teamSupport: Record<string, any> = {};
-	let supportLoading: Record<string, boolean> = {};
 
 	let showNodeModal = false;
 	let showTemplateUploadModal = false;
@@ -240,12 +233,14 @@
 	function deliveryLabel(challenge: any) {
 		if (challenge.delivery_type === 'multi') return 'Multi-service';
 		if (challenge.delivery_type === 'static') return 'Static / files';
+		if (challenge.delivery_type === 'external') return 'External target';
 		return resourceLabel(challenge.resource_type);
 	}
 
 	function deliveryIcon(challenge: any) {
 		if (challenge.delivery_type === 'multi') return 'mdi:server-network';
 		if (challenge.delivery_type === 'static') return 'mdi:file-download-outline';
+		if (challenge.delivery_type === 'external') return 'mdi:open-in-new';
 		return resourceIcon(challenge.resource_type);
 	}
 
@@ -569,12 +564,13 @@
 				difficulty: editingChallenge.difficulty,
 				base_points: editingChallenge.base_points,
 				resource_type: delivery === 'vm' ? 'vm' : 'docker',
+				delivery_type: delivery === 'vm' ? 'vm' : delivery === 'static' ? 'static' : delivery === 'external' ? 'external' : 'docker',
 				author_name: editingChallenge.author_name || '',
 				instance_timeout: editingChallenge.instance_timeout,
 				max_extensions: editingChallenge.max_extensions,
 				cooldown_minutes: editingChallenge.cooldown_minutes,
 				scoring_mode: editingChallenge.scoring_mode || 'flag',
-				arena_mode: delivery === 'static' ? 'per_team' : editingChallenge.arena_mode || 'per_team',
+				arena_mode: delivery === 'static' || delivery === 'external' ? 'per_team' : editingChallenge.arena_mode || 'per_team',
 				privesc: (delivery === 'container' || delivery === 'multi') && !!editingChallenge.privesc,
 			};
 
@@ -1070,6 +1066,57 @@
 		}
 	}
 
+	async function refreshTeamDossier() {
+		if (!selectedTeamSeed) return;
+		await Promise.all([openTeamDetail(selectedTeamSeed), loadTeams()]);
+	}
+
+	async function addTeamMember(event: CustomEvent<{ username: string }>) {
+		if (!selectedTeamSeed || teamDossierAction) return;
+		teamDossierAction = 'add-member';
+		teamDetailError = '';
+		try {
+			await api.addAdminTeamMember(selectedTeamSeed.id, event.detail);
+			await refreshTeamDossier();
+		} catch (e) {
+			teamDetailError = e instanceof Error ? e.message : 'Failed to add team member';
+		} finally {
+			teamDossierAction = '';
+		}
+	}
+
+	async function removeTeamMember(event: CustomEvent<any>) {
+		if (!selectedTeamSeed || teamDossierAction) return;
+		const member = event.detail;
+		if (!(await confirmDialog({ title: 'Remove team member', message: `Remove ${member.username} from ${selectedTeamSeed.name}?`, confirmLabel: 'Remove', danger: true }))) return;
+		teamDossierAction = `remove-${member.id}`;
+		teamDetailError = '';
+		try {
+			await api.removeAdminTeamMember(selectedTeamSeed.id, member.id);
+			await refreshTeamDossier();
+		} catch (e) {
+			teamDetailError = e instanceof Error ? e.message : 'Failed to remove team member';
+		} finally {
+			teamDossierAction = '';
+		}
+	}
+
+	async function stopTeamInstance(event: CustomEvent<any>) {
+		if (!selectedTeamSeed || teamDossierAction) return;
+		const instance = event.detail;
+		if (!(await confirmDialog({ title: 'Force stop instance', message: `Stop ${instance.challenge_name} for ${instance.username || selectedTeamSeed.name}? Their session will end immediately.`, confirmLabel: 'Force stop', danger: true }))) return;
+		teamDossierAction = `stop-${instance.id}`;
+		teamDetailError = '';
+		try {
+			await api.forceStopAdminInstance(instance.id);
+			await Promise.all([refreshTeamDossier(), loadInfrastructure()]);
+		} catch (e) {
+			teamDetailError = e instanceof Error ? e.message : 'Failed to stop instance';
+		} finally {
+			teamDossierAction = '';
+		}
+	}
+
 	async function openChallengeDetail(challenge: any) {
 		selectedChallengeSeed = challenge;
 		selectedChallengeDetail = null;
@@ -1172,92 +1219,10 @@
 		}
 	}
 
-	async function kickMember(team: any, member: any) {
-		if (!(await confirmDialog({ title: 'Remove member', message: `Remove ${member.username} from ${team.name}?`, confirmLabel: 'Remove', danger: true }))) return;
-		actionLoading = team.id;
-		try {
-			await api.removeAdminTeamMember(team.id, member.id);
-			await loadTeams();
-		} catch (e) {
-			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to remove member' });
-		} finally {
-			actionLoading = '';
-		}
-	}
-
-	async function addTeamMember(team: any) {
-		const username = (addMemberInput[team.id] || '').trim();
-		if (!username) return;
-		actionLoading = team.id;
-		try {
-			await api.addAdminTeamMember(team.id, { username });
-			addMemberInput[team.id] = '';
-			await loadTeams();
-		} catch (e) {
-			alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to add member' });
-		} finally {
-			actionLoading = '';
-		}
-	}
-
-	function toggleTeamExpand(id: string) {
-		expandedTeams[id] = !expandedTeams[id];
-		expandedTeams = expandedTeams;
-	}
-
-	async function toggleSolvesExpand(id: string) {
-		expandedSolves[id] = !expandedSolves[id];
-		expandedSolves = expandedSolves;
-		if (expandedSolves[id] && teamSolves[id] === undefined) {
-			solvesLoading[id] = true;
-			solvesLoading = solvesLoading;
-			try {
-				const res = await api.getAdminTeamSolves(id);
-				teamSolves[id] = res.solves || [];
-			} catch {
-				teamSolves[id] = [];
-			} finally {
-				solvesLoading[id] = false;
-				solvesLoading = solvesLoading;
-				teamSolves = teamSolves;
-			}
-		}
-	}
-
-	async function loadSupport(id: string) {
-		supportLoading[id] = true;
-		supportLoading = supportLoading;
-		try {
-			const [support, ledger] = await Promise.all([
-				api.getAdminTeamSupport(id),
-				api.getAdminTeamCreditEvents(id)
-			]);
-			teamSupport[id] = { ...support, credit_events: ledger.events || [] };
-		} catch {
-			teamSupport[id] = null;
-		} finally {
-			supportLoading[id] = false;
-			supportLoading = supportLoading;
-			teamSupport = teamSupport;
-		}
-	}
-
-	async function toggleSupportExpand(id: string) {
-		expandedSupport[id] = !expandedSupport[id];
-		expandedSupport = expandedSupport;
-		if (expandedSupport[id] && teamSupport[id] === undefined) {
-			await loadSupport(id);
-		}
-	}
-
-	async function supportForceStop(teamId: string, instanceId: string, name: string) {
-		if (!(await confirmDialog({ message: `Force-stop the "${name}" instance for this team? This frees an open slot.`, title: 'Force-stop instance', confirmLabel: 'Force-stop', danger: true }))) return;
-		try {
-			await api.forceStopAdminInstance(instanceId);
-			await loadSupport(teamId);
-		} catch (e: any) {
-			await alertDialog({ title: 'Force-stop failed', message: e?.message ?? 'force-stop failed' });
-		}
+	function activateRow(event: KeyboardEvent, action: () => void) {
+		if (event.key !== 'Enter' && event.key !== ' ') return;
+		event.preventDefault();
+		action();
 	}
 
 	function formatDate(timestamp: number): string {
@@ -1299,7 +1264,7 @@
 				difficulty: newChallenge.difficulty,
 				base_points: newChallenge.base_points,
 				scoring_mode: newChallenge.scoring_mode,
-				arena_mode: newChallenge.type === 'download' ? 'per_team' : newChallenge.arena_mode,
+				arena_mode: newChallenge.type === 'download' || newChallenge.type === 'external' ? 'per_team' : newChallenge.arena_mode,
 				privesc: newChallenge.type === 'container' || newChallenge.type === 'multi' ? newChallenge.privesc : false,
 				...(categoryId ? { category_id: categoryId } : {}),
 				...(categoryName ? { category: categoryName } : {}),
@@ -1317,6 +1282,7 @@
 					const result = await api.createAdminChallenge({
 						...common,
 						challenge_type: 'vm',
+						delivery_type: 'vm',
 						vm_template_id: newChallenge.vm_template_id,
 						vcpu: newChallenge.vm_vcpu,
 						memory_mb: newChallenge.vm_memory_mb,
@@ -1332,11 +1298,12 @@
 			} else {
 				// container and download-only are both resource_type "docker"; a download-only
 				// challenge has no image + no ports (files are added as attachments).
-				const isDownload = newChallenge.type === 'download';
+				const isDownload = newChallenge.type === 'download' || newChallenge.type === 'external';
 				const isMulti = newChallenge.type === 'multi';
 				const result = await api.createAdminChallenge({
 					...common,
 					challenge_type: 'docker',
+					delivery_type: newChallenge.type === 'external' ? 'external' : newChallenge.type === 'download' ? 'static' : 'docker',
 					container_image: isDownload || isMulti ? '' : newChallenge.docker_image,
 					container_platform: isDownload ? '' : newChallenge.container_platform,
 					exposed_ports: isDownload || isMulti ? [] : newChallenge.exposed_ports.filter(p => p.port > 0),
@@ -1495,60 +1462,61 @@
 			</div>
 
 			{#if activeTab === 'overview'}
-				<div class="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+				<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+					<div><p class="metadata-label text-stone-600">Operations overview</p><h2 class="mt-1 text-xl font-semibold text-stone-100">Competition command center</h2><p class="mt-1 text-sm text-stone-500">Live event posture, content readiness, participant activity and runtime capacity in one view.</p></div>
+					<div class="flex flex-wrap gap-2"><button type="button" on:click={() => setTab('event')} class={btnGhost}>Configure event</button><button type="button" on:click={() => setTab('launch')} class={btnPrimary}>Release checks</button></div>
+				</div>
+
+				<div class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
 					{#each [
-						{ label: 'Users', value: stats?.total_users || 0 },
-						{ label: 'Challenges', value: stats?.total_challenges || 0 },
-						{ label: 'Active Instances', value: stats?.active_instances || 0 },
-						{ label: 'Total Solves', value: stats?.total_solves || 0 }
+						{ label: 'Participants', value: stats?.total_users || 0, icon: 'mdi:account-outline' },
+						{ label: 'Teams', value: stats?.total_teams || 0, icon: 'mdi:account-multiple-outline' },
+						{ label: 'Published', value: stats?.published_challenges || 0, icon: 'mdi:flag-checkered' },
+						{ label: 'Drafts', value: stats?.draft_challenges || 0, icon: 'mdi:file-document-edit-outline' },
+						{ label: 'Live workloads', value: stats?.active_instances || 0, icon: 'mdi:cube-outline' },
+						{ label: 'Submissions', value: stats?.total_submissions || 0, icon: 'mdi:send-check-outline' }
 					] as stat}
-						<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-							<p class="metadata-label text-stone-500">{stat.label}</p>
-							<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">{stat.value.toLocaleString()}</p>
+						<div class="rounded-lg border border-stone-800 bg-stone-900/40 p-4">
+							<div class="flex items-center justify-between gap-2"><p class="metadata-label text-stone-500">{stat.label}</p><OpticalIcon icon={stat.icon} size={15} box={16} className="text-stone-700" /></div>
+							<p class="mt-2 text-2xl font-semibold text-stone-100 tabular-nums">{stat.value.toLocaleString()}</p>
 						</div>
 					{/each}
 				</div>
 
-				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-					<Card title="Recent Users" bodyClass="">
-						{#if users.length === 0}
-							<EmptyState icon="mdi:account-off-outline" text="No users yet." />
-						{:else}
-							<div class="divide-y divide-stone-800/60">
-								{#each users.slice(0, 5) as user}
-									<div class="px-4 py-3 flex items-center justify-between gap-3">
-										<div class="flex items-center gap-3 min-w-0">
-											<div class="w-8 h-8 bg-stone-800 rounded-full flex items-center justify-center shrink-0">
-												<span class="text-xs font-medium text-stone-400">{user.username.charAt(0).toUpperCase()}</span>
-											</div>
-											<div class="min-w-0">
-												<p class="text-sm text-stone-200 truncate">{user.username}</p>
-												<p class="text-xs text-stone-500 truncate">{user.email}</p>
-											</div>
-										</div>
-										<span class="text-xs text-stone-600 tabular-nums shrink-0" title={instantTitle(user.created_at, 'seconds')}>{formatDate(user.created_at)}</span>
-									</div>
-								{/each}
-							</div>
-						{/if}
+				<div class="mb-6 grid items-start gap-6 xl:grid-cols-2">
+					<Card title="Competition posture" bodyClass="p-4">
+						<div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+							{#each [
+								{ label: 'Event', value: $platformInfo?.event?.phase ?? 'unscheduled', enabled: $platformInfo?.event?.phase === 'live' },
+								{ label: 'Registration', value: $platformInfo?.registration_mode ?? 'unknown', enabled: $platformInfo?.registration_mode !== 'disabled' },
+								{ label: 'Scoreboard', value: $platformInfo?.scoreboard_enabled === false ? 'hidden' : 'public', enabled: $platformInfo?.scoreboard_enabled !== false },
+								{ label: 'Economy', value: $platformInfo?.economy_enabled ? 'enabled' : 'disabled', enabled: !!$platformInfo?.economy_enabled },
+								{ label: 'Market Pulse', value: $platformInfo?.market_pulse_enabled ? 'enabled' : 'disabled', enabled: !!$platformInfo?.market_pulse_enabled },
+								{ label: 'Arena', value: $platformInfo?.arena_enabled ? 'enabled' : 'disabled', enabled: !!$platformInfo?.arena_enabled }
+							] as item}
+								<div class="rounded-md border border-stone-800 bg-stone-950/50 p-3"><p class="metadata-label text-stone-600">{item.label}</p><p class="mt-1 flex items-center gap-2 text-xs capitalize {item.enabled ? 'text-up' : 'text-stone-400'}"><span class="h-1.5 w-1.5 rounded-full {item.enabled ? 'bg-up' : 'bg-stone-600'}"></span>{item.value}</p></div>
+							{/each}
+						</div>
+						<div class="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-stone-800 pt-4 text-xs text-stone-500"><span>{stats?.published_challenges || 0} of {stats?.total_challenges || 0} challenges released</span><span>{(stats?.total_solves || 0).toLocaleString()} successful solves</span></div>
 					</Card>
 
-					<Card title="Top Challenges" bodyClass="">
-						{#if challenges.length === 0}
-							<EmptyState icon="mdi:flag-outline" text="No challenges yet." />
-						{:else}
-							<div class="divide-y divide-stone-800/60">
-								{#each challenges.slice(0, 5) as challenge}
-									<div class="px-4 py-3 flex items-center justify-between gap-3">
-										<div class="min-w-0">
-											<p class="text-sm text-stone-200 truncate">{challenge.name}</p>
-											<span class="inline-flex items-center px-2 py-0.5 mt-1 rounded-full border text-[0.7rem] capitalize {difficultyClass(challenge.difficulty)}"><span class="badge-label">{challenge.difficulty}</span></span>
-										</div>
-										<span class="text-xs text-stone-400 tabular-nums shrink-0">{challenge.total_solves || 0} solves</span>
-									</div>
-								{/each}
-							</div>
-						{/if}
+					<Card title="Runtime pulse" bodyClass="p-4">
+						<div class="flex items-start justify-between gap-4"><div><p class="text-3xl font-semibold text-stone-100 tabular-nums">{infraStats?.nodes?.online || 0}<span class="text-base font-normal text-stone-600">/{infraStats?.nodes?.total || 0}</span></p><p class="mt-1 text-xs text-stone-500">runtime nodes online</p></div><div class="text-right text-xs text-stone-500"><p>{infraStats?.instances?.running || 0} active workloads</p><p class="mt-1">{infraStats?.resources?.vcpu?.used || 0}/{infraStats?.resources?.vcpu?.total || 0} vCPU reserved</p></div></div>
+						<div class="mt-5 grid grid-cols-2 gap-3">
+							<div class="rounded-md border border-stone-800 bg-stone-950/50 p-3"><p class="metadata-label text-stone-600">Memory reserved</p><p class="mt-1 text-sm text-stone-300 tabular-nums">{infraStats?.resources?.memory_gb?.used || 0}/{infraStats?.resources?.memory_gb?.total || 0} GB</p></div>
+							<div class="rounded-md border border-stone-800 bg-stone-950/50 p-3"><p class="metadata-label text-stone-600">Last sync</p><p class="mt-1 text-sm text-stone-300">{infrastructureUpdatedAt ? infrastructureUpdatedAt.toLocaleTimeString() : 'Connecting'}</p></div>
+						</div>
+						<button type="button" on:click={() => setTab('infrastructure')} class="mt-4 text-xs font-medium text-amber-500 hover:text-amber-400">Inspect nodes and workloads →</button>
+					</Card>
+				</div>
+
+				<div class="grid items-start gap-6 lg:grid-cols-2">
+					<Card title="Recent participants" bodyClass="p-0">
+						{#if users.length === 0}<EmptyState icon="mdi:account-off-outline" text="No participants yet." />{:else}<div class="divide-y divide-stone-800/60">{#each users.slice(0, 6) as user}<button type="button" on:click={() => openUserDetail(user)} class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-stone-900/60"><div class="flex min-w-0 items-center gap-3"><div class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-stone-800 text-xs font-medium text-stone-400">{user.username.charAt(0).toUpperCase()}</div><div class="min-w-0"><p class="truncate text-sm text-stone-200">{user.username}</p><p class="truncate text-xs text-stone-600">{user.email}</p></div></div><span class="shrink-0 text-xs text-stone-600" title={instantTitle(user.created_at, 'seconds')}>{formatDate(user.created_at)}</span></button>{/each}</div>{/if}
+					</Card>
+
+					<Card title="Most solved challenges" bodyClass="p-0">
+						{#if challenges.length === 0}<EmptyState icon="mdi:flag-outline" text="No challenges yet." />{:else}<div class="divide-y divide-stone-800/60">{#each [...challenges].sort((a, b) => (b.total_solves || 0) - (a.total_solves || 0)).slice(0, 6) as challenge}<button type="button" on:click={() => openChallengeDetail(challenge)} class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-stone-900/60"><div class="min-w-0"><p class="truncate text-sm text-stone-200">{challenge.name}</p><div class="mt-1.5 flex items-center gap-1.5"><span class="inline-flex rounded-full border px-2 py-0.5 text-[0.65rem] capitalize {difficultyClass(challenge.difficulty)}">{challenge.difficulty}</span><span class="text-[11px] text-stone-600">{deliveryLabel(challenge)}</span></div></div><span class="shrink-0 text-xs text-stone-400 tabular-nums">{challenge.total_solves || 0} solves</span></button>{/each}</div>{/if}
 					</Card>
 				</div>
 			{/if}
@@ -1585,10 +1553,16 @@
 				{:else}
 					<div class="lg:hidden space-y-3">
 						{#each challenges as challenge}
-							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
+							<div
+								class="cursor-pointer rounded-lg border border-stone-800 bg-stone-900/40 p-4 transition-colors hover:border-stone-700 hover:bg-stone-900/70 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+								role="button"
+								tabindex="0"
+								on:click={() => openChallengeDetail(challenge)}
+								on:keydown={(event) => activateRow(event, () => openChallengeDetail(challenge))}
+							>
 								<div class="flex items-start justify-between gap-3 mb-3">
 									<div class="min-w-0">
-										<button type="button" on:click={() => openChallengeDetail(challenge)} class="text-left text-sm font-medium text-stone-200 hover:text-amber-400 transition-colors" title="Open challenge dossier">{challenge.name}</button>
+										<p class="text-sm font-medium text-stone-200">{challenge.name}</p>
 										<div class="flex items-center flex-wrap gap-1.5 mt-1.5 leading-none">
 											<span class="inline-flex items-center px-2 py-0.5 rounded-full border text-[0.7rem] leading-none capitalize {difficultyClass(challenge.difficulty)}"><span class="badge-label">{challenge.difficulty}</span></span>
 										<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[0.7rem] leading-none {resourceClass(challenge.resource_type)}">
@@ -1607,7 +1581,8 @@
 								</div>
 								<div class="flex items-center gap-2 pt-3 border-t border-stone-800">
 									<button
-										on:click={() => openEditModal(challenge)}
+										on:click|stopPropagation={() => openEditModal(challenge)}
+										on:keydown|stopPropagation
 										class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-stone-300 border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 										disabled={actionLoading === challenge.id}
 										title="Edit challenge"
@@ -1617,7 +1592,8 @@
 									</button>
 									{#if challenge.status === 'draft'}
 										<button
-											on:click={() => publishChallenge(challenge)}
+											on:click|stopPropagation={() => publishChallenge(challenge)}
+											on:keydown|stopPropagation
 											class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-up border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 											disabled={actionLoading === challenge.id}
 											title="Publish challenge"
@@ -1627,7 +1603,8 @@
 										</button>
 									{:else}
 										<button
-											on:click={() => unpublishChallenge(challenge)}
+											on:click|stopPropagation={() => unpublishChallenge(challenge)}
+											on:keydown|stopPropagation
 											class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs leading-none font-medium text-warn border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 											disabled={actionLoading === challenge.id}
 											title="Unpublish challenge"
@@ -1637,7 +1614,8 @@
 										</button>
 									{/if}
 									<button
-										on:click={() => deleteChallenge(challenge)}
+										on:click|stopPropagation={() => deleteChallenge(challenge)}
+										on:keydown|stopPropagation
 										class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs leading-none font-medium text-down border border-stone-700 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50 ml-auto"
 										disabled={actionLoading === challenge.id}
 										title="Delete challenge"
@@ -1667,9 +1645,15 @@
 									</thead>
 									<tbody>
 										{#each challenges as challenge}
-											<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
+											<tr
+												class="cursor-pointer border-b border-stone-800/60 transition-colors hover:bg-stone-800/30 focus:bg-stone-800/30 focus:outline-none"
+												role="button"
+												tabindex="0"
+											on:click={() => openChallengeDetail(challenge)}
+											on:keydown={(event) => activateRow(event, () => openChallengeDetail(challenge))}
+											>
 												<td class="px-4 py-2.5">
-													<button type="button" on:click={() => openChallengeDetail(challenge)} class="text-left text-stone-200 hover:text-amber-400 transition-colors" title="Open challenge dossier">{challenge.name}</button>
+												<span class="text-stone-200">{challenge.name}</span>
 													{#if challenge.scoring_mode === 'graded'}
 														<span class="ml-1.5 inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[0.65rem] leading-none text-amber-500 align-middle" title="Graded challenge">
 															<OpticalIcon icon="mdi:gauge" size={11} box={11} /><span class="badge-label">Graded</span>
@@ -1695,7 +1679,8 @@
 												<td class="px-4 py-2.5">
 													<div class="flex items-center justify-end gap-1">
 														<button
-															on:click={() => openEditModal(challenge)}
+															on:click|stopPropagation={() => openEditModal(challenge)}
+															on:keydown|stopPropagation
 															class="p-2 text-stone-400 hover:text-stone-100 hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 															disabled={actionLoading === challenge.id}
 															title="Edit"
@@ -1704,7 +1689,8 @@
 														</button>
 														{#if challenge.status === 'draft'}
 															<button
-																on:click={() => publishChallenge(challenge)}
+																on:click|stopPropagation={() => publishChallenge(challenge)}
+																on:keydown|stopPropagation
 																class="p-2 text-up hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 																disabled={actionLoading === challenge.id}
 																title="Publish"
@@ -1713,7 +1699,8 @@
 															</button>
 														{:else}
 															<button
-																on:click={() => unpublishChallenge(challenge)}
+																on:click|stopPropagation={() => unpublishChallenge(challenge)}
+																on:keydown|stopPropagation
 																class="p-2 text-warn hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 																disabled={actionLoading === challenge.id}
 																title="Unpublish"
@@ -1722,7 +1709,8 @@
 															</button>
 														{/if}
 														<button
-															on:click={() => deleteChallenge(challenge)}
+															on:click|stopPropagation={() => deleteChallenge(challenge)}
+															on:keydown|stopPropagation
 															class="p-2 text-down hover:bg-stone-800/40 rounded-md transition-colors disabled:opacity-50"
 															disabled={actionLoading === challenge.id}
 															title="Delete"
@@ -1749,13 +1737,19 @@
 				{:else}
 					<div class="lg:hidden space-y-3">
 						{#each users as user}
-							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
+							<div
+								class="cursor-pointer rounded-lg border border-stone-800 bg-stone-900/40 p-4 transition-colors hover:border-stone-700 hover:bg-stone-900/70 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+								role="button"
+								tabindex="0"
+								on:click={() => openUserDetail(user)}
+								on:keydown={(event) => activateRow(event, () => openUserDetail(user))}
+							>
 								<div class="flex items-center gap-3 mb-3">
 									<div class="w-10 h-10 bg-stone-800 rounded-full flex items-center justify-center shrink-0">
 										<span class="text-sm font-medium text-stone-400">{user.username.charAt(0).toUpperCase()}</span>
 									</div>
 									<div class="flex-1 min-w-0">
-										<button type="button" on:click={() => openUserDetail(user)} class="text-sm font-medium text-stone-200 hover:text-amber-400 truncate">{user.username}</button>
+										<p class="truncate text-sm font-medium text-stone-200">{user.username}</p>
 										<p class="text-xs text-stone-500 truncate">{user.email}</p>
 									</div>
 									<span class="text-xs {user.role === 'admin' ? 'text-amber-500/90' : 'text-stone-400'}">{user.role}</span>
@@ -1764,10 +1758,11 @@
 									<span>{user.total_score || 0} points</span>
 									<span title={instantTitle(user.created_at, 'seconds')}>Joined {formatDate(user.created_at)}</span>
 								</div>
-								<div class="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-stone-800">
-									<button type="button" on:click={() => openUserDetail(user)} class="text-xs text-stone-300 hover:underline">Details</button>
+								<div class="flex items-center justify-end gap-3 mt-3 pt-3 border-t border-stone-800">
 									<select
 										value={user.role}
+										on:click|stopPropagation
+										on:keydown|stopPropagation
 										on:change={(e) => changeUserRole(user.id, e.currentTarget.value)}
 										disabled={actionLoading === user.id}
 										class="text-xs bg-stone-950 border border-stone-800 rounded-md px-2 py-1 text-stone-200 focus:outline-none focus:border-stone-500"
@@ -1776,7 +1771,8 @@
 										<option value="admin">Admin</option>
 									</select>
 									<button
-										on:click={() => toggleBan(user)}
+										on:click|stopPropagation={() => toggleBan(user)}
+										on:keydown|stopPropagation
 										disabled={actionLoading === user.id}
 										class="text-xs {user.is_banned ? 'text-up' : 'text-warn'} hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
 										title={user.is_banned ? 'Unban user' : 'Ban user'}
@@ -1784,7 +1780,8 @@
 										{user.is_banned ? 'Unban' : 'Ban'}
 									</button>
 									<button
-										on:click={() => deleteUser(user.id)}
+										on:click|stopPropagation={() => deleteUser(user.id)}
+										on:keydown|stopPropagation
 										disabled={actionLoading === user.id}
 										class="text-xs text-down hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
 										title="Delete user"
@@ -1813,13 +1810,19 @@
 									</thead>
 									<tbody>
 										{#each users as user}
-											<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
+											<tr
+												class="cursor-pointer border-b border-stone-800/60 transition-colors hover:bg-stone-800/30 focus:bg-stone-800/30 focus:outline-none"
+												role="button"
+												tabindex="0"
+												on:click={() => openUserDetail(user)}
+												on:keydown={(event) => activateRow(event, () => openUserDetail(user))}
+											>
 												<td class="px-4 py-2.5">
 													<div class="flex items-center gap-3">
 														<div class="w-8 h-8 bg-stone-800 rounded-full flex items-center justify-center shrink-0">
 															<span class="text-xs font-medium text-stone-400">{user.username.charAt(0).toUpperCase()}</span>
 														</div>
-														<button type="button" on:click={() => openUserDetail(user)} class="text-stone-200 hover:text-amber-400 hover:underline">{user.username}</button>
+														<span class="text-stone-200">{user.username}</span>
 													</div>
 												</td>
 												<td class="px-4 py-2.5 text-stone-400 hidden md:table-cell">{user.email}</td>
@@ -1830,9 +1833,10 @@
 											<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden md:table-cell" title={instantTitle(user.created_at, 'seconds')}>{formatDate(user.created_at)}</td>
 												<td class="px-4 py-2.5">
 											<div class="flex items-center justify-end gap-3">
-												<button type="button" on:click={() => openUserDetail(user)} class="text-xs text-stone-300 hover:underline">Details</button>
-														<select
-															value={user.role}
+													<select
+														value={user.role}
+														on:click|stopPropagation
+														on:keydown|stopPropagation
 															on:change={(e) => changeUserRole(user.id, e.currentTarget.value)}
 															disabled={actionLoading === user.id}
 															class="text-xs bg-stone-950 border border-stone-800 rounded-md px-2 py-1 text-stone-200 focus:outline-none focus:border-stone-500"
@@ -1840,16 +1844,18 @@
 															<option value="user">User</option>
 															<option value="admin">Admin</option>
 														</select>
-														<button
-															on:click={() => toggleBan(user)}
+													<button
+														on:click|stopPropagation={() => toggleBan(user)}
+														on:keydown|stopPropagation
 															disabled={actionLoading === user.id}
 															class="text-xs {user.is_banned ? 'text-up' : 'text-warn'} hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
 															title={user.is_banned ? 'Unban user' : 'Ban user'}
 														>
 															{user.is_banned ? 'Unban' : 'Ban'}
 														</button>
-														<button
-															on:click={() => deleteUser(user.id)}
+													<button
+														on:click|stopPropagation={() => deleteUser(user.id)}
+														on:keydown|stopPropagation
 															disabled={actionLoading === user.id}
 															class="text-xs text-down hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
 															title="Delete user"
@@ -1897,219 +1903,82 @@
 						<EmptyState icon="mdi:account-multiple-outline" text="No teams yet." />
 					</Card>
 				{:else}
-					<Card title="Teams" bodyClass="">
-						<span slot="meta" class="text-stone-500 text-xs tabular-nums">{teams.length}</span>
-						<div class="overflow-x-auto">
-							<table class="w-full min-w-[900px] text-sm">
-								<thead>
-									<tr class="metadata-label text-stone-500 border-b border-stone-800">
-										<th class="px-4 py-2.5 text-left">Team</th>
-										<th class="px-4 py-2.5 text-right">Members</th>
-									<th class="px-4 py-2.5 text-right">Solved</th>
-									<th class="px-4 py-2.5 text-right">Ledger</th>
-										<th class="px-4 py-2.5 text-right hidden md:table-cell">Max</th>
-										<th class="px-4 py-2.5 text-left hidden md:table-cell">Join code</th>
-										<th class="px-4 py-2.5 text-right hidden lg:table-cell">Created</th>
-										<th class="px-4 py-2.5 text-right">Actions</th>
-									</tr>
-								</thead>
-								<tbody>
-									{#each teams as team}
-										<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
-											<td class="px-4 py-2.5">
-											<button class="text-stone-200 hover:text-amber-400 hover:underline text-left" on:click={() => openTeamDetail(team)} title="Open full team dossier">{team.name}</button>
-											</td>
-											<td class="px-4 py-2.5 text-right tabular-nums">
-												<button class="text-stone-300 hover:underline" on:click={() => toggleTeamExpand(team.id)} title="Show members">
-													{team.member_count}{expandedTeams[team.id] ? ' ▾' : ' ▸'}
-												</button>
-											</td>
-										<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">
-											{team.challenge_solves ?? 0}
-										</td>
-										<td class="px-4 py-2.5 text-right text-amber-500 tabular-nums" title={`Legacy score: ${team.legacy_score ?? 0}`}>
-											{Math.round(team.ledger_points ?? team.total_score ?? 0).toLocaleString()}
-											</td>
-											<td class="px-4 py-2.5 text-right text-stone-400 tabular-nums hidden md:table-cell">
-												<button class="hover:underline" on:click={() => editTeamMax(team)} title="Edit max members">{team.max_members == null ? '∞' : team.max_members}</button>
-											</td>
-											<td class="px-4 py-2.5 hidden md:table-cell">
-												<span class="font-mono text-xs text-stone-400">{team.join_code}</span>
-												<button class="text-xs text-stone-500 hover:underline ml-2 disabled:opacity-50" on:click={() => rotateTeamCode(team)} disabled={actionLoading === team.id} title="Rotate join code">rotate</button>
-											</td>
-											<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden lg:table-cell" title={team.created_at ? instantTitle(team.created_at, 'seconds') : ''}>{team.created_at ? formatDate(team.created_at) : '-'}</td>
-											<td class="px-4 py-2.5">
-											<div class="flex items-center justify-end gap-3">
-												<button class="text-xs text-stone-400 hover:underline" on:click={() => renameTeam(team)}>Rename</button>
-													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleTeamExpand(team.id)}>Members</button>
-													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleSolvesExpand(team.id)}>Solves</button>
-													<button class="text-xs text-amber-500 hover:underline" on:click={() => toggleSupportExpand(team.id)} title="Economy, open slots and instances">Support</button>
-													<button class="text-xs text-down hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => disbandTeam(team)} disabled={actionLoading === team.id} title="Disband team">
-														{actionLoading === team.id ? '...' : 'Disband'}
-													</button>
-												</div>
-											</td>
+					<div class="space-y-3 lg:hidden">
+						{#each teams as team}
+							<div
+								class="cursor-pointer rounded-lg border border-stone-800 bg-stone-900/40 p-4 transition-colors hover:border-stone-700 hover:bg-stone-900/70 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+								role="button"
+								tabindex="0"
+								on:click={() => openTeamDetail(team)}
+								on:keydown={(event) => activateRow(event, () => openTeamDetail(team))}
+							>
+								<div class="flex items-start justify-between gap-3">
+									<div class="min-w-0"><p class="truncate text-sm font-medium text-stone-200">{team.name}</p><p class="mt-1 text-xs text-stone-600">{team.member_count} members · joined {team.created_at ? formatDate(team.created_at) : '—'}</p></div>
+									<Icon icon="mdi:chevron-right" class="h-5 w-5 shrink-0 text-stone-600" />
+								</div>
+								<div class="mt-4 grid grid-cols-3 gap-3 border-y border-stone-800 py-3 text-xs">
+									<div><p class="metadata-label text-stone-600">Solved</p><p class="mt-1 text-stone-300">{team.challenge_solves ?? 0}</p></div>
+									<div><p class="metadata-label text-stone-600">Ledger</p><p class="mt-1 text-amber-500">{Math.round(team.ledger_points ?? team.total_score ?? 0).toLocaleString()}</p></div>
+									<div><p class="metadata-label text-stone-600">Capacity</p><p class="mt-1 text-stone-300">{team.member_count}/{team.max_members ?? '∞'}</p></div>
+								</div>
+								<div class="mt-3 flex items-center justify-between gap-3">
+									<span class="truncate font-mono text-[11px] text-stone-600">Join {team.join_code}</span>
+									<div class="flex items-center gap-3">
+										<button type="button" class="text-xs text-stone-400 hover:text-stone-200" on:click|stopPropagation={() => renameTeam(team)} on:keydown|stopPropagation>Rename</button>
+										<button type="button" class="text-xs text-stone-500 hover:text-stone-300" on:click|stopPropagation={() => rotateTeamCode(team)} on:keydown|stopPropagation disabled={actionLoading === team.id}>Rotate code</button>
+										<button type="button" class="text-xs text-down hover:underline disabled:opacity-50" on:click|stopPropagation={() => disbandTeam(team)} on:keydown|stopPropagation disabled={actionLoading === team.id}>{actionLoading === team.id ? '…' : 'Disband'}</button>
+									</div>
+								</div>
+							</div>
+						{/each}
+					</div>
+
+					<div class="hidden lg:block">
+						<Card title="Teams" bodyClass="">
+							<span slot="meta" class="text-stone-500 text-xs tabular-nums">{teams.length}</span>
+							<div class="overflow-x-auto">
+								<table class="w-full min-w-[900px] text-sm">
+									<thead>
+										<tr class="metadata-label border-b border-stone-800 text-stone-500">
+											<th class="px-4 py-2.5 text-left">Team</th>
+											<th class="px-4 py-2.5 text-right">Members</th>
+											<th class="px-4 py-2.5 text-right">Solved</th>
+											<th class="px-4 py-2.5 text-right">Ledger</th>
+											<th class="hidden px-4 py-2.5 text-right md:table-cell">Max</th>
+											<th class="hidden px-4 py-2.5 text-left md:table-cell">Join code</th>
+											<th class="hidden px-4 py-2.5 text-right xl:table-cell">Created</th>
+											<th class="px-4 py-2.5 text-right">Actions</th>
 										</tr>
-										{#if expandedTeams[team.id]}
-											<tr class="border-b border-stone-800/60 bg-stone-900/30">
-											<td class="px-4 py-3" colspan="8">
-													<div class="space-y-2">
-														{#if team.members && team.members.length}
-															{#each team.members as member}
-																<div class="flex items-center justify-between text-sm">
-																	<span class="text-stone-300">{member.username}</span>
-																	<button class="text-xs text-warn hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => kickMember(team, member)} disabled={actionLoading === team.id}>Kick</button>
-																</div>
-															{/each}
-														{:else}
-															<p class="text-xs text-stone-500">No members.</p>
-														{/if}
-														<div class="flex items-center gap-2 pt-2 border-t border-stone-800">
-															<input
-																type="text"
-																bind:value={addMemberInput[team.id]}
-																on:keydown={(e) => e.key === 'Enter' && addTeamMember(team)}
-																placeholder="username to add / move..."
-																class="flex-1 text-xs bg-stone-950 border border-stone-800 rounded-md px-2 py-1.5 text-stone-200 focus:outline-none focus:border-stone-500"
-															/>
-															<button class="text-xs text-up hover:underline disabled:opacity-50 disabled:cursor-not-allowed" on:click={() => addTeamMember(team)} disabled={actionLoading === team.id}>Add member</button>
-														</div>
+									</thead>
+									<tbody>
+										{#each teams as team}
+											<tr
+												class="cursor-pointer border-b border-stone-800/60 transition-colors hover:bg-stone-800/30 focus:bg-stone-800/30 focus:outline-none"
+												role="button"
+												tabindex="0"
+												on:click={() => openTeamDetail(team)}
+												on:keydown={(event) => activateRow(event, () => openTeamDetail(team))}
+											>
+												<td class="px-4 py-3"><div class="flex items-center gap-2"><span class="font-medium text-stone-200">{team.name}</span><Icon icon="mdi:chevron-right" class="h-4 w-4 text-stone-700" /></div></td>
+												<td class="px-4 py-3 text-right text-stone-300 tabular-nums">{team.member_count}</td>
+												<td class="px-4 py-3 text-right text-stone-200 tabular-nums">{team.challenge_solves ?? 0}</td>
+												<td class="px-4 py-3 text-right text-amber-500 tabular-nums" title={`Legacy score: ${team.legacy_score ?? 0}`}>{Math.round(team.ledger_points ?? team.total_score ?? 0).toLocaleString()}</td>
+												<td class="hidden px-4 py-3 text-right text-stone-400 tabular-nums md:table-cell" on:click|stopPropagation on:keydown|stopPropagation><button type="button" class="hover:underline" on:click={() => editTeamMax(team)}>{team.max_members == null ? '∞' : team.max_members}</button></td>
+												<td class="hidden px-4 py-3 md:table-cell" on:click|stopPropagation on:keydown|stopPropagation><span class="font-mono text-xs text-stone-400">{team.join_code}</span><button type="button" class="ml-2 text-xs text-stone-600 hover:text-stone-300 disabled:opacity-50" on:click={() => rotateTeamCode(team)} disabled={actionLoading === team.id}>rotate</button></td>
+												<td class="hidden px-4 py-3 text-right text-stone-500 tabular-nums xl:table-cell" title={team.created_at ? instantTitle(team.created_at, 'seconds') : ''}>{team.created_at ? formatDate(team.created_at) : '—'}</td>
+												<td class="px-4 py-3" on:click|stopPropagation on:keydown|stopPropagation>
+													<div class="flex items-center justify-end gap-3">
+														<button type="button" class="text-xs text-stone-400 hover:text-stone-200" on:click={() => renameTeam(team)}>Rename</button>
+														<button type="button" class="text-xs text-down hover:underline disabled:opacity-50" on:click={() => disbandTeam(team)} disabled={actionLoading === team.id}>{actionLoading === team.id ? '…' : 'Disband'}</button>
 													</div>
 												</td>
 											</tr>
-										{/if}
-										{#if expandedSolves[team.id]}
-											<tr class="border-b border-stone-800/60 bg-stone-900/30">
-											<td class="px-4 py-3" colspan="8">
-													{#if solvesLoading[team.id]}
-														<p class="text-xs text-stone-500">Loading solves...</p>
-													{:else if teamSolves[team.id] && teamSolves[team.id].length}
-														<div class="overflow-x-auto">
-															<table class="w-full min-w-[420px] text-xs">
-																<thead>
-																	<tr class="metadata-label text-stone-500 border-b border-stone-800">
-																		<th class="px-2 py-1.5 text-left">Challenge</th>
-																		<th class="px-2 py-1.5 text-left">Solver</th>
-																		<th class="px-2 py-1.5 text-right">Points</th>
-																		<th class="px-2 py-1.5 text-right">When</th>
-																	</tr>
-																</thead>
-																<tbody>
-																	{#each teamSolves[team.id] as solve}
-																		<tr class="border-b border-stone-800/40">
-																			<td class="px-2 py-1.5 text-stone-300">{solve.challenge_name}{solve.flag_name ? ` · ${solve.flag_name}` : ''}</td>
-																			<td class="px-2 py-1.5 text-stone-400">{solve.solver_username}</td>
-																			<td class="px-2 py-1.5 text-right text-stone-300 tabular-nums">{solve.points}</td>
-																			<td class="px-2 py-1.5 text-right text-stone-500 tabular-nums" title={instantTitle(solve.solved_at, 'seconds')}>{formatDate(solve.solved_at)}</td>
-																		</tr>
-																	{/each}
-																</tbody>
-															</table>
-														</div>
-													{:else}
-														<p class="text-xs text-stone-500">No solves yet.</p>
-													{/if}
-												</td>
-											</tr>
-										{/if}
-										{#if expandedSupport[team.id]}
-											<tr class="border-b border-stone-800/60 bg-stone-900/30">
-											<td class="px-4 py-3" colspan="8">
-													{#if supportLoading[team.id]}
-														<p class="text-xs text-stone-500">Loading support view...</p>
-													{:else if teamSupport[team.id]}
-														{@const sup = teamSupport[team.id]}
-														<div class="space-y-4">
-															<div class="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
-																<span class="text-stone-500">Credits <span class="text-amber-500 font-semibold tabular-nums">{Math.floor(sup.economy?.credits ?? 0)}</span></span>
-																<span class="text-stone-500">Points <span class="text-stone-200 font-semibold tabular-nums">{Math.round(sup.economy?.points ?? 0)}</span></span>
-																<span class="text-stone-500">Open <span class="{sup.open_count >= sup.concurrency_cap ? 'text-warn' : 'text-stone-200'} font-semibold tabular-nums">{sup.open_count}/{sup.concurrency_cap}</span></span>
-																<span class="text-stone-500">Grant <span class="text-stone-300">{sup.economy?.grant_issued ? 'issued' : 'none'}</span></span>
-																<span class="text-stone-500">Bailout <span class="text-stone-300">{sup.economy?.bailout_used ? 'used' : 'available'}</span></span>
-															</div>
-
-															<div>
-																<p class="metadata-label text-stone-500 mb-1.5">Open slots ({sup.open_count}/{sup.concurrency_cap})</p>
-																{#if (sup.opens ?? []).filter((o: any) => o.status === 'open').length}
-																	<div class="space-y-1">
-																		{#each (sup.opens ?? []).filter((o: any) => o.status === 'open') as o}
-																			<div class="flex items-center justify-between text-xs">
-																				<span class="text-stone-300">{o.name} <span class="text-stone-600">({o.has_instance ? 'instance' : 'static'})</span></span>
-																				<span class="text-stone-500 tabular-nums" title={o.expires_at ? instantTitle(o.expires_at, 'seconds') : ''}>{o.expires_at ? formatDate(o.expires_at) : '-'}</span>
-																			</div>
-																		{/each}
-																	</div>
-																{:else}
-																	<p class="text-xs text-stone-500">No open slots in use.</p>
-																{/if}
-															</div>
-
-															<div>
-																<p class="metadata-label text-stone-500 mb-1.5">Instances</p>
-																{#if (sup.instances ?? []).length}
-																	<div class="overflow-x-auto">
-																		<table class="w-full min-w-[520px] text-xs">
-																			<thead>
-																				<tr class="metadata-label text-stone-500 border-b border-stone-800">
-																					<th class="px-2 py-1.5 text-left">Challenge</th>
-																					<th class="px-2 py-1.5 text-left">Launched by</th>
-																					<th class="px-2 py-1.5 text-left">Status</th>
-																					<th class="px-2 py-1.5 text-right">Expires</th>
-																					<th class="px-2 py-1.5 text-right">Action</th>
-																				</tr>
-																			</thead>
-																			<tbody>
-																				{#each sup.instances as inst}
-																					<tr class="border-b border-stone-800/40">
-																						<td class="px-2 py-1.5 text-stone-300">{inst.challenge_name}</td>
-																						<td class="px-2 py-1.5 text-stone-400">{inst.launched_by}</td>
-																						<td class="px-2 py-1.5">
-																							<span class="{inst.active ? 'text-up' : 'text-stone-500'}">{inst.status}</span>{#if !inst.has_runtime}<span class="text-stone-600" title="No container id recorded - likely already gone"> (stale?)</span>{/if}
-																						</td>
-																						<td class="px-2 py-1.5 text-right text-stone-500 tabular-nums" title={inst.expires_at ? instantTitle(inst.expires_at, 'seconds') : ''}>{inst.expires_at ? formatDate(inst.expires_at) : '-'}</td>
-																						<td class="px-2 py-1.5 text-right">
-																							{#if inst.active}
-																								<button class="text-down hover:underline" on:click={() => supportForceStop(team.id, inst.id, inst.challenge_name)}>Force-stop</button>
-																							{:else}
-																								<span class="text-stone-600">-</span>
-																							{/if}
-																						</td>
-																					</tr>
-																				{/each}
-																			</tbody>
-																		</table>
-																	</div>
-														{:else}
-															<p class="text-xs text-stone-500">No instances.</p>
-														{/if}
-													</div>
-
-													<div>
-														<p class="metadata-label text-stone-500 mb-1.5">Ledger history</p>
-														{#if (sup.credit_events ?? []).length}
-															<div class="max-h-56 overflow-y-auto rounded-md border border-stone-800">
-																{#each sup.credit_events as event}
-																	<div class="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 border-b border-stone-800/60 px-3 py-2 text-xs last:border-0">
-																		<span class="truncate text-stone-400">{event.kind}</span>
-																		<span class="tabular-nums {event.amount >= 0 ? 'text-up' : 'text-down'}">{event.amount >= 0 ? '+' : ''}{Number(event.amount).toFixed(2)}</span>
-																		<span class="tabular-nums text-stone-600" title={instantTitle(event.created_at, 'seconds')}>{formatDate(event.created_at)}</span>
-																	</div>
-																{/each}
-															</div>
-														{:else}<p class="text-xs text-stone-500">No Ledger activity.</p>{/if}
-													</div>
-												</div>
-													{:else}
-														<p class="text-xs text-stone-500">Could not load support view.</p>
-													{/if}
-												</td>
-											</tr>
-										{/if}
-									{/each}
-								</tbody>
-							</table>
-						</div>
-					</Card>
+										{/each}
+									</tbody>
+								</table>
+							</div>
+						</Card>
+					</div>
 				{/if}
 			{/if}
 
@@ -2222,7 +2091,7 @@
 
 			{#if activeTab === 'infrastructure'}
 				<div class="mb-4 flex items-center justify-between gap-3">
-					<div><h2 class="text-sm font-semibold text-stone-200">Live runtime capacity</h2><p class="mt-1 text-xs text-stone-500">Docker Swarm and VM capacity refresh every 10 seconds.</p></div>
+					<div><h2 class="text-sm font-semibold text-stone-200">Live runtime capacity</h2><p class="mt-1 text-xs text-stone-500">Docker Swarm discovery and VM heartbeats refresh every 10 seconds. Resource figures are scheduler reservations, not host utilization.</p></div>
 					<div class="flex items-center gap-2 text-xs text-stone-500"><span class="h-1.5 w-1.5 rounded-full {infrastructureError ? 'bg-down' : 'bg-up'}"></span>{infrastructureRefreshing ? 'Refreshing…' : infrastructureUpdatedAt ? `Updated ${infrastructureUpdatedAt.toLocaleTimeString()}` : 'Connecting…'}<button type="button" on:click={loadInfrastructure} disabled={infrastructureRefreshing} class="ml-2 text-stone-300 hover:text-stone-100 disabled:opacity-50" aria-label="Refresh infrastructure"><Icon icon="mdi:refresh" class="h-4 w-4 {infrastructureRefreshing ? 'animate-spin' : ''}" /></button></div>
 				</div>
 				{#if infrastructureError}
@@ -2240,28 +2109,28 @@
 						<p class="text-xs text-up mt-1">online</p>
 					</div>
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-						<p class="metadata-label text-stone-500">vCPU</p>
+						<p class="metadata-label text-stone-500">Reserved vCPU</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">
 							{infraStats?.resources?.vcpu?.used || 0}/{infraStats?.resources?.vcpu?.total || 0}
 						</p>
 						<p class="text-xs text-stone-400 mt-1 tabular-nums">{infraStats?.resources?.vcpu?.available || 0} available</p>
 					</div>
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-						<p class="metadata-label text-stone-500">Memory</p>
+						<p class="metadata-label text-stone-500">Reserved memory</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">
 							{infraStats?.resources?.memory_gb?.used || 0}/{infraStats?.resources?.memory_gb?.total || 0} GB
 						</p>
 						<p class="text-xs text-stone-400 mt-1 tabular-nums">{infraStats?.resources?.memory_gb?.available || 0} GB free</p>
 					</div>
 					<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-4">
-						<p class="metadata-label text-stone-500">Running Instances</p>
+						<p class="metadata-label text-stone-500">Running workloads</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums mt-1">{infraStats?.instances?.running || 0}</p>
 						<p class="text-xs text-stone-400 mt-1 tabular-nums">of {infraStats?.instances?.total || 0} active</p>
 					</div>
 				</div>
 
 				<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-					<Card title="Runtime Nodes" bodyClass="">
+					<Card title="Runtime nodes" bodyClass="">
 						<span slot="meta" class="text-stone-500 text-xs tabular-nums">{nodes.length} nodes</span>
 						{#if nodes.length === 0}
 							<EmptyState icon="mdi:server-off" text="No nodes configured.">
@@ -2293,13 +2162,14 @@
 												</button>
 											{/if}
 										</div>
-										<div class="text-xs text-stone-500 tabular-nums">
+									<div class="text-xs text-stone-500 tabular-nums">
 											<span>{node.ip_address}</span>
 											<span class="mx-2 text-stone-700">•</span>
 											<span>{node.active_vms}/{node.max_vms} {node.runtime === 'docker' ? 'workloads' : 'VMs'}</span>
 											<span class="mx-2 text-stone-700">•</span>
-											<span>{node.used_vcpu}/{node.total_vcpu} vCPU</span>
-										</div>
+										<span>{node.used_vcpu}/{node.total_vcpu} vCPU</span>
+									</div>
+									<p class="mt-1 text-[11px] text-stone-600">{node.runtime === 'docker' ? 'Discovered live from the Swarm manager' : node.last_heartbeat ? `Heartbeat ${formatLocalDateTimeWithZone(node.last_heartbeat, 'seconds')}` : 'No heartbeat received'}</p>
 										<div class="mt-2 space-y-1">
 											<div class="flex items-center gap-2">
 												<span class="metadata-label text-stone-600 w-10">CPU</span>
@@ -2479,12 +2349,18 @@
 						<button type="button" on:click={loadDashboard} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
 					</div>
 				{/if}
-				<nav class="sticky top-0 z-20 mb-5 flex items-center gap-1 overflow-x-auto rounded-lg border border-stone-800 bg-stone-950/95 p-1.5 shadow-lg shadow-stone-950/30 backdrop-blur" aria-label="Settings sections">
-					<span class="shrink-0 px-2 text-[10px] uppercase tracking-wider text-stone-600">Jump to</span>
-					{#each [{ href: '#settings-ledger', label: 'Ledger' }, { href: '#settings-instances', label: 'Instances' }, { href: '#settings-access', label: 'Access' }, { href: '#settings-platform', label: 'Platform & event' }] as link}
-						<a href={link.href} class="shrink-0 rounded-md px-3 py-2 text-xs text-stone-400 transition-colors hover:bg-stone-900 hover:text-stone-100">{link.label}</a>
-					{/each}
-					{#if settingsChanged}<span class="ml-auto shrink-0 px-2 text-xs text-warn">Unsaved changes</span>{/if}
+				<nav class="sticky top-2 z-20 mb-6 rounded-lg border border-stone-800 bg-stone-950/95 p-2 shadow-xl shadow-black/20 backdrop-blur" aria-label="Settings sections">
+					<div class="mb-2 flex items-center justify-between gap-3 px-2 pt-1"><div><p class="metadata-label text-stone-600">Settings map</p><p class="mt-0.5 text-xs text-stone-500">Choose an area instead of hunting through one long form.</p></div>{#if settingsChanged}<span class="shrink-0 rounded-full bg-warn/10 px-2 py-1 text-[11px] text-warn">Unsaved changes</span>{/if}</div>
+					<div class="grid grid-cols-2 gap-1 md:grid-cols-4">
+						{#each [
+							{ href: '#settings-ledger', label: 'Economy rules', detail: 'Active Ledger policy', icon: 'mdi:scale-balance' },
+							{ href: '#settings-instances', label: 'Runtime', detail: 'Timeouts and limits', icon: 'mdi:timer-outline' },
+							{ href: '#settings-access', label: 'Access', detail: 'VPN requirements', icon: 'mdi:shield-key-outline' },
+							{ href: '#settings-platform', label: 'Competition', detail: 'Modes and event clock', icon: 'mdi:tune-variant' }
+						] as link}
+							<a href={link.href} class="flex min-w-0 items-center gap-2 rounded-md border border-transparent px-2.5 py-2 text-left transition-colors hover:border-stone-800 hover:bg-stone-900"><OpticalIcon icon={link.icon} size={15} box={16} className="shrink-0 text-stone-500" /><span class="min-w-0"><span class="block truncate text-xs font-medium text-stone-300">{link.label}</span><span class="hidden truncate text-[10px] text-stone-600 sm:block">{link.detail}</span></span></a>
+						{/each}
+					</div>
 				</nav>
 				<div class="space-y-6 {settingsError ? 'pointer-events-none select-none opacity-40' : ''}" aria-disabled={settingsError ? 'true' : undefined}>
 					{#if settingsChanged}
@@ -2501,29 +2377,19 @@
 					{/if}
 
 					{#if $platformInfo?.economy_policy}
-						<Card elementId="settings-ledger" bodyClass="p-4">
+						<Card elementId="settings-ledger" bodyClass="p-4 scroll-mt-32">
 							<div slot="header">
 								<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
 									<OpticalIcon icon="mdi:scale-balance" size={14} box={14} className="text-stone-500" />
-									<span class="optical-label">Ledger Policy</span>
+									<span class="optical-label">Economy ruleset</span>
 								</h2>
-								<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">The versioned ruleset currently loaded by the API</p>
+								<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Identity of the scoring and credit rules loaded by the API</p>
 							</div>
-							<div class="grid gap-4 md:grid-cols-[1fr_auto] md:items-center">
-								<div>
-									<div class="flex flex-wrap items-center gap-2">
-										<p class="text-sm font-medium text-stone-200">{$platformInfo.economy_policy.name} v{$platformInfo.economy_policy.version}</p>
-										<span class="rounded-full px-2 py-0.5 text-[10px] font-medium {$platformInfo.economy_policy.customized ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}">
-											{$platformInfo.economy_policy.customized ? 'Customized' : 'Canonical'}
-										</span>
-									</div>
-									<p class="mt-1 text-xs text-stone-500">Preset {$platformInfo.economy_policy.id}</p>
-								</div>
-								<div class="min-w-0 md:text-right">
-									<p class="metadata-label text-stone-600">Active checksum</p>
-									<code class="mt-1 block break-all text-[11px] text-stone-400" title={$platformInfo.economy_policy.checksum}>{$platformInfo.economy_policy.checksum}</code>
-								</div>
+							<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+								<div class="flex items-center gap-3"><div class="grid h-10 w-10 place-items-center rounded-lg bg-amber-500/10 text-amber-500"><Icon icon="mdi:bank-outline" class="h-5 w-5" /></div><div><p class="text-sm font-medium text-stone-200">{$platformInfo.economy_policy.name}</p><p class="mt-1 text-xs text-stone-500">Version {$platformInfo.economy_policy.version} · preset {$platformInfo.economy_policy.id}</p></div></div>
+								<span class="w-fit rounded-full px-2.5 py-1 text-[11px] font-medium {$platformInfo.economy_policy.customized ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}">{$platformInfo.economy_policy.customized ? 'Organizer customized' : 'Canonical policy'}</span>
 							</div>
+							<details class="mt-4 border-t border-stone-800 pt-3"><summary class="cursor-pointer text-xs text-stone-500 hover:text-stone-300">Technical identity</summary><div class="mt-3 grid gap-2 text-[11px] sm:grid-cols-2"><div><p class="metadata-label text-stone-600">Active checksum</p><code class="mt-1 block break-all text-stone-500">{$platformInfo.economy_policy.checksum}</code></div><div><p class="metadata-label text-stone-600">Canonical checksum</p><code class="mt-1 block break-all text-stone-500">{$platformInfo.economy_policy.canonical_checksum}</code></div></div></details>
 						</Card>
 					{/if}
 
@@ -2829,15 +2695,24 @@
 						</div>
 					{/if}
 					<div>
+						<p class="metadata-label text-stone-600">Integrity operations</p>
+						<div class="mt-1 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><h2 class="text-xl font-semibold text-stone-100">Evidence without secret exposure</h2><p class="mt-1 text-sm text-stone-500">Review suspicious submissions, contact participants and correlate generated flags without displaying reusable flag material.</p></div><button type="button" on:click={loadIntel} disabled={intelLoading} class={btnGhost}><Icon icon="mdi:refresh" class="h-4 w-4 {intelLoading ? 'animate-spin' : ''}" />Refresh evidence</button></div>
+						<div class="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+							{#each [
+								{ label: 'Share alerts', value: flagShares.length, tone: flagShares.length ? 'text-down' : 'text-up' },
+								{ label: 'Dynamic flags indexed', value: instanceFlags.length, tone: 'text-stone-200' },
+								{ label: 'Raw secrets shown', value: 0, tone: 'text-up' },
+								{ label: 'Evidence state', value: intelError ? 'degraded' : 'current', tone: intelError ? 'text-warn' : 'text-up' }
+							] as item}<div class="rounded-lg border border-stone-800 bg-stone-900/40 p-4"><p class="metadata-label text-stone-600">{item.label}</p><p class="mt-2 text-xl font-semibold capitalize tabular-nums {item.tone}">{item.value}</p></div>{/each}
+						</div>
+					</div>
+					<div>
 						<div class="flex items-center justify-between mb-4">
 							<div>
 								<h3 class="text-sm font-semibold text-stone-200">Flag Share Events</h3>
 								<p class="mt-1 text-xs text-stone-500">Valid flag material is never exposed here. Evidence uses participant, challenge, IP, time, and a non-reversible fingerprint.</p>
 							</div>
-							<button type="button" on:click={loadIntel} class="text-xs leading-none text-stone-500 hover:text-stone-300 flex items-center gap-1 transition-colors">
-								<Icon icon="mdi:refresh" class="w-3 h-3 shrink-0" />
-								Refresh
-							</button>
+								<span class="rounded-full border border-stone-800 px-2 py-1 text-[10px] text-stone-500">Priority review queue</span>
 						</div>
 						{#if intelLoading}
 							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-8 flex justify-center">
@@ -2869,7 +2744,7 @@
 													<td class="px-4 py-2.5 text-amber-500/90">{ev.owner_username ?? ev.owner_user_id}</td>
 													<td class="px-4 py-2.5 text-down">{ev.submitter_username ?? ev.submitter_user_id}</td>
 													<td class="px-4 py-2.5 text-xs text-stone-400 font-mono">{ev.submitter_ip ?? '-'}</td>
-											<td class="px-4 py-2.5 text-xs text-stone-300 font-mono max-w-xs truncate">{ev.flag_value === '[redacted]' ? 'protected' : ev.flag_value}</td>
+											<td class="px-4 py-2.5 text-xs text-stone-300 font-mono max-w-xs truncate">sha256:{ev.flag_fingerprint} · {ev.flag_length} chars</td>
 										<td
 											class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums"
 											title={instantTitle(ev.created_at, 'seconds')}
@@ -2890,7 +2765,7 @@
 					</div>
 
 					<div>
-						<h3 class="text-sm font-semibold text-stone-200 mb-4">Instance Flags ({instanceFlags.length})</h3>
+						<div class="mb-4"><h3 class="text-sm font-semibold text-stone-200">Generated flag index ({instanceFlags.length})</h3><p class="mt-1 text-xs text-stone-500">Only a shortened SHA-256 fingerprint and length are returned. Use these to correlate evidence; raw per-instance flags stay inside the runtime and verification path.</p></div>
 						{#if intelLoading}
 							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-8 flex justify-center">
 								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />
@@ -2907,7 +2782,7 @@
 											<tr class="metadata-label text-stone-500 border-b border-stone-800">
 												<th class="px-4 py-2.5 text-left">User</th>
 												<th class="px-4 py-2.5 text-left">Challenge</th>
-												<th class="px-4 py-2.5 text-left">Flag Value</th>
+											<th class="px-4 py-2.5 text-left">Fingerprint</th>
 												<th class="px-4 py-2.5 text-left">Instance ID</th>
 											</tr>
 										</thead>
@@ -2916,7 +2791,7 @@
 												<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
 													<td class="px-4 py-2.5 text-stone-200">{fl.username ?? fl.user_id}</td>
 													<td class="px-4 py-2.5 text-stone-300">{fl.challenge_name ?? fl.challenge_id}</td>
-													<td class="px-4 py-2.5 text-xs text-up font-mono max-w-xs truncate">{fl.flag_value}</td>
+											<td class="px-4 py-2.5 text-xs text-stone-400 font-mono max-w-xs truncate">sha256:{fl.flag_fingerprint} · {fl.flag_length} chars</td>
 													<td class="px-4 py-2.5 text-xs text-stone-500 font-mono">{fl.instance_id}</td>
 												</tr>
 											{/each}
@@ -3071,9 +2946,13 @@
 		loading={teamDetailLoading}
 		error={teamDetailError}
 		adjusting={teamCreditAdjusting}
+		action={teamDossierAction}
 		on:close={() => { selectedTeamSeed = null; selectedTeamDetail = null; }}
 		on:user={(event) => { const member = event.detail; selectedTeamSeed = null; selectedTeamDetail = null; void openUserDetail(member); }}
 		on:credit={adjustTeamCredit}
+		on:addmember={addTeamMember}
+		on:removemember={removeTeamMember}
+		on:stopinstance={stopTeamInstance}
 	/>
 {/if}
 
@@ -3103,7 +2982,7 @@
 					</button>
 				</div>
 
-				<div class="grid grid-cols-2 gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md sm:grid-cols-4">
+				<div class="grid grid-cols-2 gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md sm:grid-cols-5">
 					<button
 						type="button"
 						on:click={() => newChallenge.type = 'container'}
@@ -3127,6 +3006,14 @@
 					>
 						<Icon icon="mdi:file-download-outline" class="w-3.5 h-3.5 shrink-0" />
 						Static / files
+					</button>
+					<button
+						type="button"
+						on:click={() => newChallenge.type = 'external'}
+						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'external' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
+					>
+						<Icon icon="mdi:open-in-new" class="w-3.5 h-3.5 shrink-0" />
+						External
 					</button>
 					<button
 						type="button"
@@ -3258,7 +3145,7 @@
 
 						<label class="block md:col-span-2">
 							<span class={labelCls}>Target topology</span>
-							<select bind:value={newChallenge.arena_mode} class="w-full {fieldCls}" disabled={newChallenge.type === 'download'}>
+							<select bind:value={newChallenge.arena_mode} class="w-full {fieldCls}" disabled={newChallenge.type === 'download' || newChallenge.type === 'external'}>
 								<option value="per_team">Isolated per team</option>
 								<option value="shared">Shared arena / KotH target</option>
 							</select>
@@ -3266,12 +3153,18 @@
 						</label>
 					</div>
 
-					{#if newChallenge.type === 'container' || newChallenge.type === 'multi' || newChallenge.type === 'download'}
+					{#if newChallenge.type === 'container' || newChallenge.type === 'multi' || newChallenge.type === 'download' || newChallenge.type === 'external'}
 						<div class="pt-4 border-t border-stone-800 space-y-5">
 							{#if newChallenge.type === 'download'}
 								<div class="flex items-start gap-2 py-2.5 px-3 bg-stone-900/40 border border-stone-800 rounded-md text-stone-400 text-xs">
 									<Icon icon="mdi:information-outline" class="w-4 h-4 shrink-0 mt-0.5" />
 									A download-only challenge has no container - add the challenge files as attachments below, and a flag.
+								</div>
+							{/if}
+							{#if newChallenge.type === 'external'}
+								<div class="flex items-start gap-2 rounded-md border border-teal-500/20 bg-teal-500/[0.05] px-3 py-2.5 text-xs text-stone-400">
+									<Icon icon="mdi:open-in-new" class="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />
+									<div><p class="font-medium text-stone-300">External target or OSINT challenge</p><p class="mt-1 leading-relaxed text-stone-500">Anvil provisions no runtime. Put the player-facing target URL and instructions in the description. Choose Static / files instead when downloadable handouts are part of delivery.</p></div>
 								</div>
 							{/if}
 							{#if newChallenge.type === 'multi'}
@@ -3552,6 +3445,7 @@
 						</div>
 					{/if}
 
+					{#if newChallenge.type !== 'external'}
 					<div class="pt-4 border-t border-stone-800 space-y-3">
 						<div class="flex items-center justify-between">
 							<span class="metadata-label block text-stone-400">File Attachments <span class="text-stone-500 font-normal">(optional)</span></span>
@@ -3596,6 +3490,7 @@
 							</p>
 						{/if}
 					</div>
+					{/if}
 
 					<div class="flex gap-3 pt-4">
 						<button type="submit" disabled={uploadLoading} class="flex-1 {btnPrimary}">
@@ -3636,7 +3531,7 @@
 				<div>
 					<h2 class="text-lg font-semibold text-stone-100">Edit Challenge</h2>
 					<p class="text-xs text-stone-500 mt-0.5">
-						{editingChallenge.delivery_type === 'vm' ? 'Virtual machine' : editingChallenge.delivery_type === 'multi' ? 'Multi-service' : editingChallenge.delivery_type === 'static' ? 'Static / files' : 'Container'} ·
+						{editingChallenge.delivery_type === 'vm' ? 'Virtual machine' : editingChallenge.delivery_type === 'multi' ? 'Multi-service' : editingChallenge.delivery_type === 'static' ? 'Static / files' : editingChallenge.delivery_type === 'external' ? 'External target' : 'Container'} ·
 						<span class="{editingChallenge.status === 'published' ? 'text-up' : 'text-warn'}">{editingChallenge.status}</span>
 						· {editingChallenge.slug}
 					</p>
@@ -3719,12 +3614,13 @@
 							<option value="container">Single container</option>
 							<option value="multi">Multi-service</option>
 							<option value="static">Static / files only</option>
+							<option value="external">External target / OSINT</option>
 							<option value="vm">Virtual machine</option>
 						</select>
 					</label>
 					<label class="block">
 						<span class={labelCls}>Topology</span>
-						<select bind:value={editingChallenge.arena_mode} disabled={editingChallenge.delivery_type === 'static'} class="w-full {fieldCls}"><option value="per_team">Isolated per team</option><option value="shared">Shared arena / KotH</option></select>
+						<select bind:value={editingChallenge.arena_mode} disabled={editingChallenge.delivery_type === 'static' || editingChallenge.delivery_type === 'external'} class="w-full {fieldCls}"><option value="per_team">Isolated per team</option><option value="shared">Shared arena / KotH</option></select>
 					</label>
 				</div>
 
@@ -3805,6 +3701,8 @@
 					</div>
 				{:else if editingChallenge.delivery_type === 'static'}
 					<div class="flex items-start gap-3 rounded-lg border border-info/20 bg-info/[0.05] p-4 text-sm text-stone-400"><Icon icon="mdi:file-download-outline" class="mt-0.5 h-5 w-5 shrink-0 text-info" /><div><p class="font-medium text-stone-300">Static / files-only delivery</p><p class="mt-1 text-xs leading-relaxed text-stone-500">No runtime will be provisioned. Add downloadable handouts in the Files tab and configure validation in Flags.</p></div></div>
+				{:else if editingChallenge.delivery_type === 'external'}
+					<div class="flex items-start gap-3 rounded-lg border border-teal-500/20 bg-teal-500/[0.05] p-4 text-sm text-stone-400"><Icon icon="mdi:open-in-new" class="mt-0.5 h-5 w-5 shrink-0 text-teal-500" /><div><p class="font-medium text-stone-300">External target / OSINT delivery</p><p class="mt-1 text-xs leading-relaxed text-stone-500">No runtime is provisioned. The description carries the player-facing target and instructions; optional external or managed handouts remain available in Files.</p></div></div>
 				{/if}
 
 				{#if editingChallenge.delivery_type === 'vm'}
@@ -3827,7 +3725,7 @@
 					</div>
 				{/if}
 
-				{#if editingChallenge.delivery_type !== 'static'}
+				{#if editingChallenge.delivery_type !== 'static' && editingChallenge.delivery_type !== 'external'}
 				<div class="border border-stone-800 rounded-lg p-4 space-y-3">
 					<div><h3 class="metadata-label text-stone-400">Instance lifecycle</h3><p class="mt-1 text-xs text-stone-600">Starting, stopping and restarting infrastructure does not charge teams. Opening, paid extensions and configured economy actions do.</p></div>
 					<div class="grid gap-3 sm:grid-cols-3">

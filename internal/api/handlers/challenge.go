@@ -58,6 +58,7 @@ type ChallengeListResponse struct {
 	ArenaMode      string  `json:"arena_mode"`                // per_team (default) or shared (KotH)
 	HasInstance    bool    `json:"has_instance"`              // docker w/ image, or active vm template; false = static download
 	HasAttachments bool    `json:"has_attachments"`           // server-side truth (true even while files are gated pre-open); no instance + no attachment = external
+	DeliveryType   string  `json:"delivery_type"`
 
 	Value *float64 `json:"value,omitempty"` // economy: what a new full capture pays right now
 
@@ -144,7 +145,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		SELECT
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
-			c.resource_type, c.sub_description, c.arena_mode,
+			c.resource_type, c.delivery_type, c.sub_description, c.arena_mode,
 			(
 				(c.resource_type = 'docker' AND (COALESCE(c.container_image, '') <> '' OR c.container_spec IS NOT NULL))
 				OR (c.resource_type = 'vm' AND EXISTS (
@@ -196,7 +197,7 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		if err := rows.Scan(
 			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 			&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
-			&ch.ResourceType, &ch.SubDescription, &ch.ArenaMode, &ch.HasInstance, &ch.HasAttachments, &categoryID, &categoryName, &ch.UserSolves,
+			&ch.ResourceType, &ch.DeliveryType, &ch.SubDescription, &ch.ArenaMode, &ch.HasInstance, &ch.HasAttachments, &categoryID, &categoryName, &ch.UserSolves,
 			&ch.ScoringMode, &ch.GradedBest, &ch.GradedTeams,
 		); err != nil {
 			h.logger.Error("failed to scan challenge", zap.Error(err))
@@ -206,7 +207,6 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 
 		ch.CategoryID = categoryID
 		ch.Category = categoryName
-
 		ch.IsSolved = ch.UserSolves >= ch.TotalFlags && ch.TotalFlags > 0
 		if ch.ScoringMode == "graded" {
 			ch.IsSolved = ch.GradedBest != nil && *ch.GradedBest >= 1
@@ -290,7 +290,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 			c.id, c.name, c.slug, c.description, c.difficulty,
 			c.base_points, c.total_solves, c.total_flags, c.author_name,
 			c.exposed_ports, c.instance_timeout, c.max_extensions, c.release_date,
-			c.resource_type, c.status, c.sub_description, c.arena_mode, c.scoring_mode,
+			c.resource_type, c.delivery_type, c.status, c.sub_description, c.arena_mode, c.scoring_mode,
 			(
 				(c.resource_type = 'docker' AND (COALESCE(c.container_image, '') <> '' OR c.container_spec IS NOT NULL))
 				OR (c.resource_type = 'vm' AND EXISTS (
@@ -311,7 +311,7 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
 		&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
 		&exposedPortsJSON, &ch.InstanceTimeout, &ch.MaxExtensions, &ch.ReleaseDate,
-		&ch.ResourceType, &ch.Status, &ch.SubDescription, &ch.ArenaMode, &ch.ScoringMode,
+		&ch.ResourceType, &ch.DeliveryType, &ch.Status, &ch.SubDescription, &ch.ArenaMode, &ch.ScoringMode,
 		&ch.HasInstance, &ch.HasAttachments,
 		&categoryID, &categoryName,
 	)
@@ -327,7 +327,6 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 
 	ch.CategoryID = categoryID
 	ch.Category = categoryName
-
 	ch.ExposedPorts = []models.ExposedPort{}
 	if len(exposedPortsJSON) > 0 {
 		if err := json.Unmarshal(exposedPortsJSON, &ch.ExposedPorts); err != nil {

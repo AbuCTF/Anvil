@@ -7,7 +7,7 @@
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
 	import { auth } from '$stores/auth';
-	import { api, ApiError } from '$api';
+	import { api, ApiError, type NotificationItem } from '$api';
 	import Icon from '@iconify/svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import EventClock from '$lib/components/EventClock.svelte';
@@ -79,6 +79,9 @@
 	let notificationUnread = 0;
 	let notificationsCheckedFor = '';
 	let notificationCountInitialized = false;
+	let notificationToasts: NotificationItem[] = [];
+	let knownNotificationIDs = new Set<string>();
+	const notificationToastTimers = new Map<string, number>();
 	$: if (browser && $platformInfo?.accent) document.documentElement.setAttribute('data-accent', $platformInfo.accent);
 	$: if (browser && $platformInfo?.logo_url) {
 		const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
@@ -91,26 +94,67 @@
 			return;
 		}
 		try {
-			const response = await api.getUnreadNotificationCount();
-			if (notificationCountInitialized && response.unread_count > notificationUnread && $platformInfo?.notification_sound_allowed && notificationSoundEnabled()) {
-				const latest = await api.getNotifications(5);
-				const audible = latest.items.find((item) => !item.read && (item.severity === 'critical' || item.audience === 'team' || item.audience === 'user'));
-				if (audible) playNotificationSound(audible.id);
+			const response = await api.getNotifications(12);
+			if (notificationCountInitialized) {
+				const fresh = response.items.filter((item) => !item.read && !knownNotificationIDs.has(item.id));
+				const visible = fresh.filter((item) => item.audience === 'team' || item.audience === 'user' || item.severity === 'warning' || item.severity === 'critical');
+				for (const item of visible.reverse()) showNotificationToast(item);
+				const audible = fresh.find((item) => item.severity === 'critical' || item.audience === 'team' || item.audience === 'user');
+				if (audible && $platformInfo?.notification_sound_allowed && notificationSoundEnabled()) playNotificationSound(audible.id);
 			}
+			for (const item of response.items) knownNotificationIDs.add(item.id);
 			notificationUnread = response.unread_count;
 			notificationCountInitialized = true;
 		} catch {
 			// The header is non-critical; the full page reports actionable errors.
 		}
 	}
+
+	function showNotificationToast(item: NotificationItem) {
+		if (notificationToasts.some((toast) => toast.id === item.id)) return;
+		notificationToasts = [...notificationToasts.slice(-2), item];
+		const existing = notificationToastTimers.get(item.id);
+		if (existing) window.clearTimeout(existing);
+		notificationToastTimers.set(item.id, window.setTimeout(() => dismissNotificationToast(item.id), 9000));
+	}
+
+	function dismissNotificationToast(id: string) {
+		notificationToasts = notificationToasts.filter((toast) => toast.id !== id);
+		const timer = notificationToastTimers.get(id);
+		if (timer) window.clearTimeout(timer);
+		notificationToastTimers.delete(id);
+	}
+
+	function resetNotificationFeed() {
+		for (const timer of notificationToastTimers.values()) window.clearTimeout(timer);
+		notificationToastTimers.clear();
+		notificationToasts = [];
+		knownNotificationIDs = new Set<string>();
+		notificationUnread = 0;
+		notificationCountInitialized = false;
+	}
+
+	function notificationAccent(item: NotificationItem) {
+		if (item.severity === 'critical') return 'border-down/40 text-down';
+		if (item.severity === 'warning') return 'border-warn/40 text-warn';
+		if (item.severity === 'success') return 'border-up/40 text-up';
+		return 'border-cyan-500/30 text-cyan-400';
+	}
+
+	function notificationIcon(item: NotificationItem) {
+		if (item.severity === 'critical') return 'mdi:alert-octagon-outline';
+		if (item.severity === 'warning') return 'mdi:alert-outline';
+		if (item.severity === 'success') return 'mdi:check-circle-outline';
+		return item.audience === 'team' ? 'mdi:account-group-outline' : 'mdi:bell-outline';
+	}
 	$: if (browser && $auth.isAuthenticated && $auth.user?.id && notificationsCheckedFor !== $auth.user.id) {
+		resetNotificationFeed();
 		notificationsCheckedFor = $auth.user.id;
 		void loadNotificationCount();
 	}
 	$: if (browser && !$auth.isAuthenticated && !$auth.isLoading && notificationsCheckedFor) {
 		notificationsCheckedFor = '';
-		notificationUnread = 0;
-		notificationCountInitialized = false;
+		resetNotificationFeed();
 	}
 
 	async function loadCredits() {
@@ -186,7 +230,7 @@
 		const refreshNotifications = () => {
 			if (!document.hidden) void loadNotificationCount();
 		};
-		const notificationTimer = window.setInterval(refreshNotifications, 60_000);
+		const notificationTimer = window.setInterval(refreshNotifications, 15_000);
 		const primeSound = () => primeNotificationSound();
 		document.addEventListener('visibilitychange', refreshVisibleRank);
 		window.addEventListener('pointerdown', primeSound, { once: true });
@@ -195,6 +239,7 @@
 		window.addEventListener('notifications:changed', refreshNotifications);
 		return () => {
 			window.clearInterval(notificationTimer);
+			resetNotificationFeed();
 			document.removeEventListener('visibilitychange', refreshVisibleRank);
 			window.removeEventListener('pointerdown', primeSound);
 			window.removeEventListener('keydown', primeSound);
@@ -277,11 +322,11 @@
 								href="/notifications"
 								aria-label={notificationUnread > 0 ? `${notificationUnread} unread notifications` : 'Notifications'}
 								title="Notifications"
-								class="relative rounded-md p-1.5 text-stone-400 transition-colors hover:bg-stone-800/40 hover:text-stone-100"
+								class="relative grid h-9 w-9 place-items-center rounded-md text-stone-400 transition-colors hover:bg-stone-800/40 hover:text-stone-100"
 							>
 								<Icon icon={notificationUnread > 0 ? 'mdi:bell' : 'mdi:bell-outline'} class="h-5 w-5" />
 								{#if notificationUnread > 0}
-									<span class="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-none text-stone-950 tabular-nums">{notificationUnread > 99 ? '99+' : notificationUnread}</span>
+									<span class="absolute right-0 top-0 inline-flex min-h-4 min-w-4 items-center justify-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-[1] text-stone-950 tabular-nums ring-2 ring-stone-950">{notificationUnread > 99 ? '99+' : notificationUnread}</span>
 								{/if}
 							</a>
 							{#if $auth.user?.role === 'admin'}
@@ -462,6 +507,24 @@
 		<slot />
 	</main>
 </div>
+
+{#if notificationToasts.length}
+	<div class="pointer-events-none fixed bottom-4 left-4 z-[90] flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2 sm:bottom-6 sm:left-6" aria-live="polite" aria-label="New team notifications">
+		{#each notificationToasts as toast (toast.id)}
+			<div class="pointer-events-auto overflow-hidden rounded-lg border bg-stone-950/95 shadow-2xl shadow-black/40 backdrop-blur {notificationAccent(toast)}">
+				<div class="flex items-start gap-3 p-4">
+					<Icon icon={notificationIcon(toast)} class="mt-0.5 h-5 w-5 shrink-0" />
+					<div class="min-w-0 flex-1">
+						<p class="text-sm font-semibold text-stone-100">{toast.title}</p>
+						<p class="mt-1 line-clamp-3 text-xs leading-relaxed text-stone-400">{toast.body}</p>
+						{#if toast.href}<a href={toast.href} on:click={() => dismissNotificationToast(toast.id)} class="mt-2 inline-flex text-xs font-medium text-amber-500 hover:text-amber-400">Open</a>{/if}
+					</div>
+					<button type="button" on:click={() => dismissNotificationToast(toast.id)} aria-label="Dismiss notification" class="shrink-0 rounded p-0.5 text-stone-600 hover:text-stone-300"><Icon icon="mdi:close" class="h-4 w-4" /></button>
+				</div>
+			</div>
+		{/each}
+	</div>
+{/if}
 
 <DialogHost />
 

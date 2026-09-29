@@ -705,6 +705,7 @@ type CreateChallengeRequest struct {
 	MaxExtensions   *int    `json:"max_extensions"`
 	AuthorName      string  `json:"author_name"`
 	ResourceType    *string `json:"resource_type"` // "docker" or "vm"
+	DeliveryType    string  `json:"delivery_type"`
 
 	// arena_mode: "per_team" (default) or "shared" (one contested KotH target the
 	// whole field attacks). Empty = leave unchanged (update) / default (create).
@@ -859,6 +860,8 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 		       c.privesc, c.arena_mode, c.release_date, c.total_attempts,
 		       c.economy_solve_count, c.supports_docker, c.supports_vm,
 		       c.vm_timeout_minutes, c.vm_max_extensions, c.vm_extension_minutes,
+		       c.delivery_type,
+		       EXISTS (SELECT 1 FROM challenge_attachments ca WHERE ca.challenge_id = c.id),
 		       (SELECT cr.vm_template_id::text FROM challenge_resources cr
 		        WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active
 		        ORDER BY cr.created_at DESC LIMIT 1)
@@ -914,6 +917,8 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			VMTimeoutMinutes   *int
 			VMMaxExtensions    *int
 			VMExtensionMinutes *int
+			DeliveryType       string
+			HasAttachments     bool
 			VMTemplateID       *string
 		}
 
@@ -927,7 +932,7 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			&ch.AuthorName, &ch.ScoringMode, &ch.SubDescription, &ch.ContainerSpec,
 			&ch.Privesc, &ch.ArenaMode, &ch.ReleaseDate, &ch.TotalAttempts,
 			&ch.EconomySolves, &ch.SupportsDocker, &ch.SupportsVM,
-			&ch.VMTimeoutMinutes, &ch.VMMaxExtensions, &ch.VMExtensionMinutes, &ch.VMTemplateID,
+			&ch.VMTimeoutMinutes, &ch.VMMaxExtensions, &ch.VMExtensionMinutes, &ch.DeliveryType, &ch.HasAttachments, &ch.VMTemplateID,
 		); err != nil {
 			h.logger.Warn("failed to scan challenge row", zap.Error(err))
 			continue
@@ -941,13 +946,11 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 		if len(ch.ContainerSpec) > 0 {
 			_ = json.Unmarshal(ch.ContainerSpec, &services)
 		}
-		deliveryType := "container"
-		if ch.ResourceType == "vm" {
-			deliveryType = "vm"
-		} else if len(services) > 0 {
+		deliveryType := ch.DeliveryType
+		if deliveryType == "docker" && len(services) > 0 {
 			deliveryType = "multi"
-		} else if ch.ContainerImage == nil || strings.TrimSpace(*ch.ContainerImage) == "" {
-			deliveryType = "static"
+		} else if deliveryType == "docker" {
+			deliveryType = "container"
 		}
 
 		challenges = append(challenges, gin.H{
@@ -989,6 +992,7 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			"vm_extension_minutes": ch.VMExtensionMinutes,
 			"vm_template_id":       ch.VMTemplateID,
 			"delivery_type":        deliveryType,
+			"has_attachments":      ch.HasAttachments,
 		})
 	}
 
@@ -1026,6 +1030,31 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	if challengeType != "docker" && challengeType != "vm" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "challenge_type must be docker or vm"})
 		return
+	}
+	deliveryType := strings.ToLower(strings.TrimSpace(req.DeliveryType))
+	if deliveryType == "" {
+		switch {
+		case challengeType == "vm":
+			deliveryType = "vm"
+		case strings.TrimSpace(req.ContainerImage) != "" || len(req.Services) > 0:
+			deliveryType = "docker"
+		default:
+			deliveryType = "static"
+		}
+	}
+	if deliveryType != "docker" && deliveryType != "static" && deliveryType != "external" && deliveryType != "vm" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "delivery_type must be docker, static, external, or vm"})
+		return
+	}
+	if (challengeType == "vm") != (deliveryType == "vm") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "VM resource and delivery types must be selected together"})
+		return
+	}
+	if deliveryType == "static" || deliveryType == "external" {
+		req.ContainerImage = ""
+		req.Services = nil
+		req.ExposedPorts = nil
+		req.Privesc = false
 	}
 
 	resourceType := "docker"
@@ -1101,14 +1130,14 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 			container_image, container_tag, container_platform, cpu_limit, memory_limit,
 			exposed_ports, base_points, instance_timeout, max_extensions,
 			vm_timeout_minutes, vm_max_extensions, vm_extension_minutes, cooldown_minutes,
-			author_name, resource_type, supports_docker, supports_vm,
+			author_name, resource_type, delivery_type, supports_docker, supports_vm,
 			total_flags, sub_description, container_spec, privesc, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, NOW(), NOW())`,
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, NOW(), NOW())`,
 		challengeID, req.Name, challengeSlug, req.Description, req.Difficulty, req.CategoryID,
 		req.ContainerImage, req.ContainerTag, req.ContainerPlatform, req.CPULimit, req.MemoryLimit,
 		portsJSON, req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 		req.VMTimeoutMinutes, req.VMMaxExtensions, req.VMExtensionMinutes, req.CooldownMinutes,
-		req.AuthorName, resourceType, supportsDocker, supportsVM, len(req.Flags), subDescriptionOrNil(req.SubDescription),
+		req.AuthorName, resourceType, deliveryType, supportsDocker, supportsVM, len(req.Flags), subDescriptionOrNil(req.SubDescription),
 		nilIfEmpty(containerSpec), req.Privesc,
 	)
 	if err != nil {
@@ -1399,9 +1428,9 @@ func (h *AdminChallengeHandler) CreateOVAChallenge(c *gin.Context) {
 	_, err = tx.Exec(c.Request.Context(),
 		`INSERT INTO challenges (
 			id, name, slug, description, difficulty, category_id, status,
-			base_points, resource_type, supports_docker, supports_vm,
+			base_points, resource_type, delivery_type, supports_docker, supports_vm,
 			total_flags, container_image, sub_description, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, 'vm', false, true, $8, '', $9, NOW(), NOW())`,
+		) VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, 'vm', 'vm', false, true, $8, '', $9, NOW(), NOW())`,
 		challengeID, name, challengeSlug, description, difficulty, categoryID, basePoints, len(flags), subDescriptionOrNil(subDescription),
 	)
 	if err != nil {
@@ -1795,6 +1824,30 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "resource_type must be docker or vm"})
 		return
 	}
+	req.DeliveryType = strings.ToLower(strings.TrimSpace(req.DeliveryType))
+	if req.DeliveryType == "" {
+		if *req.ResourceType == "vm" {
+			req.DeliveryType = "vm"
+		} else if strings.TrimSpace(req.ContainerImage) != "" || len(req.Services) > 0 {
+			req.DeliveryType = "docker"
+		} else {
+			req.DeliveryType = "static"
+		}
+	}
+	if req.DeliveryType != "docker" && req.DeliveryType != "static" && req.DeliveryType != "external" && req.DeliveryType != "vm" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "delivery_type must be docker, static, external, or vm"})
+		return
+	}
+	if (*req.ResourceType == "vm") != (req.DeliveryType == "vm") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "VM resource and delivery types must be selected together"})
+		return
+	}
+	if req.DeliveryType == "static" || req.DeliveryType == "external" {
+		req.ContainerImage = ""
+		req.Services = nil
+		req.ExposedPorts = nil
+		req.Privesc = false
+	}
 	if *req.ResourceType == "vm" && len(req.Services) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "VM challenges cannot define container services"})
 		return
@@ -1829,7 +1882,7 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 				name = $1, description = $2, difficulty = $3, category_id = $4,
 				base_points = $5, instance_timeout = $6, max_extensions = $7,
 				vm_timeout_minutes = $8, vm_max_extensions = $9, vm_extension_minutes = $10,
-				cooldown_minutes = $11, author_name = $12, resource_type = $13,
+				cooldown_minutes = $11, author_name = $12, resource_type = $13, delivery_type = 'vm',
 				supports_vm = true, supports_docker = false, sub_description = $14,
 				container_spec = NULL, privesc = false,
 				arena_mode = COALESCE(NULLIF($15, ''), arena_mode), updated_at = NOW()
@@ -1892,17 +1945,17 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 				container_image = $5, container_tag = $6, container_platform = $7,
 				cpu_limit = $8, memory_limit = $9, exposed_ports = $10,
 				base_points = $11, instance_timeout = $12, max_extensions = $13,
-				cooldown_minutes = $14, author_name = $15, resource_type = 'docker',
+				cooldown_minutes = $14, author_name = $15, resource_type = 'docker', delivery_type = $20,
 				supports_vm = false, supports_docker = true, sub_description = $16,
 				container_spec = $17, privesc = $18,
 				arena_mode = COALESCE(NULLIF($19, ''), arena_mode), updated_at = NOW()
-			WHERE id = $20`,
+			WHERE id = $21`,
 			req.Name, req.Description, req.Difficulty, req.CategoryID,
 			req.ContainerImage, req.ContainerTag, req.ContainerPlatform,
 			req.CPULimit, req.MemoryLimit, portsJSON,
 			req.BasePoints, req.InstanceTimeout, req.MaxExtensions,
 			req.CooldownMinutes, req.AuthorName, subDescriptionOrNil(req.SubDescription),
-			nilIfEmpty(containerSpec), req.Privesc, req.ArenaMode, challengeID,
+			nilIfEmpty(containerSpec), req.Privesc, req.ArenaMode, req.DeliveryType, challengeID,
 		)
 		if err == nil && result.RowsAffected() == 0 {
 			c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
@@ -2661,7 +2714,8 @@ func (h *AdminChallengeHandler) ListFlagShareEvents(c *gin.Context) {
 		ChallengeName     string  `json:"challenge_name"`
 		FlagID            string  `json:"flag_id"`
 		FlagName          string  `json:"flag_name"`
-		FlagValue         string  `json:"flag_value"`
+		FlagFingerprint   string  `json:"flag_fingerprint"`
+		FlagLength        int     `json:"flag_length"`
 		OwnerUserID       string  `json:"owner_user_id"`
 		OwnerUsername     string  `json:"owner_username"`
 		SubmitterUserID   string  `json:"submitter_user_id"`
@@ -2673,16 +2727,19 @@ func (h *AdminChallengeHandler) ListFlagShareEvents(c *gin.Context) {
 	var results []shareRow
 	for rows.Next() {
 		var r shareRow
+		var flagValue string
 		var createdAt time.Time
 		if err := rows.Scan(
 			&r.ID, &createdAt, &r.ChallengeID, &r.ChallengeName,
-			&r.FlagID, &r.FlagName, &r.FlagValue,
+			&r.FlagID, &r.FlagName, &flagValue,
 			&r.OwnerUserID, &r.OwnerUsername,
 			&r.SubmitterUserID, &r.SubmitterUsername,
 			&r.SubmitterIP, &r.OwnerInstanceID,
 		); err != nil {
 			continue
 		}
+		r.FlagFingerprint = hashFlag(flagValue)[:16]
+		r.FlagLength = len(flagValue)
 		r.CreatedAt = createdAt.Unix()
 		results = append(results, r)
 	}
@@ -2741,32 +2798,36 @@ func (h *AdminChallengeHandler) ListInstanceFlags(c *gin.Context) {
 	defer rows.Close()
 
 	type row struct {
-		ID             string `json:"id"`
-		InstanceID     string `json:"instance_id"`
-		UserID         string `json:"user_id"`
-		Username       string `json:"username"`
-		ChallengeID    string `json:"challenge_id"`
-		ChallengeName  string `json:"challenge_name"`
-		FlagID         string `json:"flag_id"`
-		FlagName       string `json:"flag_name"`
-		FlagType       string `json:"flag_type"`
-		FlagValue      string `json:"flag_value"`
-		CreatedAt      int64  `json:"created_at"`
-		InstanceStatus string `json:"instance_status"`
+		ID              string `json:"id"`
+		InstanceID      string `json:"instance_id"`
+		UserID          string `json:"user_id"`
+		Username        string `json:"username"`
+		ChallengeID     string `json:"challenge_id"`
+		ChallengeName   string `json:"challenge_name"`
+		FlagID          string `json:"flag_id"`
+		FlagName        string `json:"flag_name"`
+		FlagType        string `json:"flag_type"`
+		FlagFingerprint string `json:"flag_fingerprint"`
+		FlagLength      int    `json:"flag_length"`
+		CreatedAt       int64  `json:"created_at"`
+		InstanceStatus  string `json:"instance_status"`
 	}
 
 	var results []row
 	for rows.Next() {
 		var r row
+		var flagValue string
 		var createdAt time.Time
 		if err := rows.Scan(
 			&r.ID, &r.InstanceID, &r.UserID, &r.Username,
 			&r.ChallengeID, &r.ChallengeName,
 			&r.FlagID, &r.FlagName, &r.FlagType,
-			&r.FlagValue, &createdAt, &r.InstanceStatus,
+			&flagValue, &createdAt, &r.InstanceStatus,
 		); err != nil {
 			continue
 		}
+		r.FlagFingerprint = hashFlag(flagValue)[:16]
+		r.FlagLength = len(flagValue)
 		r.CreatedAt = createdAt.Unix()
 		results = append(results, r)
 	}
@@ -2781,31 +2842,37 @@ func (h *StatsHandler) Get(c *gin.Context) {
 	query := `
 		SELECT
 			(SELECT COUNT(*) FROM users WHERE role NOT IN ('admin', 'author')) as total_users,
+			(SELECT COUNT(*) FROM teams) as total_teams,
 			(SELECT COUNT(*) FROM challenges) as total_challenges,
 			(SELECT COUNT(*) FROM challenges WHERE status = 'published') as published_challenges,
 			(SELECT COUNT(*) FROM challenges WHERE status = 'draft') as draft_challenges,
 			(SELECT COUNT(*) FROM solves s WHERE NOT EXISTS (
 				SELECT 1 FROM users u WHERE u.id = s.user_id AND u.role IN ('admin', 'author'))) as total_solves,
+			(SELECT COUNT(*) FROM submissions) as total_submissions,
 			(SELECT COUNT(*) FROM instances) as total_instances,
 			(SELECT COUNT(*) FROM instances WHERE status = 'running') as active_instances
 	`
 
 	var stats struct {
 		TotalUsers          int
+		TotalTeams          int
 		TotalChallenges     int
 		PublishedChallenges int
 		DraftChallenges     int
 		TotalSolves         int
+		TotalSubmissions    int
 		TotalInstances      int
 		ActiveInstances     int
 	}
 
 	err := h.db.Pool.QueryRow(c.Request.Context(), query).Scan(
 		&stats.TotalUsers,
+		&stats.TotalTeams,
 		&stats.TotalChallenges,
 		&stats.PublishedChallenges,
 		&stats.DraftChallenges,
 		&stats.TotalSolves,
+		&stats.TotalSubmissions,
 		&stats.TotalInstances,
 		&stats.ActiveInstances,
 	)
@@ -2818,10 +2885,12 @@ func (h *StatsHandler) Get(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"total_users":          stats.TotalUsers,
+		"total_teams":          stats.TotalTeams,
 		"total_challenges":     stats.TotalChallenges,
 		"published_challenges": stats.PublishedChallenges,
 		"draft_challenges":     stats.DraftChallenges,
 		"total_solves":         stats.TotalSolves,
+		"total_submissions":    stats.TotalSubmissions,
 		"total_instances":      stats.TotalInstances,
 		"active_instances":     stats.ActiveInstances,
 	})

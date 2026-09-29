@@ -465,6 +465,36 @@
 		}
 	}
 
+	async function revertInstance() {
+		if (!instance) return;
+		const resetCount = instance.reset_count ?? 0;
+		const maxResets = instance.max_resets ?? 3;
+		if (resetCount >= maxResets) {
+			instanceError = `Reset limit reached (${resetCount}/${maxResets}).`;
+			return;
+		}
+		if (!(await confirmDialog({
+			title: 'Revert instance',
+			message: `Replace this runtime with a clean copy? Current runtime state will be erased. This is reset ${resetCount + 1} of ${maxResets} and does not spend credits.`,
+			confirmLabel: 'Revert',
+			danger: true
+		}))) return;
+		instanceAction = 'reverting';
+		instanceError = '';
+		try {
+			const result = await api.revertInstance(instance.id);
+			instance = result.instance;
+			timeRemaining = formatTimeRemaining(instance.expires_at);
+			justLaunchedAt = Date.now();
+			warmingUp = true;
+		} catch (e) {
+			instanceError = e instanceof Error ? e.message : 'Failed to revert instance';
+			await loadUserInstance();
+		} finally {
+			instanceAction = '';
+		}
+	}
+
 	async function handleSaveEdit() {
 		if (!challenge || !editForm) return;
 		saving = true;
@@ -1345,7 +1375,7 @@
 										{/if}
 									</div>
 
-									<div class="grid grid-cols-2 gap-3">
+									<div class="grid grid-cols-3 gap-3">
 										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
 											<p class="metadata-label text-stone-500 mb-1">Time left</p>
 											<p
@@ -1360,10 +1390,14 @@
 											<p class="metadata-label text-stone-500 mb-1">Extensions</p>
 											<p class="text-base font-medium text-stone-200 tabular-nums">{instance.extensions_used || 0}<span class="text-stone-600 font-normal text-sm"> / {instance.max_extensions || 3}</span></p>
 										</div>
+										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
+											<p class="metadata-label text-stone-500 mb-1">Resets</p>
+											<p class="text-base font-medium text-stone-200 tabular-nums">{instance.reset_count || 0}<span class="text-stone-600 font-normal text-sm"> / {instance.max_resets || 3}</span></p>
+										</div>
 									</div>
 
-									<div class="flex gap-2">
-										<button on:click={extendInstance} disabled={instanceAction === 'extending' || (instance.extensions_used >= (instance.max_extensions || 3))} class="flex-1 text-xs leading-none py-2 bg-stone-900 text-stone-300 rounded-md border border-stone-800 hover:bg-stone-800/60 hover:border-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
+									<div class="grid grid-cols-3 gap-2">
+										<button on:click={extendInstance} disabled={!!instanceAction || (instance.extensions_used >= (instance.max_extensions || 3))} class="text-xs leading-none py-2 bg-stone-900 text-stone-300 rounded-md border border-stone-800 hover:bg-stone-800/60 hover:border-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
 											{#if instanceAction === 'extending'}
 												<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
 											{:else}
@@ -1371,7 +1405,11 @@
 											{/if}
 											{instanceAction === 'extending' ? 'Extending…' : 'Extend'}
 										</button>
-										<button on:click={stopInstance} disabled={instanceAction === 'stopping'} class="flex-1 text-xs leading-none py-2 bg-down/10 text-down rounded-md border border-down/30 hover:bg-down/20 transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5">
+										<button on:click={revertInstance} disabled={!!instanceAction || (instance.reset_count ?? 0) >= (instance.max_resets ?? 3)} title={(instance.reset_count ?? 0) >= (instance.max_resets ?? 3) ? `Reset limit reached (${instance.reset_count ?? 0}/${instance.max_resets ?? 3})` : 'Replace with a clean runtime'} class="text-xs leading-none py-2 bg-stone-900 text-stone-300 rounded-md border border-stone-800 hover:bg-stone-800/60 hover:border-stone-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5">
+											{#if instanceAction === 'reverting'}<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />{:else}<Icon icon="mdi:restart" class="w-3 h-3 shrink-0" />{/if}
+											{instanceAction === 'reverting' ? 'Reverting…' : 'Revert'}
+										</button>
+										<button on:click={stopInstance} disabled={!!instanceAction} class="text-xs leading-none py-2 bg-down/10 text-down rounded-md border border-down/30 hover:bg-down/20 transition-colors disabled:opacity-40 flex items-center justify-center gap-1.5">
 											{#if instanceAction === 'stopping'}
 												<Icon icon="mdi:loading" class="w-3 h-3 shrink-0 animate-spin" />
 											{:else}
@@ -1380,7 +1418,7 @@
 											{instanceAction === 'stopping' ? 'Stopping…' : 'Stop'}
 										</button>
 									</div>
-									<p class="text-[11px] leading-relaxed text-stone-600">Runtime start, stop and extension controls are free. The separate solve-window extension below is the action that spends Ledger credits.</p>
+									<p class="text-[11px] leading-relaxed text-stone-600">Runtime start, stop, revert and extension controls are free. Revert erases runtime state and keeps the challenge open; the separate solve-window extension below spends Ledger credits.</p>
 								</div>
 							{:else if cooldownInfo}
 								<div class="text-center py-4">

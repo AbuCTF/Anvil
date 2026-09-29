@@ -56,6 +56,8 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	exec(`INSERT INTO challenges (id, name, slug, description, difficulty, status, container_image, base_points, total_flags) VALUES ($1, 'Dossier target', $2, 'test', 'medium', 'published', '', 100, 1)`, challengeID, "challenge-"+challengeID.String())
 	exec(`INSERT INTO flags (id, challenge_id, name, flag_hash, points, sort_order) VALUES ($1, $2, 'Flag', 'digest', 100, 1)`, flagID, challengeID)
 	exec(`INSERT INTO instances (id, challenge_id, user_id, team_id, status, ip_address, container_id, started_at, expires_at) VALUES ($1, $2, $3, $4, 'running', 'challenge.test', 'runtime', NOW(), NOW() + INTERVAL '1 hour')`, instanceID, challengeID, userID, teamID)
+	exec(`INSERT INTO instance_flags (id, instance_id, user_id, challenge_id, flag_id, flag_value) VALUES ($1, $2, $3, $4, $5, 'H7CTF{runtime-secret}')`, uuid.New(), instanceID, userID, challengeID, flagID)
+	exec(`INSERT INTO flag_share_events (id, challenge_id, flag_id, owner_user_id, owner_instance_id, submitter_user_id, flag_value, submitter_ip) VALUES ($1, $2, $3, $4, $5, $4, 'H7CTF{shared-secret}', '203.0.113.13')`, uuid.New(), challengeID, flagID, userID, instanceID)
 	exec(`INSERT INTO submissions (id, user_id, challenge_id, flag_id, instance_id, submitted_flag, is_correct, points_awarded, ip_address, user_agent) VALUES ($1, $2, $3, $4, $5, 'H7CTF{correct}', true, 100, '203.0.113.10', 'qa-client'), ($6, $2, $3, $4, $5, 'H7CTF{wrong}', false, 0, '203.0.113.11', 'qa-client')`, submissionID, userID, challengeID, flagID, instanceID, uuid.New())
 	exec(`INSERT INTO solves (id, user_id, challenge_id, flag_id, points_awarded) VALUES ($1, $2, $3, $4, 100)`, uuid.New(), userID, challengeID, flagID)
 	exec(`INSERT INTO economy_team_score (team_id, points, credits, grant_issued) VALUES ($1, 321.500, 777.250, true)`, teamID)
@@ -74,11 +76,16 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	cfg.VPN.Enabled = false
 	gin.SetMode(gin.TestMode)
 	router := NewServer(cfg, db, nil, nil, nil, nil, nil, nil, zap.NewNop()).Router()
-	token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
-		UserID: adminID, Username: "admin", Role: "admin", TokenType: "user",
-		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
-	}).SignedString([]byte(cfg.JWT.Secret))
-	request := func(method, path string, body any) *httptest.ResponseRecorder {
+	tokenFor := func(id uuid.UUID, username, role string) string {
+		token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
+			UserID: id, Username: username, Role: role, TokenType: "user",
+			RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
+		}).SignedString([]byte(cfg.JWT.Secret))
+		return token
+	}
+	adminToken := tokenFor(adminID, "admin", "admin")
+	userToken := tokenFor(userID, "user", "user")
+	requestAs := func(method, path, token string, body any) *httptest.ResponseRecorder {
 		var payload *bytes.Reader
 		if body == nil {
 			payload = bytes.NewReader(nil)
@@ -94,6 +101,9 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, req)
 		return response
+	}
+	request := func(method, path string, body any) *httptest.ResponseRecorder {
+		return requestAs(method, path, adminToken, body)
 	}
 	decode := func(response *httptest.ResponseRecorder) map[string]any {
 		if response.Code != http.StatusOK {
@@ -137,6 +147,16 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	if stats["submissions"].(float64) != 2 || stats["solved_teams"].(float64) != 1 || stats["running_instances"].(float64) != 1 || len(challengeDetail["audit"].([]any)) != 1 || len(challengeDetail["flags"].([]any)) != 1 {
 		t.Fatalf("incomplete challenge dossier: %#v", challengeDetail)
 	}
+	for _, path := range []string{"/api/v1/admin/instance-flags", "/api/v1/admin/flag-shares"} {
+		response := request(http.MethodGet, path, nil)
+		if response.Code != http.StatusOK {
+			t.Fatalf("audit evidence %s status=%d body=%s", path, response.Code, response.Body.String())
+		}
+		body := response.Body.String()
+		if strings.Contains(body, "runtime-secret") || strings.Contains(body, "shared-secret") || strings.Contains(body, "flag_value") || !strings.Contains(body, "flag_fingerprint") {
+			t.Fatalf("audit evidence secret boundary failed for %s: %s", path, body)
+		}
+	}
 
 	challengeName := "multi-" + uuid.NewString()
 	createdResponse := request(http.MethodPost, "/api/v1/admin/challenges", map[string]any{
@@ -165,13 +185,39 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	if delivery != "multi" {
 		t.Fatalf("delivery=%q, want multi", delivery)
 	}
-	updated := request(http.MethodPut, "/api/v1/admin/challenges/"+createdID, map[string]any{
-		"name": challengeName, "description": "static integration", "difficulty": "hard", "base_points": 200,
-		"resource_type": "docker", "scoring_mode": "flag", "arena_mode": "per_team",
+	if response := requestAs(http.MethodGet, "/api/v1/admin/challenges", userToken, nil); response.Code != http.StatusForbidden {
+		t.Fatalf("participant admin challenge list status=%d, want 403", response.Code)
+	}
+	if response := requestAs(http.MethodGet, "/api/v1/challenges/"+created["slug"].(string), userToken, nil); response.Code != http.StatusNotFound {
+		t.Fatalf("participant draft preview status=%d, want 404", response.Code)
+	}
+	if response := request(http.MethodGet, "/api/v1/challenges/"+created["slug"].(string), nil); response.Code != http.StatusOK {
+		t.Fatalf("admin draft preview status=%d body=%s", response.Code, response.Body.String())
+	}
+	publicDetail := requestAs(http.MethodGet, "/api/v1/challenges/challenge-"+challengeID.String(), userToken, nil)
+	if publicDetail.Code != http.StatusOK {
+		t.Fatalf("participant published detail status=%d body=%s", publicDetail.Code, publicDetail.Body.String())
+	}
+	for _, forbidden := range []string{"container_image", "flag_hash", "flag_value", "digest"} {
+		if strings.Contains(publicDetail.Body.String(), forbidden) {
+			t.Fatalf("participant detail exposed %q: %s", forbidden, publicDetail.Body.String())
+		}
+	}
+	externalPayload := map[string]any{
+		"name": challengeName, "description": "external integration", "difficulty": "hard", "base_points": 200,
+		"resource_type": "docker", "delivery_type": "external", "scoring_mode": "flag", "arena_mode": "per_team",
 		"container_image": "", "exposed_ports": []any{}, "services": []any{},
-	})
+	}
+	updated := request(http.MethodPut, "/api/v1/admin/challenges/"+createdID, externalPayload)
 	if updated.Code != http.StatusOK {
-		t.Fatalf("convert challenge to static status=%d body=%s", updated.Code, updated.Body.String())
+		t.Fatalf("convert challenge to external status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	challengeList = decode(request(http.MethodGet, "/api/v1/admin/challenges", nil))
+	for _, item := range challengeList["challenges"].([]any) {
+		challenge := item.(map[string]any)
+		if challenge["id"] == createdID && challenge["delivery_type"] != "external" {
+			t.Fatalf("delivery before handout=%q, want external", challenge["delivery_type"])
+		}
 	}
 	link := request(http.MethodPost, "/api/v1/admin/challenges/"+createdID+"/attachments/link", map[string]any{
 		"name": "artifact.zip", "url": "https://cdn.example.test/artifact.zip", "sha256": strings.Repeat("a", 64),
@@ -182,6 +228,25 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	handouts := decode(request(http.MethodGet, "/api/v1/admin/challenges/"+createdID+"/attachments", nil))
 	if len(handouts["attachments"].([]any)) != 1 {
 		t.Fatalf("external handout was not listed: %#v", handouts)
+	}
+	challengeList = decode(request(http.MethodGet, "/api/v1/admin/challenges", nil))
+	for _, item := range challengeList["challenges"].([]any) {
+		challenge := item.(map[string]any)
+		if challenge["id"] == createdID && challenge["delivery_type"] != "external" {
+			t.Fatalf("external delivery with handout=%q, want external", challenge["delivery_type"])
+		}
+	}
+	externalPayload["delivery_type"] = "static"
+	updated = request(http.MethodPut, "/api/v1/admin/challenges/"+createdID, externalPayload)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("convert challenge to static status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	challengeList = decode(request(http.MethodGet, "/api/v1/admin/challenges", nil))
+	for _, item := range challengeList["challenges"].([]any) {
+		challenge := item.(map[string]any)
+		if challenge["id"] == createdID && challenge["delivery_type"] != "static" {
+			t.Fatalf("explicit static delivery=%q, want static", challenge["delivery_type"])
+		}
 	}
 
 	credit := decode(request(http.MethodPost, "/api/v1/admin/teams/"+teamID.String()+"/credit", map[string]any{

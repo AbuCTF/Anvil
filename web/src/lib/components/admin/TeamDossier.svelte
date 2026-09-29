@@ -10,12 +10,14 @@
 	export let loading = false;
 	export let error = '';
 	export let adjusting = false;
+	export let action = '';
 
 	const dispatch = createEventDispatcher();
 	let tab = 'overview';
 	let adjustmentAmount = 0;
 	let adjustmentKind = 'admin_bonus';
 	let adjustmentNote = '';
+	let memberUsername = '';
 
 	$: team = detail?.team ?? seed ?? {};
 	$: tabs = [
@@ -42,6 +44,17 @@
 	function submitAdjustment() {
 		if (!Number.isFinite(Number(adjustmentAmount)) || Number(adjustmentAmount) === 0 || !adjustmentNote.trim()) return;
 		dispatch('credit', { amount: Number(adjustmentAmount), kind: adjustmentKind, note: adjustmentNote.trim() });
+	}
+
+	function addMember() {
+		const username = memberUsername.trim();
+		if (!username || action) return;
+		dispatch('addmember', { username });
+		memberUsername = '';
+	}
+
+	function canStop(status: string) {
+		return ['pending', 'creating', 'starting', 'running', 'active', 'ready', 'stopping'].includes(status);
 	}
 </script>
 
@@ -135,12 +148,19 @@
 						<p class="mt-2 text-xs text-stone-600">Positive values grant credits; negative values deduct them. Every change is atomic and appears in the team Ledger.</p>
 					</Card>
 				{:else if tab === 'members'}
+					<form class="mb-4 flex flex-col gap-2 rounded-lg border border-stone-800 bg-stone-900/30 p-3 sm:flex-row sm:items-end" on:submit|preventDefault={addMember}>
+						<label class="min-w-0 flex-1"><span class="metadata-label mb-1.5 block text-stone-600">Add or move participant by username</span><input type="text" bind:value={memberUsername} autocomplete="off" placeholder="username" class="w-full rounded-md border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-300 placeholder-stone-700 focus:border-stone-600 focus:outline-none" /></label>
+						<button type="submit" disabled={!memberUsername.trim() || !!action} class="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-stone-700 px-4 text-sm font-medium text-stone-300 hover:border-stone-600 hover:text-stone-100 disabled:cursor-not-allowed disabled:opacity-40">{#if action === 'add-member'}<Icon icon="mdi:loading" class="h-4 w-4 animate-spin" />{/if}Add member</button>
+					</form>
 					<div class="grid gap-3 lg:grid-cols-2">
 						{#each detail.members ?? [] as member}
-							<button type="button" on:click={() => dispatch('user', member)} class="rounded-lg border border-stone-800 bg-stone-900/30 p-4 text-left transition-colors hover:border-stone-700 hover:bg-stone-900/60">
-								<div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="truncate text-sm font-medium text-stone-200">{member.display_name || member.username}</p><p class="mt-1 truncate text-xs text-stone-600">@{member.username} · {member.email || 'No email'}</p></div><span class="text-xs {stateClass(member.status)}">{member.status}</span></div>
-								<div class="mt-4 grid grid-cols-3 gap-3 text-xs"><div><p class="metadata-label text-stone-600">Challenges</p><p class="mt-1 text-stone-300">{member.challenge_solves}</p></div><div><p class="metadata-label text-stone-600">Attempts</p><p class="mt-1 text-stone-300">{member.submission_count}</p></div><div><p class="metadata-label text-stone-600">Last IP</p><p class="mt-1 truncate font-mono text-stone-400">{member.last_login_ip || '—'}</p></div></div>
-							</button>
+							<div class="rounded-lg border border-stone-800 bg-stone-900/30 p-4 transition-colors hover:border-stone-700 hover:bg-stone-900/60">
+								<button type="button" on:click={() => dispatch('user', member)} class="block w-full text-left">
+									<div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="truncate text-sm font-medium text-stone-200">{member.display_name || member.username}</p><p class="mt-1 truncate text-xs text-stone-600">@{member.username} · {member.email || 'No email'}</p></div><span class="text-xs {stateClass(member.status)}">{member.status}</span></div>
+									<div class="mt-4 grid grid-cols-3 gap-3 text-xs"><div><p class="metadata-label text-stone-600">Challenges</p><p class="mt-1 text-stone-300">{member.challenge_solves}</p></div><div><p class="metadata-label text-stone-600">Attempts</p><p class="mt-1 text-stone-300">{member.submission_count}</p></div><div><p class="metadata-label text-stone-600">Last IP</p><p class="mt-1 truncate font-mono text-stone-400">{member.last_login_ip || '—'}</p></div></div>
+								</button>
+								<div class="mt-3 flex items-center justify-between border-t border-stone-800/70 pt-3"><button type="button" on:click={() => dispatch('user', member)} class="text-xs text-stone-500 hover:text-stone-200">Open participant dossier</button><button type="button" disabled={!!action} on:click={() => dispatch('removemember', member)} class="inline-flex items-center gap-1.5 text-xs text-down/80 hover:text-down disabled:cursor-not-allowed disabled:opacity-40">{#if action === `remove-${member.id}`}<Icon icon="mdi:loading" class="h-3.5 w-3.5 animate-spin" />{/if}Remove from team</button></div>
+							</div>
 						{/each}
 					</div>
 				{:else if tab === 'submissions'}
@@ -158,7 +178,7 @@
 					{:else}<EmptyState icon="mdi:ip-network-outline" text="No IP activity recorded." />{/if}
 				{:else if tab === 'instances'}
 					{#if detail.instances?.length}
-						<div class="space-y-2">{#each detail.instances as row}<div class="rounded-lg border border-stone-800 bg-stone-900/30 p-3 text-xs"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="text-stone-300">{row.challenge_name} · {row.username || 'Unknown owner'}</p><p class="mt-1 break-all font-mono text-stone-600">{row.id}{row.target ? ` · ${row.target}` : ''}</p></div><span class="shrink-0 {stateClass(row.status)}">{row.status}</span></div><div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-stone-600"><span>Created {when(row.created_at)}</span>{#if row.started_at}<span>Started {when(row.started_at)}</span>{/if}{#if row.expires_at}<span>Expires {when(row.expires_at)}</span>{/if}{#if row.stopped_at}<span>Stopped {when(row.stopped_at)}</span>{/if}</div>{#if row.error_message}<p class="mt-2 text-down">{row.error_message}</p>{/if}</div>{/each}</div>
+						<div class="space-y-2">{#each detail.instances as row}<div class="rounded-lg border border-stone-800 bg-stone-900/30 p-3 text-xs"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="text-stone-300">{row.challenge_name} · {row.username || 'Unknown owner'}</p><p class="mt-1 break-all font-mono text-stone-600">{row.id}{row.target ? ` · ${row.target}` : ''}</p></div><div class="flex shrink-0 items-center gap-3"><span class="{stateClass(row.status)}">{row.status}</span>{#if canStop(row.status)}<button type="button" disabled={!!action} on:click={() => dispatch('stopinstance', row)} class="inline-flex items-center gap-1.5 rounded border border-down/30 px-2 py-1 text-down/80 hover:border-down/60 hover:text-down disabled:cursor-not-allowed disabled:opacity-40">{#if action === `stop-${row.id}`}<Icon icon="mdi:loading" class="h-3.5 w-3.5 animate-spin" />{/if}Force stop</button>{/if}</div></div><div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-stone-600"><span>Created {when(row.created_at)}</span>{#if row.started_at}<span>Started {when(row.started_at)}</span>{/if}{#if row.expires_at}<span>Expires {when(row.expires_at)}</span>{/if}{#if row.stopped_at}<span>Stopped {when(row.stopped_at)}</span>{/if}</div>{#if row.error_message}<p class="mt-2 text-down">{row.error_message}</p>{/if}</div>{/each}</div>
 					{:else}<EmptyState icon="mdi:cube-off-outline" text="No instance history." />{/if}
 				{:else if tab === 'ledger'}
 					{#if detail.credit_events?.length}

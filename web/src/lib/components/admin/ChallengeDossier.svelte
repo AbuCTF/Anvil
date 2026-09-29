@@ -49,7 +49,7 @@
 				<p class="mt-1 font-mono text-xs text-stone-600">{seed.slug} · {seed.id}</p>
 			</div>
 			<div class="flex shrink-0 items-center gap-3">
-				<a href="/challenges/{seed.slug}" class="hidden text-xs text-stone-400 hover:text-stone-200 sm:inline">Player view</a>
+				<a href="/challenges/{seed.slug}" target="_blank" rel="noreferrer" class="hidden items-center gap-1 text-xs text-stone-400 hover:text-stone-200 sm:inline-flex"><Icon icon="mdi:open-in-new" class="h-3.5 w-3.5" />{seed.status === 'draft' ? 'Admin preview' : 'Player view'}</a>
 				<button type="button" on:click={() => dispatch('edit')} class="text-xs text-amber-500 hover:text-amber-400">Edit</button>
 				<button type="button" on:click={() => dispatch('close')} class="rounded p-1 text-stone-500 hover:text-stone-200"><Icon icon="mdi:close" class="h-5 w-5" /></button>
 			</div>
@@ -102,6 +102,8 @@
 						<Card title="Runtime" bodyClass="p-4">
 							{#if seed.delivery_type === 'static'}
 								<p class="text-sm text-stone-400">Download or flag-only challenge. No runtime is provisioned.</p>
+							{:else if seed.delivery_type === 'external'}
+								<p class="text-sm text-stone-400">External target or OSINT challenge. Anvil serves the instructions and scoring flow without provisioning a runtime.</p>
 							{:else if seed.resource_type === 'vm'}
 								<p class="text-sm text-stone-300">VM template <span class="font-mono text-stone-500">{seed.vm_template_id || 'not selected'}</span></p>
 							{:else if seed.delivery_type === 'multi'}

@@ -10,6 +10,7 @@
 		difficulty: string;
 		category?: string;
 		resource_type?: string;
+		delivery_type?: string;
 		has_instance?: boolean;
 		has_attachments?: boolean;
 		base_points?: number;
@@ -29,14 +30,14 @@
 
 	// resource_type is always 'docker' in data; the real signals are has_instance and
 	// has_attachments. no instance and no files = an external/off-platform challenge.
-	$: displayResource =
+	$: displayResource = challenge.delivery_type ?? (
 		challenge.resource_type === 'vm'
 			? 'vm'
 			: challenge.has_instance
 				? 'docker'
 				: challenge.has_attachments
 					? 'static'
-					: 'external';
+					: 'external');
 	// economy boards carry the live value (band ceiling x crowd decay); else base points
 	$: live = typeof challenge.value === 'number';
 	$: points = live ? Math.round(challenge.value ?? 0) : (challenge.base_points ?? challenge.points ?? 0);

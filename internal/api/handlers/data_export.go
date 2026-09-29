@@ -320,9 +320,9 @@ func (h *DataHandler) fetchExportEntity(ctx context.Context, entity string) (exp
 	case "categories":
 		return h.queryExport(ctx, []string{"slug", "name", "description", "color", "icon", "sort_order"}, `SELECT slug, name, COALESCE(description, ''), COALESCE(color, ''), COALESCE(icon, ''), sort_order FROM categories ORDER BY sort_order, slug`)
 	case "challenges":
-		return h.queryExport(ctx, []string{"slug", "name", "description", "sub_description", "difficulty", "category_slug", "status", "author_name", "resource_type", "container_image", "container_tag", "cpu_limit", "memory_limit", "exposed_ports", "base_points", "release_date", "privesc", "scoring_mode"}, `
+		return h.queryExport(ctx, []string{"slug", "name", "description", "sub_description", "difficulty", "category_slug", "status", "author_name", "resource_type", "delivery_type", "container_image", "container_tag", "cpu_limit", "memory_limit", "exposed_ports", "base_points", "release_date", "privesc", "scoring_mode"}, `
 			SELECT c.slug, c.name, COALESCE(c.description, ''), COALESCE(c.sub_description, ''), c.difficulty::text,
-			       COALESCE(category.slug, ''), c.status::text, COALESCE(c.author_name, ''), COALESCE(c.resource_type::text, ''),
+			       COALESCE(category.slug, ''), c.status::text, COALESCE(c.author_name, ''), COALESCE(c.resource_type::text, ''), c.delivery_type,
 			       c.container_image, c.container_tag, c.cpu_limit, c.memory_limit, c.exposed_ports::text,
 			       c.base_points, c.release_date, c.privesc, c.scoring_mode
 			FROM challenges c LEFT JOIN categories category ON category.id = c.category_id ORDER BY c.slug`)

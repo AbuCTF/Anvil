@@ -72,6 +72,7 @@ type Challenge struct {
 	CooldownMinutes    *int `json:"cooldown_minutes,omitempty" db:"cooldown_minutes"`
 
 	ResourceType string `json:"resource_type" db:"resource_type"` // docker or vm
+	DeliveryType string `json:"delivery_type" db:"delivery_type"`
 
 	BasePoints int `json:"base_points" db:"base_points"`
 
