@@ -34,6 +34,7 @@
 	// Team lives in the user dropdown (where players expect it); teams mode only.
 	$: userMenu = [
 		...($auth.user?.role === 'admin' ? [{ name: 'Admin', href: '/admin', icon: 'mdi:shield-crown' }] : []),
+		...($auth.isAuthenticated ? [{ name: 'Notifications', href: '/notifications', icon: 'mdi:bell-outline' }] : []),
 		{ name: 'Profile', href: '/profile', icon: 'mdi:account' },
 		...($platformInfo?.teams_mode && $auth.isAuthenticated ? [{ name: 'Team', href: '/team', icon: 'mdi:account-group' }] : []),
 		...($platformInfo?.vpn_enabled ? [{ name: 'VPN', href: '/vpn', icon: 'mdi:vpn' }] : [])
@@ -57,6 +58,7 @@
 		'mdi:flag': { size: 15.5 },
 		'mdi:trophy': { size: 13.5 },
 		'mdi:pulse': { size: 14.5 },
+		'mdi:bell-outline': { size: 14 },
 		'mdi:account-group': { size: 15 },
 		'mdi:sword-cross': { size: 14 },
 		'mdi:server': { size: 12.75 },
@@ -71,6 +73,29 @@
 
 	let theme: 'dark' | 'light' = 'dark';
 	let credits: number | null = null;
+	let notificationUnread = 0;
+	let notificationsCheckedFor = '';
+
+	async function loadNotificationCount() {
+		if (!$auth.isAuthenticated) {
+			notificationUnread = 0;
+			return;
+		}
+		try {
+			const response = await api.getUnreadNotificationCount();
+			notificationUnread = response.unread_count;
+		} catch {
+			// The header is non-critical; the full page reports actionable errors.
+		}
+	}
+	$: if (browser && $auth.isAuthenticated && $auth.user?.id && notificationsCheckedFor !== $auth.user.id) {
+		notificationsCheckedFor = $auth.user.id;
+		void loadNotificationCount();
+	}
+	$: if (browser && !$auth.isAuthenticated && !$auth.isLoading && notificationsCheckedFor) {
+		notificationsCheckedFor = '';
+		notificationUnread = 0;
+	}
 
 	async function loadCredits() {
 		// only poll /economy/me when the economy is actually on - otherwise it 400s
@@ -137,13 +162,23 @@
 			/* ignore */
 		}
 		const refreshVisibleRank = () => {
-			if (!document.hidden) void auth.refreshRank();
+			if (!document.hidden) {
+				void auth.refreshRank();
+				void loadNotificationCount();
+			}
 		};
+		const refreshNotifications = () => {
+			if (!document.hidden) void loadNotificationCount();
+		};
+		const notificationTimer = window.setInterval(refreshNotifications, 60_000);
 		document.addEventListener('visibilitychange', refreshVisibleRank);
 		window.addEventListener('focus', refreshVisibleRank);
+		window.addEventListener('notifications:changed', refreshNotifications);
 		return () => {
+			window.clearInterval(notificationTimer);
 			document.removeEventListener('visibilitychange', refreshVisibleRank);
 			window.removeEventListener('focus', refreshVisibleRank);
+			window.removeEventListener('notifications:changed', refreshNotifications);
 		};
 	});
 
@@ -217,6 +252,17 @@
 							<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="h-5 w-5" />
 						</button>
 						{#if $auth.isAuthenticated}
+							<a
+								href="/notifications"
+								aria-label={notificationUnread > 0 ? `${notificationUnread} unread notifications` : 'Notifications'}
+								title="Notifications"
+								class="relative rounded-md p-1.5 text-stone-400 transition-colors hover:bg-stone-800/40 hover:text-stone-100"
+							>
+								<Icon icon={notificationUnread > 0 ? 'mdi:bell' : 'mdi:bell-outline'} class="h-5 w-5" />
+								{#if notificationUnread > 0}
+									<span class="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold leading-none text-stone-950 tabular-nums">{notificationUnread > 99 ? '99+' : notificationUnread}</span>
+								{/if}
+							</a>
 							{#if $auth.user?.role === 'admin'}
 								<a
 									href="/admin"

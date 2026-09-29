@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, type GradedAdminInfo } from '$api';
+	import { api, type AdminAnnouncement, type GradedAdminInfo } from '$api';
 	import Icon from '@iconify/svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -78,6 +78,16 @@
 	let settingsError = '';
 	let eventWindowError = '';
 	let browserTimeZone = 'local time';
+
+	let announcements: AdminAnnouncement[] = [];
+	let announcementsLoading = false;
+	let announcementsError = '';
+	let announcementSaving = false;
+	let announcementForm = {
+		title: '', body: '', severity: 'info' as AdminAnnouncement['severity'],
+		audience: 'all' as AdminAnnouncement['audience'], href: '',
+		publish_at: '', expires_at: '', pinned: false
+	};
 
 	let categories: any[] = [];
 	let newChallenge = {
@@ -558,6 +568,69 @@
 		}
 	}
 
+	async function loadAnnouncements() {
+		announcementsLoading = true;
+		announcementsError = '';
+		try {
+			const response = await api.getAdminAnnouncements();
+			announcements = response.announcements;
+		} catch (e) {
+			announcementsError = e instanceof Error ? e.message : 'Failed to load announcements';
+		} finally {
+			announcementsLoading = false;
+		}
+	}
+
+	async function createAnnouncement() {
+		if (!announcementForm.title.trim() || !announcementForm.body.trim()) {
+			announcementsError = 'Title and message are required.';
+			return;
+		}
+		announcementSaving = true;
+		announcementsError = '';
+		try {
+			await api.createAdminAnnouncement({
+				title: announcementForm.title,
+				body: announcementForm.body,
+				severity: announcementForm.severity,
+				audience: announcementForm.audience,
+				href: announcementForm.href || undefined,
+				publish_at: announcementForm.publish_at ? new Date(announcementForm.publish_at).toISOString() : undefined,
+				expires_at: announcementForm.expires_at ? new Date(announcementForm.expires_at).toISOString() : undefined,
+				pinned: announcementForm.pinned
+			});
+			announcementForm = { title: '', body: '', severity: 'info', audience: 'all', href: '', publish_at: '', expires_at: '', pinned: false };
+			await loadAnnouncements();
+			window.dispatchEvent(new Event('notifications:changed'));
+		} catch (e) {
+			announcementsError = e instanceof Error ? e.message : 'Failed to create announcement';
+		} finally {
+			announcementSaving = false;
+		}
+	}
+
+	async function cancelAnnouncement(item: AdminAnnouncement) {
+		if (!(await confirmDialog({
+			title: 'Cancel announcement',
+			message: `Remove “${item.title}” from every participant inbox? The audit record is retained.`,
+			confirmLabel: 'Cancel announcement', danger: true
+		}))) return;
+		try {
+			await api.cancelAdminAnnouncement(item.id);
+			await loadAnnouncements();
+			window.dispatchEvent(new Event('notifications:changed'));
+		} catch (e) {
+			announcementsError = e instanceof Error ? e.message : 'Failed to cancel announcement';
+		}
+	}
+
+	function announcementStatus(item: AdminAnnouncement) {
+		if (item.cancelled_at) return 'Cancelled';
+		if (item.expires_at && Date.parse(item.expires_at) <= Date.now()) return 'Expired';
+		if (Date.parse(item.publish_at) > Date.now()) return 'Scheduled';
+		return 'Live';
+	}
+
 	function setTab(id: string) {
 		activeTab = id;
 		if (id === 'intel' && flagShares.length === 0 && instanceFlags.length === 0) {
@@ -565,6 +638,9 @@
 		}
 		if (id === 'teams' && teams.length === 0) {
 			loadTeams();
+		}
+		if (id === 'communications' && announcements.length === 0) {
+			loadAnnouncements();
 		}
 	}
 
@@ -1124,6 +1200,7 @@
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
 		{ id: 'users', label: 'Users', icon: 'mdi:account-group-outline' },
 		{ id: 'teams', label: 'Teams', icon: 'mdi:account-multiple-outline' },
+		{ id: 'communications', label: 'Comms', icon: 'mdi:bullhorn-outline' },
 		{ id: 'infrastructure', label: 'System', icon: 'mdi:server-network' },
 		{ id: 'settings', label: 'Settings', icon: 'mdi:cog-outline' },
 		{ id: 'intel', label: 'Audit', icon: 'mdi:shield-search' }
@@ -1766,6 +1843,113 @@
 						</div>
 					</Card>
 				{/if}
+			{/if}
+
+			{#if activeTab === 'communications'}
+				{#if announcementsError}
+					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-down/20 bg-down/[0.06] px-4 py-3 text-sm text-down" aria-live="polite">
+						<span>{announcementsError}</span>
+						<button type="button" on:click={loadAnnouncements} class="shrink-0 underline underline-offset-2">Retry</button>
+					</div>
+				{/if}
+				<div class="grid gap-6 xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]">
+					<Card bodyClass="p-4">
+						<div slot="header">
+							<h2 class="flex items-center gap-2 text-sm font-semibold text-stone-200">
+								<OpticalIcon icon="mdi:bullhorn-outline" size={14} box={14} className="text-stone-500" />
+								<span class="optical-label">New Announcement</span>
+							</h2>
+							<p class="mt-1 text-xs font-normal normal-case tracking-normal text-stone-500">Publish now or schedule a scoped message. Published records are cancelled, never deleted.</p>
+						</div>
+						<div class="space-y-4">
+							<label class="block">
+								<span class={labelCls}>Title</span>
+								<input bind:value={announcementForm.title} maxlength="160" placeholder="Challenge update" class="w-full {fieldCls}" />
+							</label>
+							<label class="block">
+								<span class={labelCls}>Message</span>
+								<textarea bind:value={announcementForm.body} maxlength="5000" rows="6" placeholder="Tell participants what changed and what they need to do." class="w-full resize-y {fieldCls}"></textarea>
+							</label>
+							<div class="grid grid-cols-2 gap-3">
+								<label class="block">
+									<span class={labelCls}>Severity</span>
+									<select bind:value={announcementForm.severity} class="w-full {fieldCls}">
+										<option value="info">Info</option>
+										<option value="success">Resolved</option>
+										<option value="warning">Warning</option>
+										<option value="critical">Critical</option>
+									</select>
+								</label>
+								<label class="block">
+									<span class={labelCls}>Audience</span>
+									<select bind:value={announcementForm.audience} class="w-full {fieldCls}">
+										<option value="all">Everyone signed in</option>
+										<option value="participants">Participants</option>
+										<option value="staff">Staff</option>
+									</select>
+								</label>
+							</div>
+							<label class="block">
+								<span class={labelCls}>Action link <span class="text-stone-600">(optional)</span></span>
+								<input bind:value={announcementForm.href} maxlength="1000" placeholder="/challenges/example or https://status…" class="w-full {fieldCls}" />
+							</label>
+							<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+								<label class="block">
+									<span class={labelCls}>Publish at <span class="text-stone-600">(blank = now)</span></span>
+									<input type="datetime-local" bind:value={announcementForm.publish_at} class="w-full {fieldCls}" />
+								</label>
+								<label class="block">
+									<span class={labelCls}>Expires at <span class="text-stone-600">(optional)</span></span>
+									<input type="datetime-local" bind:value={announcementForm.expires_at} class="w-full {fieldCls}" />
+								</label>
+							</div>
+							<label class="flex items-start gap-3 rounded-md border border-stone-800 bg-stone-950/35 p-3">
+								<input type="checkbox" bind:checked={announcementForm.pinned} class="mt-0.5" />
+								<span><span class="block text-sm text-stone-300">Pin to the top</span><span class="mt-1 block text-xs text-stone-600">Use sparingly for active operational information.</span></span>
+							</label>
+							<button on:click={createAnnouncement} disabled={announcementSaving || !announcementForm.title.trim() || !announcementForm.body.trim()} class="w-full {btnPrimary}">
+								<Icon icon={announcementSaving ? 'mdi:loading' : 'mdi:send-outline'} class="h-4 w-4 {announcementSaving ? 'animate-spin' : ''}" />
+								{announcementForm.publish_at ? 'Schedule announcement' : 'Publish announcement'}
+							</button>
+						</div>
+					</Card>
+
+					<Card bodyClass="p-0">
+						<div slot="header" class="flex items-center justify-between gap-3">
+							<div>
+								<h2 class="text-sm font-semibold text-stone-200">Announcement history</h2>
+								<p class="mt-1 text-xs font-normal normal-case tracking-normal text-stone-500">Latest 100, including scheduled, expired, and cancelled records</p>
+							</div>
+							<button on:click={loadAnnouncements} disabled={announcementsLoading} class="text-xs text-stone-500 hover:text-stone-300"><Icon icon="mdi:refresh" class="inline h-4 w-4 {announcementsLoading ? 'animate-spin' : ''}" /></button>
+						</div>
+						{#if announcementsLoading && announcements.length === 0}
+							<div class="flex items-center justify-center gap-2 py-14 text-sm text-stone-500"><Icon icon="mdi:loading" class="h-4 w-4 animate-spin" /> Loading announcements…</div>
+						{:else if announcements.length === 0}
+							<EmptyState icon="mdi:bullhorn-outline" text="No announcements yet." />
+						{:else}
+							<div class="divide-y divide-stone-800/70">
+								{#each announcements as item}
+									<div class="p-4 {item.cancelled_at ? 'opacity-55' : ''}">
+										<div class="flex items-start justify-between gap-4">
+											<div class="min-w-0">
+												<div class="flex flex-wrap items-center gap-2">
+													<p class="text-sm font-medium text-stone-200">{item.title}</p>
+													<span class="rounded-full bg-stone-900 px-2 py-0.5 text-[10px] text-stone-500">{announcementStatus(item)}</span>
+													<span class="text-[10px] uppercase tracking-wider text-stone-600">{item.audience} · {item.severity}</span>
+												</div>
+												<p class="mt-2 whitespace-pre-wrap text-xs leading-relaxed text-stone-400">{item.body}</p>
+												<p class="mt-2 text-[11px] text-stone-600">Publishes {formatLocalDateTimeWithZone(item.publish_at)}{item.expires_at ? ` · expires ${formatLocalDateTimeWithZone(item.expires_at)}` : ''}</p>
+											</div>
+											{#if !item.cancelled_at && (!item.expires_at || Date.parse(item.expires_at) > Date.now())}
+												<button on:click={() => cancelAnnouncement(item)} class="shrink-0 text-xs text-down hover:underline">Cancel</button>
+											{/if}
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</Card>
+				</div>
 			{/if}
 
 			{#if activeTab === 'infrastructure'}

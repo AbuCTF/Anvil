@@ -174,6 +174,15 @@ func (s *Server) setupRouter() {
 		protected := v1.Group("")
 		protected.Use(middleware.Auth(s.config, s.db))
 		{
+			notifications := protected.Group("/notifications")
+			{
+				notificationHandler := handlers.NewNotificationHandler(s.db, s.logger)
+				notifications.GET("", notificationHandler.List)
+				notifications.GET("/unread-count", notificationHandler.UnreadCount)
+				notifications.POST("/read-all", notificationHandler.MarkAllRead)
+				notifications.POST("/:id/read", notificationHandler.MarkRead)
+			}
+
 			user := protected.Group("/user")
 			{
 				userHandler := handlers.NewUserHandler(s.config, s.db, s.logger)
@@ -301,6 +310,14 @@ func (s *Server) setupRouter() {
 		admin.Use(middleware.Auth(s.config, s.db))
 		admin.Use(middleware.RequireRole("admin"))
 		{
+			announcements := admin.Group("/announcements")
+			{
+				notificationHandler := handlers.NewNotificationHandler(s.db, s.logger)
+				announcements.GET("", notificationHandler.ListAnnouncements)
+				announcements.POST("", notificationHandler.CreateAnnouncement)
+				announcements.POST("/:id/cancel", notificationHandler.CancelAnnouncement)
+			}
+
 			users := admin.Group("/users")
 			{
 				adminUserHandler := handlers.NewAdminUserHandler(s.config, s.db, s.logger)

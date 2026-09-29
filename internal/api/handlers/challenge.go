@@ -659,11 +659,11 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 	}
 
 	var chalID uuid.UUID
-	var difficulty string
+	var challengeName, difficulty string
 	err = h.db.Pool.QueryRow(ctx,
-		`SELECT id, difficulty FROM challenges
+		`SELECT id, name, difficulty FROM challenges
 		 WHERE slug = $1 AND ((status = 'published' AND (release_date IS NULL OR release_date <= NOW())) OR $2)`,
-		slug, isStaff(c)).Scan(&chalID, &difficulty)
+		slug, isStaff(c)).Scan(&chalID, &challengeName, &difficulty)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
@@ -686,11 +686,23 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 		return
 	}
 	var state string
+	var expiresAt *time.Time
 	_ = tx.QueryRow(ctx,
-		`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
-		*teamID, chalID).Scan(&state)
+		`SELECT status, expires_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+		*teamID, chalID).Scan(&state, &expiresAt)
 	var credits float64
 	_ = tx.QueryRow(ctx, `SELECT credits FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&credits)
+	if state == "open" && expiresAt != nil {
+		if err := insertTeamNotification(ctx, tx, *teamID, "economy.challenge_opened",
+			challengeName+" opened", "A team challenge slot is now in use.", "info",
+			"/challenges/"+slug,
+			fmt.Sprintf("economy:open:%s:%s:%d", teamID.String(), chalID.String(), expiresAt.UnixNano()),
+			gin.H{"challenge_id": chalID, "slug": slug, "expires_at": expiresAt, "credits": credits}); err != nil {
+			h.logger.Error("failed to queue challenge-open notification", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to launch challenge"})
+			return
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		h.logger.Error("failed to commit challenge open", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to launch challenge"})
@@ -887,8 +899,9 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		"message": "you're in the arena - plant this token on the target to hold it"})
 }
 
-// resolves the economy context for a challenge action (economy on, caller's team, challenge id + difficulty). writes the error response and returns ok=false on any failure.
-func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID uuid.UUID, difficulty string, ok bool) {
+// resolves the economy context for a challenge action (economy on, caller's team,
+// and challenge identity). writes the error response and returns ok=false on failure.
+func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID uuid.UUID, difficulty, challengeName string, ok bool) {
 	uid, uok := contextUserID(c)
 	if !uok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -914,9 +927,9 @@ func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID u
 		return
 	}
 	err = h.db.Pool.QueryRow(ctx,
-		`SELECT id, difficulty FROM challenges
+		`SELECT id, name, difficulty FROM challenges
 		 WHERE slug = $1 AND ((status = 'published' AND (release_date IS NULL OR release_date <= NOW())) OR $2)`,
-		c.Param("slug"), isStaff(c)).Scan(&chalID, &difficulty)
+		c.Param("slug"), isStaff(c)).Scan(&chalID, &challengeName, &difficulty)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
@@ -925,14 +938,14 @@ func (h *ChallengeHandler) economyChallengeCtx(c *gin.Context) (teamID, chalID u
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load challenge"})
 		return
 	}
-	return *tid, chalID, difficulty, true
+	return *tid, chalID, difficulty, challengeName, true
 }
 
 // releases an open challenge early for a partial refund, and — since abandon
 // means "I'm done with this" - reaps the team's running instance immediately
 // rather than letting it ride out its TTL (option A).
 func (h *ChallengeHandler) AbandonChallenge(c *gin.Context) {
-	teamID, chalID, difficulty, ok := h.economyChallengeCtx(c)
+	teamID, chalID, difficulty, challengeName, ok := h.economyChallengeCtx(c)
 	if !ok {
 		return
 	}
@@ -945,6 +958,22 @@ func (h *ChallengeHandler) AbandonChallenge(c *gin.Context) {
 	defer tx.Rollback(ctx)
 	if opErr := abandonChallengeEconomy(ctx, tx, teamID, chalID, difficulty, h.config.Economy); opErr != nil {
 		c.JSON(opErr.Status, gin.H{"error": opErr.Message})
+		return
+	}
+	var openedAt time.Time
+	if err := tx.QueryRow(ctx,
+		`SELECT opened_at FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`,
+		teamID, chalID).Scan(&openedAt); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "abandon failed"})
+		return
+	}
+	refund := h.config.Economy.AbandonRefundFrac * launchCost(h.config.Economy, difficulty)
+	if err := insertTeamNotification(ctx, tx, teamID, "economy.challenge_abandoned",
+		challengeName+" abandoned", fmt.Sprintf("The slot was released and %.3f credits were refunded.", refund), "warning",
+		"/challenges/"+c.Param("slug"),
+		fmt.Sprintf("economy:abandon:%s:%s:%d", teamID.String(), chalID.String(), openedAt.UnixNano()),
+		gin.H{"challenge_id": chalID, "slug": c.Param("slug"), "refund": refund}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "abandon failed"})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -1046,7 +1075,7 @@ func (h *ChallengeHandler) reapTeamInstance(ctx context.Context, challengeID, te
 
 // extends an open challenge's timer at an escalating credit cost.
 func (h *ChallengeHandler) ExtendChallenge(c *gin.Context) {
-	teamID, chalID, difficulty, ok := h.economyChallengeCtx(c)
+	teamID, chalID, difficulty, challengeName, ok := h.economyChallengeCtx(c)
 	if !ok {
 		return
 	}
@@ -1067,6 +1096,15 @@ func (h *ChallengeHandler) ExtendChallenge(c *gin.Context) {
 	newExpiry, opErr := extendChallengeEconomy(ctx, tx, teamID, chalID, difficulty, *req.QuoteVersion, h.config.Economy)
 	if opErr != nil {
 		c.JSON(opErr.Status, gin.H{"error": opErr.Message})
+		return
+	}
+	extensionCost := bandParam(h.config.Economy.ExtCostFracs, *req.QuoteVersion) * launchCost(h.config.Economy, difficulty)
+	if err := insertTeamNotification(ctx, tx, teamID, "economy.challenge_extended",
+		challengeName+" extended", fmt.Sprintf("The timer was extended to %s for %.3f credits.", newExpiry.UTC().Format(time.RFC3339), extensionCost), "info",
+		"/challenges/"+c.Param("slug"),
+		fmt.Sprintf("economy:extend:%s:%s:%d", teamID.String(), chalID.String(), *req.QuoteVersion),
+		gin.H{"challenge_id": chalID, "slug": c.Param("slug"), "expires_at": newExpiry, "cost": extensionCost}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "extend failed"})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {

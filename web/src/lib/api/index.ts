@@ -58,6 +58,42 @@ export interface EconomyPolicyDescriptor {
 	customized: boolean;
 }
 
+export interface NotificationItem {
+	id: string;
+	kind: 'announcement' | 'event';
+	event_type: string;
+	title: string;
+	body: string;
+	severity: 'info' | 'success' | 'warning' | 'critical';
+	audience: 'all' | 'participants' | 'staff' | 'team' | 'user';
+	href?: string;
+	payload: Record<string, unknown>;
+	publish_at: string;
+	expires_at?: string;
+	pinned: boolean;
+	read: boolean;
+	created_at: string;
+}
+
+export interface NotificationListResponse {
+	items: NotificationItem[];
+	unread_count: number;
+}
+
+export interface AdminAnnouncement {
+	id: string;
+	title: string;
+	body: string;
+	severity: NotificationItem['severity'];
+	audience: 'all' | 'participants' | 'staff';
+	href?: string;
+	publish_at: string;
+	expires_at?: string;
+	pinned: boolean;
+	cancelled_at?: string;
+	created_at: string;
+}
+
 export interface MarketPulseResponse {
 	policy: {
 		generated_at: string;
@@ -360,6 +396,22 @@ class ApiClient {
 		return this.request<PlatformInfoResponse>('/info', { cache: 'no-store' }, false);
 	}
 
+	async getNotifications(limit = 30) {
+		return this.request<NotificationListResponse>(`/notifications?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
+	}
+
+	async getUnreadNotificationCount() {
+		return this.request<{ unread_count: number }>('/notifications/unread-count', { cache: 'no-store' });
+	}
+
+	async markNotificationRead(id: string) {
+		return this.request<{ success: boolean }>(`/notifications/${encodeURIComponent(id)}/read`, { method: 'POST' });
+	}
+
+	async markAllNotificationsRead() {
+		return this.request<{ success: boolean; updated: number }>('/notifications/read-all', { method: 'POST' });
+	}
+
 	// auth
 	async login(username: string, password: string) {
 		return this.request<{
@@ -621,6 +673,29 @@ class ApiClient {
 	// admin
 	async getAdminStats() {
 		return this.request<any>('/admin/stats');
+	}
+
+	async getAdminAnnouncements() {
+		return this.request<{ announcements: AdminAnnouncement[] }>('/admin/announcements', { cache: 'no-store' });
+	}
+
+	async createAdminAnnouncement(data: {
+		title: string;
+		body: string;
+		severity: AdminAnnouncement['severity'];
+		audience: AdminAnnouncement['audience'];
+		href?: string;
+		publish_at?: string;
+		expires_at?: string;
+		pinned: boolean;
+	}) {
+		return this.request<{ id: string; publish_at: string }>('/admin/announcements', {
+			method: 'POST', body: JSON.stringify(data)
+		});
+	}
+
+	async cancelAdminAnnouncement(id: string) {
+		return this.request<{ success: boolean }>(`/admin/announcements/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
 	}
 
 	async getAdminUsers() {

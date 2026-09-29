@@ -755,7 +755,15 @@ func (h *EconomyHandler) Bailout(c *gin.Context) {
 		return
 	}
 	h.runTx(c, func(tx pgx.Tx) *EconomyOpError {
-		return bailoutEconomy(c.Request.Context(), tx, teamID, h.config.Economy)
+		if opErr := bailoutEconomy(c.Request.Context(), tx, teamID, h.config.Economy); opErr != nil {
+			return opErr
+		}
+		if err := insertTeamNotification(c.Request.Context(), tx, teamID, "economy.bailout_claimed",
+			"Bailout claimed", fmt.Sprintf("The team received %.3f credits. This one-time option is now used.", h.config.Economy.Bailout),
+			"warning", "/team", "economy:bailout:"+teamID.String(), gin.H{"credits": h.config.Economy.Bailout}); err != nil {
+			return &EconomyOpError{Status: http.StatusInternalServerError, Message: "failed to record bailout"}
+		}
+		return nil
 	})
 }
 
@@ -782,6 +790,13 @@ func (h *EconomyHandler) Convert(c *gin.Context) {
 	gained, opErr := convertPointsToCredits(ctx, tx, teamID, req.Points, *req.QuoteVersion, h.config.Economy)
 	if opErr != nil {
 		c.JSON(opErr.Status, gin.H{"error": opErr.Message})
+		return
+	}
+	if err := insertTeamNotification(ctx, tx, teamID, "economy.points_converted",
+		"Points converted", fmt.Sprintf("The team converted %.3f points into %.3f credits.", req.Points, gained),
+		"info", "/team", fmt.Sprintf("economy:p2c:%s:%d", teamID.String(), *req.QuoteVersion),
+		gin.H{"points_spent": req.Points, "credits_gained": gained, "quote_version": *req.QuoteVersion}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "conversion failed"})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
