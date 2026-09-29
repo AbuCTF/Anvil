@@ -90,7 +90,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOME}/.ssh:/root/.ssh:ro
-      - ${HOME}/.docker:/root/.docker:ro
+      - ${ANVIL_DOCKER_CONFIG_HOST_DIR:-${HOME}/.docker}:/root/.docker:ro
       - ${ANVIL_TRAEFIK_DYNAMIC_HOST_PATH:-./data/traefik-dynamic}:/var/lib/anvil/traefik-dynamic
       - ${ANVIL_STORAGE_HOST_PATH:-./data/storage}:${ANVIL_STORAGE_PATH:-/var/lib/anvil/storage}
       - /var/lib/anvil:/var/lib/anvil
