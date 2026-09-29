@@ -46,6 +46,12 @@ func TestValidatePlatformSetting(t *testing.T) {
 		{name: "setup completion", key: "event.setup_completed", value: true},
 		{name: "managed event profile", key: "event.profile_managed", value: true},
 		{name: "branding storage key is protected", key: "branding.logo_key", value: "other/object", wantErr: true},
+		{name: "team creation policy", key: "participants.team_creation", value: "admin"},
+		{name: "bad team creation policy", key: "participants.team_creation", value: "captain", wantErr: true},
+		{name: "team size policy", key: "participants.default_team_size", value: float64(4)},
+		{name: "allowed email domains", key: "participants.allowed_email_domains", value: "kpmg.com, *.kpmg.co.uk"},
+		{name: "bad email domains", key: "participants.allowed_email_domains", value: "https://kpmg.com", wantErr: true},
+		{name: "brand accent", key: "branding.accent", value: "violet"},
 	}
 
 	for _, tt := range tests {

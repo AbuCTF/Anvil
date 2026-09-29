@@ -15,6 +15,8 @@
 	import RankBadge from '$lib/components/RankBadge.svelte';
 	import DialogHost from '$lib/components/DialogHost.svelte';
 	import BrandLogo from '$lib/components/BrandLogo.svelte';
+	import { notificationSoundEnabled, playNotificationSound, primeNotificationSound } from '$lib/notificationSound';
+	import { API_BASE } from '$lib/config';
 
 	let mobileMenuOpen = false;
 	let userMenuOpen = false;
@@ -76,6 +78,12 @@
 	let credits: number | null = null;
 	let notificationUnread = 0;
 	let notificationsCheckedFor = '';
+	let notificationCountInitialized = false;
+	$: if (browser && $platformInfo?.accent) document.documentElement.setAttribute('data-accent', $platformInfo.accent);
+	$: if (browser && $platformInfo?.logo_url) {
+		const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+		if (favicon) favicon.href = `${API_BASE}${$platformInfo.logo_url}`;
+	}
 
 	async function loadNotificationCount() {
 		if (!$auth.isAuthenticated) {
@@ -84,7 +92,13 @@
 		}
 		try {
 			const response = await api.getUnreadNotificationCount();
+			if (notificationCountInitialized && response.unread_count > notificationUnread && $platformInfo?.notification_sound_allowed && notificationSoundEnabled()) {
+				const latest = await api.getNotifications(5);
+				const audible = latest.items.find((item) => !item.read && (item.severity === 'critical' || item.audience === 'team' || item.audience === 'user'));
+				if (audible) playNotificationSound(audible.id);
+			}
 			notificationUnread = response.unread_count;
+			notificationCountInitialized = true;
 		} catch {
 			// The header is non-critical; the full page reports actionable errors.
 		}
@@ -96,6 +110,7 @@
 	$: if (browser && !$auth.isAuthenticated && !$auth.isLoading && notificationsCheckedFor) {
 		notificationsCheckedFor = '';
 		notificationUnread = 0;
+		notificationCountInitialized = false;
 	}
 
 	async function loadCredits() {
@@ -172,12 +187,17 @@
 			if (!document.hidden) void loadNotificationCount();
 		};
 		const notificationTimer = window.setInterval(refreshNotifications, 60_000);
+		const primeSound = () => primeNotificationSound();
 		document.addEventListener('visibilitychange', refreshVisibleRank);
+		window.addEventListener('pointerdown', primeSound, { once: true });
+		window.addEventListener('keydown', primeSound, { once: true });
 		window.addEventListener('focus', refreshVisibleRank);
 		window.addEventListener('notifications:changed', refreshNotifications);
 		return () => {
 			window.clearInterval(notificationTimer);
 			document.removeEventListener('visibilitychange', refreshVisibleRank);
+			window.removeEventListener('pointerdown', primeSound);
+			window.removeEventListener('keydown', primeSound);
 			window.removeEventListener('focus', refreshVisibleRank);
 			window.removeEventListener('notifications:changed', refreshNotifications);
 		};

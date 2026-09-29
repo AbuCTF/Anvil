@@ -51,6 +51,14 @@ func boolSettingOrDefault(ctx context.Context, db *database.DB, key string, def 
 	return enabled, nil
 }
 
+func textSettingOrDefault(ctx context.Context, db *database.DB, key, def string) (string, error) {
+	var value string
+	err := db.Pool.QueryRow(ctx,
+		`SELECT COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = $1), $2)`,
+		key, def).Scan(&value)
+	return value, err
+}
+
 func resolveTeamID(ctx context.Context, db *database.DB, userID uuid.UUID) (*uuid.UUID, error) {
 	var teamID *uuid.UUID
 	err := db.Pool.QueryRow(ctx,
@@ -121,6 +129,37 @@ func (h *TeamsHandler) Create(c *gin.Context) {
 	}
 	defer tx.Rollback(ctx)
 
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('anvil:team-create'))`); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create team"})
+		return
+	}
+	var creationPolicy string
+	var defaultTeamSize, maxTeams int
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'participants.team_creation'), 'open'),
+			COALESCE((SELECT (value #>> '{}')::int FROM platform_settings WHERE key = 'participants.default_team_size'), 4),
+			COALESCE((SELECT (value #>> '{}')::int FROM platform_settings WHERE key = 'participants.max_teams'), 0)
+	`).Scan(&creationPolicy, &defaultTeamSize, &maxTeams); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create team"})
+		return
+	}
+	if creationPolicy != "open" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "team creation is managed by the organizer"})
+		return
+	}
+	if maxTeams > 0 {
+		var teamCount int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*)::int FROM teams`).Scan(&teamCount); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create team"})
+			return
+		}
+		if teamCount >= maxTeams {
+			c.JSON(http.StatusForbidden, gin.H{"error": "the event has reached its team limit"})
+			return
+		}
+	}
+
 	var existingTeam *uuid.UUID
 	if err := tx.QueryRow(ctx,
 		`SELECT team_id FROM users WHERE id = $1 FOR UPDATE`, uid,
@@ -136,8 +175,8 @@ func (h *TeamsHandler) Create(c *gin.Context) {
 
 	teamID := uuid.New()
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO teams (id, name, join_code, created_by) VALUES ($1, $2, $3, $4)`,
-		teamID, name, joinCode, uid,
+		`INSERT INTO teams (id, name, join_code, max_members, created_by) VALUES ($1, $2, $3, $4, $5)`,
+		teamID, name, joinCode, defaultTeamSize, uid,
 	); err != nil {
 		if postgresErrorCode(err) == "23505" { // unique_violation
 			c.JSON(http.StatusConflict, gin.H{"error": "a team with that name already exists"})
@@ -175,6 +214,15 @@ func (h *TeamsHandler) Join(c *gin.Context) {
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	joinPolicy, err := textSettingOrDefault(c.Request.Context(), h.db, "participants.team_join", "code")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check team policy"})
+		return
+	}
+	if joinPolicy != "code" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "team joining is managed by the organizer"})
 		return
 	}
 	var req joinTeamRequest

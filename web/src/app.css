@@ -21,6 +21,8 @@
     --challenge-solved-border-hover: rgb(111 174 127 / 0.4);
     --challenge-solved-mark: rgb(111 174 127);
     --chart-dim-opacity: 0.5;
+    --brand-accent: 34 211 238;
+    --brand-accent-strong: 14 116 144;
     color-scheme: dark;
   }
   /* Light theme - the scale inverts, so every stone-* class flips automatically. */
@@ -88,7 +90,7 @@
     summary,
     [tabindex]
   ):focus-visible {
-    outline: 2px solid rgb(245 158 11 / 0.8) !important;
+    outline: 2px solid rgb(var(--brand-accent) / 0.8) !important;
     outline-offset: 2px !important;
   }
 }
@@ -143,10 +145,23 @@
 
 /* Theme-aware hero highlight - cyan reads darker on a light ground. */
 .hero-accent {
-  color: #22d3ee;
+  color: rgb(var(--brand-accent));
 }
 :root[data-theme="light"] .hero-accent {
-  color: #0e7490;
+  color: rgb(var(--brand-accent-strong));
+}
+
+:root[data-accent="amber"] {
+  --brand-accent: 245 158 11;
+  --brand-accent-strong: 180 83 9;
+}
+:root[data-accent="emerald"] {
+  --brand-accent: 52 211 153;
+  --brand-accent-strong: 4 120 87;
+}
+:root[data-accent="violet"] {
+  --brand-accent: 167 139 250;
+  --brand-accent-strong: 109 40 217;
 }
 
 /* Hide scrollbar globally but keep functionality */

@@ -11,6 +11,8 @@
 	import { confirmDialog, alertDialog, promptDialog } from '$lib/stores/dialog';
 	import { platformInfo, refreshPlatformInfo } from '$lib/stores/platform';
 	import EventSetup from '$lib/components/admin/EventSetup.svelte';
+	import DataWorkspace from '$lib/components/admin/DataWorkspace.svelte';
+	import LaunchWorkspace from '$lib/components/admin/LaunchWorkspace.svelte';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -1206,6 +1208,8 @@
 	const TABS = [
 		{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard-outline' },
 		{ id: 'event', label: 'Event', icon: 'mdi:calendar-star' },
+		{ id: 'data', label: 'Data', icon: 'mdi:database-export-outline' },
+		{ id: 'launch', label: 'Launch', icon: 'mdi:rocket-launch-outline' },
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
 		{ id: 'users', label: 'Users', icon: 'mdi:account-group-outline' },
 		{ id: 'teams', label: 'Teams', icon: 'mdi:account-multiple-outline' },
@@ -1340,6 +1344,10 @@
 					update={updateSetting}
 					save={savePlatformSettings}
 				/>
+			{:else if activeTab === 'data'}
+				<DataWorkspace />
+			{:else if activeTab === 'launch'}
+				<LaunchWorkspace />
 			{:else if activeTab === 'challenges'}
 				{#if categoriesError}
 					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-warn/20 bg-warn/5 px-4 py-3 text-sm text-warn" aria-live="polite">

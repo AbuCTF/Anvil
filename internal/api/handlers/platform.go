@@ -33,14 +33,18 @@ type platformInfoResponse struct {
 	RulesURL           string                         `json:"rules_url,omitempty"`
 	PrivacyURL         string                         `json:"privacy_url,omitempty"`
 	TermsURL           string                         `json:"terms_url,omitempty"`
+	Accent             string                         `json:"accent"`
 	RegistrationMode   string                         `json:"registration_mode"`
 	ScoringEnabled     bool                           `json:"scoring_enabled"`
 	ScoreboardEnabled  bool                           `json:"scoreboard_enabled"`
 	ArenaEnabled       bool                           `json:"arena_enabled"`
 	EconomyEnabled     bool                           `json:"economy_enabled"`
 	MarketPulseEnabled bool                           `json:"market_pulse_enabled"`
+	NotificationSound  bool                           `json:"notification_sound_allowed"`
 	EconomyPolicy      config.EconomyPolicyDescriptor `json:"economy_policy"`
 	TeamsMode          bool                           `json:"teams_mode"`
+	TeamCreation       string                         `json:"team_creation_policy"`
+	TeamJoin           string                         `json:"team_join_policy"`
 	VPNEnabled         bool                           `json:"vpn_enabled"`
 	SSOEnabled         bool                           `json:"sso_enabled"`
 	DiscordWalkin      bool                           `json:"discord_walkin"`
@@ -78,6 +82,18 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("failed to read scoreboard_enabled", zap.Error(err))
 	}
+	notificationSound, err := boolSettingOrDefault(ctx, h.db, "notifications.sound_allowed", false)
+	if err != nil {
+		h.logger.Warn("failed to read notifications.sound_allowed", zap.Error(err))
+	}
+	teamCreation, err := textSettingOrDefault(ctx, h.db, "participants.team_creation", "open")
+	if err != nil {
+		h.logger.Warn("failed to read participants.team_creation", zap.Error(err))
+	}
+	teamJoin, err := textSettingOrDefault(ctx, h.db, "participants.team_join", "code")
+	if err != nil {
+		h.logger.Warn("failed to read participants.team_join", zap.Error(err))
+	}
 	registrationMode := h.config.Platform.RegistrationMode
 	if effective, modeErr := (&AuthHandler{config: h.config, db: h.db}).registrationMode(ctx); modeErr != nil {
 		h.logger.Warn("failed to read effective registration_mode", zap.Error(modeErr))
@@ -98,14 +114,18 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		RulesURL:           profile.RulesURL,
 		PrivacyURL:         profile.PrivacyURL,
 		TermsURL:           profile.TermsURL,
+		Accent:             profile.Accent,
 		RegistrationMode:   registrationMode,
 		ScoringEnabled:     scoring,
 		ScoreboardEnabled:  scoreboard,
 		ArenaEnabled:       arena,
 		EconomyEnabled:     economy,
 		MarketPulseEnabled: pulse,
+		NotificationSound:  notificationSound,
 		EconomyPolicy:      h.config.EconomyPolicyDescriptor(),
 		TeamsMode:          teams,
+		TeamCreation:       teamCreation,
+		TeamJoin:           teamJoin,
 		VPNEnabled:         h.config.VPN.Enabled,
 		SSOEnabled:         h.config.SSO.Enabled && strings.TrimSpace(h.config.SSO.SharedSecret) != "",
 		DiscordWalkin:      h.config.Discord.Enabled && h.config.Discord.ClientID != "",
@@ -131,7 +151,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 }
 
 type eventProfile struct {
-	Name, Description, Slug, Timezone, ContactEmail, LogoURL, RulesURL, PrivacyURL, TermsURL string
+	Name, Description, Slug, Timezone, ContactEmail, LogoURL, RulesURL, PrivacyURL, TermsURL, Accent string
 }
 
 func loadEventProfile(ctx context.Context, db *database.DB, defaultName, defaultDescription string) (eventProfile, error) {
@@ -149,13 +169,14 @@ func loadEventProfile(ctx context.Context, db *database.DB, defaultName, default
 			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.rules_url'), ''),
 			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.privacy_url'), ''),
 			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.terms_url'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'branding.accent'), 'cyan'),
 			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.profile_managed'), 'false')::boolean
 		FROM platform_settings
 		WHERE key IN ('platform_name', 'platform_description', 'event.slug', 'event.timezone',
-			'event.contact_email', 'branding.logo_key', 'event.rules_url', 'event.privacy_url', 'event.terms_url',
+			'event.contact_email', 'branding.logo_key', 'event.rules_url', 'event.privacy_url', 'event.terms_url', 'branding.accent',
 			'event.profile_managed')
 	`).Scan(&profile.Name, &profile.Description, &profile.Slug, &profile.Timezone, &profile.ContactEmail,
-		&logoKey, &profile.RulesURL, &profile.PrivacyURL, &profile.TermsURL, &managed)
+		&logoKey, &profile.RulesURL, &profile.PrivacyURL, &profile.TermsURL, &profile.Accent, &managed)
 	if err != nil {
 		return profile, err
 	}
@@ -170,6 +191,9 @@ func loadEventProfile(ctx context.Context, db *database.DB, defaultName, default
 	}
 	if profile.Timezone == "" {
 		profile.Timezone = "UTC"
+	}
+	if profile.Accent == "" {
+		profile.Accent = "cyan"
 	}
 	if logoKey != "" {
 		profile.LogoURL = "/api/v1/branding/logo?v=" + strings.TrimPrefix(logoKey, "branding/logos/")

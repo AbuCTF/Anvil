@@ -3,6 +3,7 @@
 	import { api } from '$api';
 	import { platformInfo, refreshPlatformInfo } from '$lib/stores/platform';
 	import BrandLogo from '$lib/components/BrandLogo.svelte';
+	import InviteCodes from '$lib/components/admin/InviteCodes.svelte';
 
 	export let settings: Record<string, any>;
 	export let challenges: any[] = [];
@@ -26,11 +27,12 @@
 	$: end = typeof settings['event.end_at'] === 'string' ? settings['event.end_at'] : '';
 	$: scheduleReady = !!start && !!end && Number.isFinite(Date.parse(start)) && Number.isFinite(Date.parse(end)) && Date.parse(end) > Date.parse(start);
 	$: pulseReady = !settings.market_pulse_enabled || settings.economy_mode;
+	$: accentColor = ({ cyan: '#22d3ee', amber: '#f59e0b', emerald: '#34d399', violet: '#a78bfa' } as Record<string, string>)[settings['branding.accent'] ?? 'cyan'];
 	$: requiredReady = !!eventName && /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(slug) && !!timezone && scheduleReady && pulseReady;
 	$: checks = [
 		{ label: 'Event identity', ready: !!eventName && !!slug && !!timezone, detail: 'Name, slug and timezone' },
 		{ label: 'Competition window', ready: scheduleReady, detail: 'Valid start and end' },
-		{ label: 'Access model', ready: ['open', 'disabled'].includes(settings.registration_mode), detail: settings.teams_mode ? 'Teams' : 'Solo' },
+		{ label: 'Access model', ready: ['open', 'invite', 'disabled'].includes(settings.registration_mode), detail: settings.teams_mode ? 'Teams' : 'Solo' },
 		{ label: 'Feature dependencies', ready: pulseReady, detail: settings.market_pulse_enabled ? 'Pulse requires Ledger' : 'No conflicts' },
 		{ label: 'Published content', ready: published > 0, detail: `${published} published challenge${published === 1 ? '' : 's'}`, warning: true }
 	];
@@ -128,6 +130,7 @@
 					<label><span class={label}>Organizer timezone</span><input class={field} list="event-timezones" value={settings['event.timezone'] ?? 'UTC'} on:input={(e) => update('event.timezone', (e.target as HTMLInputElement).value)} /></label>
 					<datalist id="event-timezones"><option value="UTC"></option><option value="Asia/Kolkata"></option><option value="Asia/Singapore"></option><option value="Europe/London"></option><option value="America/New_York"></option><option value="America/Los_Angeles"></option></datalist>
 					<label class="sm:col-span-2"><span class={label}>Contact email</span><input type="email" class={field} maxlength="254" placeholder="ctf@example.com" value={settings['event.contact_email'] ?? ''} on:input={(e) => update('event.contact_email', (e.target as HTMLInputElement).value)} /></label>
+					<label class="sm:col-span-2"><span class={label}>Accent palette</span><select class={field} value={settings['branding.accent'] ?? 'cyan'} on:change={(e) => update('branding.accent', (e.target as HTMLSelectElement).value)}><option value="cyan">Cyan</option><option value="amber">Amber</option><option value="emerald">Emerald</option><option value="violet">Violet</option></select></label>
 				</div>
 			</div>
 		</section>
@@ -136,12 +139,18 @@
 			<div class="border-b border-stone-800 px-5 py-4"><h2 class="text-sm font-semibold text-stone-100">Format and access</h2><p class="mt-1 text-xs text-stone-500">Choose the participant model before registrations begin.</p></div>
 			<div class="grid gap-4 p-5 md:grid-cols-2">
 				<label><span class={label}>Competition format</span><select class={field} value={String(settings.teams_mode ?? false)} on:change={(e) => update('teams_mode', (e.target as HTMLSelectElement).value === 'true')}><option value="false">Solo competition</option><option value="true">Team competition</option></select></label>
-				<label><span class={label}>Self-registration</span><select class={field} value={settings.registration_mode ?? 'open'} on:change={(e) => update('registration_mode', (e.target as HTMLSelectElement).value)}><option value="open">Open registration</option><option value="disabled">Closed</option></select><span class="mt-1.5 block text-[11px] text-stone-600">Local registration uses username, email and password.</span></label>
+				<label><span class={label}>Self-registration</span><select class={field} value={settings.registration_mode ?? 'open'} on:change={(e) => update('registration_mode', (e.target as HTMLSelectElement).value)}><option value="open">Open registration</option><option value="invite">Invite only</option><option value="disabled">Closed</option></select><span class="mt-1.5 block text-[11px] text-stone-600">Local registration uses username, email and password.</span></label>
+				<label><span class={label}>Participant team creation</span><select class={field} value={settings['participants.team_creation'] ?? 'open'} on:change={(e) => update('participants.team_creation', (e.target as HTMLSelectElement).value)}><option value="open">Participants may create</option><option value="admin">Organizer managed</option><option value="disabled">Disabled</option></select></label>
+				<label><span class={label}>Join by team code</span><select class={field} value={settings['participants.team_join'] ?? 'code'} on:change={(e) => update('participants.team_join', (e.target as HTMLSelectElement).value)}><option value="code">Enabled</option><option value="disabled">Organizer managed</option></select></label>
+				<label><span class={label}>Default team size</span><input type="number" min="1" max="100" class={field} value={settings['participants.default_team_size'] ?? 4} on:input={(e) => update('participants.default_team_size', Number((e.target as HTMLInputElement).value))} /></label>
+				<label><span class={label}>Maximum teams</span><input type="number" min="0" max="100000" class={field} value={settings['participants.max_teams'] ?? 0} on:input={(e) => update('participants.max_teams', Number((e.target as HTMLInputElement).value))} /><span class="mt-1.5 block text-[11px] text-stone-600">Zero means unlimited.</span></label>
+				<label class="md:col-span-2"><span class={label}>Allowed email domains</span><input class={field} maxlength="2000" placeholder="kpmg.com, *.subsidiary.com" value={settings['participants.allowed_email_domains'] ?? ''} on:input={(e) => update('participants.allowed_email_domains', (e.target as HTMLInputElement).value)} /><span class="mt-1.5 block text-[11px] text-stone-600">Leave empty to allow every domain.</span></label>
 				<div class="rounded-md border border-stone-800 p-4 text-xs leading-relaxed text-stone-500 md:col-span-2">
 					<span class="font-medium text-stone-300">Identity methods detected:</span>
 					Credentials enabled · SSO {$platformInfo?.sso_enabled ? 'connected' : 'not configured'} · Discord {$platformInfo?.discord_walkin ? 'connected' : 'not configured'}.
 					Provider secrets remain deployment-managed until the encrypted connector vault is available.
 				</div>
+				{#if settings.registration_mode === 'invite'}<InviteCodes />{/if}
 			</div>
 		</section>
 
@@ -161,7 +170,8 @@
 					{ key: 'scoreboard_enabled', title: 'Scoreboard', body: 'Public rankings and team profiles' },
 					{ key: 'economy_mode', title: 'Ledger economy', body: 'Credits, quotes and strategic scoring' },
 					{ key: 'market_pulse_enabled', title: 'Market Pulse', body: 'Delayed, privacy-safe field signals' },
-					{ key: 'arena_enabled', title: 'Arena', body: 'Attack-defense and KotH surfaces' }
+					{ key: 'arena_enabled', title: 'Arena', body: 'Attack-defense and KotH surfaces' },
+					{ key: 'notifications.sound_allowed', title: 'Notification sounds', body: 'Let participants opt into critical and direct-team tones' }
 				] as feature}
 					<label class="flex cursor-pointer items-start justify-between gap-4 rounded-md border border-stone-800 p-4 hover:border-stone-700">
 						<span><span class="block text-sm font-medium text-stone-200">{feature.title}</span><span class="mt-1 block text-xs leading-relaxed text-stone-500">{feature.body}</span></span>
@@ -183,7 +193,16 @@
 	</div>
 
 	<aside class="xl:sticky xl:top-24 xl:self-start">
-		<div class="rounded-lg border border-stone-800 bg-stone-900/40 p-5">
+		<div class="rounded-lg border border-stone-800 bg-stone-950 p-4">
+			<div class="flex items-center justify-between border-b border-stone-800 pb-3"><BrandLogo className="h-7 w-auto max-w-32" /><span class="text-[9px] uppercase tracking-widest text-stone-600">Participant preview</span></div>
+			<div class="py-8 text-center">
+				<p class="break-words text-2xl font-semibold text-stone-100">{eventName || 'Your event'}</p>
+				<p class="mx-auto mt-3 max-w-xs text-xs leading-relaxed text-stone-500">{settings.platform_description || 'Your event description appears here.'}</p>
+				<span class="mt-5 inline-flex rounded-md px-3 py-2 text-xs font-medium text-stone-950" style:background-color={accentColor}>View challenges</span>
+			</div>
+			<div class="flex justify-center gap-4 border-t border-stone-800 pt-3 text-[10px] text-stone-600"><span style:color={accentColor}>Challenges</span><span>Scoreboard</span><span>Team</span></div>
+		</div>
+		<div class="mt-4 rounded-lg border border-stone-800 bg-stone-900/40 p-5">
 			<div class="flex items-center justify-between gap-3"><h2 class="text-sm font-semibold text-stone-100">Launch readiness</h2><span class="rounded-full px-2 py-1 text-[10px] {requiredReady ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}">{requiredReady ? 'Ready' : 'Needs attention'}</span></div>
 			<div class="mt-4 divide-y divide-stone-800/70">
 				{#each checks as check}

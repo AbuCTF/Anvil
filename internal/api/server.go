@@ -311,6 +311,22 @@ func (s *Server) setupRouter() {
 		admin.Use(middleware.Auth(s.config, s.db))
 		admin.Use(middleware.RequireRole("admin"))
 		{
+			readinessHandler := handlers.NewReadinessHandler(s.config, s.db, s.storageSvc != nil, s.containerSvc != nil || s.instancerSvc != nil || s.vmSvc != nil, s.logger)
+			admin.GET("/readiness", readinessHandler.Report)
+			admin.GET("/release-candidates", readinessHandler.ListReleases)
+			admin.POST("/release-candidates", readinessHandler.CreateRelease)
+
+			data := admin.Group("/data")
+			{
+				dataHandler := handlers.NewDataHandler(s.db, s.logger)
+				data.GET("/summary", dataHandler.Summary)
+				data.GET("/export", dataHandler.Export)
+				data.GET("/templates/:entity", dataHandler.Template)
+				data.GET("/imports", dataHandler.ListImports)
+				data.POST("/imports/preview", dataHandler.PreviewImport)
+				data.POST("/imports/:id/apply", dataHandler.ApplyImport)
+			}
+
 			branding := admin.Group("/branding")
 			{
 				brandingHandler := handlers.NewBrandingHandler(s.db, s.storageSvc, s.logger)

@@ -6,12 +6,15 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { platformInfo } from '$lib/stores/platform';
+	import { notificationSoundEnabled, playNotificationSound, setNotificationSound } from '$lib/notificationSound';
 
 	let items: NotificationItem[] = [];
 	let unreadCount = 0;
 	let loading = true;
 	let working = '';
 	let error = '';
+	let soundEnabled = false;
 	let filter: 'all' | 'unread' | 'announcements' | 'team' = 'all';
 
 	$: visible = items.filter((item) => {
@@ -35,7 +38,16 @@
 		}
 	}
 
-	onMount(() => { void load(); });
+	function toggleSound() {
+		soundEnabled = !soundEnabled;
+		setNotificationSound(soundEnabled);
+		if (soundEnabled) playNotificationSound('preference-test');
+	}
+
+	onMount(() => {
+		soundEnabled = notificationSoundEnabled();
+		void load();
+	});
 	function syncHeader() {
 		window.dispatchEvent(new Event('notifications:changed'));
 	}
@@ -107,6 +119,12 @@
 <div class="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
 	<PageHeader title="Notifications" subtitle="Organizer announcements and activity addressed to you or your team.">
 		<div slot="actions">
+			{#if $platformInfo?.notification_sound_allowed}
+				<button type="button" on:click={toggleSound} aria-pressed={soundEnabled} class="mr-2 inline-flex items-center gap-2 rounded-md border border-stone-700 px-3.5 py-2 text-sm text-stone-300 transition-colors hover:bg-stone-900">
+					<Icon icon={soundEnabled ? 'mdi:volume-high' : 'mdi:volume-off'} class="h-4 w-4" />
+					{soundEnabled ? 'Sound on' : 'Sound off'}
+				</button>
+			{/if}
 			{#if unreadCount > 0}
 				<button on:click={markAllRead} disabled={working === 'all'} class="inline-flex items-center gap-2 rounded-md border border-stone-700 px-3.5 py-2 text-sm text-stone-300 transition-colors hover:bg-stone-900 disabled:opacity-50">
 					<Icon icon={working === 'all' ? 'mdi:loading' : 'mdi:check-all'} class="h-4 w-4 {working === 'all' ? 'animate-spin' : ''}" />

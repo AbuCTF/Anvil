@@ -1076,6 +1076,15 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if err := validateCompetitionFormatUpdate(c.Request.Context(), tx, req.Settings); err != nil {
+		if errors.Is(err, errEventSettingsUnavailable) {
+			h.logger.Error("Failed to validate competition format", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to validate competition format"})
+			return
+		}
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
 
 	for key, value := range req.Settings {
 		valueJSON, err := json.Marshal(value)
@@ -1148,6 +1157,10 @@ func validatePlatformSetting(key string, value interface{}) error {
 	switch key {
 	case "instance.max_per_user":
 		return intRange(1, 100)
+	case "participants.default_team_size":
+		return intRange(1, 100)
+	case "participants.max_teams":
+		return intRange(0, 100000)
 	case "instance.max_extensions":
 		return intRange(0, 10)
 	case "instance.extension_minutes":
@@ -1156,7 +1169,7 @@ func validatePlatformSetting(key string, value interface{}) error {
 		return intRange(30, 480)
 	case "cooldown.easy_minutes", "cooldown.medium_minutes", "cooldown.hard_minutes", "cooldown.insane_minutes":
 		return intRange(0, 120)
-	case "platform.require_vpn", "scoreboard_enabled", "teams_mode", "economy_mode", "arena_enabled", "market_pulse_enabled", "event.profile_managed", "event.setup_completed":
+	case "platform.require_vpn", "scoreboard_enabled", "teams_mode", "economy_mode", "arena_enabled", "market_pulse_enabled", "event.profile_managed", "event.setup_completed", "notifications.sound_allowed":
 		return boolValue()
 	case "platform_name":
 		_, err := stringValue(1, 100)
@@ -1202,6 +1215,42 @@ func validatePlatformSetting(key string, value interface{}) error {
 		}
 	case "branding.logo_key", "branding.logo_mime":
 		return errors.New("Branding storage settings are read-only")
+	case "participants.team_creation":
+		text, err := stringValue(1, 20)
+		if err != nil {
+			return err
+		}
+		if text != "open" && text != "admin" && text != "disabled" {
+			return errors.New("Invalid value for participants.team_creation")
+		}
+	case "participants.team_join":
+		text, err := stringValue(1, 20)
+		if err != nil {
+			return err
+		}
+		if text != "code" && text != "disabled" {
+			return errors.New("Invalid value for participants.team_join")
+		}
+	case "participants.allowed_email_domains":
+		text, err := stringValue(0, 2000)
+		if err != nil || text == "" {
+			return err
+		}
+		for _, domain := range strings.Split(text, ",") {
+			domain = strings.TrimSpace(strings.ToLower(domain))
+			base := strings.TrimPrefix(domain, "*.")
+			if base == "" || strings.ContainsAny(base, " /@:") || !strings.Contains(base, ".") || strings.HasPrefix(base, ".") || strings.HasSuffix(base, ".") {
+				return errors.New("Invalid value for participants.allowed_email_domains")
+			}
+		}
+	case "branding.accent":
+		text, err := stringValue(1, 20)
+		if err != nil {
+			return err
+		}
+		if text != "cyan" && text != "amber" && text != "emerald" && text != "violet" {
+			return errors.New("Invalid value for branding.accent")
+		}
 	case "registration_mode":
 		mode, ok := value.(string)
 		if !ok || !isRegistrationMode(strings.ToLower(strings.TrimSpace(mode))) {
@@ -1224,6 +1273,40 @@ func validatePlatformSetting(key string, value interface{}) error {
 }
 
 var errEventSettingsUnavailable = errors.New("event schedule settings unavailable")
+
+func validateCompetitionFormatUpdate(ctx context.Context, tx pgx.Tx, settings map[string]interface{}) error {
+	requested, changes := settings["teams_mode"]
+	if !changes {
+		return nil
+	}
+	next, ok := requested.(bool)
+	if !ok {
+		return errors.New("Invalid value for teams_mode")
+	}
+	var current bool
+	if err := tx.QueryRow(ctx, `
+		SELECT value = 'true'::jsonb FROM platform_settings WHERE key = 'teams_mode' FOR UPDATE
+	`).Scan(&current); err != nil {
+		return fmt.Errorf("%w: query team mode: %v", errEventSettingsUnavailable, err)
+	}
+	if current == next {
+		return nil
+	}
+	var teams, activity int
+	if err := tx.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*)::int FROM teams),
+			(SELECT COUNT(*)::int FROM solves) +
+			(SELECT COUNT(*)::int FROM instances) +
+			(SELECT COUNT(*)::int FROM economy_credit_events)
+	`).Scan(&teams, &activity); err != nil {
+		return fmt.Errorf("%w: inspect competition state: %v", errEventSettingsUnavailable, err)
+	}
+	if activity > 0 || (!next && teams > 0) {
+		return errors.New("Competition format cannot change after teams or competition activity exist")
+	}
+	return nil
+}
 
 func validateEventSettingsUpdate(ctx context.Context, tx pgx.Tx, settings map[string]interface{}) error {
 	_, changesStart := settings["event.start_at"]

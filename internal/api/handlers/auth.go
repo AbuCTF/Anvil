@@ -113,6 +113,17 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Password must be at most 72 bytes"})
 		return
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	allowedDomains, err := h.allowedEmailDomains(c.Request.Context())
+	if err != nil {
+		h.logger.Error("Failed to load registration email policy", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Registration is temporarily unavailable"})
+		return
+	}
+	if !emailDomainAllowed(req.Email, allowedDomains) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Use an email address from an approved organization"})
+		return
+	}
 
 	// an invite is checked authoritatively after the password is hashed, inside the same transaction that creates the account and its refresh token
 	if regMode == "invite" {
@@ -306,6 +317,48 @@ func isRegistrationMode(mode string) bool {
 	default:
 		return false
 	}
+}
+
+func (h *AuthHandler) allowedEmailDomains(ctx context.Context) ([]string, error) {
+	var raw string
+	err := h.db.Pool.QueryRow(ctx, `
+		SELECT COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'participants.allowed_email_domains'), '')
+	`).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	domains := make([]string, 0)
+	for _, domain := range strings.Split(raw, ",") {
+		if domain = strings.ToLower(strings.TrimSpace(domain)); domain != "" {
+			domains = append(domains, domain)
+		}
+	}
+	return domains, nil
+}
+
+func emailDomainAllowed(email string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	separator := strings.LastIndex(email, "@")
+	if separator < 1 || separator == len(email)-1 {
+		return false
+	}
+	domain := strings.ToLower(email[separator+1:])
+	for _, candidate := range allowed {
+		if strings.HasPrefix(candidate, "*.") {
+			base := strings.TrimPrefix(candidate, "*.")
+			if strings.HasSuffix(domain, "."+base) {
+				return true
+			}
+		} else if domain == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *AuthHandler) Login(c *gin.Context) {

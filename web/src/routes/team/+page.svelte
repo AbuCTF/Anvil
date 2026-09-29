@@ -7,7 +7,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { confirmDialog } from '$lib/stores/dialog';
-	import { hasTeam } from '$lib/stores/platform';
+	import { hasTeam, platformInfo } from '$lib/stores/platform';
 
 	let loading = true;
 	let teamsDisabled = false;
@@ -366,21 +366,29 @@
 			{/if}
 		{:else}
 			<div class="grid gap-4 sm:grid-cols-2">
-				<Card title="Create a Team">
-					<p class="text-sm text-stone-500 mb-3">Start a team and share the join code with your teammates.</p>
-					<form on:submit|preventDefault={createTeam} class="space-y-3">
-						<input class={inputClass} bind:value={createName} maxlength="100" placeholder="Team name" aria-label="Team name" />
-						<button type="submit" disabled={busy || !createName.trim()} class="w-full {primaryBtn}">Create Team</button>
-					</form>
-				</Card>
+				{#if $platformInfo?.team_creation_policy === 'open'}
+					<Card title="Create a Team">
+						<p class="text-sm text-stone-500 mb-3">Start a team and share the join code with your teammates.</p>
+						<form on:submit|preventDefault={createTeam} class="space-y-3">
+							<input class={inputClass} bind:value={createName} maxlength="100" placeholder="Team name" aria-label="Team name" />
+							<button type="submit" disabled={busy || !createName.trim()} class="w-full {primaryBtn}">Create Team</button>
+						</form>
+					</Card>
+				{/if}
 
-				<Card title="Join a Team">
-					<p class="text-sm text-stone-500 mb-3">Have a join code from a teammate? Enter it here.</p>
-					<form on:submit|preventDefault={joinTeam} class="space-y-3">
-						<input class={inputClass} bind:value={joinCode} placeholder="Join code" aria-label="Team join code" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
-						<button type="submit" disabled={busy || !joinCode.trim()} class="w-full {primaryBtn}">Join Team</button>
-					</form>
-				</Card>
+				{#if $platformInfo?.team_join_policy === 'code'}
+					<Card title="Join a Team">
+						<p class="text-sm text-stone-500 mb-3">Have a join code from a teammate? Enter it here.</p>
+						<form on:submit|preventDefault={joinTeam} class="space-y-3">
+							<input class={inputClass} bind:value={joinCode} placeholder="Join code" aria-label="Team join code" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" />
+							<button type="submit" disabled={busy || !joinCode.trim()} class="w-full {primaryBtn}">Join Team</button>
+						</form>
+					</Card>
+				{/if}
+
+				{#if $platformInfo?.team_creation_policy !== 'open' && $platformInfo?.team_join_policy !== 'code'}
+					<div class="sm:col-span-2"><EmptyState icon="mdi:account-lock-outline" text="Team membership is managed by the organizer." /></div>
+				{/if}
 			</div>
 		{/if}
 	{/if}

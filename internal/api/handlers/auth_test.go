@@ -43,3 +43,23 @@ func TestGenerateSecureToken(t *testing.T) {
 		t.Fatal("expected zero-length token request to fail")
 	}
 }
+
+func TestEmailDomainAllowed(t *testing.T) {
+	tests := []struct {
+		email   string
+		allowed []string
+		want    bool
+	}{
+		{email: "person@example.com", want: true},
+		{email: "person@kpmg.com", allowed: []string{"kpmg.com"}, want: true},
+		{email: "person@lab.kpmg.com", allowed: []string{"*.kpmg.com"}, want: true},
+		{email: "person@kpmg.com", allowed: []string{"*.kpmg.com"}, want: false},
+		{email: "person@notkpmg.com", allowed: []string{"kpmg.com"}, want: false},
+		{email: "not-an-email", allowed: []string{"kpmg.com"}, want: false},
+	}
+	for _, test := range tests {
+		if got := emailDomainAllowed(test.email, test.allowed); got != test.want {
+			t.Errorf("emailDomainAllowed(%q, %v) = %v, want %v", test.email, test.allowed, got, test.want)
+		}
+	}
+}

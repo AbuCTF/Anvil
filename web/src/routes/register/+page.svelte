@@ -23,6 +23,7 @@
 	let email = '';
 	let password = '';
 	let confirmPassword = '';
+	let inviteCode = '';
 	let loading = false;
 	let error = '';
 
@@ -30,7 +31,8 @@
 	$: emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 	$: passwordValid = password.length >= 8;
 	$: passwordsMatch = password === confirmPassword;
-	$: formValid = usernameValid && emailValid && passwordValid && passwordsMatch;
+	$: inviteRequired = $platformInfo?.registration_mode === 'invite';
+	$: formValid = usernameValid && emailValid && passwordValid && passwordsMatch && (!inviteRequired || !!inviteCode.trim());
 
 	async function handleSubmit() {
 		if (!formValid) return;
@@ -39,7 +41,7 @@
 		error = '';
 
 		try {
-			const response = await api.register(username, email, password);
+			const response = await api.register(username, email, password, inviteRequired ? inviteCode.trim() : undefined);
 
 			localStorage.setItem('accessToken', response.access_token);
 			localStorage.setItem('refreshToken', response.refresh_token);
@@ -110,6 +112,13 @@
 						<p class="mt-1.5 text-xs text-stone-500">Enter a valid email address</p>
 					{/if}
 				</div>
+
+				{#if inviteRequired}
+					<div>
+						<label for="invite-code" class="block text-sm font-medium text-stone-300 mb-1.5">Invite code</label>
+						<input id="invite-code" type="text" autocomplete="one-time-code" bind:value={inviteCode} required placeholder="anvil_inv_…" class="w-full bg-stone-900/60 border border-stone-800 rounded-md px-3 py-2.5 text-sm text-stone-200 placeholder-stone-600 focus:outline-none focus:border-stone-600 transition-colors" />
+					</div>
+				{/if}
 
 				<div>
 					<label for="password" class="block text-sm font-medium text-stone-300 mb-1.5">Password</label>

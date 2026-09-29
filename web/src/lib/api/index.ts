@@ -35,14 +35,18 @@ export interface PlatformInfoResponse {
 	rules_url?: string;
 	privacy_url?: string;
 	terms_url?: string;
+	accent: 'cyan' | 'amber' | 'emerald' | 'violet';
 	registration_mode: string;
 	scoring_enabled: boolean;
 	scoreboard_enabled: boolean;
 	arena_enabled: boolean;
 	economy_enabled: boolean;
 	market_pulse_enabled: boolean;
+	notification_sound_allowed: boolean;
 	economy_policy: EconomyPolicyDescriptor;
 	teams_mode: boolean;
+	team_creation_policy: 'open' | 'admin' | 'disabled';
+	team_join_policy: 'code' | 'disabled';
 	vpn_enabled: boolean;
 	sso_enabled: boolean;
 	discord_walkin: boolean;
@@ -99,6 +103,84 @@ export interface AdminAnnouncement {
 	pinned: boolean;
 	cancelled_at?: string;
 	created_at: string;
+}
+
+export interface InviteCodeSummary {
+	id: string;
+	code_suffix: string;
+	max_uses: number;
+	current_uses: number;
+	expires_at?: string;
+	created_at: string;
+}
+
+export interface DataImportPlan {
+	create: number;
+	update: number;
+	skip: number;
+	state_checksum: string;
+	errors: Array<{ row: number; field?: string; message: string }>;
+	rows: Array<{ row: number; key: string; action: 'create' | 'update' | 'skip' }>;
+}
+
+export interface DataImportPreview {
+	job_id: string;
+	checksum: string;
+	entity: string;
+	mode: string;
+	source_name: string;
+	row_count: number;
+	expires_at: string;
+	plan: DataImportPlan;
+}
+
+export interface DataImportHistory {
+	id: string;
+	entity: string;
+	format: string;
+	mode: string;
+	source_name: string;
+	checksum: string;
+	row_count: number;
+	plan: DataImportPlan;
+	status: 'pending' | 'applied' | 'failed' | 'expired';
+	result?: Record<string, unknown>;
+	error?: string;
+	applied_at?: string;
+	expires_at: string;
+	created_at: string;
+}
+
+export interface ReadinessCheck {
+	id: string;
+	group: string;
+	label: string;
+	status: 'pass' | 'warning' | 'blocker';
+	detail: string;
+	evidence?: unknown;
+}
+
+export interface ReadinessReport {
+	generated_at: string;
+	ready: boolean;
+	blockers: number;
+	warnings: number;
+	checks: ReadinessCheck[];
+	event_checksum: string;
+	content_checksum: string;
+	economy_checksum: string;
+}
+
+export interface ReleaseCandidate {
+	id: string;
+	sequence: number;
+	event_checksum: string;
+	content_checksum: string;
+	economy_checksum: string;
+	report: ReadinessReport;
+	waived_warnings: string[];
+	created_at: string;
+	created_by: string;
 }
 
 export interface MarketPulseResponse {
@@ -1059,6 +1141,68 @@ class ApiClient {
 
 	async deleteBrandLogo() {
 		return this.request<{ success: boolean }>('/admin/branding/logo', { method: 'DELETE' });
+	}
+
+	async getInviteCodes() {
+		return this.request<{ codes: InviteCodeSummary[] }>('/admin/tokens/invite', { cache: 'no-store' });
+	}
+
+	async createInviteCode(maxUses: number, expiresAt?: string) {
+		return this.request<{ id: string; code: string; max_uses: number; expires_at?: string; created_at: string }>('/admin/tokens/invite', {
+			method: 'POST',
+			body: JSON.stringify({ max_uses: maxUses, expires_at: expiresAt || null })
+		});
+	}
+
+	async deleteInviteCode(id: string) {
+		return this.request<{ message: string }>(`/admin/tokens/invite/${encodeURIComponent(id)}`, { method: 'DELETE' });
+	}
+
+	async getDataSummary() {
+		return this.request<{ users: number; teams: number; categories: number; challenges: number; solves: number; pending_imports: number }>('/admin/data/summary', { cache: 'no-store' });
+	}
+
+	async previewDataImport(data: { entity: string; format: 'csv' | 'json'; mode: 'create' | 'merge'; source_name: string; content: string }) {
+		return this.request<DataImportPreview>('/admin/data/imports/preview', { method: 'POST', body: JSON.stringify(data) });
+	}
+
+	async applyDataImport(id: string, checksum: string) {
+		return this.request<{ entity: string; mode: string; created: number; updated: number; skipped: number }>(`/admin/data/imports/${encodeURIComponent(id)}/apply`, { method: 'POST', body: JSON.stringify({ checksum }) });
+	}
+
+	async getDataImports() {
+		return this.request<{ imports: DataImportHistory[] }>('/admin/data/imports', { cache: 'no-store' });
+	}
+
+	async getReadiness() {
+		return this.request<ReadinessReport>('/admin/readiness', { cache: 'no-store' });
+	}
+
+	async getReleaseCandidates() {
+		return this.request<{ release_candidates: ReleaseCandidate[] }>('/admin/release-candidates', { cache: 'no-store' });
+	}
+
+	async createReleaseCandidate(waiveWarnings: string[]) {
+		return this.request<{ id: string; sequence: number; created_at: string; report: ReadinessReport; waived_warnings: string[] }>('/admin/release-candidates', {
+			method: 'POST', body: JSON.stringify({ waive_warnings: waiveWarnings })
+		});
+	}
+
+	async downloadAdminData(path: string) {
+		let token = this.getAuthToken();
+		if (!token) throw new Error('Authentication required');
+		let response = await fetch(`${this.baseUrl}/api/v1${path}`, { headers: { Authorization: `Bearer ${token}` } });
+		if (response.status === 401 && browser) {
+			const refreshed = await auth.refreshAccessToken();
+			if (refreshed) {
+				token = refreshed;
+				response = await fetch(`${this.baseUrl}/api/v1${path}`, { headers: { Authorization: `Bearer ${token}` } });
+			}
+		}
+		if (!response.ok) throw await this.apiError(response, 'Download failed');
+		const disposition = response.headers.get('Content-Disposition') ?? '';
+		const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? 'anvil-export';
+		return { blob: await response.blob(), filename };
 	}
 
 	async uploadOvaChallenge(formData: FormData, onProgress?: (progress: number) => void): Promise<any> {
