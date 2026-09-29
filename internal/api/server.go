@@ -149,6 +149,7 @@ func (s *Server) setupRouter() {
 			scoreboardRoutes.GET("/scoreboard/history", scoreboardHandler.History)
 			scoreboardRoutes.GET("/scoreboard/matrix", scoreboardHandler.Matrix)
 			scoreboardRoutes.GET("/profile/:username", scoreboardHandler.Profile)
+			scoreboardRoutes.GET("/teams/:id", scoreboardHandler.TeamProfile)
 
 			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
 

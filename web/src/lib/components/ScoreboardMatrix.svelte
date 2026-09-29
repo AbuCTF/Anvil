@@ -223,8 +223,10 @@
                   class="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2.5"
                 >
                   {#if teams}
-                    <span class="min-w-0 truncate text-stone-200" title={row.name}
-                      >{row.name}</span
+                    <a
+                      href="/team/{row.user_id}"
+                      class="min-w-0 truncate text-stone-200 transition hover:text-amber-400"
+                      title={row.name}>{row.name}</a
                     >
                   {:else}
                     <a

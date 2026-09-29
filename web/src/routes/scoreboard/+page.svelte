@@ -761,9 +761,10 @@
                           style="background: {color};"
                         ></span>
                         {#if teamsBoard}
-                          <span
-                            class="optical-label min-w-0 truncate text-stone-200"
-                            title={entry.username}>{entry.username}</span
+                          <a
+                            href="/team/{entry.user_id}"
+                            class="optical-label min-w-0 truncate text-stone-200 transition hover:text-amber-400"
+                            title={entry.username}>{entry.username}</a
                           >
                         {:else}
                           <a

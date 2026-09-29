@@ -114,6 +114,18 @@ func TestScoreboardListsOnlyScoringTeams(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &out)
 		return out
 	}
+	request := func(path string, who *uuid.UUID) (int, map[string]any) {
+		t.Helper()
+		req := httptest.NewRequest("GET", path, nil)
+		if who != nil {
+			req.Header.Set("Authorization", "Bearer "+token(*who))
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		out := map[string]any{}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out
+	}
 	list := func(body map[string]any, key string, fields ...string) string {
 		var out []string
 		for _, raw := range body[key].([]any) {
@@ -233,6 +245,44 @@ func TestScoreboardListsOnlyScoringTeams(t *testing.T) {
 		t.Errorf("team history = %s", got)
 	}
 
+	// A public team profile follows the same ranking and QA exclusions as the
+	// board. Anonymous viewers never see partial progress or private team fields;
+	// a member can see the partial state of their own team.
+	extraPwnFlag := uuid.New()
+	exec(`INSERT INTO flags (id, challenge_id, name, flag_hash, points, sort_order)
+		VALUES ($1, $2, 'second', 'x7', 100, 1)`, extraPwnFlag, pwnMed)
+	fresh()
+	teamProfile := get("/api/v1/teams/"+alpha.String(), nil)
+	team := teamProfile["team"].(map[string]any)
+	if team["name"] != "alpha" || team["global_rank"] != 1.0 || team["total_score"] != 300.0 {
+		t.Errorf("public team identity/rank = %v", team)
+	}
+	if members := team["members"].([]any); len(members) != 2 {
+		t.Errorf("public team members = %v", members)
+	} else if _, leaked := members[0].(map[string]any)["id"]; leaked {
+		t.Errorf("public team member leaked id: %v", members[0])
+	}
+	for _, privateKey := range []string{"join_code", "credits", "instances", "open_challenges"} {
+		if _, leaked := team[privateKey]; leaked {
+			t.Errorf("public team leaked %s", privateKey)
+		}
+	}
+	publicPwn := findChallenge(t, teamProfile, "pwn-med")
+	if publicPwn["solved"] != false || publicPwn["solved_flags"] != 0.0 || publicPwn["awarded_points"] != 0.0 {
+		t.Errorf("anonymous partial progress leaked: %v", publicPwn)
+	}
+	privatePwn := findChallenge(t, get("/api/v1/teams/"+alpha.String(), &a1), "pwn-med")
+	if privatePwn["solved"] != false || privatePwn["solved_flags"] != 1.0 {
+		t.Errorf("member partial progress = %v", privatePwn)
+	}
+	if code, _ := request("/api/v1/teams/"+testTeam.String(), nil); code != http.StatusNotFound {
+		t.Errorf("staff-only test team profile status = %d, want 404", code)
+	}
+	if code, _ := request("/api/v1/teams/not-a-uuid", nil); code != http.StatusNotFound {
+		t.Errorf("invalid team profile status = %d, want 404", code)
+	}
+	exec(`DELETE FROM flags WHERE id = $1`, extraPwnFlag)
+
 	// before the start the matrix gives nothing away, except to staff
 	exec(`INSERT INTO platform_settings (key, value) VALUES
 		('event.start_at', to_jsonb($1::text)), ('event.end_at', to_jsonb($2::text))
@@ -285,6 +335,17 @@ func TestScoreboardListsOnlyScoringTeams(t *testing.T) {
 	if r := rank(c1); r != 0 {
 		t.Errorf("idle economy team rank = %v, want 0", r)
 	}
+	teamProfile = get("/api/v1/teams/"+alpha.String(), nil)
+	team = teamProfile["team"].(map[string]any)
+	if teamProfile["economy"] != true || team["total_score"] != 151.0 || team["global_rank"] != 1.0 {
+		t.Errorf("economy team profile identity/rank = %v", teamProfile)
+	}
+	if pwn := findChallenge(t, teamProfile, "pwn-med"); pwn["solved"] != true {
+		t.Errorf("economy full holding = %v", pwn)
+	}
+	if web := findChallenge(t, teamProfile, "web-hard"); web["solved"] != false || web["solved_flags"] != 0.0 {
+		t.Errorf("anonymous economy partial holding leaked as solve: %v", web)
+	}
 }
 
 func toString(v any) string {
@@ -293,4 +354,16 @@ func toString(v any) string {
 	}
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+func findChallenge(t *testing.T, profile map[string]any, slug string) map[string]any {
+	t.Helper()
+	for _, raw := range profile["challenges"].([]any) {
+		challenge := raw.(map[string]any)
+		if challenge["slug"] == slug {
+			return challenge
+		}
+	}
+	t.Fatalf("challenge %q missing from profile", slug)
+	return nil
 }
