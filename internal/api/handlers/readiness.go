@@ -258,7 +258,7 @@ func (h *ReadinessHandler) readinessContent(ctx context.Context) ([]byte, readin
 				(c.resource_type = 'vm' AND NOT EXISTS (
 					SELECT 1 FROM challenge_resources cr WHERE cr.challenge_id = c.id AND cr.resource_type = 'vm' AND cr.is_active = TRUE
 				)) OR (
-					c.resource_type = 'docker' AND c.exposed_ports <> '[]'::jsonb AND COALESCE(c.container_image, '') = '' AND c.container_spec IS NULL
+					c.resource_type = 'docker' AND c.exposed_ports IS NOT NULL AND c.exposed_ports <> 'null'::jsonb AND c.exposed_ports <> '[]'::jsonb AND COALESCE(c.container_image, '') = '' AND c.container_spec IS NULL
 				)
 			))::int
 		FROM challenges c LEFT JOIN categories category ON category.id = c.category_id

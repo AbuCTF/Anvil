@@ -47,7 +47,7 @@ func TestReleaseReadinessAndImmutableCandidate(t *testing.T) {
 	if _, err := db.Pool.Exec(ctx, `TRUNCATE users, teams, challenges, categories CASCADE`); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
-	adminID, userID, categoryID, challengeID := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	adminID, userID, categoryID, challengeID, staticID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	seed := []struct {
 		query string
 		args  []any
@@ -56,6 +56,8 @@ func TestReleaseReadinessAndImmutableCandidate(t *testing.T) {
 		{`INSERT INTO categories (id, name, slug) VALUES ($1, 'Readiness', 'readiness')`, []any{categoryID}},
 		{`INSERT INTO challenges (id, name, slug, difficulty, category_id, status, container_image, resource_type, scoring_mode) VALUES ($1, 'Release probe', 'release-probe', 'easy', $2, 'published', 'registry.invalid/release-probe:1', 'docker', 'flag')`, []any{challengeID, categoryID}},
 		{`INSERT INTO flags (challenge_id, name, flag_hash, points) VALUES ($1, 'Flag', 'hash', 100)`, []any{challengeID}},
+		{`INSERT INTO challenges (id, name, slug, difficulty, category_id, status, container_image, resource_type, scoring_mode, exposed_ports) VALUES ($1, 'Static probe', 'static-probe', 'easy', $2, 'published', '', 'docker', 'flag', 'null'::jsonb)`, []any{staticID, categoryID}},
+		{`INSERT INTO flags (challenge_id, name, flag_hash, points) VALUES ($1, 'Flag', 'hash', 100)`, []any{staticID}},
 	}
 	for _, statement := range seed {
 		if _, err := db.Pool.Exec(ctx, statement.query, statement.args...); err != nil {
