@@ -95,7 +95,7 @@ func TestDataPortabilityPreviewExportAndApply(t *testing.T) {
 	if got := request(http.MethodGet, "/api/v1/admin/data/summary", userToken, nil).Code; got != http.StatusForbidden {
 		t.Fatalf("participant summary status=%d", got)
 	}
-	bundle := request(http.MethodGet, "/api/v1/admin/data/export?format=bundle&entities=settings,categories", adminToken, nil)
+	bundle := request(http.MethodGet, "/api/v1/admin/data/export?format=bundle&entities=settings,categories,scoreboard,solves,submissions,ledger_balances,ledger_history", adminToken, nil)
 	if bundle.Code != http.StatusOK || bundle.Header().Get("Content-Type") != "application/zip" {
 		t.Fatalf("bundle status=%d type=%q body=%s", bundle.Code, bundle.Header().Get("Content-Type"), bundle.Body.String())
 	}
@@ -118,6 +118,50 @@ func TestDataPortabilityPreviewExportAndApply(t *testing.T) {
 	}
 	if !strings.Contains(contents["data/categories.csv"], "'=2+2") {
 		t.Fatalf("CSV formula was not neutralized: %s", contents["data/categories.csv"])
+	}
+	for _, name := range []string{"scoreboard", "solves", "submissions", "ledger_balances", "ledger_history"} {
+		if _, ok := contents["data/"+name+".csv"]; !ok {
+			t.Fatalf("competition export is missing %s.csv", name)
+		}
+	}
+
+	var categoryID uuid.UUID
+	if err := db.Pool.QueryRow(ctx, `SELECT id FROM categories WHERE slug = 'portable-formula'`).Scan(&categoryID); err != nil {
+		t.Fatalf("load category: %v", err)
+	}
+	activeChallenge, draftChallenge := uuid.New(), uuid.New()
+	defer func() {
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM submissions WHERE challenge_id IN ($1, $2)`, activeChallenge, draftChallenge)
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM challenges WHERE id IN ($1, $2)`, activeChallenge, draftChallenge)
+	}()
+	if _, err := db.Pool.Exec(ctx, `
+		INSERT INTO challenges (id, name, slug, description, difficulty, category_id, status, base_points, resource_type, delivery_type, container_image)
+		VALUES ($1, 'Active scoring model', $2, 'test', 'easy', $3, 'draft', 100, 'docker', 'static', ''),
+		       ($4, 'Draft scoring model', $5, 'test', 'easy', $3, 'draft', 100, 'docker', 'static', '')
+	`, activeChallenge, "active-scoring-"+activeChallenge.String(), categoryID, draftChallenge, "draft-scoring-"+draftChallenge.String()); err != nil {
+		t.Fatalf("seed challenges: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO submissions (user_id, challenge_id, submitted_flag, is_correct) VALUES ($1, $2, 'wrong', false)`, userID, activeChallenge); err != nil {
+		t.Fatalf("seed submission: %v", err)
+	}
+	updateChallenge := func(id uuid.UUID, name string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{
+			"name": name, "description": "test", "difficulty": "easy", "category_id": categoryID,
+			"base_points": 100, "resource_type": "docker", "delivery_type": "static", "scoring_mode": "graded",
+		})
+		return request(http.MethodPut, "/api/v1/admin/challenges/"+id.String(), adminToken, bytes.NewReader(body))
+	}
+	locked := updateChallenge(activeChallenge, "Active scoring model")
+	if locked.Code != http.StatusConflict || !strings.Contains(locked.Body.String(), "scoring model is locked") {
+		t.Fatalf("active scoring change status=%d body=%s", locked.Code, locked.Body.String())
+	}
+	changed := updateChallenge(draftChallenge, "Draft scoring model")
+	if changed.Code != http.StatusOK {
+		t.Fatalf("inactive scoring change status=%d body=%s", changed.Code, changed.Body.String())
+	}
+	var scoringMode string
+	if err := db.Pool.QueryRow(ctx, `SELECT scoring_mode FROM challenges WHERE id = $1`, draftChallenge).Scan(&scoringMode); err != nil || scoringMode != "graded" {
+		t.Fatalf("draft scoring mode=%q error=%v", scoringMode, err)
 	}
 
 	csvContent := "slug,name,description,color,icon,sort_order\nportable-alpha,Alpha,,,mdi:flag,1\nportable-beta,Beta,,,mdi:flag,2\n"
@@ -144,6 +188,11 @@ func TestDataPortabilityPreviewExportAndApply(t *testing.T) {
 	stale := request(http.MethodPost, "/api/v1/admin/data/imports/"+first.JobID+"/apply", adminToken, applyBody)
 	if stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "data changed after preview") {
 		t.Fatalf("stale apply status=%d body=%s", stale.Code, stale.Body.String())
+	}
+	var failedStatus, failedError string
+	var retainedRows int
+	if err := db.Pool.QueryRow(ctx, `SELECT status, COALESCE(error, ''), jsonb_array_length(payload->'rows') FROM data_import_jobs WHERE id = $1`, first.JobID).Scan(&failedStatus, &failedError, &retainedRows); err != nil || failedStatus != "failed" || failedError == "" || retainedRows != 0 {
+		t.Fatalf("failed import status=%q error=%q rows=%d query_error=%v", failedStatus, failedError, retainedRows, err)
 	}
 
 	preview = request(http.MethodPost, "/api/v1/admin/data/imports/preview", adminToken, bytes.NewReader(previewBody))

@@ -1874,6 +1874,28 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(ctx)
+	if req.ScoringMode != "" {
+		var currentMode string
+		var activity int
+		if err := tx.QueryRow(ctx, `
+			SELECT scoring_mode,
+			       (SELECT COUNT(*) FROM submissions WHERE challenge_id = challenges.id) +
+			       (SELECT COUNT(*) FROM solves WHERE challenge_id = challenges.id) +
+			       (SELECT COUNT(*) FROM graded_evaluations WHERE challenge_id = challenges.id) +
+			       (SELECT COUNT(*) FROM instances WHERE challenge_id = challenges.id AND status IN ('creating', 'running', 'stopping'))
+			FROM challenges WHERE id = $1 FOR UPDATE`, challengeID).Scan(&currentMode, &activity); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to inspect challenge scoring"})
+			return
+		}
+		if req.ScoringMode != currentMode && activity > 0 {
+			c.JSON(http.StatusConflict, gin.H{"error": "scoring model is locked after submissions, evaluations, solves, or a live instance; create a new challenge to use another scoring model"})
+			return
+		}
+	}
 
 	var result pgconn.CommandTag
 	if req.ResourceType != nil && *req.ResourceType == "vm" {

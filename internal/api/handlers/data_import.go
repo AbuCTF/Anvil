@@ -173,11 +173,19 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	sum := sha256.Sum256([]byte(request.Content))
 	checksum := hex.EncodeToString(sum[:])
 	jobID := uuid.New()
+	jobStatus := "pending"
+	var jobError *string
+	if len(plan.Errors) > 0 {
+		jobStatus = "failed"
+		message := fmt.Sprintf("validation found %d issue(s); fix the source file and preview it again", len(plan.Errors))
+		jobError = &message
+		payload = []byte(`{"rows":[]}`)
+	}
 	_, err := h.db.Pool.Exec(c.Request.Context(), `
 		INSERT INTO data_import_jobs
-		(id, created_by, entity, source_format, import_mode, source_name, checksum, row_count, plan, payload)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb)
-	`, jobID, uid, request.Entity, request.Format, request.Mode, request.SourceName, checksum, len(rows), planJSON, payload)
+		(id, created_by, entity, source_format, import_mode, source_name, checksum, row_count, plan, payload, status, error)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12)
+	`, jobID, uid, request.Entity, request.Format, request.Mode, request.SourceName, checksum, len(rows), planJSON, payload, jobStatus, jobError)
 	if err != nil {
 		h.logger.Error("store import preview", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store import preview"})
@@ -285,12 +293,16 @@ func (h *DataHandler) ApplyImport(c *gin.Context) {
 	}
 	currentPlan := h.planImport(c.Request.Context(), tx, entity, mode, payload.Rows, nil)
 	if len(currentPlan.Errors) > 0 || currentPlan.StateChecksum != storedPlan.StateChecksum {
+		_ = tx.Rollback(c.Request.Context())
+		h.recordImportFailure(c.Request.Context(), jobID, "data changed after preview; create a fresh preview")
 		c.JSON(http.StatusConflict, gin.H{"error": "data changed after preview; create a fresh preview", "plan": currentPlan})
 		return
 	}
 	result, err := h.applyImportRows(c.Request.Context(), tx, entity, mode, payload.Rows, currentPlan)
 	if err != nil {
 		h.logger.Error("apply import", zap.String("job_id", jobID.String()), zap.Error(err))
+		_ = tx.Rollback(c.Request.Context())
+		h.recordImportFailure(c.Request.Context(), jobID, err.Error())
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
@@ -318,6 +330,18 @@ func (h *DataHandler) ApplyImport(c *gin.Context) {
 		return
 	}
 	c.Data(http.StatusOK, "application/json", resultJSON)
+}
+
+func (h *DataHandler) recordImportFailure(ctx context.Context, jobID uuid.UUID, message string) {
+	if len(message) > 2000 {
+		message = message[:2000]
+	}
+	if _, err := h.db.Pool.Exec(ctx, `
+		UPDATE data_import_jobs SET status = 'failed', error = $2, payload = '{"rows":[]}'::jsonb
+		WHERE id = $1 AND status = 'pending'
+	`, jobID, message); err != nil {
+		h.logger.Warn("record import failure", zap.String("job_id", jobID.String()), zap.Error(err))
+	}
 }
 
 func parseImportContent(entity, format string, content []byte) ([]map[string]string, []importIssue) {
@@ -372,9 +396,13 @@ func parseImportCSV(entity string, content []byte) ([]map[string]string, []impor
 }
 
 func parseImportJSON(entity string, content []byte) ([]map[string]string, []importIssue) {
-	var records []map[string]any
-	if err := json.Unmarshal(content, &records); err != nil {
-		return nil, []importIssue{{Row: 1, Message: "JSON must be an array of objects"}}
+	var document any
+	if err := json.Unmarshal(content, &document); err != nil {
+		return nil, []importIssue{{Row: 1, Message: "invalid JSON: " + err.Error()}}
+	}
+	records, err := importJSONRecords(entity, document)
+	if err != nil {
+		return nil, []importIssue{{Row: 1, Message: err.Error()}}
 	}
 	rows := make([]map[string]string, 0, len(records))
 	issues := []importIssue{}
@@ -401,6 +429,38 @@ func parseImportJSON(entity string, content []byte) ([]map[string]string, []impo
 		rows = append(rows, row)
 	}
 	return rows, issues
+}
+
+func importJSONRecords(entity string, document any) ([]map[string]any, error) {
+	value := document
+	if object, ok := value.(map[string]any); ok {
+		if data, exists := object["data"]; exists {
+			value = data
+		}
+		if data, ok := value.(map[string]any); ok {
+			if selected, exists := data[entity]; exists {
+				value = selected
+			}
+		}
+		if collection, ok := value.(map[string]any); ok {
+			if rows, exists := collection["rows"]; exists {
+				value = rows
+			}
+		}
+	}
+	items, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("JSON must be an array, an object with rows, or an Anvil export containing data.%s", entity)
+	}
+	records := make([]map[string]any, 0, len(items))
+	for index, item := range items {
+		record, ok := item.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("JSON row %d must be an object", index+1)
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func normalizeImportHeader(value string) string {
@@ -461,11 +521,13 @@ func (h *DataHandler) planImport(ctx context.Context, query importQuery, entity,
 			var activity int
 			if err := query.QueryRow(ctx, `
 				SELECT (SELECT COUNT(*)::int FROM solves s JOIN challenges c ON c.id = s.challenge_id WHERE c.slug = $1) +
+				       (SELECT COUNT(*)::int FROM submissions s JOIN challenges c ON c.id = s.challenge_id WHERE c.slug = $1) +
+				       (SELECT COUNT(*)::int FROM graded_evaluations e JOIN challenges c ON c.id = e.challenge_id WHERE c.slug = $1) +
 				       (SELECT COUNT(*)::int FROM instances i JOIN challenges c ON c.id = i.challenge_id WHERE c.slug = $1)
 			`, row["slug"]).Scan(&activity); err != nil {
 				plan.Errors = append(plan.Errors, importIssue{Row: rowNumber, Message: "could not inspect challenge activity"})
 			} else if activity > 0 {
-				plan.Errors = append(plan.Errors, importIssue{Row: rowNumber, Field: "slug", Message: "challenge has solves or instances and cannot be overwritten"})
+				plan.Errors = append(plan.Errors, importIssue{Row: rowNumber, Field: "slug", Message: "challenge has participant or runtime activity and cannot be overwritten; use a new slug"})
 			}
 		}
 	}

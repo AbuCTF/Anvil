@@ -220,7 +220,7 @@ func (h *ReadinessHandler) buildReport(ctx context.Context) (readinessReport, er
 	}
 	dockerOnly := backend != "k8s"
 	runtimeCompatible := !dockerOnly || content.ContainerSpecs == 0
-	add("content.runtime_compatibility", "Infrastructure", "Runtime compatibility", status(runtimeCompatible, "blocker"), ternary(runtimeCompatible, "Published challenge definitions are supported by the active runtime.", "Published service-spec challenges require the Kubernetes runtime."), gin.H{"service_spec_challenges": content.ContainerSpecs, "backend": backend})
+	add("content.runtime_compatibility", "Infrastructure", "Challenge runtime", status(runtimeCompatible, "blocker"), ternary(runtimeCompatible, "Published challenge definitions match the active runtime.", "A published multi-service challenge cannot run on the active runtime. Use a single-container image, unpublish it, or move the event to a Kubernetes-backed runtime."), gin.H{"service_spec_challenges": content.ContainerSpecs, "backend": backend})
 	add("platform.storage", "Infrastructure", "Storage backend", status(h.storageAvailable, "blocker"), ternary(h.storageAvailable, "The attachment and branding backend is connected.", "No storage backend is connected."), nil)
 	add("platform.runtime", "Infrastructure", "Instance runtime", status(h.runtimeAvailable, "blocker"), ternary(h.runtimeAvailable, "An instance runtime is connected.", "No instance runtime is connected."), gin.H{"backend": h.config.Instancer.Backend, "orchestrator": h.config.Container.Orchestrator})
 	pulseEnabled := boolSetting(settings, "market_pulse_enabled")

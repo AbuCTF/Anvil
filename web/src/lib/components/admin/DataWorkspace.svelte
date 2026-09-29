@@ -2,19 +2,25 @@
 	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
 	import { api, type DataImportHistory, type DataImportPreview } from '$api';
+	import HelpTip from '$lib/components/HelpTip.svelte';
 
 	const entities = [
-		{ id: 'settings', label: 'Event settings', importable: false },
-		{ id: 'categories', label: 'Categories', importable: true },
-		{ id: 'challenges', label: 'Challenges', importable: true },
-		{ id: 'users', label: 'Users', importable: true },
-		{ id: 'teams', label: 'Teams', importable: true },
-		{ id: 'team_members', label: 'Team membership', importable: true }
+		{ id: 'settings', label: 'Event settings', importable: false, selected: true },
+		{ id: 'categories', label: 'Categories', importable: true, selected: true },
+		{ id: 'challenges', label: 'Challenges', importable: true, selected: true },
+		{ id: 'users', label: 'Users', importable: true, selected: true },
+		{ id: 'teams', label: 'Teams', importable: true, selected: true },
+		{ id: 'team_members', label: 'Team membership', importable: true, selected: true },
+		{ id: 'scoreboard', label: 'Scoreboard', importable: false, selected: true },
+		{ id: 'solves', label: 'Solve log', importable: false, selected: true },
+		{ id: 'submissions', label: 'Submission audit', importable: false, selected: false },
+		{ id: 'ledger_balances', label: 'Ledger balances', importable: false, selected: true },
+		{ id: 'ledger_history', label: 'Ledger history', importable: false, selected: true }
 	];
 
 	let summary: Awaited<ReturnType<typeof api.getDataSummary>> | null = null;
 	let history: DataImportHistory[] = [];
-	let selected = new Set(entities.map((entity) => entity.id));
+	let selected = new Set(entities.filter((entity) => entity.selected).map((entity) => entity.id));
 	let exportFormat: 'bundle' | 'json' | 'csv' = 'bundle';
 	let anonymize = false;
 	let exportBusy = false;
@@ -44,6 +50,21 @@
 		else next.add(entity);
 		selected = next;
 		if (exportFormat === 'csv' && next.size !== 1) exportFormat = 'bundle';
+	}
+
+	function selectDefaults() {
+		selected = new Set(entities.filter((entity) => entity.selected).map((entity) => entity.id));
+		if (exportFormat === 'csv') exportFormat = 'bundle';
+	}
+
+	function selectAll() {
+		selected = new Set(entities.map((entity) => entity.id));
+		if (exportFormat === 'csv') exportFormat = 'bundle';
+	}
+
+	function clearSelection() {
+		selected = new Set();
+		if (exportFormat === 'csv') exportFormat = 'bundle';
 	}
 
 	async function saveDownload(path: string) {
@@ -113,6 +134,18 @@
 		}
 	}
 
+	function downloadIssueReport() {
+		if (!preview?.plan.errors.length) return;
+		const escape = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+		const content = ['row,field,problem', ...preview.plan.errors.map((issue) => [issue.row || '', issue.field || '', issue.message].map(escape).join(','))].join('\n');
+		const href = URL.createObjectURL(new Blob([`${content}\n`], { type: 'text/csv;charset=utf-8' }));
+		const anchor = document.createElement('a');
+		anchor.href = href;
+		anchor.download = `${preview.entity}-import-issues.csv`;
+		anchor.click();
+		URL.revokeObjectURL(href);
+	}
+
 	onMount(load);
 </script>
 
@@ -130,9 +163,9 @@
 
 	<div class="grid gap-6 xl:grid-cols-2">
 		<section class="rounded-lg border border-stone-800 bg-stone-900/25">
-			<div class="border-b border-stone-800 px-5 py-4"><h2 class="text-sm font-semibold text-stone-100">Portable export</h2><p class="mt-1 text-xs text-stone-500">Create a versioned bundle, JSON snapshot or spreadsheet export.</p></div>
+			<div class="flex items-start justify-between gap-3 border-b border-stone-800 px-5 py-4"><div><h2 class="flex items-center gap-1.5 text-sm font-semibold text-stone-100">Export <HelpTip text="The Anvil bundle contains both JSON and CSV plus checksums. Choose one item and CSV when you only need a spreadsheet." /></h2><p class="mt-1 text-xs text-stone-500">Portable configuration, results, and audit data.</p></div><div class="flex items-center gap-2 text-[10px]"><button type="button" on:click={selectDefaults} class="text-stone-500 hover:text-stone-200">Recommended</button><button type="button" on:click={selectAll} class="text-stone-500 hover:text-stone-200">All</button><button type="button" on:click={clearSelection} class="text-stone-500 hover:text-stone-200">Clear</button></div></div>
 			<div class="space-y-5 p-5">
-				<div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
+				<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
 					{#each entities as entity}
 						<label class="flex cursor-pointer items-center gap-2 rounded-md border border-stone-800 px-3 py-2 text-xs text-stone-400"><input type="checkbox" checked={selected.has(entity.id)} on:change={() => toggleEntity(entity.id)} class="accent-amber-500" />{entity.label}</label>
 					{/each}
@@ -141,19 +174,23 @@
 					<label><span class={label}>Format</span><select class={input} bind:value={exportFormat}><option value="bundle">Anvil bundle (.zip)</option><option value="json">Normalized JSON</option><option value="csv" disabled={selected.size !== 1}>CSV (one entity)</option></select></label>
 					<label class="flex items-end"><span class="flex w-full items-center justify-between rounded-md border border-stone-800 px-3 py-2.5 text-sm text-stone-400">Anonymize identities<input type="checkbox" bind:checked={anonymize} class="h-4 w-4 accent-amber-500" /></span></label>
 				</div>
-				<div class="rounded-md border border-stone-800 bg-stone-950/50 p-3 text-xs leading-relaxed text-stone-500">Secrets, passwords, sessions, flags, grader keys, team join codes, runtime credentials and active instances are excluded. The bundle manifest includes SHA-256 checksums for every data file.</div>
+				<div class="flex items-start gap-2 rounded-md border border-stone-800 bg-stone-950/50 p-3 text-xs leading-relaxed text-stone-500"><Icon icon="mdi:shield-lock-outline" class="mt-0.5 h-4 w-4 shrink-0 text-stone-600" /><span>Secrets and live runtime credentials are excluded. Submission exports contain outcomes and metadata, never submitted flag values. Bundles include a checksum manifest.</span></div>
 				<button type="button" on:click={runExport} disabled={exportBusy || !selected.size || (exportFormat === 'csv' && selected.size !== 1)} class="inline-flex w-full items-center justify-center gap-2 rounded-md bg-stone-100 px-4 py-2.5 text-sm font-medium text-stone-950 disabled:opacity-40"><Icon icon={exportBusy ? 'mdi:loading' : 'mdi:download'} class="h-4 w-4 {exportBusy ? 'animate-spin' : ''}" />Download export</button>
 			</div>
 		</section>
 
 		<section class="rounded-lg border border-stone-800 bg-stone-900/25">
-			<div class="border-b border-stone-800 px-5 py-4"><h2 class="text-sm font-semibold text-stone-100">Validated import</h2><p class="mt-1 text-xs text-stone-500">Preview every operation before it can touch event data.</p></div>
+			<div class="border-b border-stone-800 px-5 py-4"><h2 class="flex items-center gap-1.5 text-sm font-semibold text-stone-100">Import <HelpTip align="right" text="Every import is parsed and validated first. Apply runs once in a database transaction: any row failure rolls back the whole import. If data changes after preview, Anvil asks for a fresh preview." /></h2><p class="mt-1 text-xs text-stone-500">Dry-run first, then apply one atomic plan.</p></div>
 			<div class="space-y-4 p-5">
 				<div class="grid gap-4 sm:grid-cols-2">
 					<label><span class={label}>Entity</span><select class={input} bind:value={importEntity} on:change={() => { preview = null; importFile = null; }}>{#each entities.filter((entity) => entity.importable) as entity}<option value={entity.id}>{entity.label}</option>{/each}</select></label>
 					<label><span class={label}>Mode</span><select class={input} bind:value={importMode}><option value="create">Create only</option><option value="merge">Create and update</option></select></label>
 				</div>
-				<div class="flex items-center justify-between gap-3"><label class="min-w-0 flex-1"><span class={label}>CSV or JSON file</span><input type="file" accept=".csv,.json,text/csv,application/json" on:change={(event) => { importFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null; preview = null; }} class="block w-full text-xs text-stone-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-2 file:text-xs file:text-stone-300" /></label><button type="button" on:click={downloadTemplate} class="mt-5 shrink-0 text-xs text-stone-400 hover:text-stone-200">CSV template</button></div>
+				<div class="flex items-center justify-between gap-3"><label class="min-w-0 flex-1"><span class={label}>CSV or JSON file</span><input type="file" accept=".csv,.json,text/csv,application/json" on:change={(event) => { importFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null; preview = null; error = ''; result = ''; }} class="block w-full text-xs text-stone-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-2 file:text-xs file:text-stone-300" /></label><button type="button" on:click={downloadTemplate} class="mt-5 shrink-0 text-xs text-stone-400 hover:text-stone-200">CSV template</button></div>
+				<div class="flex flex-wrap gap-2 text-[10px] text-stone-500"><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5 MB</span><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5,000 rows</span><span class="rounded-full border border-stone-800 px-2 py-1">CSV · JSON array · Anvil JSON export</span></div>
+				{#if importEntity === 'challenges'}
+					<details class="rounded-md border border-stone-800 bg-stone-950/40 px-3 py-2.5 text-xs text-stone-500"><summary class="cursor-pointer font-medium text-stone-300">Bulk challenge / repository workflow</summary><div class="mt-2 space-y-1.5 leading-relaxed"><p>Import categories first, then one challenge row per slug. Registry image references, points, delivery type, scoring model, author, and release state travel in the sheet.</p><p>Binary handouts, flags, hints, grader secrets, and VM images stay out of portable metadata. Add them from each imported challenge’s Files, Flags, Hints, or Grading tab so secrets and large artifacts do not land in an import job.</p><p>A challenge repository can generate this CSV in CI; keep Docker images in a registry and handouts in a release or object store.</p></div></details>
+				{/if}
 				<button type="button" on:click={previewImport} disabled={!importFile || importBusy} class="inline-flex w-full items-center justify-center gap-2 rounded-md border border-stone-700 px-4 py-2.5 text-sm font-medium text-stone-200 disabled:opacity-40"><Icon icon={importBusy ? 'mdi:loading' : 'mdi:magnify-scan'} class="h-4 w-4 {importBusy ? 'animate-spin' : ''}" />Dry-run import</button>
 			</div>
 		</section>
@@ -161,11 +198,12 @@
 
 	{#if preview}
 		<section class="rounded-lg border border-stone-800 bg-stone-900/25">
-			<div class="flex flex-col gap-3 border-b border-stone-800 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 class="text-sm font-semibold text-stone-100">Import plan</h2><p class="mt-1 break-all text-xs text-stone-600">{preview.source_name} · {preview.checksum}</p></div><span class="rounded-full px-2.5 py-1 text-[10px] {preview.plan.errors.length ? 'bg-down/10 text-down' : 'bg-emerald-500/10 text-emerald-400'}">{preview.plan.errors.length ? `${preview.plan.errors.length} errors` : 'Validated'}</span></div>
+			<div class="flex flex-col gap-3 border-b border-stone-800 px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><h2 class="text-sm font-semibold text-stone-100">Import plan</h2><p class="mt-1 break-all text-xs text-stone-600">{preview.source_name} · {preview.row_count} rows · expires {new Date(preview.expires_at).toLocaleString()}</p></div><span class="rounded-full px-2.5 py-1 text-[10px] {preview.plan.errors.length ? 'bg-down/10 text-down' : 'bg-emerald-500/10 text-emerald-400'}">{preview.plan.errors.length ? `${preview.plan.errors.length} issues` : 'Ready to apply'}</span></div>
 			<div class="p-5">
 				<div class="grid grid-cols-3 gap-3"><div class="rounded-md bg-emerald-500/5 p-3 text-center"><p class="text-xl font-semibold text-emerald-400">{preview.plan.create}</p><p class="text-[10px] uppercase text-stone-600">Create</p></div><div class="rounded-md bg-amber-500/5 p-3 text-center"><p class="text-xl font-semibold text-amber-400">{preview.plan.update}</p><p class="text-[10px] uppercase text-stone-600">Update</p></div><div class="rounded-md bg-stone-950 p-3 text-center"><p class="text-xl font-semibold text-stone-400">{preview.plan.skip}</p><p class="text-[10px] uppercase text-stone-600">Skip</p></div></div>
 				{#if preview.plan.errors.length}
-					<div class="mt-4 max-h-64 overflow-auto rounded-md border border-down/20"><table class="w-full text-left text-xs"><thead class="sticky top-0 bg-stone-950 text-stone-500"><tr><th class="px-3 py-2">Row</th><th class="px-3 py-2">Field</th><th class="px-3 py-2">Problem</th></tr></thead><tbody class="divide-y divide-stone-800">{#each preview.plan.errors as issue}<tr><td class="px-3 py-2 tabular-nums text-stone-500">{issue.row || '—'}</td><td class="px-3 py-2 text-stone-400">{issue.field || '—'}</td><td class="px-3 py-2 text-down">{issue.message}</td></tr>{/each}</tbody></table></div>
+					<div class="mt-4 flex items-center justify-between gap-3"><p class="text-xs text-stone-500">Fix the listed rows in the source file, then run the preview again. Nothing has been written.</p><button type="button" on:click={downloadIssueReport} class="shrink-0 text-xs text-stone-300 hover:text-stone-100">Download issues</button></div>
+					<div class="mt-3 max-h-64 overflow-auto rounded-md border border-down/20"><table class="w-full text-left text-xs"><thead class="sticky top-0 bg-stone-950 text-stone-500"><tr><th class="px-3 py-2">Row</th><th class="px-3 py-2">Field</th><th class="px-3 py-2">Problem</th></tr></thead><tbody class="divide-y divide-stone-800">{#each preview.plan.errors as issue}<tr><td class="px-3 py-2 tabular-nums text-stone-500">{issue.row || '—'}</td><td class="px-3 py-2 text-stone-400">{issue.field || '—'}</td><td class="px-3 py-2 text-down">{issue.message}</td></tr>{/each}</tbody></table></div>
 				{:else}
 					<div class="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"><label><span class={label}>Type APPLY {preview.entity}</span><input class={input} bind:value={confirmation} autocomplete="off" /></label><button type="button" on:click={applyImport} disabled={importBusy || confirmation !== `APPLY ${preview.entity}`} class="self-end rounded-md bg-amber-500 px-5 py-2.5 text-sm font-medium text-stone-950 disabled:opacity-40">Apply once</button></div>
 				{/if}
@@ -176,7 +214,7 @@
 	<section class="rounded-lg border border-stone-800 bg-stone-900/25">
 		<div class="border-b border-stone-800 px-5 py-4"><h2 class="text-sm font-semibold text-stone-100">Recent imports</h2><p class="mt-1 text-xs text-stone-500">Previews expire after 24 hours. Applied payloads are erased after the transaction commits.</p></div>
 		{#if history.length}
-			<div class="divide-y divide-stone-800/70">{#each history as item}<div class="flex flex-col gap-2 px-5 py-3 text-xs sm:flex-row sm:items-center sm:justify-between"><div><span class="font-medium text-stone-300">{item.source_name}</span><span class="ml-2 text-stone-600">{item.entity} · {item.mode} · {item.row_count} rows</span></div><span class="rounded-full px-2 py-1 text-[10px] {item.status === 'applied' ? 'bg-emerald-500/10 text-emerald-400' : item.status === 'pending' ? 'bg-amber-500/10 text-amber-400' : 'bg-stone-800 text-stone-500'}">{item.status}</span></div>{/each}</div>
+			<div class="divide-y divide-stone-800/70">{#each history as item}<div class="flex flex-col gap-2 px-5 py-3 text-xs sm:flex-row sm:items-center sm:justify-between"><div class="min-w-0"><span class="font-medium text-stone-300">{item.source_name}</span><span class="ml-2 text-stone-600">{item.entity} · {item.mode} · {item.row_count} rows</span>{#if item.error}<p class="mt-1 truncate text-down" title={item.error}>{item.error}</p>{/if}</div><span class="w-fit rounded-full px-2 py-1 text-[10px] {item.status === 'applied' ? 'bg-emerald-500/10 text-emerald-400' : item.status === 'pending' ? 'bg-amber-500/10 text-amber-400' : item.status === 'failed' ? 'bg-down/10 text-down' : 'bg-stone-800 text-stone-500'}">{item.status}</span></div>{/each}</div>
 		{:else}<div class="px-5 py-10 text-center text-sm text-stone-600">No import previews yet.</div>{/if}
 	</section>
 </div>

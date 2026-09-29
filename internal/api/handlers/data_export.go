@@ -50,7 +50,7 @@ type exportManifest struct {
 	PolicyNotice string               `json:"policy_notice"`
 }
 
-var exportEntities = []string{"settings", "categories", "challenges", "users", "teams", "team_members"}
+var exportEntities = []string{"settings", "categories", "challenges", "users", "teams", "team_members", "scoreboard", "solves", "submissions", "ledger_balances", "ledger_history"}
 
 var exportSettingAllowlist = map[string]bool{
 	"platform_name": true, "platform_description": true, "registration_mode": true,
@@ -288,6 +288,15 @@ func anonymizeCollection(entity string, collection *exportCollection) {
 		case "team_members":
 			row["username"] = pseudonym("user", exportString(row["username"]))
 			row["team_name"] = pseudonym("team", exportString(row["team_name"]))
+		case "scoreboard", "ledger_balances", "ledger_history":
+			row["team_name"] = pseudonym("team", exportString(row["team_name"]))
+		case "solves":
+			row["username"] = pseudonym("user", exportString(row["username"]))
+			row["team_name"] = pseudonym("team", exportString(row["team_name"]))
+		case "submissions":
+			row["username"] = pseudonym("user", exportString(row["username"]))
+			row["team_name"] = pseudonym("team", exportString(row["team_name"]))
+			row["ip_address"], row["user_agent"] = "", ""
 		}
 	}
 }
@@ -332,6 +341,50 @@ func (h *DataHandler) fetchExportEntity(ctx context.Context, entity string) (exp
 		return h.queryExport(ctx, []string{"name", "max_members", "total_score", "created_at"}, `SELECT name, max_members, total_score, created_at FROM teams ORDER BY name`)
 	case "team_members":
 		return h.queryExport(ctx, []string{"username", "team_name"}, `SELECT u.username, t.name FROM users u JOIN teams t ON t.id = u.team_id ORDER BY t.name, u.username`)
+	case "scoreboard":
+		return h.queryExport(ctx, []string{"rank", "team_name", "points", "challenges_solved", "last_solve_at"}, `
+			WITH mode AS (
+				SELECT COALESCE((SELECT value = 'true'::jsonb FROM platform_settings WHERE key = 'economy_mode'), false) AS economy
+			), scores AS (
+				SELECT t.name AS team_name,
+				       CASE WHEN mode.economy THEN COALESCE(ets.points, 0) + t.koth_score ELSE t.total_score + t.koth_score END AS points,
+				       CASE WHEN mode.economy THEN (SELECT COUNT(*)::int FROM economy_challenge_state e WHERE e.team_id = t.id AND e.holds_solve)
+				            ELSE (SELECT COUNT(DISTINCT s.challenge_id)::int FROM solves s JOIN users u ON u.id = s.user_id WHERE u.team_id = t.id) END AS challenges_solved,
+				       (SELECT MAX(s.solved_at) FROM solves s JOIN users u ON u.id = s.user_id WHERE u.team_id = t.id) AS last_solve_at
+				FROM teams t CROSS JOIN mode LEFT JOIN economy_team_score ets ON ets.team_id = t.id
+				WHERE `+publicTeamSQL("t")+`
+			), ranked AS (
+				SELECT ROW_NUMBER() OVER (ORDER BY points DESC, last_solve_at ASC NULLS LAST, team_name ASC) AS rank,
+				       team_name, points, challenges_solved, last_solve_at
+				FROM scores WHERE points > 0 OR challenges_solved > 0 OR last_solve_at IS NOT NULL
+			)
+			SELECT rank, team_name, points, challenges_solved, last_solve_at FROM ranked ORDER BY rank`)
+	case "solves":
+		return h.queryExport(ctx, []string{"username", "team_name", "challenge_slug", "challenge_name", "flag_name", "points_awarded", "solved_at"}, `
+			SELECT u.username, COALESCE(t.name, ''), c.slug, c.name, f.name, s.points_awarded, s.solved_at
+			FROM solves s JOIN users u ON u.id = s.user_id LEFT JOIN teams t ON t.id = u.team_id
+			JOIN challenges c ON c.id = s.challenge_id JOIN flags f ON f.id = s.flag_id
+			ORDER BY s.solved_at, u.username, c.slug`)
+	case "submissions":
+		return h.queryExport(ctx, []string{"username", "team_name", "challenge_slug", "challenge_name", "flag_name", "correct", "points_awarded", "ip_address", "user_agent", "submitted_at"}, `
+			SELECT COALESCE(u.username, ''), COALESCE(t.name, ''), c.slug, c.name, COALESCE(f.name, ''),
+			       s.is_correct, COALESCE(s.points_awarded, 0), COALESCE(s.ip_address, ''), LEFT(COALESCE(s.user_agent, ''), 500), s.created_at
+			FROM submissions s LEFT JOIN users u ON u.id = s.user_id LEFT JOIN teams t ON t.id = u.team_id
+			JOIN challenges c ON c.id = s.challenge_id LEFT JOIN flags f ON f.id = s.flag_id
+			ORDER BY s.created_at, u.username, c.slug`)
+	case "ledger_balances":
+		return h.queryExport(ctx, []string{"team_name", "credits", "points", "conversion_blocks", "grant_issued", "bailout_used", "updated_at"}, `
+			SELECT t.name, COALESCE(ets.credits, 0), COALESCE(ets.points, 0), COALESCE(ets.p2c_blocks, 0),
+			       COALESCE(ets.grant_issued, false), COALESCE(ets.bailout_used, false), ets.updated_at
+			FROM teams t LEFT JOIN economy_team_score ets ON ets.team_id = t.id ORDER BY t.name`)
+	case "ledger_history":
+		return h.queryExport(ctx, []string{"ledger", "team_name", "challenge_slug", "kind", "amount", "balance_after", "created_at"}, `
+			SELECT 'credits', t.name, COALESCE(c.slug, ''), e.kind, e.amount, e.balance_after, e.created_at
+			FROM economy_credit_events e JOIN teams t ON t.id = e.team_id LEFT JOIN challenges c ON c.id = e.challenge_id
+			UNION ALL
+			SELECT 'points', t.name, c.slug, e.kind, e.value_after, NULL::numeric, e.created_at
+			FROM economy_point_events e JOIN teams t ON t.id = e.team_id JOIN challenges c ON c.id = e.challenge_id
+			ORDER BY 7, 2, 1`)
 	default:
 		return exportCollection{}, fmt.Errorf("unsupported entity %q", entity)
 	}

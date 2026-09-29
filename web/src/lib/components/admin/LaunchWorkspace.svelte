@@ -60,6 +60,12 @@
 		return 'mdi:close-circle';
 	}
 
+	function statusLabel(check: ReadinessCheck) {
+		if (check.status === 'pass') return 'Ready';
+		if (check.status === 'warning') return 'Review';
+		return 'Needs action';
+	}
+
 	function short(value: string) {
 		return value.slice(0, 12);
 	}
@@ -68,7 +74,7 @@
 </script>
 
 <div class="space-y-6">
-	<div><h2 class="text-base font-semibold text-stone-100">Release control</h2><p class="mt-1 max-w-3xl text-xs leading-relaxed text-stone-500">Run the final event, content, runtime, access and Ledger checks, review each warning, then seal an auditable release candidate. Sealing records exactly what staff approved; it never deploys infrastructure or publishes challenges.</p></div>
+	<div><h2 class="text-base font-semibold text-stone-100">Release checks</h2><p class="mt-1 max-w-3xl text-xs leading-relaxed text-stone-500">Verify the event, content, runtime, access, and Ledger configuration before recording an approved release.</p></div>
 	{#if loading}
 		<div class="flex min-h-[18rem] items-center justify-center"><Icon icon="mdi:loading" class="h-6 w-6 animate-spin text-stone-600" /></div>
 	{:else}
@@ -80,13 +86,13 @@
 				<div class="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between">
 					<div class="flex items-center gap-4">
 						<div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full {report.ready ? 'bg-emerald-500/10 text-emerald-400' : 'bg-down/10 text-down'}"><Icon icon={report.ready ? 'mdi:shield-check-outline' : 'mdi:shield-alert-outline'} class="h-6 w-6" /></div>
-						<div><p class="text-base font-semibold text-stone-100">{report.ready ? 'Ready for release review' : `${report.blockers} release blocker${report.blockers === 1 ? '' : 's'}`}</p><p class="mt-1 text-xs text-stone-500">Live checks generated {new Date(report.generated_at).toLocaleString()}</p></div>
+						<div><p class="text-base font-semibold text-stone-100">{report.ready ? 'Ready for release review' : `${report.blockers} item${report.blockers === 1 ? '' : 's'} to resolve`}</p><p class="mt-1 text-xs text-stone-500">Live checks generated {new Date(report.generated_at).toLocaleString()}</p></div>
 					</div>
 					<button type="button" on:click={load} class="inline-flex items-center justify-center gap-2 rounded-md border border-stone-700 px-3 py-2 text-xs text-stone-300 hover:border-stone-600"><Icon icon="mdi:refresh" class="h-4 w-4" />Run checks again</button>
 				</div>
 				<div class="grid grid-cols-2 border-t border-stone-800 sm:grid-cols-4">
 					<div class="border-r border-stone-800 p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Checks</p><p class="mt-1 text-xl font-semibold text-stone-200">{report.checks.length}</p></div>
-					<div class="border-r border-stone-800 p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Blockers</p><p class="mt-1 text-xl font-semibold {report.blockers ? 'text-down' : 'text-emerald-400'}">{report.blockers}</p></div>
+					<div class="border-r border-stone-800 p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Needs action</p><p class="mt-1 text-xl font-semibold {report.blockers ? 'text-down' : 'text-emerald-400'}">{report.blockers}</p></div>
 					<div class="border-r border-stone-800 p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Warnings</p><p class="mt-1 text-xl font-semibold {report.warnings ? 'text-amber-400' : 'text-emerald-400'}">{report.warnings}</p></div>
 					<div class="p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Latest RC</p><p class="mt-1 text-xl font-semibold text-stone-200">{releases.length ? `#${releases[0].sequence}` : 'None'}</p></div>
 				</div>
@@ -101,7 +107,7 @@
 								{#each report.checks.filter((check) => check.group === group) as check}
 									<div class="flex items-start gap-3 px-5 py-4">
 										<Icon icon={statusIcon(check)} class="mt-0.5 h-4 w-4 shrink-0 {check.status === 'pass' ? 'text-emerald-400' : check.status === 'warning' ? 'text-amber-400' : 'text-down'}" />
-										<div class="min-w-0 flex-1"><div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-medium text-stone-200">{check.label}</p><span class="text-[10px] uppercase tracking-wider {check.status === 'pass' ? 'text-emerald-400' : check.status === 'warning' ? 'text-amber-400' : 'text-down'}">{check.status}</span></div><p class="mt-1 text-xs leading-relaxed text-stone-500">{check.detail}</p></div>
+										<div class="min-w-0 flex-1"><div class="flex flex-wrap items-center justify-between gap-2"><p class="text-sm font-medium text-stone-200">{check.label}</p><span class="text-[10px] uppercase tracking-wider {check.status === 'pass' ? 'text-emerald-400' : check.status === 'warning' ? 'text-amber-400' : 'text-down'}">{statusLabel(check)}</span></div><p class="mt-1 text-xs leading-relaxed text-stone-500">{check.detail}</p></div>
 										{#if check.status === 'warning'}<label class="flex shrink-0 cursor-pointer items-center gap-2 text-[10px] uppercase tracking-wider text-stone-500"><input type="checkbox" checked={waived.has(check.id)} on:change={() => toggleWaiver(check.id)} class="accent-amber-500" />Waive</label>{/if}
 									</div>
 								{/each}

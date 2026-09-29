@@ -15,6 +15,7 @@
 	import LaunchWorkspace from '$lib/components/admin/LaunchWorkspace.svelte';
 	import TeamDossier from '$lib/components/admin/TeamDossier.svelte';
 	import ChallengeDossier from '$lib/components/admin/ChallengeDossier.svelte';
+	import HelpTip from '$lib/components/HelpTip.svelte';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -1293,6 +1294,7 @@
 		uploadError = '';
 		uploadProgress = 0;
 		attachmentUploadStatus = '';
+		const configureGraderAfterCreate = newChallenge.scoring_mode === 'graded';
 
 		// resolve the category: either an existing ID or a new category name
 		let categoryId: string | undefined;
@@ -1327,7 +1329,7 @@
 				privesc: newChallenge.type === 'container' || newChallenge.type === 'multi' ? newChallenge.privesc : false,
 				...(categoryId ? { category_id: categoryId } : {}),
 				...(categoryName ? { category: categoryName } : {}),
-				flags: newChallenge.flags.map((flag, index) => ({
+				flags: configureGraderAfterCreate ? [] : newChallenge.flags.map((flag, index) => ({
 					name: flag.name, flag: flag.flag, points: Number(flag.points) || 0,
 					sort_order: index + 1, flag_type: flag.flag_type || 'static',
 					dynamic_flag_prefix: flag.dynamic_flag_prefix || ''
@@ -1397,6 +1399,7 @@
 			// challenge was created - close modal and reset form regardless of attachment failures
 			showCreateModal = false;
 			await loadDashboard();
+			const createdChallenge = configureGraderAfterCreate ? challenges.find((challenge) => challenge.id === createdChallengeId) : null;
 
 			newChallenge = {
 				name: '',
@@ -1433,6 +1436,10 @@
 			};
 			ovaFile = null;
 			pendingAttachments = [];
+			if (createdChallenge) {
+				openEditModal(createdChallenge);
+				openEditTab('grading');
+			}
 
 			if (failedFiles.length > 0) {
 				// surface file upload failures as a page-level warning so the admin can
@@ -1522,7 +1529,7 @@
 
 			{#if activeTab === 'overview'}
 				<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-					<div><p class="metadata-label text-stone-600">Operations overview</p><h2 class="mt-1 text-xl font-semibold text-stone-100">Competition command center</h2><p class="mt-1 text-sm text-stone-500">Live event posture, content readiness, participant activity and runtime capacity in one view.</p></div>
+					<div><h2 class="text-xl font-semibold text-stone-100">Overview</h2><p class="mt-1 text-sm text-stone-500">Current event, content, and runtime status.</p></div>
 					<div class="flex flex-wrap gap-2"><button type="button" on:click={() => setTab('event')} class={btnGhost}>Configure event</button><button type="button" on:click={() => setTab('launch')} class={btnPrimary}>Release checks</button></div>
 				</div>
 
@@ -3249,12 +3256,19 @@
 						</label>
 
 						<label class="block">
-							<span class={labelCls}>Scoring model</span>
+							<span class="flex items-center gap-1 {labelCls}">Scoring model <HelpTip text="Flag scoring accepts one or more answers. Relative grading lets a trusted in-instance grader report a team's best score from 0 to 1, which Anvil converts proportionally to the challenge's base points." /></span>
 							<select bind:value={newChallenge.scoring_mode} class="w-full {fieldCls}">
-								<option value="flag">Flags</option>
-								<option value="graded">Relative grading (0–100%)</option>
+								<option value="flag">Flag scoring</option>
+								<option value="graded">Relative grading (best 0–100%)</option>
 							</select>
 						</label>
+
+						{#if newChallenge.scoring_mode === 'graded'}
+							<div class="md:col-span-2 flex items-start gap-3 rounded-md border border-info/20 bg-info/[0.05] px-3 py-2.5 text-xs text-stone-400">
+								<Icon icon="mdi:chart-timeline-variant-shimmer" class="mt-0.5 h-4 w-4 shrink-0 text-info" />
+								<div><p class="font-medium text-stone-300">Continuous progress instead of a binary solve</p><p class="mt-1 leading-relaxed text-stone-500">No player flag is required. A trusted grader reports a monotonic score from 0 to 1; awarded points are best score × base points. Grader credentials and the report contract open immediately after creation.</p></div>
+							</div>
+						{/if}
 
 						<label class="block md:col-span-2">
 							<span class={labelCls}>Target topology</span>
@@ -3271,7 +3285,7 @@
 							{#if newChallenge.type === 'download'}
 								<div class="flex items-start gap-2 py-2.5 px-3 bg-stone-900/40 border border-stone-800 rounded-md text-stone-400 text-xs">
 									<Icon icon="mdi:information-outline" class="w-4 h-4 shrink-0 mt-0.5" />
-									A download-only challenge has no container - add the challenge files as attachments below, and a flag.
+									A download-only challenge has no container. Add handouts below{newChallenge.scoring_mode === 'flag' ? ' and configure its answer' : '; its trusted grader remains external'}.
 								</div>
 							{/if}
 							{#if newChallenge.type === 'external'}
@@ -3364,6 +3378,7 @@
 							{/if}
 							{/if}
 
+							{#if newChallenge.scoring_mode === 'flag'}
 							<div>
 								<div class="flex items-center justify-between mb-2">
 									<span class="metadata-label block text-stone-400">Flags</span>
@@ -3401,8 +3416,9 @@
 										</div>
 									{/each}
 								</div>
-								<p class="mt-2 text-xs tabular-nums {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0) === Number(newChallenge.base_points) ? 'text-stone-600' : 'text-warn'}">Flag total: {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0)} / {newChallenge.base_points} base points{newChallenge.scoring_mode === 'graded' ? ' · graded scoring uses the best reported fraction' : ''}</p>
+								<p class="mt-2 text-xs tabular-nums {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0) === Number(newChallenge.base_points) ? 'text-stone-600' : 'text-warn'}">Flag total: {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0)} / {newChallenge.base_points} base points</p>
 							</div>
+							{/if}
 
 							{#if newChallenge.type === 'container' || newChallenge.type === 'multi'}
 							<div>
@@ -3512,6 +3528,7 @@
 								<label class="block"><span class={labelCls}>Reset cooldown (min)</span><input type="number" bind:value={newChallenge.cooldown_minutes} min="0" class="w-full {fieldCls} tabular-nums" /></label>
 							</div>
 
+							{#if newChallenge.scoring_mode === 'flag'}
 							<div>
 								<div class="flex items-center justify-between mb-3">
 									<span class="metadata-label block text-stone-400">Flags <span class="font-mono tracking-normal tabular-nums">({newChallenge.flags.length})</span></span>
@@ -3555,6 +3572,7 @@
 								</div>
 								<p class="text-stone-500 text-xs mt-2 tabular-nums">Total points: {newChallenge.flags.reduce((sum, f) => sum + (f.points || 0), 0)}</p>
 							</div>
+							{/if}
 						</div>
 					{/if}
 
@@ -3618,7 +3636,7 @@
 								{/if}
 							{:else}
 									<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
-								Create Challenge
+								{newChallenge.scoring_mode === 'graded' ? 'Create and configure grader' : 'Create Challenge'}
 							{/if}
 						</button>
 						<button
@@ -3655,7 +3673,7 @@
 			</div>
 
 			<div class="px-3 sm:px-6 border-b border-stone-800 flex gap-1 bg-stone-950 overflow-x-auto">
-				{#each [{ id: 'settings', label: 'Settings', n: 0 }, { id: 'flags', label: 'Flags', n: editFlags.length }, { id: 'hints', label: 'Hints', n: editHints.length }, { id: 'files', label: 'Files', n: editAttachments.length }, ...(editingChallenge.scoring_mode === 'graded' ? [{ id: 'grading', label: 'Grading', n: 0 }] : [])] as t}
+				{#each [{ id: 'settings', label: 'Settings', n: 0 }, ...(editingChallenge.scoring_mode === 'flag' ? [{ id: 'flags', label: 'Flags', n: editFlags.length }] : []), { id: 'hints', label: 'Hints', n: editHints.length }, { id: 'files', label: 'Files', n: editAttachments.length }, ...(editingChallenge.scoring_mode === 'graded' ? [{ id: 'grading', label: 'Grading', n: 0 }] : [])] as t}
 					<button type="button" on:click={() => openEditTab(t.id as typeof editTab)} class="px-3.5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors {editTab === t.id ? 'border-amber-500 text-stone-100' : 'border-transparent text-stone-500 hover:text-stone-300'}">
 						{t.label}{#if t.n}<span class="ml-1.5 text-xs tabular-nums {editTab === t.id ? 'text-amber-500' : 'text-stone-600'}">{t.n}</span>{/if}
 					</button>
@@ -3715,10 +3733,10 @@
 						<input type="text" bind:value={editingChallenge.author_name} placeholder="e.g. abu" class="w-full {fieldCls}" />
 					</label>
 					<label class="block sm:col-span-2">
-						<span class={labelCls}>Scoring</span>
+						<span class="flex items-center gap-1 {labelCls}">Scoring <HelpTip text="Changing the scoring model is allowed only before any submission, evaluation, solve, or live instance. Once activity begins, create a new challenge instead so historical results remain coherent." /></span>
 						<select bind:value={editingChallenge.scoring_mode} class="w-full {fieldCls}">
 							<option value="flag">Flag — solves by flag submission</option>
-							<option value="graded">Graded - an in-instance grader scores depth 0-1, best x points</option>
+							<option value="graded">Relative grading: best 0–100% × base points</option>
 						</select>
 					</label>
 					<label class="block">

@@ -438,9 +438,6 @@
 						{/if}
 					</div>
 					<div class="flex items-center gap-1 lg:hidden">
-						<button on:click={toggleTheme} aria-label={`Theme: ${themePreference === 'system' ? `${theme}, following system` : theme}`} class="p-2 text-stone-400 hover:text-stone-100">
-							<Icon icon={themePreference === 'system' ? 'mdi:theme-light-dark' : theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
-						</button>
 						<button
 							on:click={() => (mobileMenuOpen = !mobileMenuOpen)}
 							aria-label={mobileMenuOpen ? 'Close navigation' : 'Open navigation'}
@@ -490,6 +487,14 @@
 									<span class="optical-label leading-[14px]">{item.name}</span>
 								</a>
 							{/each}
+							<div class="mx-3 my-2 border-y border-stone-800 py-3">
+								<p class="metadata-label mb-2 text-stone-600">Appearance</p>
+								<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+									{#each themeOptions as option}
+										<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
+									{/each}
+								</div>
+							</div>
 							<button
 								on:click={() => { handleLogout(); mobileMenuOpen = false; }}
 								class="flex items-center gap-3 px-3 py-2.5 text-sm leading-none font-medium text-stone-400 hover:bg-stone-800/40 hover:text-danger rounded-md transition-colors w-full text-left"
@@ -499,11 +504,21 @@
 							</button>
 						</div>
 					{:else}
-						<div class="border-t border-stone-800 pt-3 mt-3 flex gap-3">
+						<div class="mt-3 border-t border-stone-800 pt-3">
+							<div class="mb-3">
+								<p class="metadata-label mb-2 text-stone-600">Appearance</p>
+								<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+									{#each themeOptions as option}
+										<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
+									{/each}
+								</div>
+							</div>
+							<div class="flex gap-3">
 							<a href="/login" on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-medium text-stone-300 border border-stone-800 rounded-md hover:bg-stone-800/40 hover:text-stone-100 transition-colors">Login</a>
 							{#if $registrationAvailable}
 								<a href={$registerHref} on:click={() => mobileMenuOpen = false} class="flex-1 px-4 py-2.5 text-center text-sm font-semibold text-amber-950 bg-amber-500 rounded-full hover:bg-amber-400 transition-colors">Register</a>
 							{/if}
+							</div>
 						</div>
 					{/if}
 				</div>
