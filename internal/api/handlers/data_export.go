@@ -21,8 +21,9 @@ import (
 )
 
 type DataHandler struct {
-	db     *database.DB
-	logger *zap.Logger
+	db         *database.DB
+	logger     *zap.Logger
+	exportGate chan struct{}
 }
 
 type exportCollection struct {
@@ -51,6 +52,7 @@ type exportManifest struct {
 }
 
 var exportEntities = []string{"settings", "categories", "challenges", "users", "teams", "team_members", "scoreboard", "solves", "submissions", "ledger_balances", "ledger_history"}
+var recommendedExportEntities = []string{"settings", "categories", "challenges", "users", "teams", "team_members", "scoreboard", "solves", "ledger_balances"}
 
 var exportSettingAllowlist = map[string]bool{
 	"platform_name": true, "platform_description": true, "registration_mode": true,
@@ -67,7 +69,7 @@ var exportSettingAllowlist = map[string]bool{
 }
 
 func NewDataHandler(db *database.DB, logger *zap.Logger) *DataHandler {
-	return &DataHandler{db: db, logger: logger}
+	return &DataHandler{db: db, logger: logger, exportGate: make(chan struct{}, 1)}
 }
 
 func (h *DataHandler) Summary(c *gin.Context) {
@@ -89,6 +91,14 @@ func (h *DataHandler) Summary(c *gin.Context) {
 }
 
 func (h *DataHandler) Export(c *gin.Context) {
+	select {
+	case h.exportGate <- struct{}{}:
+		defer func() { <-h.exportGate }()
+	default:
+		c.Header("Retry-After", "5")
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "another administrative export is still being prepared; retry in a moment"})
+		return
+	}
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -154,7 +164,7 @@ func (h *DataHandler) Export(c *gin.Context) {
 
 func requestedExportEntities(raw string) ([]string, error) {
 	if strings.TrimSpace(raw) == "" {
-		return append([]string(nil), exportEntities...), nil
+		return append([]string(nil), recommendedExportEntities...), nil
 	}
 	valid := make(map[string]bool, len(exportEntities))
 	for _, entity := range exportEntities {

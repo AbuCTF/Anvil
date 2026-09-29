@@ -3,6 +3,17 @@ package handlers
 import "testing"
 
 func TestRequestedExportEntitiesIncludesCompetitionResults(t *testing.T) {
+	defaults, err := requestedExportEntities("")
+	if err != nil {
+		t.Fatalf("requestedExportEntities(default): %v", err)
+	}
+	for _, excluded := range []string{"submissions", "ledger_history"} {
+		for _, entity := range defaults {
+			if entity == excluded {
+				t.Fatalf("large or sensitive entity %q was included by default", excluded)
+			}
+		}
+	}
 	entities, err := requestedExportEntities("scoreboard,solves,submissions,ledger_balances,ledger_history")
 	if err != nil {
 		t.Fatalf("requestedExportEntities(): %v", err)

@@ -15,7 +15,7 @@
 		{ id: 'solves', label: 'Solve log', importable: false, selected: true },
 		{ id: 'submissions', label: 'Submission audit', importable: false, selected: false },
 		{ id: 'ledger_balances', label: 'Ledger balances', importable: false, selected: true },
-		{ id: 'ledger_history', label: 'Ledger history', importable: false, selected: true }
+		{ id: 'ledger_history', label: 'Ledger history (large)', importable: false, selected: false }
 	];
 
 	let summary: Awaited<ReturnType<typeof api.getDataSummary>> | null = null;
@@ -163,7 +163,7 @@
 
 	<div class="grid gap-6 xl:grid-cols-2">
 		<section class="rounded-lg border border-stone-800 bg-stone-900/25">
-			<div class="flex items-start justify-between gap-3 border-b border-stone-800 px-5 py-4"><div><h2 class="flex items-center gap-1.5 text-sm font-semibold text-stone-100">Export <HelpTip text="The Anvil bundle contains both JSON and CSV plus checksums. Choose one item and CSV when you only need a spreadsheet." /></h2><p class="mt-1 text-xs text-stone-500">Portable configuration, results, and audit data.</p></div><div class="flex items-center gap-2 text-[10px]"><button type="button" on:click={selectDefaults} class="text-stone-500 hover:text-stone-200">Recommended</button><button type="button" on:click={selectAll} class="text-stone-500 hover:text-stone-200">All</button><button type="button" on:click={clearSelection} class="text-stone-500 hover:text-stone-200">Clear</button></div></div>
+			<div class="flex items-start justify-between gap-3 border-b border-stone-800 px-5 py-4"><div><h2 class="flex items-center gap-1.5 text-sm font-semibold text-stone-100">Export <HelpTip text="The Anvil bundle contains JSON and CSV plus checksums. Full Ledger history and submission audit are optional because mature events can make them large; choose one item and CSV for a focused spreadsheet." /></h2><p class="mt-1 text-xs text-stone-500">Portable configuration, results, and audit data.</p></div><div class="flex items-center gap-2 text-[10px]"><button type="button" on:click={selectDefaults} class="text-stone-500 hover:text-stone-200">Recommended</button><button type="button" on:click={selectAll} class="text-stone-500 hover:text-stone-200">All</button><button type="button" on:click={clearSelection} class="text-stone-500 hover:text-stone-200">Clear</button></div></div>
 			<div class="space-y-5 p-5">
 				<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
 					{#each entities as entity}
