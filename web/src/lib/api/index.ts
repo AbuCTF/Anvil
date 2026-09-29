@@ -34,6 +34,7 @@ export interface PlatformInfoResponse {
 	arena_enabled: boolean;
 	economy_enabled: boolean;
 	market_pulse_enabled: boolean;
+	economy_policy: EconomyPolicyDescriptor;
 	teams_mode: boolean;
 	vpn_enabled: boolean;
 	sso_enabled: boolean;
@@ -48,6 +49,15 @@ export interface PlatformInfoResponse {
 	};
 }
 
+export interface EconomyPolicyDescriptor {
+	id: string;
+	version: string;
+	name: string;
+	checksum: string;
+	canonical_checksum: string;
+	customized: boolean;
+}
+
 export interface MarketPulseResponse {
 	policy: {
 		generated_at: string;
@@ -57,6 +67,7 @@ export interface MarketPulseResponse {
 		min_anonymity: number;
 		field_hidden: boolean;
 		field_hidden_reason?: string;
+		economy: EconomyPolicyDescriptor;
 	};
 	team: {
 		credits: number;

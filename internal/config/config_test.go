@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -153,6 +154,41 @@ func TestLoadWithoutConfigUsesValidDurations(t *testing.T) {
 	}
 	if got := cfg.Economy.Grant * cfg.Economy.C2PRate; got != 60 {
 		t.Fatalf("full grant settlement = %v, want 60", got)
+	}
+}
+
+func TestDefaultEconomyMatchesVersionedPreset(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load(): %v", err)
+	}
+	want := builtInEconomyPreset.Parameters
+	if !reflect.DeepEqual(cfg.Economy, want) {
+		t.Fatalf("default economy no longer matches %s %s\ngot:  %#v\nwant: %#v",
+			builtInEconomyPreset.ID, builtInEconomyPreset.Version, cfg.Economy, want)
+	}
+	descriptor := cfg.EconomyPolicyDescriptor()
+	if descriptor.ID != "h7-ledger" || descriptor.Version != "1.0.0" || descriptor.Name != "H7 Ledger" {
+		t.Fatalf("unexpected policy identity: %+v", descriptor)
+	}
+	if !reflect.DeepEqual(builtInEconomyPreset.DifficultyOrder, []string{"easy", "medium", "hard", "insane"}) {
+		t.Fatalf("unexpected difficulty order: %v", builtInEconomyPreset.DifficultyOrder)
+	}
+	if descriptor.Checksum == "" || descriptor.Checksum == "unavailable" || descriptor.Customized {
+		t.Fatalf("unexpected canonical descriptor: %+v", descriptor)
+	}
+	// A rule change requires a deliberate preset-version bump and checksum update.
+	if descriptor.Checksum != "ca2461c0fcbbbf04956cb3d6d1af926c08530031fff4b675f0cd6eefd05c573c" {
+		t.Fatalf("unexpected h7-ledger v1.0.0 checksum: %s", descriptor.Checksum)
+	}
+
+	customConfig := *cfg
+	customConfig.Economy = cloneEconomyConfig(cfg.Economy)
+	customConfig.Economy.LaunchCosts[0]++
+	custom := customConfig.EconomyPolicyDescriptor()
+	if !custom.Customized || custom.Checksum == descriptor.Checksum {
+		t.Fatalf("overridden policy was not fingerprinted: canonical=%+v custom=%+v", descriptor, custom)
 	}
 }
 

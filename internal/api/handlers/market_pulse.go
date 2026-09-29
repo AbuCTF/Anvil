@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
@@ -22,13 +23,14 @@ const (
 )
 
 type pulsePolicy struct {
-	GeneratedAt       time.Time `json:"generated_at"`
-	SourceCutoff      time.Time `json:"source_cutoff"`
-	CadenceSeconds    int       `json:"cadence_seconds"`
-	DelaySeconds      int       `json:"delay_seconds"`
-	MinAnonymity      int       `json:"min_anonymity"`
-	FieldHidden       bool      `json:"field_hidden"`
-	FieldHiddenReason string    `json:"field_hidden_reason,omitempty"`
+	GeneratedAt       time.Time                      `json:"generated_at"`
+	SourceCutoff      time.Time                      `json:"source_cutoff"`
+	CadenceSeconds    int                            `json:"cadence_seconds"`
+	DelaySeconds      int                            `json:"delay_seconds"`
+	MinAnonymity      int                            `json:"min_anonymity"`
+	FieldHidden       bool                           `json:"field_hidden"`
+	FieldHiddenReason string                         `json:"field_hidden_reason,omitempty"`
+	Economy           config.EconomyPolicyDescriptor `json:"economy"`
 }
 
 type pulseAffordability struct {
@@ -175,6 +177,7 @@ func (h *EconomyHandler) MarketPulse(c *gin.Context) {
 			DelaySeconds:   int(marketPulseDelay.Seconds()),
 			MinAnonymity:   marketPulseMinAnonymity,
 			FieldHidden:    frozen,
+			Economy:        h.config.EconomyPolicyDescriptor(),
 		},
 		Field:   []pulseFieldChallenge{},
 		Notices: []pulseNotice{},

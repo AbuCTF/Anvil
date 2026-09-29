@@ -155,8 +155,13 @@ func TestMarketPulsePrivacyAndFreeze(t *testing.T) {
 		t.Fatalf("disabled pulse = %d, want 404", code)
 	}
 	exec(`UPDATE platform_settings SET value = 'true'::jsonb WHERE key = 'market_pulse_enabled'`)
-	if publicInfo()["market_pulse_enabled"] != true {
+	info := publicInfo()
+	if info["market_pulse_enabled"] != true {
 		t.Fatalf("public info exposed the wrong enabled state")
+	}
+	infoPolicy := info["economy_policy"].(map[string]any)
+	if infoPolicy["id"] != "h7-ledger" || infoPolicy["version"] != "1.0.0" || infoPolicy["customized"] != false {
+		t.Fatalf("unexpected public economy policy: %v", infoPolicy)
 	}
 
 	if code, _, _ := request(nil); code != http.StatusUnauthorized {
@@ -172,6 +177,10 @@ func TestMarketPulsePrivacyAndFreeze(t *testing.T) {
 	}
 	if header.Get("Cache-Control") != "private, no-store" {
 		t.Errorf("cache control = %q", header.Get("Cache-Control"))
+	}
+	pulsePolicy := body["policy"].(map[string]any)["economy"].(map[string]any)
+	if pulsePolicy["checksum"] != infoPolicy["checksum"] {
+		t.Errorf("pulse policy checksum %v differs from public contract %v", pulsePolicy["checksum"], infoPolicy["checksum"])
 	}
 	teamBody := body["team"].(map[string]any)
 	if teamBody["credits"] != 275.0 || teamBody["points"] != 125.0 || teamBody["open_slots_used"] != 1.0 {

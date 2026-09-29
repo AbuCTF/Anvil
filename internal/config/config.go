@@ -68,34 +68,36 @@ type InstancerConfig struct {
 	Timeout    time.Duration `mapstructure:"timeout"`     // instance TTL when the challenge sets none
 }
 
-// ledger economy parameters (player 0-1000 anchor, ×10 of
-// ledger-sim/reference_config.json). band arrays index by difficulty: 0=easy,
-// 1=medium, 2=hard, 3=insane(=the sim's "novel" tier). the live on/off is the
-// runtime economy_mode platform setting; these are the validated numbers, guarded
-// by invariant #7 at boot (see validate). any change here => ctf26-1 re-sims.
+// Ledger economy parameters. Band arrays index by difficulty: 0=easy,
+// 1=medium, 2=hard, 3=insane. The built-in defaults come from the versioned
+// preset in internal/config/presets; environment overrides are fingerprinted so
+// operators can see when the active policy differs from that baseline.
 type EconomyConfig struct {
-	Grant             float64   `mapstructure:"grant"`
-	Ceilings          []float64 `mapstructure:"ceilings"`
-	LaunchCosts       []float64 `mapstructure:"launch_costs"`
-	CrowdFloors       []float64 `mapstructure:"crowd_floors"`
-	CrowdHalflives    []float64 `mapstructure:"crowd_halflives"`
-	CleanRefundFrac   float64   `mapstructure:"clean_refund_frac"`
-	AbandonRefundFrac float64   `mapstructure:"abandon_refund_frac"`
-	WrongSubPenalty   float64   `mapstructure:"wrong_sub_penalty"`
-	WrongSubFloor     float64   `mapstructure:"wrong_sub_floor"`
-	ConcurrencyCap    int       `mapstructure:"concurrency_cap"`
-	MaxExtensions     int       `mapstructure:"max_extensions"`
-	ExtCostFracs      []float64 `mapstructure:"ext_cost_fracs"`
-	TimerSteps        []float64 `mapstructure:"timer_steps"`  // per-band open-timer length, in steps
-	StepMinutes       float64   `mapstructure:"step_minutes"` // minutes per step
-	ExtAddStepsFrac   float64   `mapstructure:"ext_add_steps_frac"`
-	Bailout           float64   `mapstructure:"bailout"`
-	FreeFlagPoints    float64   `mapstructure:"free_flag_points"`
-	P2CBlock          float64   `mapstructure:"p2c_block"`
-	P2CBase           float64   `mapstructure:"p2c_base"`
-	P2CRateDecay      float64   `mapstructure:"p2c_rate_decay"`
-	P2CMinRate        float64   `mapstructure:"p2c_min_rate"`
-	C2PRate           float64   `mapstructure:"c2p_rate"`
+	PresetID          string    `mapstructure:"preset_id" json:"-"`
+	PresetVersion     string    `mapstructure:"preset_version" json:"-"`
+	PresetName        string    `mapstructure:"preset_name" json:"-"`
+	Grant             float64   `mapstructure:"grant" json:"grant"`
+	Ceilings          []float64 `mapstructure:"ceilings" json:"ceilings"`
+	LaunchCosts       []float64 `mapstructure:"launch_costs" json:"launch_costs"`
+	CrowdFloors       []float64 `mapstructure:"crowd_floors" json:"crowd_floors"`
+	CrowdHalflives    []float64 `mapstructure:"crowd_halflives" json:"crowd_halflives"`
+	CleanRefundFrac   float64   `mapstructure:"clean_refund_frac" json:"clean_refund_frac"`
+	AbandonRefundFrac float64   `mapstructure:"abandon_refund_frac" json:"abandon_refund_frac"`
+	WrongSubPenalty   float64   `mapstructure:"wrong_sub_penalty" json:"wrong_sub_penalty"`
+	WrongSubFloor     float64   `mapstructure:"wrong_sub_floor" json:"wrong_sub_floor"`
+	ConcurrencyCap    int       `mapstructure:"concurrency_cap" json:"concurrency_cap"`
+	MaxExtensions     int       `mapstructure:"max_extensions" json:"max_extensions"`
+	ExtCostFracs      []float64 `mapstructure:"ext_cost_fracs" json:"ext_cost_fracs"`
+	TimerSteps        []float64 `mapstructure:"timer_steps" json:"timer_steps"`   // per-band open-timer length, in steps
+	StepMinutes       float64   `mapstructure:"step_minutes" json:"step_minutes"` // minutes per step
+	ExtAddStepsFrac   float64   `mapstructure:"ext_add_steps_frac" json:"ext_add_steps_frac"`
+	Bailout           float64   `mapstructure:"bailout" json:"bailout"`
+	FreeFlagPoints    float64   `mapstructure:"free_flag_points" json:"free_flag_points"`
+	P2CBlock          float64   `mapstructure:"p2c_block" json:"p2c_block"`
+	P2CBase           float64   `mapstructure:"p2c_base" json:"p2c_base"`
+	P2CRateDecay      float64   `mapstructure:"p2c_rate_decay" json:"p2c_rate_decay"`
+	P2CMinRate        float64   `mapstructure:"p2c_min_rate" json:"p2c_min_rate"`
+	C2PRate           float64   `mapstructure:"c2p_rate" json:"c2p_rate"`
 }
 
 // configures the zeropool -> anvil sso handoff (model b). zeropool signs a
@@ -415,29 +417,33 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("storage.path", "./data/storage")
 
-	// ledger economy (player 0-1000 anchor, ×10 of ledger-sim/reference_config.json).
-	v.SetDefault("economy.grant", 4000.0)
-	v.SetDefault("economy.ceilings", []float64{100, 250, 500, 1000})
-	v.SetDefault("economy.launch_costs", []float64{50, 100, 200, 400})
-	v.SetDefault("economy.crowd_floors", []float64{0.25, 0.25, 0.15, 0.75})
-	v.SetDefault("economy.crowd_halflives", []float64{8, 12, 20, 40})
-	v.SetDefault("economy.clean_refund_frac", 0.5)
-	v.SetDefault("economy.abandon_refund_frac", 0.3)
-	v.SetDefault("economy.wrong_sub_penalty", 0.25)
-	v.SetDefault("economy.wrong_sub_floor", 0.2)
-	v.SetDefault("economy.concurrency_cap", 3)
-	v.SetDefault("economy.max_extensions", 2)
-	v.SetDefault("economy.ext_cost_fracs", []float64{0.5, 1.0})
-	v.SetDefault("economy.timer_steps", []float64{12, 27, 66, 120})
-	v.SetDefault("economy.step_minutes", 10.0)
-	v.SetDefault("economy.ext_add_steps_frac", 0.5)
-	v.SetDefault("economy.bailout", 100.0)
-	v.SetDefault("economy.free_flag_points", 10.0)
-	v.SetDefault("economy.p2c_block", 50.0)
-	v.SetDefault("economy.p2c_base", 1.0)
-	v.SetDefault("economy.p2c_rate_decay", 0.7)
-	v.SetDefault("economy.p2c_min_rate", 0.05)
-	v.SetDefault("economy.c2p_rate", 0.015)
+	// Ledger defaults come from one embedded, versioned policy contract.
+	economy := cloneEconomyConfig(builtInEconomyPreset.Parameters)
+	v.SetDefault("economy.preset_id", economy.PresetID)
+	v.SetDefault("economy.preset_version", economy.PresetVersion)
+	v.SetDefault("economy.preset_name", economy.PresetName)
+	v.SetDefault("economy.grant", economy.Grant)
+	v.SetDefault("economy.ceilings", economy.Ceilings)
+	v.SetDefault("economy.launch_costs", economy.LaunchCosts)
+	v.SetDefault("economy.crowd_floors", economy.CrowdFloors)
+	v.SetDefault("economy.crowd_halflives", economy.CrowdHalflives)
+	v.SetDefault("economy.clean_refund_frac", economy.CleanRefundFrac)
+	v.SetDefault("economy.abandon_refund_frac", economy.AbandonRefundFrac)
+	v.SetDefault("economy.wrong_sub_penalty", economy.WrongSubPenalty)
+	v.SetDefault("economy.wrong_sub_floor", economy.WrongSubFloor)
+	v.SetDefault("economy.concurrency_cap", economy.ConcurrencyCap)
+	v.SetDefault("economy.max_extensions", economy.MaxExtensions)
+	v.SetDefault("economy.ext_cost_fracs", economy.ExtCostFracs)
+	v.SetDefault("economy.timer_steps", economy.TimerSteps)
+	v.SetDefault("economy.step_minutes", economy.StepMinutes)
+	v.SetDefault("economy.ext_add_steps_frac", economy.ExtAddStepsFrac)
+	v.SetDefault("economy.bailout", economy.Bailout)
+	v.SetDefault("economy.free_flag_points", economy.FreeFlagPoints)
+	v.SetDefault("economy.p2c_block", economy.P2CBlock)
+	v.SetDefault("economy.p2c_base", economy.P2CBase)
+	v.SetDefault("economy.p2c_rate_decay", economy.P2CRateDecay)
+	v.SetDefault("economy.p2c_min_rate", economy.P2CMinRate)
+	v.SetDefault("economy.c2p_rate", economy.C2PRate)
 
 	v.SetDefault("zeropool.base_url", "")
 	v.SetDefault("zeropool.api_key", "")

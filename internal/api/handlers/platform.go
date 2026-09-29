@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -23,21 +24,22 @@ type publicEventInfo struct {
 const eventClockGracePeriod = 48 * time.Hour
 
 type platformInfoResponse struct {
-	Name               string           `json:"name"`
-	Description        string           `json:"description"`
-	RegistrationMode   string           `json:"registration_mode"`
-	ScoringEnabled     bool             `json:"scoring_enabled"`
-	ScoreboardEnabled  bool             `json:"scoreboard_enabled"`
-	ArenaEnabled       bool             `json:"arena_enabled"`
-	EconomyEnabled     bool             `json:"economy_enabled"`
-	MarketPulseEnabled bool             `json:"market_pulse_enabled"`
-	TeamsMode          bool             `json:"teams_mode"`
-	VPNEnabled         bool             `json:"vpn_enabled"`
-	SSOEnabled         bool             `json:"sso_enabled"`
-	DiscordWalkin      bool             `json:"discord_walkin"`
-	RegisterURL        string           `json:"register_url,omitempty"`
-	ServerTime         time.Time        `json:"server_time"`
-	Event              *publicEventInfo `json:"event,omitempty"`
+	Name               string                         `json:"name"`
+	Description        string                         `json:"description"`
+	RegistrationMode   string                         `json:"registration_mode"`
+	ScoringEnabled     bool                           `json:"scoring_enabled"`
+	ScoreboardEnabled  bool                           `json:"scoreboard_enabled"`
+	ArenaEnabled       bool                           `json:"arena_enabled"`
+	EconomyEnabled     bool                           `json:"economy_enabled"`
+	MarketPulseEnabled bool                           `json:"market_pulse_enabled"`
+	EconomyPolicy      config.EconomyPolicyDescriptor `json:"economy_policy"`
+	TeamsMode          bool                           `json:"teams_mode"`
+	VPNEnabled         bool                           `json:"vpn_enabled"`
+	SSOEnabled         bool                           `json:"sso_enabled"`
+	DiscordWalkin      bool                           `json:"discord_walkin"`
+	RegisterURL        string                         `json:"register_url,omitempty"`
+	ServerTime         time.Time                      `json:"server_time"`
+	Event              *publicEventInfo               `json:"event,omitempty"`
 }
 
 func (h *PlatformHandler) GetInfo(c *gin.Context) {
@@ -76,6 +78,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		ArenaEnabled:       arena,
 		EconomyEnabled:     economy,
 		MarketPulseEnabled: pulse,
+		EconomyPolicy:      h.config.EconomyPolicyDescriptor(),
 		TeamsMode:          teams,
 		VPNEnabled:         h.config.VPN.Enabled,
 		SSOEnabled:         h.config.SSO.Enabled && strings.TrimSpace(h.config.SSO.SharedSecret) != "",

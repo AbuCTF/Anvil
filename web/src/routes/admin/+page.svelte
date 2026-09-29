@@ -9,6 +9,7 @@
 	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
 	import { formatLocalDateLong, formatLocalDateTime, formatLocalDateTimeWithZone, instantTitle, viewerTimeZone } from '$lib/time';
 	import { confirmDialog, alertDialog, promptDialog } from '$lib/stores/dialog';
+	import { platformInfo } from '$lib/stores/platform';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -2034,6 +2035,33 @@
 								Save Settings
 							</button>
 						</div>
+					{/if}
+
+					{#if $platformInfo?.economy_policy}
+						<Card bodyClass="p-4">
+							<div slot="header">
+								<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
+									<OpticalIcon icon="mdi:scale-balance" size={14} box={14} className="text-stone-500" />
+									<span class="optical-label">Ledger Policy</span>
+								</h2>
+								<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">The versioned ruleset currently loaded by the API</p>
+							</div>
+							<div class="grid gap-4 md:grid-cols-[1fr_auto] md:items-center">
+								<div>
+									<div class="flex flex-wrap items-center gap-2">
+										<p class="text-sm font-medium text-stone-200">{$platformInfo.economy_policy.name} v{$platformInfo.economy_policy.version}</p>
+										<span class="rounded-full px-2 py-0.5 text-[10px] font-medium {$platformInfo.economy_policy.customized ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}">
+											{$platformInfo.economy_policy.customized ? 'Customized' : 'Canonical'}
+										</span>
+									</div>
+									<p class="mt-1 text-xs text-stone-500">Preset {$platformInfo.economy_policy.id}</p>
+								</div>
+								<div class="min-w-0 md:text-right">
+									<p class="metadata-label text-stone-600">Active checksum</p>
+									<code class="mt-1 block break-all text-[11px] text-stone-400" title={$platformInfo.economy_policy.checksum}>{$platformInfo.economy_policy.checksum}</code>
+								</div>
+							</div>
+						</Card>
 					{/if}
 
 					<Card bodyClass="p-4">

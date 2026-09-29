@@ -138,7 +138,10 @@
 				<Icon icon="mdi:shield-check-outline" class="h-4 w-4 shrink-0 text-emerald-500" />
 				<span>Field data is delayed {Math.round(pulse.policy.delay_seconds / 60)} minutes, published every {Math.round(pulse.policy.cadence_seconds / 60)} minutes, and hidden below {pulse.policy.min_anonymity} teams.</span>
 			</div>
-			<span class="shrink-0 tabular-nums">As of {dateTime(pulse.policy.source_cutoff)}</span>
+			<div class="flex shrink-0 flex-col items-end gap-0.5 tabular-nums">
+				<span>As of {dateTime(pulse.policy.source_cutoff)}</span>
+				<span class="text-[10px] text-stone-600">{pulse.policy.economy.name} v{pulse.policy.economy.version} · {pulse.policy.economy.checksum.slice(0, 10)}</span>
+			</div>
 		</div>
 
 		{#if pulse.notices.length}
