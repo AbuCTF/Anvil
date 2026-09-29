@@ -471,6 +471,7 @@ func (s *Server) setupRouter() {
 			{
 				settingsHandler := handlers.NewSettingsHandler(s.config, s.db, s.logger)
 				settings.GET("", settingsHandler.List)
+				settings.GET("/economy-policy", settingsHandler.EconomyPolicy)
 				settings.PUT("", settingsHandler.Update)
 			}
 

@@ -29,6 +29,17 @@ type EconomyPolicyDescriptor struct {
 	Customized        bool   `json:"customized"`
 }
 
+type EconomyPolicyDocument struct {
+	SchemaVersion   int           `json:"schema_version"`
+	ID              string        `json:"id"`
+	Version         string        `json:"version"`
+	Name            string        `json:"name"`
+	DifficultyOrder []string      `json:"difficulty_order"`
+	Parameters      EconomyConfig `json:"parameters"`
+	Checksum        string        `json:"checksum"`
+	Customized      bool          `json:"customized"`
+}
+
 var builtInEconomyPreset = mustLoadEconomyPreset(defaultEconomyPresetJSON)
 
 func mustLoadEconomyPreset(data []byte) economyPreset {
@@ -81,5 +92,19 @@ func (c Config) EconomyPolicyDescriptor() EconomyPolicyDescriptor {
 		Checksum:          activeChecksum,
 		CanonicalChecksum: canonicalChecksum,
 		Customized:        activeChecksum != canonicalChecksum,
+	}
+}
+
+func (c Config) EconomyPolicyDocument() EconomyPolicyDocument {
+	descriptor := c.EconomyPolicyDescriptor()
+	return EconomyPolicyDocument{
+		SchemaVersion:   1,
+		ID:              descriptor.ID,
+		Version:         descriptor.Version,
+		Name:            descriptor.Name,
+		DifficultyOrder: append([]string(nil), builtInEconomyPreset.DifficultyOrder...),
+		Parameters:      cloneEconomyConfig(c.Economy),
+		Checksum:        descriptor.Checksum,
+		Customized:      descriptor.Customized,
 	}
 }

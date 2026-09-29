@@ -74,6 +74,9 @@
 		return iconMetrics[icon] ?? { size: 14 };
 	}
 
+	type ThemePreference = 'system' | 'dark' | 'light';
+	const themeOptions: ThemePreference[] = ['system', 'light', 'dark'];
+	let themePreference: ThemePreference = 'system';
 	let theme: 'dark' | 'light' = 'dark';
 	let credits: number | null = null;
 	let notificationUnread = 0;
@@ -215,7 +218,18 @@
 	onMount(() => {
 		auth.checkAuth();
 		loadPlatformInfo();
-		theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+		const systemTheme = window.matchMedia('(prefers-color-scheme: light)');
+		try {
+			const saved = localStorage.getItem('theme');
+			themePreference = saved === 'light' || saved === 'dark' ? saved : 'system';
+		} catch {
+			themePreference = 'system';
+		}
+		applyTheme(themePreference, systemTheme.matches);
+		const handleSystemThemeChange = (event: MediaQueryListEvent) => {
+			if (themePreference === 'system') applyTheme('system', event.matches);
+		};
+		systemTheme.addEventListener('change', handleSystemThemeChange);
 		try {
 			teamBannerDismissed = sessionStorage.getItem('teamBannerDismissed') === '1';
 		} catch {
@@ -245,18 +259,31 @@
 			window.removeEventListener('keydown', primeSound);
 			window.removeEventListener('focus', refreshVisibleRank);
 			window.removeEventListener('notifications:changed', refreshNotifications);
+			systemTheme.removeEventListener('change', handleSystemThemeChange);
 		};
 	});
 
-	function toggleTheme() {
-		theme = theme === 'dark' ? 'light' : 'dark';
+	function applyTheme(preference: ThemePreference, systemLight = window.matchMedia('(prefers-color-scheme: light)').matches) {
+		theme = preference === 'system' ? (systemLight ? 'light' : 'dark') : preference;
 		if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
 		else document.documentElement.removeAttribute('data-theme');
+		const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+		if (themeColor) themeColor.content = theme === 'light' ? '#faf9f6' : '#0c0a09';
+	}
+
+	function setThemePreference(preference: ThemePreference) {
+		themePreference = preference;
+		applyTheme(preference);
 		try {
-			localStorage.setItem('theme', theme);
+			if (preference === 'system') localStorage.removeItem('theme');
+			else localStorage.setItem('theme', preference);
 		} catch {
-			/* ignore */
+			return;
 		}
+	}
+
+	function toggleTheme() {
+		setThemePreference(theme === 'dark' ? 'light' : 'dark');
 	}
 
 	function handleLogout() {
@@ -311,11 +338,11 @@
 					<div class="hidden items-center gap-0.5 lg:flex">
 						<button
 							on:click={toggleTheme}
-							aria-label="Toggle theme"
-							title="Toggle theme"
+							aria-label={`Theme: ${themePreference === 'system' ? `${theme}, following system` : theme}`}
+							title={themePreference === 'system' ? `Following system theme (${theme})` : `Using ${theme} theme`}
 							class="rounded-md p-1.5 text-stone-400 transition-colors hover:bg-stone-800/40 hover:text-stone-100"
 						>
-							<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="h-5 w-5" />
+							<Icon icon={themePreference === 'system' ? 'mdi:theme-light-dark' : theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="h-5 w-5" />
 						</button>
 						{#if $auth.isAuthenticated}
 							<a
@@ -373,6 +400,14 @@
 											<span class="optical-label leading-[14px]">{item.name}</span>
 										</a>
 									{/each}
+									<div class="border-t border-stone-800 px-4 py-3">
+										<p class="metadata-label mb-2 text-stone-600">Appearance</p>
+										<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+											{#each themeOptions as option}
+												<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
+											{/each}
+										</div>
+									</div>
 									<div class="border-t border-stone-800">
 										<button
 											on:click={handleLogout}
@@ -403,8 +438,8 @@
 						{/if}
 					</div>
 					<div class="flex items-center gap-1 lg:hidden">
-						<button on:click={toggleTheme} aria-label="Toggle theme" class="p-2 text-stone-400 hover:text-stone-100">
-							<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
+						<button on:click={toggleTheme} aria-label={`Theme: ${themePreference === 'system' ? `${theme}, following system` : theme}`} class="p-2 text-stone-400 hover:text-stone-100">
+							<Icon icon={themePreference === 'system' ? 'mdi:theme-light-dark' : theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="w-5 h-5" />
 						</button>
 						<button
 							on:click={() => (mobileMenuOpen = !mobileMenuOpen)}

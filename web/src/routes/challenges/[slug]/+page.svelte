@@ -1375,9 +1375,9 @@
 										{/if}
 									</div>
 
-									<div class="grid grid-cols-3 gap-3">
-										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
-											<p class="metadata-label text-stone-500 mb-1">Time left</p>
+									<div class="grid grid-cols-3 gap-2 sm:gap-3">
+										<div class="bg-stone-950 border border-stone-800 rounded-lg px-2.5 py-3 sm:px-3">
+											<p class="metadata-label mb-1 whitespace-nowrap text-[9px] tracking-[0.02em] text-stone-500">Time left</p>
 											<p
 												class="text-base font-mono font-medium tabular-nums {getTimeColorClass(instance.expires_at)}"
 												title={instantTitle(instance.expires_at, 'seconds')}
@@ -1386,12 +1386,12 @@
 												<p class="text-xs text-down mt-1">Expiring soon</p>
 											{/if}
 										</div>
-										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
-											<p class="metadata-label text-stone-500 mb-1">Extensions</p>
+										<div class="bg-stone-950 border border-stone-800 rounded-lg px-2.5 py-3 sm:px-3">
+											<p class="metadata-label mb-1 whitespace-nowrap text-[9px] tracking-[0.02em] text-stone-500">Extensions</p>
 											<p class="text-base font-medium text-stone-200 tabular-nums">{instance.extensions_used || 0}<span class="text-stone-600 font-normal text-sm"> / {instance.max_extensions || 3}</span></p>
 										</div>
-										<div class="bg-stone-950 border border-stone-800 rounded-lg p-3">
-											<p class="metadata-label text-stone-500 mb-1">Resets</p>
+										<div class="bg-stone-950 border border-stone-800 rounded-lg px-2.5 py-3 sm:px-3">
+											<p class="metadata-label mb-1 whitespace-nowrap text-[9px] tracking-[0.02em] text-stone-500">Resets</p>
 											<p class="text-base font-medium text-stone-200 tabular-nums">{instance.reset_count || 0}<span class="text-stone-600 font-normal text-sm"> / {instance.max_resets || 3}</span></p>
 										</div>
 									</div>

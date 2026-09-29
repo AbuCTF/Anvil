@@ -69,6 +69,17 @@ export interface EconomyPolicyDescriptor {
 	customized: boolean;
 }
 
+export interface EconomyPolicyDocument {
+	schema_version: number;
+	id: string;
+	version: string;
+	name: string;
+	difficulty_order: string[];
+	parameters: Record<string, number | number[]>;
+	checksum: string;
+	customized: boolean;
+}
+
 export interface NotificationItem {
 	id: string;
 	kind: 'announcement' | 'event';
@@ -1161,6 +1172,10 @@ class ApiClient {
 	// platform settings
 	async getPlatformSettings() {
 		return this.request<{ settings: Record<string, any> }>('/admin/settings');
+	}
+
+	async getAdminEconomyPolicy() {
+		return this.request<EconomyPolicyDocument>('/admin/settings/economy-policy', { cache: 'no-store' });
 	}
 
 	async updatePlatformSettings(settings: Record<string, any>) {

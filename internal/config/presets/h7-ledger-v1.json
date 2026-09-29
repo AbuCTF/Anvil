@@ -1,7 +1,7 @@
 {
   "id": "h7-ledger",
-  "version": "1.0.0",
-  "name": "H7 Ledger",
+  "version": "1.7",
+  "name": "Ledger",
   "difficulty_order": ["easy", "medium", "hard", "insane"],
   "parameters": {
     "grant": 4000,

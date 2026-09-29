@@ -169,7 +169,7 @@ func TestDefaultEconomyMatchesVersionedPreset(t *testing.T) {
 			builtInEconomyPreset.ID, builtInEconomyPreset.Version, cfg.Economy, want)
 	}
 	descriptor := cfg.EconomyPolicyDescriptor()
-	if descriptor.ID != "h7-ledger" || descriptor.Version != "1.0.0" || descriptor.Name != "H7 Ledger" {
+	if descriptor.ID != "h7-ledger" || descriptor.Version != "1.7" || descriptor.Name != "Ledger" {
 		t.Fatalf("unexpected policy identity: %+v", descriptor)
 	}
 	if !reflect.DeepEqual(builtInEconomyPreset.DifficultyOrder, []string{"easy", "medium", "hard", "insane"}) {
@@ -180,7 +180,19 @@ func TestDefaultEconomyMatchesVersionedPreset(t *testing.T) {
 	}
 	// A rule change requires a deliberate preset-version bump and checksum update.
 	if descriptor.Checksum != "ca2461c0fcbbbf04956cb3d6d1af926c08530031fff4b675f0cd6eefd05c573c" {
-		t.Fatalf("unexpected h7-ledger v1.0.0 checksum: %s", descriptor.Checksum)
+		t.Fatalf("unexpected Ledger v1.7 checksum: %s", descriptor.Checksum)
+	}
+	document := cfg.EconomyPolicyDocument()
+	if document.SchemaVersion != 1 || document.ID != descriptor.ID || document.Version != descriptor.Version || document.Name != descriptor.Name {
+		t.Fatalf("unexpected policy document identity: %+v", document)
+	}
+	if document.Checksum != descriptor.Checksum || document.Customized || !reflect.DeepEqual(document.Parameters, cfg.Economy) {
+		t.Fatalf("unexpected canonical policy document: %+v", document)
+	}
+	document.DifficultyOrder[0] = "changed"
+	document.Parameters.LaunchCosts[0]++
+	if builtInEconomyPreset.DifficultyOrder[0] != "easy" || cfg.Economy.LaunchCosts[0] != want.LaunchCosts[0] {
+		t.Fatal("policy document exposed mutable configuration slices")
 	}
 
 	customConfig := *cfg

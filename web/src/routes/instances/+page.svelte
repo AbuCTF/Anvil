@@ -347,7 +347,7 @@
 							<div class="p-3 bg-stone-950/50 border border-stone-800 rounded-md">
 								<div class="flex items-center gap-1.5 text-stone-500 mb-1.5">
 									<OpticalIcon icon="mdi:refresh" size={12} box={12} />
-									<span class="optical-label metadata-label">Extensions</span>
+									<span class="optical-label metadata-label whitespace-nowrap">Extensions</span>
 								</div>
 								<div class="font-mono tabular-nums text-lg text-stone-100">
 									{instance.extensions_used} / {instance.max_extensions}

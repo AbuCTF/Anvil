@@ -160,7 +160,7 @@ func TestMarketPulsePrivacyAndFreeze(t *testing.T) {
 		t.Fatalf("public info exposed the wrong enabled state")
 	}
 	infoPolicy := info["economy_policy"].(map[string]any)
-	if infoPolicy["id"] != "h7-ledger" || infoPolicy["version"] != "1.0.0" || infoPolicy["customized"] != false {
+	if infoPolicy["id"] != "h7-ledger" || infoPolicy["version"] != "1.7" || infoPolicy["customized"] != false {
 		t.Fatalf("unexpected public economy policy: %v", infoPolicy)
 	}
 

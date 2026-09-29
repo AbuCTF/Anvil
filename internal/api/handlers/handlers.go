@@ -1027,6 +1027,10 @@ func (h *SettingsHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"settings": settings})
 }
 
+func (h *SettingsHandler) EconomyPolicy(c *gin.Context) {
+	c.JSON(http.StatusOK, h.config.EconomyPolicyDocument())
+}
+
 func (h *SettingsHandler) Update(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 256<<10)
 	var req struct {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { api, type AdminAnnouncement, type GradedAdminInfo } from '$api';
+	import { api, type AdminAnnouncement, type EconomyPolicyDocument, type GradedAdminInfo } from '$api';
 	import Icon from '@iconify/svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -106,6 +106,9 @@
 	let settingsError = '';
 	let eventWindowError = '';
 	let browserTimeZone = 'local time';
+	let economyPolicyDocument: EconomyPolicyDocument | null = null;
+	let economyPolicyLoading = false;
+	let showEconomyPolicy = false;
 
 	let announcements: AdminAnnouncement[] = [];
 	let announcementsLoading = false;
@@ -817,6 +820,41 @@
 		platformSettings = { ...platformSettings, [key]: value };
 		settingsChanged = true;
 		settingsError = '';
+	}
+
+	async function loadEconomyPolicy() {
+		if (economyPolicyDocument) return economyPolicyDocument;
+		economyPolicyLoading = true;
+		try {
+			economyPolicyDocument = await api.getAdminEconomyPolicy();
+			return economyPolicyDocument;
+		} catch (e) {
+			settingsError = e instanceof Error ? e.message : 'Failed to load Ledger policy';
+			return null;
+		} finally {
+			economyPolicyLoading = false;
+		}
+	}
+
+	async function toggleEconomyPolicy() {
+		if (!showEconomyPolicy && !(await loadEconomyPolicy())) return;
+		showEconomyPolicy = !showEconomyPolicy;
+	}
+
+	async function downloadEconomyPolicy() {
+		const document = await loadEconomyPolicy();
+		if (!document) return;
+		const blob = new Blob([`${JSON.stringify(document, null, 2)}\n`], { type: 'application/json' });
+		const href = URL.createObjectURL(blob);
+		const anchor = window.document.createElement('a');
+		anchor.href = href;
+		anchor.download = `ledger-v${document.version}.json`;
+		anchor.click();
+		URL.revokeObjectURL(href);
+	}
+
+	function economyRuleLabel(key: string) {
+		return key.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 	}
 
 	function handleNumberInput(e: Event, key: string) {
@@ -2435,15 +2473,36 @@
 							<div slot="header">
 								<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
 									<OpticalIcon icon="mdi:scale-balance" size={14} box={14} className="text-stone-500" />
-									<span class="optical-label">Economy ruleset</span>
+									<span class="optical-label">Ledger policy</span>
 								</h2>
-								<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Identity of the scoring and credit rules loaded by the API</p>
+								<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">The active scoring and credit rules for this event</p>
 							</div>
-							<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-								<div class="flex items-center gap-3"><div class="grid h-10 w-10 place-items-center rounded-lg bg-amber-500/10 text-amber-500"><Icon icon="mdi:bank-outline" class="h-5 w-5" /></div><div><p class="text-sm font-medium text-stone-200">{$platformInfo.economy_policy.name}</p><p class="mt-1 text-xs text-stone-500">Version {$platformInfo.economy_policy.version} · preset {$platformInfo.economy_policy.id}</p></div></div>
-								<span class="w-fit rounded-full px-2.5 py-1 text-[11px] font-medium {$platformInfo.economy_policy.customized ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}">{$platformInfo.economy_policy.customized ? 'Organizer customized' : 'Canonical policy'}</span>
+							<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+								<div class="flex items-center gap-3">
+									<div class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-amber-500/10 text-amber-500"><Icon icon="mdi:bank-outline" class="h-5 w-5" /></div>
+									<div>
+										<div class="flex flex-wrap items-center gap-2"><p class="text-sm font-medium text-stone-200">{$platformInfo.economy_policy.name}</p><span class="rounded-full border border-stone-800 px-2 py-0.5 text-[10px] text-stone-500">v{$platformInfo.economy_policy.version}</span></div>
+										<p class="mt-1 text-xs text-stone-500">Versioned JSON rule profile · not a PDF</p>
+									</div>
+								</div>
+								<div class="flex flex-wrap items-center gap-2">
+									<span class="w-fit rounded-full px-2.5 py-1 text-[11px] font-medium {$platformInfo.economy_policy.customized ? 'bg-amber-500/10 text-amber-400' : 'bg-emerald-500/10 text-emerald-400'}">{$platformInfo.economy_policy.customized ? 'Organizer customized' : 'Canonical policy'}</span>
+									<button type="button" class={btnGhost} on:click={toggleEconomyPolicy} disabled={economyPolicyLoading}>{economyPolicyLoading ? 'Loading…' : showEconomyPolicy ? 'Hide rules' : 'View rules'}</button>
+									<button type="button" class={btnGhost} on:click={downloadEconomyPolicy} disabled={economyPolicyLoading}><Icon icon="mdi:download-outline" class="h-4 w-4" /> Download JSON</button>
+								</div>
 							</div>
-							<details class="mt-4 border-t border-stone-800 pt-3"><summary class="cursor-pointer text-xs text-stone-500 hover:text-stone-300">Technical identity</summary><div class="mt-3 grid gap-2 text-[11px] sm:grid-cols-2"><div><p class="metadata-label text-stone-600">Active checksum</p><code class="mt-1 block break-all text-stone-500">{$platformInfo.economy_policy.checksum}</code></div><div><p class="metadata-label text-stone-600">Canonical checksum</p><code class="mt-1 block break-all text-stone-500">{$platformInfo.economy_policy.canonical_checksum}</code></div></div></details>
+							<p class="mt-4 max-w-4xl text-xs leading-relaxed text-stone-500">Download the exact active policy for review or offline editing. Live rule changes stay deployment-controlled so an organizer cannot silently alter the economy during a running competition.</p>
+							{#if showEconomyPolicy && economyPolicyDocument}
+								<div class="mt-4 rounded-lg border border-stone-800 bg-stone-950/40 p-3">
+									<div class="mb-3 flex flex-wrap items-center justify-between gap-2"><p class="text-xs font-medium text-stone-300">Active rules</p><p class="text-[11px] text-stone-600">Difficulty order: {economyPolicyDocument.difficulty_order.join(' → ')}</p></div>
+									<div class="grid gap-px overflow-hidden rounded-md border border-stone-800 bg-stone-800 sm:grid-cols-2 xl:grid-cols-3">
+										{#each Object.entries(economyPolicyDocument.parameters) as [key, value]}
+											<div class="flex min-w-0 items-start justify-between gap-3 bg-stone-950 px-3 py-2.5"><span class="text-[11px] text-stone-500">{economyRuleLabel(key)}</span><code class="max-w-[60%] break-words text-right text-[11px] text-stone-300">{Array.isArray(value) ? value.join(' · ') : value}</code></div>
+										{/each}
+									</div>
+								</div>
+							{/if}
+							<details class="mt-4 border-t border-stone-800 pt-3"><summary class="cursor-pointer text-xs text-stone-500 hover:text-stone-300">Technical identity</summary><div class="mt-3 grid gap-2 text-[11px] sm:grid-cols-3"><div><p class="metadata-label text-stone-600">Internal policy ID</p><code class="mt-1 block break-all text-stone-500">{$platformInfo.economy_policy.id}</code></div><div><p class="metadata-label text-stone-600">Active checksum</p><code class="mt-1 block break-all text-stone-500">{$platformInfo.economy_policy.checksum}</code></div><div><p class="metadata-label text-stone-600">Canonical checksum</p><code class="mt-1 block break-all text-stone-500">{$platformInfo.economy_policy.canonical_checksum}</code></div></div></details>
 						</Card>
 					{/if}
 
