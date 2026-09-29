@@ -55,6 +55,9 @@ container:
   swarm_http_port_min: 31000
   swarm_http_port_max: 31999
   swarm_default_arch: amd64
+  # Dedicated non-overlapping overlay address space, split per instance.
+  swarm_network_pool: "10.231.0.0/16"
+  swarm_network_prefix: 24
   labels:
     managed-by: anvil
 

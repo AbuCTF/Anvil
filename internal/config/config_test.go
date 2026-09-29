@@ -106,6 +106,8 @@ func TestValidateSwarmRouting(t *testing.T) {
 	valid.Container.HTTPRoutesPath = "/var/lib/anvil/traefik-dynamic"
 	valid.Container.SwarmHTTPPortMin = 31000
 	valid.Container.SwarmHTTPPortMax = 31999
+	valid.Container.SwarmNetworkPool = "10.231.0.0/16"
+	valid.Container.SwarmNetworkPrefix = 24
 	valid.Instancer.HMACSecret = "0123456789abcdef0123456789abcdef"
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("Validate() rejected valid Swarm routing config: %v", err)
@@ -116,6 +118,8 @@ func TestValidateSwarmRouting(t *testing.T) {
 		func(c *Config) { c.Container.HTTPRoutesPath = "" },
 		func(c *Config) { c.Container.SwarmHTTPPortMin = 80 },
 		func(c *Config) { c.Container.SwarmHTTPPortMax = 30000 },
+		func(c *Config) { c.Container.SwarmNetworkPool = "not-a-prefix" },
+		func(c *Config) { c.Container.SwarmNetworkPrefix = 8 },
 	} {
 		cfg := valid
 		mutate(&cfg)

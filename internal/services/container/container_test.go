@@ -1,6 +1,7 @@
 package container
 
 import (
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,37 @@ func TestSwarmHTTPRouteDocument(t *testing.T) {
 	}
 	if _, err := swarmHTTPRouteDocument("router", "bad host", "http", 31000); err == nil {
 		t.Fatal("swarmHTTPRouteDocument() accepted unsafe hostname")
+	}
+}
+
+func TestSwarmSubnetCandidatesAreDeterministicAndContained(t *testing.T) {
+	first, err := swarmSubnetCandidates("10.231.0.0/16", 24, "instance-a")
+	if err != nil {
+		t.Fatalf("swarmSubnetCandidates() error = %v", err)
+	}
+	second, err := swarmSubnetCandidates("10.231.0.0/16", 24, "instance-a")
+	if err != nil {
+		t.Fatalf("swarmSubnetCandidates() repeat error = %v", err)
+	}
+	if len(first) != 256 || len(second) != len(first) {
+		t.Fatalf("candidate count = %d, want 256", len(first))
+	}
+	pool := netip.MustParsePrefix("10.231.0.0/16")
+	seen := make(map[string]struct{}, len(first))
+	for index, candidate := range first {
+		if candidate != second[index] {
+			t.Fatalf("candidate %d is not deterministic", index)
+		}
+		if candidate.Bits() != 24 || !pool.Contains(candidate.Addr()) {
+			t.Fatalf("candidate %s is outside %s", candidate, pool)
+		}
+		seen[candidate.String()] = struct{}{}
+	}
+	if len(seen) != len(first) {
+		t.Fatalf("unique candidate count = %d, want %d", len(seen), len(first))
+	}
+	if _, err := swarmSubnetCandidates("10.231.0.0/16", 15, "instance"); err == nil {
+		t.Fatal("swarmSubnetCandidates() accepted child prefix larger than pool")
 	}
 }
 

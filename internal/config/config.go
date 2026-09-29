@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -170,6 +171,18 @@ func (c Config) Validate() error {
 	if orchestrator != "standalone" && orchestrator != "swarm" {
 		return fmt.Errorf("container.orchestrator must be standalone or swarm")
 	}
+	if orchestrator == "swarm" {
+		pool, err := netip.ParsePrefix(strings.TrimSpace(c.Container.SwarmNetworkPool))
+		if err != nil || !pool.Addr().Is4() {
+			return fmt.Errorf("container.swarm_network_pool must be a valid IPv4 prefix")
+		}
+		if c.Container.SwarmNetworkPrefix < pool.Bits() || c.Container.SwarmNetworkPrefix > 30 {
+			return fmt.Errorf("container.swarm_network_prefix must be between the pool prefix and 30")
+		}
+		if c.Container.SwarmNetworkPrefix-pool.Bits() > 12 {
+			return fmt.Errorf("container.swarm_network_pool may contain at most 4096 instance subnets")
+		}
+	}
 	if orchestrator == "swarm" && c.Container.HTTPRouting {
 		if strings.TrimSpace(c.Container.HTTPRoutesPath) == "" {
 			return fmt.Errorf("container.http_routes_path is required for Swarm HTTP routing")
@@ -256,6 +269,8 @@ type ContainerConfig struct {
 	SwarmHTTPPortMin   int               `mapstructure:"swarm_http_port_min"`
 	SwarmHTTPPortMax   int               `mapstructure:"swarm_http_port_max"`
 	SwarmDefaultArch   string            `mapstructure:"swarm_default_arch"`
+	SwarmNetworkPool   string            `mapstructure:"swarm_network_pool"`
+	SwarmNetworkPrefix int               `mapstructure:"swarm_network_prefix"`
 	TCPRouting         bool              `mapstructure:"tcp_routing"`
 	TCPBaseDomain      string            `mapstructure:"tcp_base_domain"`
 	TCPPortMin         int               `mapstructure:"tcp_port_min"`
@@ -455,6 +470,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("container.swarm_http_port_min", 31000)
 	v.SetDefault("container.swarm_http_port_max", 31999)
 	v.SetDefault("container.swarm_default_arch", "amd64")
+	v.SetDefault("container.swarm_network_pool", "10.231.0.0/16")
+	v.SetDefault("container.swarm_network_prefix", 24)
 	v.SetDefault("container.tcp_routing", false)
 	v.SetDefault("container.tcp_base_domain", "")
 	v.SetDefault("container.tcp_port_min", 30000)

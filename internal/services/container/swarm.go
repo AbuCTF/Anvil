@@ -2,8 +2,11 @@ package container
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -138,6 +141,88 @@ func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
+func swarmSubnetCandidates(poolRaw string, childBits int, seed string) ([]netip.Prefix, error) {
+	pool, err := netip.ParsePrefix(strings.TrimSpace(poolRaw))
+	if err != nil || !pool.Addr().Is4() {
+		return nil, fmt.Errorf("invalid Swarm IPv4 network pool %q", poolRaw)
+	}
+	pool = pool.Masked()
+	if childBits < pool.Bits() || childBits > 30 || childBits-pool.Bits() > 12 {
+		return nil, fmt.Errorf("invalid Swarm instance prefix /%d for pool %s", childBits, pool)
+	}
+	slots := 1 << uint(childBits-pool.Bits())
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(seed))
+	start := int(hasher.Sum32() % uint32(slots))
+	baseBytes := pool.Addr().As4()
+	base := uint64(binary.BigEndian.Uint32(baseBytes[:]))
+	blockSize := uint64(1) << uint(32-childBits)
+
+	result := make([]netip.Prefix, 0, slots)
+	for offset := 0; offset < slots; offset++ {
+		index := (start + offset) % slots
+		var address [4]byte
+		binary.BigEndian.PutUint32(address[:], uint32(base+uint64(index)*blockSize))
+		result = append(result, netip.PrefixFrom(netip.AddrFrom4(address), childBits).Masked())
+	}
+	return result, nil
+}
+
+func prefixesOverlap(left, right netip.Prefix) bool {
+	return left.Contains(right.Addr()) || right.Contains(left.Addr())
+}
+
+func (s *Service) createSwarmNetwork(ctx context.Context, name string, labels map[string]string, seed string) (client.NetworkCreateResult, netip.Prefix, error) {
+	candidates, err := swarmSubnetCandidates(s.config.SwarmNetworkPool, s.config.SwarmNetworkPrefix, seed)
+	if err != nil {
+		return client.NetworkCreateResult{}, netip.Prefix{}, err
+	}
+	networks, err := s.client.NetworkList(ctx, client.NetworkListOptions{})
+	if err != nil {
+		return client.NetworkCreateResult{}, netip.Prefix{}, fmt.Errorf("list Docker networks: %w", err)
+	}
+	used := make([]netip.Prefix, 0, len(networks.Items))
+	for _, existing := range networks.Items {
+		for _, allocation := range existing.IPAM.Config {
+			if allocation.Subnet.IsValid() && allocation.Subnet.Addr().Is4() {
+				used = append(used, allocation.Subnet.Masked())
+			}
+		}
+	}
+	for _, candidate := range candidates {
+		available := true
+		for _, allocation := range used {
+			if prefixesOverlap(candidate, allocation) {
+				available = false
+				break
+			}
+		}
+		if !available {
+			continue
+		}
+		networkLabels := make(map[string]string, len(labels)+1)
+		for key, value := range labels {
+			networkLabels[key] = value
+		}
+		networkLabels["anvil.swarm.subnet"] = candidate.String()
+		result, createErr := s.client.NetworkCreate(ctx, name, client.NetworkCreateOptions{
+			Driver:     "overlay",
+			Scope:      "swarm",
+			Internal:   s.config.NetworkInternal,
+			Attachable: false,
+			IPAM: &network.IPAM{Config: []network.IPAMConfig{{
+				Subnet: candidate,
+			}}},
+			Labels: networkLabels,
+		})
+		if createErr != nil {
+			return client.NetworkCreateResult{}, netip.Prefix{}, createErr
+		}
+		return result, candidate, nil
+	}
+	return client.NetworkCreateResult{}, netip.Prefix{}, fmt.Errorf("Swarm instance network pool %s is exhausted", s.config.SwarmNetworkPool)
+}
+
 func (s *Service) createSwarmInstance(ctx context.Context, req CreateInstanceRequest, image string) (*CreateInstanceResponse, error) {
 	if err := s.ensureSwarmManager(ctx); err != nil {
 		return nil, err
@@ -178,18 +263,14 @@ func (s *Service) createSwarmInstance(ctx context.Context, req CreateInstanceReq
 	labels["anvil.challenge.slug"] = req.ChallengeSlug
 	labels["anvil.swarm.network"] = networkName
 
-	networkResult, err := s.client.NetworkCreate(ctx, networkName, client.NetworkCreateOptions{
-		Driver:     "overlay",
-		Scope:      "swarm",
-		Internal:   s.config.NetworkInternal,
-		Attachable: false,
-		Labels: map[string]string{
-			"managed-by":           "anvil",
-			"anvil.instance.id":    req.InstanceID.String(),
-			"anvil.challenge.slug": req.ChallengeSlug,
-		},
-	})
+	s.portMu.Lock()
+	networkResult, networkSubnet, err := s.createSwarmNetwork(ctx, networkName, map[string]string{
+		"managed-by":           "anvil",
+		"anvil.instance.id":    req.InstanceID.String(),
+		"anvil.challenge.slug": req.ChallengeSlug,
+	}, req.InstanceID.String())
 	if err != nil {
+		s.portMu.Unlock()
 		return nil, fmt.Errorf("create isolated Swarm network: %w", err)
 	}
 
@@ -207,7 +288,6 @@ func (s *Service) createSwarmInstance(ctx context.Context, req CreateInstanceReq
 	var httpTarget *ExposedPort
 	var httpPublishedPort int
 
-	s.portMu.Lock()
 	used, err := s.usedSwarmPorts(ctx)
 	if err == nil {
 		for index := range req.ExposedPorts {
@@ -375,6 +455,7 @@ func (s *Service) createSwarmInstance(ctx context.Context, req CreateInstanceReq
 		zap.String("network", networkName),
 		zap.String("node_id", task.NodeID),
 		zap.String("architecture", architecture),
+		zap.String("subnet", networkSubnet.String()),
 	)
 	return &CreateInstanceResponse{
 		ContainerID:    runtimeID,
