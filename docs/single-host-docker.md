@@ -11,7 +11,7 @@ It does not expose the Docker API over TCP. The API talks to the local Unix sock
 - Per-user or per-team dynamic flags
 - CPU, memory, reset, extension, and expiry controls
 - Deterministic wildcard hostnames for HTTP challenges
-- Direct host-port publication for raw-TCP challenges, including protocols that rely on TCP half-close
+- A dedicated raw-TCP router that preserves client half-close while challenge containers remain isolated
 - Automatic route recovery after the challenge router restarts
 
 The current Docker provider does not yet implement Kubernetes-style multi-container challenge specifications or public UDP routing. The admin UI should not advertise those capabilities for a Docker-only installation until provider capability discovery is implemented.
@@ -82,16 +82,16 @@ The TCP pool is shared by all running Docker challenge instances. Size it for th
 
 ## 2. Start the private stack
 
-Validate the rendered configuration before starting anything:
+Validate the rendered configuration before starting anything. Include the TCP profile when raw-TCP routing is enabled:
 
 ```bash
-docker compose --profile http-routing config --quiet
+docker compose --profile http-routing --profile tcp-routing config --quiet
 ```
 
 Build and start the platform on loopback-only ports:
 
 ```bash
-docker compose --profile http-routing up -d --build
+docker compose --profile http-routing --profile tcp-routing up -d --build
 docker compose ps
 curl --fail http://127.0.0.1:18080/health
 ```
@@ -161,7 +161,7 @@ exposed_ports:
   - { port: 1337, protocol: tcp, service: tcp }
 ```
 
-The player-facing command is `nc <instance-hostname> <allocated-port>`. Anvil publishes the container port directly through Docker instead of putting a stream proxy in the data path, so services that read until client EOF and reply afterward retain TCP half-close behavior.
+The player-facing command is `nc <instance-hostname> <allocated-port>`. Anvil's trusted host-network router forwards the allocated port to the challenge's isolated bridge address. It explicitly propagates TCP half-close in each direction, so services that read until client EOF and reply afterward continue to work. The router reads only Anvil route labels and does not run player-controlled code.
 
 Before a demo or event, verify the image architecture:
 
@@ -191,10 +191,11 @@ Keep the original export private and mode `0600`. Use a separately generated san
 ```bash
 docker compose ps
 curl --fail http://127.0.0.1:18080/health
+curl --fail http://127.0.0.1:18083/healthz
 curl --fail -H 'Host: <instance-hostname>' http://127.0.0.1:18082/
 nc -vz <instance-hostname> <allocated-tcp-port>
 docker ps --filter label=managed-by=anvil
-docker inspect <challenge-container> --format '{{json .HostConfig.Resources}} {{json .HostConfig.PortBindings}}'
+docker inspect <challenge-container> --format '{{json .HostConfig.Resources}} {{json .Config.Labels}}'
 ```
 
 Validate two separate teams, dynamic flag isolation, route cleanup after stop and expiry, router restart recovery, stack restart persistence, and the health of unrelated services on the host.
@@ -204,7 +205,7 @@ Validate two separate teams, dynamic flag isolation, route cleanup after stop an
 Stop the demo without deleting its database:
 
 ```bash
-docker compose --profile http-routing down
+docker compose --profile http-routing --profile tcp-routing down
 ```
 
 Do not add `--volumes` unless the database has been backed up and deletion is explicitly intended.

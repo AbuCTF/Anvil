@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/netip"
 	"os"
 	"regexp"
@@ -36,6 +35,18 @@ type Service struct {
 }
 
 const interContainerCommunicationOption = "com.docker.network.bridge.enable_icc"
+
+const (
+	// TCPRoutesLabel tells the single-host TCP router which public pool ports
+	// forward to which container ports. The value is a JSON object whose keys are
+	// public ports and whose values are container ports.
+	TCPRoutesLabel = "anvil.tcp.routes"
+	// TCPNetworkLabel identifies the isolated Docker network containing the
+	// challenge backend.
+	TCPNetworkLabel = "anvil.tcp.network"
+	// TCPRouterComponentLabel identifies the trusted host-network router.
+	TCPRouterComponentLabel = "anvil.component=tcp-router"
+)
 
 func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -224,29 +235,56 @@ func nextAvailableTCPPort(minPort, maxPort int, used map[int]struct{}, available
 	return 0, fmt.Errorf("TCP instance port pool %d-%d is exhausted", minPort, maxPort)
 }
 
-func hostTCPPortAvailable(port int) bool {
-	listener, err := net.Listen("tcp4", fmt.Sprintf("0.0.0.0:%d", port))
-	if err != nil {
-		return false
-	}
-	_ = listener.Close()
-	return true
-}
-
 func (s *Service) usedDockerTCPPorts(ctx context.Context) (map[int]struct{}, error) {
-	result, err := s.client.ContainerList(ctx, client.ContainerListOptions{})
+	result, err := s.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, err
 	}
 	used := make(map[int]struct{})
 	for _, item := range result.Items {
+		switch item.State {
+		case "created", "running", "paused", "restarting":
+		default:
+			continue
+		}
 		for _, port := range item.Ports {
 			if port.Type == "tcp" && port.PublicPort != 0 {
 				used[int(port.PublicPort)] = struct{}{}
 			}
 		}
+		if raw := item.Labels[TCPRoutesLabel]; raw != "" {
+			var routes map[string]int
+			if err := json.Unmarshal([]byte(raw), &routes); err != nil {
+				return nil, fmt.Errorf("decode TCP routes on container %s: %w", item.ID, err)
+			}
+			for value := range routes {
+				port, err := strconv.Atoi(value)
+				if err != nil || port < 1 || port > 65535 {
+					return nil, fmt.Errorf("invalid public TCP route %q on container %s", value, item.ID)
+				}
+				used[port] = struct{}{}
+			}
+		}
 	}
 	return used, nil
+}
+
+func (s *Service) tcpRouterReady(ctx context.Context) error {
+	result, err := s.client.ContainerList(ctx, client.ContainerListOptions{
+		Filters: make(client.Filters).Add("label", TCPRouterComponentLabel),
+	})
+	if err != nil {
+		return fmt.Errorf("find Docker TCP router: %w", err)
+	}
+	for _, item := range result.Items {
+		if item.State != "running" {
+			continue
+		}
+		if item.Status == "" || strings.Contains(item.Status, "(healthy)") {
+			return nil
+		}
+	}
+	return fmt.Errorf("Docker TCP router is not running and healthy")
 }
 
 func httpRoutingLabels(routerName, host string, ports []ExposedPort) (map[string]string, error) {
@@ -379,6 +417,7 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}
 
 	publishedPorts := make(map[string]int)
+	routeTargets := make(map[string]int)
 	hasPublicTCP := false
 	for _, port := range req.ExposedPorts {
 		if isRawTCPPort(port) {
@@ -389,6 +428,9 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 		s.portMu.Lock()
 		defer s.portMu.Unlock()
 
+		if err := s.tcpRouterReady(ctx); err != nil {
+			return nil, err
+		}
 		used, err := s.usedDockerTCPPorts(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list published Docker ports: %w", err)
@@ -397,25 +439,27 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 			if !isRawTCPPort(exposed) {
 				continue
 			}
-			containerPort, err := network.ParsePort(fmt.Sprintf("%d/tcp", exposed.Port))
-			if err != nil {
-				return nil, fmt.Errorf("invalid TCP port: %w", err)
-			}
 			hostPort, err := nextAvailableTCPPort(
 				s.config.TCPPortMin,
 				s.config.TCPPortMax,
 				used,
-				hostTCPPortAvailable,
+				nil,
 			)
 			if err != nil {
 				return nil, err
 			}
-			hostCfg.PortBindings[containerPort] = []network.PortBinding{{
-				HostIP:   netip.MustParseAddr("0.0.0.0"),
-				HostPort: strconv.Itoa(hostPort),
-			}}
+			// Docker intentionally does not activate published ports for an
+			// internal-only bridge. Keep the challenge isolated and let the trusted
+			// host-network router forward this port based on the labels below.
 			publishedPorts[fmt.Sprintf("%d/tcp", exposed.Port)] = hostPort
+			routeTargets[strconv.Itoa(hostPort)] = exposed.Port
 		}
+		routesJSON, err := json.Marshal(routeTargets)
+		if err != nil {
+			return nil, fmt.Errorf("encode TCP routes: %w", err)
+		}
+		labels[TCPRoutesLabel] = string(routesJSON)
+		labels[TCPNetworkLabel] = s.config.NetworkName
 	}
 
 	createOptions := client.ContainerCreateOptions{
