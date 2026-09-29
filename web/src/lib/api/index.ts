@@ -793,6 +793,10 @@ class ApiClient {
 		return this.request<{ users: any[] }>('/admin/users');
 	}
 
+	async getAdminUserDetail(userId: string) {
+		return this.request<any>(`/admin/users/${userId}/detail`);
+	}
+
 	async getAdminChallenges() {
 		return this.request<{ challenges: any[] }>('/admin/challenges');
 	}
@@ -834,6 +838,13 @@ class ApiClient {
 
 	async unbanUser(userId: string) {
 		return this.request<any>(`/admin/users/${userId}/unban`, { method: 'POST' });
+	}
+
+	async warnUser(userId: string, message: string) {
+		return this.request<any>(`/admin/users/${userId}/warn`, {
+			method: 'POST',
+			body: JSON.stringify({ message })
+		});
 	}
 
 	async getAdminTeams(params?: { q?: string; sort?: string }) {
@@ -886,6 +897,10 @@ class ApiClient {
 			concurrency_cap: number;
 			instances: any[];
 		}>(`/admin/teams/${id}/support`);
+	}
+
+	async getAdminTeamCreditEvents(id: string) {
+		return this.request<{ events: any[] }>(`/admin/teams/${id}/credit-events`);
 	}
 
 	async updateAdminCategory(id: string, data: { name?: string; description?: string; color?: string }) {

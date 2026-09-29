@@ -149,6 +149,13 @@ func (h *InstanceHandler) instanceOwnerScope(ctx context.Context, uid uuid.UUID)
 		return "", nil, err
 	}
 	if teamsMode {
+		var role string
+		if err := h.db.Pool.QueryRow(ctx, `SELECT role::text FROM users WHERE id = $1`, uid).Scan(&role); err != nil {
+			return "", nil, err
+		}
+		if role == "admin" {
+			return "user_id", uid, nil
+		}
 		teamID, err := resolveTeamID(ctx, h.db, uid)
 		if err != nil {
 			return "", nil, err
@@ -1225,7 +1232,13 @@ func (h *InstanceHandler) persistCreateFailure(ctx context.Context, instanceID u
 		creationErr = errors.New("unknown instance creation failure")
 	}
 	persist := func(updateCtx context.Context) error {
-		result, err := h.db.Pool.Exec(updateCtx,
+		tx, err := h.db.Pool.Begin(updateCtx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback(updateCtx) }()
+
+		result, err := tx.Exec(updateCtx,
 			`UPDATE instances
 			 SET status = 'failed', error_message = $2, updated_at = NOW()
 			 WHERE id = $1 AND status = 'creating'`,
@@ -1236,7 +1249,10 @@ func (h *InstanceHandler) persistCreateFailure(ctx context.Context, instanceID u
 		if result.RowsAffected() != 1 {
 			return fmt.Errorf("failure update affected %d rows", result.RowsAffected())
 		}
-		return nil
+		if _, err := tx.Exec(updateCtx, `DELETE FROM instance_flags WHERE instance_id = $1`, instanceID); err != nil {
+			return fmt.Errorf("delete unpublished instance flags: %w", err)
+		}
+		return tx.Commit(updateCtx)
 	}
 
 	err := persist(ctx)

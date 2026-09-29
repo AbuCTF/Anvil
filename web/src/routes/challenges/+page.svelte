@@ -73,7 +73,7 @@
 	let searchQuery = '';
 	let selectedDifficulty = '';
 	let selectedCategory = '';
-	let showSolved = false;
+	let showUnsolved = false;
 	let showKoth = false;
 
 	// icons only - the accent color always comes from the muted categoryColor palette.
@@ -107,14 +107,14 @@
 	$: categories = [...new Set(challenges.map((c) => c.category).filter(Boolean))].sort() as string[];
 
 	$: hasKoth = challenges.some((c) => c.arena_mode === 'shared');
-	$: hasFilters = !!(searchQuery || selectedDifficulty || selectedCategory || showSolved || showKoth);
-	$: solvedOnlyEmpty = showSolved && !searchQuery && !selectedDifficulty && !selectedCategory;
+	$: hasFilters = !!(searchQuery || selectedDifficulty || selectedCategory || showUnsolved || showKoth);
+	$: unsolvedOnlyEmpty = showUnsolved && !searchQuery && !selectedDifficulty && !selectedCategory;
 
 	$: filteredChallenges = challenges.filter((c) => {
 		if (searchQuery && !c.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
 		if (selectedDifficulty && c.difficulty !== selectedDifficulty) return false;
 		if (selectedCategory && c.category !== selectedCategory) return false;
-		if (showSolved && !c.is_solved) return false;
+		if (showUnsolved && c.is_solved) return false;
 		if (showKoth && c.arena_mode !== 'shared') return false;
 		return true;
 	});
@@ -143,7 +143,7 @@
 		searchQuery = '';
 		selectedDifficulty = '';
 		selectedCategory = '';
-		showSolved = false;
+		showUnsolved = false;
 		showKoth = false;
 	}
 
@@ -152,18 +152,18 @@
 	// cached list rendered synchronously - lets built-in scroll restoration land us
 	// back on the same section instead of the top.
 	export const snapshot = {
-		capture: () => ({ searchQuery, selectedDifficulty, selectedCategory, showSolved, showKoth }),
+		capture: () => ({ searchQuery, selectedDifficulty, selectedCategory, showUnsolved, showKoth }),
 		restore: (v: {
 			searchQuery: string;
 			selectedDifficulty: string;
 			selectedCategory: string;
-			showSolved: boolean;
+			showUnsolved: boolean;
 			showKoth: boolean;
 		}) => {
 			searchQuery = v.searchQuery;
 			selectedDifficulty = v.selectedDifficulty;
 			selectedCategory = v.selectedCategory;
-			showSolved = v.showSolved;
+			showUnsolved = v.showUnsolved;
 			showKoth = v.showKoth;
 		}
 	};
@@ -319,10 +319,10 @@
 							<label class="inline-flex items-center gap-2 cursor-pointer select-none">
 								<input
 									type="checkbox"
-									bind:checked={showSolved}
+									bind:checked={showUnsolved}
 									class="w-3.5 h-3.5 rounded-sm border-stone-700 bg-stone-950 accent-amber-600 focus:ring-0 focus:ring-offset-0"
 								/>
-								<span class="relative top-px metadata-label text-stone-400">Solved only</span>
+								<span class="relative top-px metadata-label text-stone-400">Unsolved only</span>
 							</label>
 						{/if}
 						{#if hasKoth}
@@ -381,12 +381,12 @@
 		{:else if filteredChallenges.length === 0}
 			<div class="flex min-h-52 flex-col items-center justify-center px-4 text-center" role="status">
 				<span class="mb-3 inline-flex h-8 w-8 items-center justify-center text-stone-600">
-					<OpticalIcon icon={solvedOnlyEmpty ? 'mdi:check-circle-outline' : 'mdi:filter-off-outline'} size={22} box={24} />
+					<OpticalIcon icon={unsolvedOnlyEmpty ? 'mdi:check-all' : 'mdi:filter-off-outline'} size={22} box={24} />
 				</span>
-				<p class="text-sm font-medium text-stone-300">{solvedOnlyEmpty ? 'No solved challenges yet' : hasFilters ? 'No matching challenges' : 'No challenges yet'}</p>
+				<p class="text-sm font-medium text-stone-300">{unsolvedOnlyEmpty ? 'Everything is solved' : hasFilters ? 'No matching challenges' : 'No challenges yet'}</p>
 				<p class="mt-1 text-xs text-stone-600">
-					{solvedOnlyEmpty
-						? 'Completed challenges will appear here.'
+					{unsolvedOnlyEmpty
+						? 'Clear the filter to revisit completed challenges.'
 						: hasFilters
 							? 'Try adjusting or clearing the current filters.'
 							: 'Check back soon.'}

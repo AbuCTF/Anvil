@@ -659,11 +659,12 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 	}
 
 	var chalID uuid.UUID
-	var challengeName, difficulty string
+	var challengeName, difficulty, resourceType string
+	var hasServiceSpec bool
 	err = h.db.Pool.QueryRow(ctx,
-		`SELECT id, name, difficulty FROM challenges
+		`SELECT id, name, difficulty, resource_type, container_spec IS NOT NULL FROM challenges
 		 WHERE slug = $1 AND ((status = 'published' AND (release_date IS NULL OR release_date <= NOW())) OR $2)`,
-		slug, isStaff(c)).Scan(&chalID, &challengeName, &difficulty)
+		slug, isStaff(c)).Scan(&chalID, &challengeName, &difficulty, &resourceType, &hasServiceSpec)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
@@ -671,6 +672,10 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("failed to load challenge for open", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to launch challenge"})
+		return
+	}
+	if resourceType == "docker" && hasServiceSpec && (h.config == nil || h.config.Instancer.Backend != "k8s") {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "this challenge requires the Kubernetes runtime and cannot be opened on the active deployment"})
 		return
 	}
 
@@ -694,7 +699,7 @@ func (h *ChallengeHandler) OpenChallenge(c *gin.Context) {
 	_ = tx.QueryRow(ctx, `SELECT credits FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&credits)
 	if state == "open" && expiresAt != nil {
 		if err := insertTeamNotification(ctx, tx, *teamID, "economy.challenge_opened",
-			challengeName+" opened", "A team challenge slot is now in use.", "info",
+			challengeName+" opened", "The solve window is open and a team challenge slot is now in use.", "info",
 			"/challenges/"+slug,
 			fmt.Sprintf("economy:open:%s:%s:%d", teamID.String(), chalID.String(), expiresAt.UnixNano()),
 			gin.H{"challenge_id": chalID, "slug": slug, "expires_at": expiresAt, "credits": credits}); err != nil {
@@ -1404,7 +1409,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 							 submitter_user_id, flag_value, submitter_ip, created_at)
 						 VALUES
 							(uuid_generate_v4(), $1, $2, $3, NULL, $4, $5, $6, NOW())`,
-						challengeID, matchedFlag.ID, priorUserID, uid, submittedFlag, c.ClientIP(),
+						challengeID, matchedFlag.ID, priorUserID, uid, "sha256:"+hashFlagForComparison(submittedFlag), c.ClientIP(),
 					); err != nil {
 						h.logger.Error("failed to log regex flag share event", zap.Error(err))
 						c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
@@ -1481,7 +1486,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 						VALUES
 							(uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, NOW())`,
 						challengeID, sharedFlagID, ownerUserID, ownerInstanceID,
-						uid, submittedFlag, c.ClientIP())
+						uid, "sha256:"+hashFlagForComparison(submittedFlag), c.ClientIP())
 					if logErr != nil {
 						h.logger.Error("failed to log flag share event", zap.Error(logErr))
 						c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})

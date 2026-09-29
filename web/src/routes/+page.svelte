@@ -2,7 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
 	import { api } from '$api';
-	import { platformInfo, registerHref, registrationAvailable } from '$lib/stores/platform';
+	import { registerHref, registrationAvailable } from '$lib/stores/platform';
 
 	let stats: { challenges: number | null; users: number | null; solves: number | null } = {
 		challenges: null,
@@ -31,16 +31,18 @@
 </script>
 
 <svelte:head>
-	<title>{$platformInfo?.name ?? 'Anvil'}</title>
+	<title>Anvil</title>
 </svelte:head>
 
 <div class="fixed top-16 inset-x-0 bottom-0 overflow-hidden flex flex-col items-center justify-center text-center px-6">
-	<h1 class="max-w-5xl break-words text-4xl sm:text-6xl md:text-7xl font-semibold tracking-tight leading-[1.05] text-stone-100">
-		{$platformInfo?.name ?? 'Anvil'}
+	<h1 class="text-4xl sm:text-6xl md:text-7xl font-semibold tracking-tight leading-[1.05] text-stone-100">
+		Forge Your<br />
+		Security <span class="hero-accent">Skills</span>
 	</h1>
 
 	<p class="mt-6 text-sm md:text-base text-stone-400 max-w-xl leading-relaxed">
-		{$platformInfo?.description ?? 'Forge your skills.'}
+		Practice offensive security on realistic vulnerable machines.
+		<span class="text-stone-500">Built for students and indie hackers who refuse to compromise on learning.</span>
 	</p>
 
 	<div class="mt-8 flex flex-wrap gap-3 justify-center">

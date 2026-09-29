@@ -71,7 +71,7 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	exec(`INSERT INTO users (id, username, email, role, status, team_id) VALUES
 		($1, 'p1', 'p1@x', 'user', 'active', $6), ($2, 'p2', 'p2@x', 'user', 'active', NULL),
 		($3, 'p3', 'p3@x', 'user', 'active', $7), ($4, 'au', 'au@x', 'author', 'active', $8),
-		($5, 'ad', 'ad@x', 'admin', 'active', NULL)`, p1, p2, p3, author, admin, teamA, teamB, teamT)
+		($5, 'ad', 'ad@x', 'admin', 'active', $8)`, p1, p2, p3, author, admin, teamA, teamB, teamT)
 	exec(`INSERT INTO categories (id, name, slug) VALUES ($1, 'web', 'web')`, cat)
 	exec(`INSERT INTO challenges (id, name, slug, description, sub_description, difficulty, category_id, status, container_image, total_flags)
 		VALUES ($1, 'Static One', 'static-one', 'SECRET BRIEF', 'teaser line', 'easy', $3, 'published', '', 1),
@@ -96,8 +96,9 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	// running instances, so an admitted start stops at "already exists" instead of provisioning
 	exec(`INSERT INTO instances (id, user_id, team_id, challenge_id, resource_type, status, expires_at) VALUES
 		($1, $3, $4, $6, 'docker', 'running', NOW() + INTERVAL '1 hour'),
-		($2, $5, $7, $6, 'docker', 'running', NOW() + INTERVAL '1 hour')`,
-		uuid.New(), uuid.New(), p1, teamA, author, c2, teamT)
+		($2, $5, $7, $6, 'docker', 'running', NOW() + INTERVAL '1 hour'),
+		($8, $9, NULL, $6, 'docker', 'running', NOW() + INTERVAL '1 hour')`,
+		uuid.New(), uuid.New(), p1, teamA, author, c2, teamT, uuid.New(), admin)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -297,6 +298,20 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	expect("opened instance start passes the gate", code, 400, body)
 	code, body, _ = call("POST", "/api/v1/instances", &author, `{"challenge_slug":"box-two"}`)
 	expect("author instance start bypasses the gate", code, 400, body)
+	code, body, _ = call("GET", "/api/v1/instances", &admin, "")
+	if code != http.StatusOK || body["total"] != float64(1) {
+		t.Fatalf("admin personal instance scope = %d %v", code, body)
+	}
+	code, body, _ = call("POST", "/api/v1/admin/users/"+p1.String()+"/warn", &admin, `{"message":"Please review the event rules."}`)
+	if code != http.StatusCreated {
+		t.Fatalf("admin warning = %d %v", code, body)
+	}
+	var warnings, warningAudits int
+	_ = db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM notification_items WHERE audience = 'user' AND user_id = $1 AND event_type = 'organizer.warning'`, p1).Scan(&warnings)
+	_ = db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM audit_log WHERE action = 'user_warned' AND entity_id = $1`, p1).Scan(&warningAudits)
+	if warnings != 1 || warningAudits != 1 {
+		t.Fatalf("warning records notification=%d audit=%d", warnings, warningAudits)
+	}
 
 	// Author on the hidden test team: open it so the economy write path has a
 	// locked state row, then exercise the full scoring path.

@@ -10,4 +10,4 @@ Environment=HOME=/home/ubuntu
 Environment=ANVIL_REGISTRY_HOST=asia-south1-docker.pkg.dev
 Environment=ANVIL_DOCKER_CONFIG_DIR=/home/ubuntu/anvil-demo/secrets/docker
 Environment=ANVIL_GCLOUD_BIN=/home/ubuntu/google-cloud-sdk/bin/gcloud
-ExecStart=/home/ubuntu/anvil-demo/scripts/refresh-docker-registry-auth.sh
+ExecStart=/home/ubuntu/anvil-demo/app/scripts/refresh-docker-registry-auth.sh

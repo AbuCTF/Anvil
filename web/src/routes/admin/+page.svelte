@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { api, type AdminAnnouncement, type GradedAdminInfo } from '$api';
 	import Icon from '@iconify/svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -25,6 +25,10 @@
 	let showEditModal = false;
 	let editingChallenge: any = null;
 	let actionLoading = '';
+	let selectedUserDetail: any = null;
+	let selectedUserSeed: any = null;
+	let userDetailLoading = false;
+	let userDetailError = '';
 
 	let infraStats: any = null;
 	let nodes: any[] = [];
@@ -32,6 +36,9 @@
 	let activeInstances: any[] = [];
 	let activeDockerInstances: any[] = [];
 	let infrastructureError = '';
+	let infrastructureRefreshing = false;
+	let infrastructureUpdatedAt: Date | null = null;
+	let infrastructureTimer: ReturnType<typeof setInterval> | undefined;
 
 	let intelLoading = false;
 	let flagShares: any[] = [];
@@ -138,7 +145,8 @@
 
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key !== 'Escape') return;
-		if (showCreateModal) showCreateModal = false;
+		if (selectedUserSeed) { selectedUserSeed = null; selectedUserDetail = null; }
+		else if (showCreateModal) showCreateModal = false;
 		else if (showEditModal) { showEditModal = false; editingChallenge = null; }
 		else if (showNodeModal) showNodeModal = false;
 		else if (showTemplateUploadModal) showTemplateUploadModal = false;
@@ -495,7 +503,37 @@
 	onMount(async () => {
 		browserTimeZone = viewerTimeZone();
 		await loadDashboard();
+		infrastructureTimer = setInterval(() => {
+			if (activeTab === 'infrastructure' && !infrastructureRefreshing) loadInfrastructure();
+		}, 10000);
 	});
+	onDestroy(() => {
+		if (infrastructureTimer) clearInterval(infrastructureTimer);
+	});
+
+	async function loadInfrastructure() {
+		infrastructureRefreshing = true;
+		try {
+			const [infraRes, nodesRes, templatesRes, instancesRes, dockerInstancesRes] = await Promise.all([
+				api.getInfrastructureStats(),
+				api.getNodes(),
+				api.getVMTemplates(),
+				api.getActiveInstances(),
+				api.getActiveDockerInstances()
+			]);
+			infraStats = infraRes;
+			nodes = nodesRes.nodes || [];
+			templates = templatesRes.templates || [];
+			activeInstances = instancesRes.instances || [];
+			activeDockerInstances = dockerInstancesRes.instances || [];
+			infrastructureError = '';
+			infrastructureUpdatedAt = new Date();
+		} catch (e) {
+			infrastructureError = e instanceof Error ? e.message : 'Failed to load infrastructure data';
+		} finally {
+			infrastructureRefreshing = false;
+		}
+	}
 
 	async function loadDashboard() {
 		loading = true;
@@ -516,28 +554,7 @@
 			categories = categoriesRes.categories || [];
 			error = '';
 
-			try {
-				const [infraRes, nodesRes, templatesRes, instancesRes, dockerInstancesRes] = await Promise.all([
-					api.getInfrastructureStats(),
-					api.getNodes(),
-					api.getVMTemplates(),
-					api.getActiveInstances(),
-					api.getActiveDockerInstances()
-				]);
-				infraStats = infraRes;
-				nodes = nodesRes.nodes || [];
-				templates = templatesRes.templates || [];
-				activeInstances = instancesRes.instances || [];
-				activeDockerInstances = dockerInstancesRes.instances || [];
-				infrastructureError = '';
-			} catch (e) {
-				infrastructureError = e instanceof Error ? e.message : 'Failed to load infrastructure data';
-				infraStats = null;
-				nodes = [];
-				templates = [];
-				activeInstances = [];
-				activeDockerInstances = [];
-			}
+			await loadInfrastructure();
 
 			try {
 				const settingsRes = await api.getPlatformSettings();
@@ -644,6 +661,9 @@
 		}
 		if (id === 'communications' && announcements.length === 0) {
 			loadAnnouncements();
+		}
+		if (id === 'infrastructure') {
+			loadInfrastructure();
 		}
 	}
 
@@ -889,6 +909,38 @@
 		}
 	}
 
+	async function openUserDetail(user: any) {
+		selectedUserSeed = user;
+		selectedUserDetail = null;
+		userDetailError = '';
+		userDetailLoading = true;
+		try {
+			selectedUserDetail = await api.getAdminUserDetail(user.id);
+		} catch (e) {
+			userDetailError = e instanceof Error ? e.message : 'Failed to load participant details';
+		} finally {
+			userDetailLoading = false;
+		}
+	}
+
+	async function warnParticipant(userId: string, username: string) {
+		const message = await promptDialog({
+			title: `Warn ${username}`,
+			message: 'The participant receives this as a pinned private organizer notification.',
+			placeholder: 'Explain the policy concern and the action they should take.'
+		});
+		if (message === null || !message.trim()) return;
+		actionLoading = userId;
+		try {
+			await api.warnUser(userId, message.trim());
+			await alertDialog({ title: 'Warning sent', message: `${username} received a private organizer warning.` });
+		} catch (e) {
+			await alertDialog({ title: 'Error', message: e instanceof Error ? e.message : 'Failed to warn participant' });
+		} finally {
+			actionLoading = '';
+		}
+	}
+
 	async function loadTeams() {
 		teamsLoading = true;
 		teamsError = '';
@@ -1003,6 +1055,22 @@
 		expandedTeams = expandedTeams;
 	}
 
+	async function toggleTeamDossier(team: any) {
+		const close = expandedTeams[team.id] || expandedSolves[team.id] || expandedSupport[team.id];
+		if (close) {
+			expandedTeams[team.id] = false;
+			expandedSolves[team.id] = false;
+			expandedSupport[team.id] = false;
+			expandedTeams = expandedTeams;
+			expandedSolves = expandedSolves;
+			expandedSupport = expandedSupport;
+			return;
+		}
+		expandedTeams[team.id] = true;
+		expandedTeams = expandedTeams;
+		await Promise.all([toggleSolvesExpand(team.id), toggleSupportExpand(team.id)]);
+	}
+
 	async function toggleSolvesExpand(id: string) {
 		expandedSolves[id] = !expandedSolves[id];
 		expandedSolves = expandedSolves;
@@ -1026,7 +1094,11 @@
 		supportLoading[id] = true;
 		supportLoading = supportLoading;
 		try {
-			teamSupport[id] = await api.getAdminTeamSupport(id);
+			const [support, ledger] = await Promise.all([
+				api.getAdminTeamSupport(id),
+				api.getAdminTeamCreditEvents(id)
+			]);
+			teamSupport[id] = { ...support, credit_events: ledger.events || [] };
 		} catch {
 			teamSupport[id] = null;
 		} finally {
@@ -1209,7 +1281,7 @@
 		{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard-outline' },
 		{ id: 'event', label: 'Event', icon: 'mdi:calendar-star' },
 		{ id: 'data', label: 'Data', icon: 'mdi:database-export-outline' },
-		{ id: 'launch', label: 'Launch', icon: 'mdi:rocket-launch-outline' },
+		{ id: 'launch', label: 'Release', icon: 'mdi:shield-check-outline' },
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
 		{ id: 'users', label: 'Users', icon: 'mdi:account-group-outline' },
 		{ id: 'teams', label: 'Teams', icon: 'mdi:account-multiple-outline' },
@@ -1536,7 +1608,7 @@
 										<span class="text-sm font-medium text-stone-400">{user.username.charAt(0).toUpperCase()}</span>
 									</div>
 									<div class="flex-1 min-w-0">
-										<p class="text-sm font-medium text-stone-200 truncate">{user.username}</p>
+										<button type="button" on:click={() => openUserDetail(user)} class="text-sm font-medium text-stone-200 hover:text-amber-400 truncate">{user.username}</button>
 										<p class="text-xs text-stone-500 truncate">{user.email}</p>
 									</div>
 									<span class="text-xs {user.role === 'admin' ? 'text-amber-500/90' : 'text-stone-400'}">{user.role}</span>
@@ -1546,6 +1618,7 @@
 									<span title={instantTitle(user.created_at, 'seconds')}>Joined {formatDate(user.created_at)}</span>
 								</div>
 								<div class="flex items-center justify-between gap-2 mt-3 pt-3 border-t border-stone-800">
+									<button type="button" on:click={() => openUserDetail(user)} class="text-xs text-stone-300 hover:underline">Details</button>
 									<select
 										value={user.role}
 										on:change={(e) => changeUserRole(user.id, e.currentTarget.value)}
@@ -1599,7 +1672,7 @@
 														<div class="w-8 h-8 bg-stone-800 rounded-full flex items-center justify-center shrink-0">
 															<span class="text-xs font-medium text-stone-400">{user.username.charAt(0).toUpperCase()}</span>
 														</div>
-														<span class="text-stone-200">{user.username}</span>
+														<button type="button" on:click={() => openUserDetail(user)} class="text-stone-200 hover:text-amber-400 hover:underline">{user.username}</button>
 													</div>
 												</td>
 												<td class="px-4 py-2.5 text-stone-400 hidden md:table-cell">{user.email}</td>
@@ -1609,7 +1682,8 @@
 												<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">{user.total_score || 0}</td>
 											<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden md:table-cell" title={instantTitle(user.created_at, 'seconds')}>{formatDate(user.created_at)}</td>
 												<td class="px-4 py-2.5">
-													<div class="flex items-center justify-end gap-3">
+											<div class="flex items-center justify-end gap-3">
+												<button type="button" on:click={() => openUserDetail(user)} class="text-xs text-stone-300 hover:underline">Details</button>
 														<select
 															value={user.role}
 															on:change={(e) => changeUserRole(user.id, e.currentTarget.value)}
@@ -1695,7 +1769,7 @@
 									{#each teams as team}
 										<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
 											<td class="px-4 py-2.5">
-												<button class="text-stone-200 hover:underline text-left" on:click={() => renameTeam(team)} title="Rename team">{team.name}</button>
+											<button class="text-stone-200 hover:text-amber-400 hover:underline text-left" on:click={() => toggleTeamDossier(team)} title="Open team details">{team.name}</button>
 											</td>
 											<td class="px-4 py-2.5 text-right tabular-nums">
 												<button class="text-stone-300 hover:underline" on:click={() => toggleTeamExpand(team.id)} title="Show members">
@@ -1714,7 +1788,8 @@
 											</td>
 											<td class="px-4 py-2.5 text-right text-stone-500 tabular-nums hidden lg:table-cell" title={team.created_at ? instantTitle(team.created_at, 'seconds') : ''}>{team.created_at ? formatDate(team.created_at) : '-'}</td>
 											<td class="px-4 py-2.5">
-												<div class="flex items-center justify-end gap-3">
+											<div class="flex items-center justify-end gap-3">
+												<button class="text-xs text-stone-400 hover:underline" on:click={() => renameTeam(team)}>Rename</button>
 													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleTeamExpand(team.id)}>Members</button>
 													<button class="text-xs text-stone-400 hover:underline" on:click={() => toggleSolvesExpand(team.id)}>Solves</button>
 													<button class="text-xs text-amber-500 hover:underline" on:click={() => toggleSupportExpand(team.id)} title="Economy, open slots and instances">Support</button>
@@ -1853,11 +1928,26 @@
 																			</tbody>
 																		</table>
 																	</div>
-																{:else}
-																	<p class="text-xs text-stone-500">No instances.</p>
-																{/if}
+														{:else}
+															<p class="text-xs text-stone-500">No instances.</p>
+														{/if}
+													</div>
+
+													<div>
+														<p class="metadata-label text-stone-500 mb-1.5">Ledger history</p>
+														{#if (sup.credit_events ?? []).length}
+															<div class="max-h-56 overflow-y-auto rounded-md border border-stone-800">
+																{#each sup.credit_events as event}
+																	<div class="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-3 border-b border-stone-800/60 px-3 py-2 text-xs last:border-0">
+																		<span class="truncate text-stone-400">{event.kind}</span>
+																		<span class="tabular-nums {event.amount >= 0 ? 'text-up' : 'text-down'}">{event.amount >= 0 ? '+' : ''}{Number(event.amount).toFixed(2)}</span>
+																		<span class="tabular-nums text-stone-600" title={instantTitle(event.created_at, 'seconds')}>{formatDate(event.created_at)}</span>
+																	</div>
+																{/each}
 															</div>
-														</div>
+														{:else}<p class="text-xs text-stone-500">No Ledger activity.</p>{/if}
+													</div>
+												</div>
 													{:else}
 														<p class="text-xs text-stone-500">Could not load support view.</p>
 													{/if}
@@ -1980,6 +2070,10 @@
 			{/if}
 
 			{#if activeTab === 'infrastructure'}
+				<div class="mb-4 flex items-center justify-between gap-3">
+					<div><h2 class="text-sm font-semibold text-stone-200">Live runtime capacity</h2><p class="mt-1 text-xs text-stone-500">Docker Swarm and VM capacity refresh every 10 seconds.</p></div>
+					<div class="flex items-center gap-2 text-xs text-stone-500"><span class="h-1.5 w-1.5 rounded-full {infrastructureError ? 'bg-down' : 'bg-up'}"></span>{infrastructureRefreshing ? 'Refreshing…' : infrastructureUpdatedAt ? `Updated ${infrastructureUpdatedAt.toLocaleTimeString()}` : 'Connecting…'}<button type="button" on:click={loadInfrastructure} disabled={infrastructureRefreshing} class="ml-2 text-stone-300 hover:text-stone-100 disabled:opacity-50" aria-label="Refresh infrastructure"><Icon icon="mdi:refresh" class="h-4 w-4 {infrastructureRefreshing ? 'animate-spin' : ''}" /></button></div>
+				</div>
 				{#if infrastructureError}
 					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-warn/20 bg-warn/5 px-4 py-3 text-sm text-warn" aria-live="polite">
 						<span>Infrastructure data could not be loaded: {infrastructureError}</span>
@@ -2234,6 +2328,13 @@
 						<button type="button" on:click={loadDashboard} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
 					</div>
 				{/if}
+				<nav class="sticky top-0 z-20 mb-5 flex items-center gap-1 overflow-x-auto rounded-lg border border-stone-800 bg-stone-950/95 p-1.5 shadow-lg shadow-stone-950/30 backdrop-blur" aria-label="Settings sections">
+					<span class="shrink-0 px-2 text-[10px] uppercase tracking-wider text-stone-600">Jump to</span>
+					{#each [{ href: '#settings-ledger', label: 'Ledger' }, { href: '#settings-instances', label: 'Instances' }, { href: '#settings-access', label: 'Access' }, { href: '#settings-platform', label: 'Platform & event' }] as link}
+						<a href={link.href} class="shrink-0 rounded-md px-3 py-2 text-xs text-stone-400 transition-colors hover:bg-stone-900 hover:text-stone-100">{link.label}</a>
+					{/each}
+					{#if settingsChanged}<span class="ml-auto shrink-0 px-2 text-xs text-warn">Unsaved changes</span>{/if}
+				</nav>
 				<div class="space-y-6 {settingsError ? 'pointer-events-none select-none opacity-40' : ''}" aria-disabled={settingsError ? 'true' : undefined}>
 					{#if settingsChanged}
 						<div class="flex justify-end">
@@ -2249,7 +2350,7 @@
 					{/if}
 
 					{#if $platformInfo?.economy_policy}
-						<Card bodyClass="p-4">
+						<Card elementId="settings-ledger" bodyClass="p-4">
 							<div slot="header">
 								<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
 									<OpticalIcon icon="mdi:scale-balance" size={14} box={14} className="text-stone-500" />
@@ -2275,7 +2376,7 @@
 						</Card>
 					{/if}
 
-					<Card bodyClass="p-4">
+					<Card elementId="settings-instances" bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
 								<OpticalIcon icon="mdi:timer-outline" size={14} box={14} className="text-stone-500" />
@@ -2401,7 +2502,7 @@
 					</div>
 					</Card>
 
-					<Card bodyClass="p-4">
+					<Card elementId="settings-access" bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
 								<OpticalIcon icon="mdi:vpn" size={14} box={14} className="text-stone-500" />
@@ -2424,7 +2525,7 @@
 						</div>
 					</Card>
 
-					<Card bodyClass="p-4">
+					<Card elementId="settings-platform" bodyClass="p-4">
 						<div slot="header">
 							<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
 								<OpticalIcon icon="mdi:cog-outline" size={14} box={14} className="text-stone-500" />
@@ -2578,7 +2679,10 @@
 					{/if}
 					<div>
 						<div class="flex items-center justify-between mb-4">
-							<h3 class="text-sm font-semibold text-stone-200">Flag Share Events</h3>
+							<div>
+								<h3 class="text-sm font-semibold text-stone-200">Flag Share Events</h3>
+								<p class="mt-1 text-xs text-stone-500">Valid flag material is never exposed here. Evidence uses participant, challenge, IP, time, and a non-reversible fingerprint.</p>
+							</div>
 							<button type="button" on:click={loadIntel} class="text-xs leading-none text-stone-500 hover:text-stone-300 flex items-center gap-1 transition-colors">
 								<Icon icon="mdi:refresh" class="w-3 h-3 shrink-0" />
 								Refresh
@@ -2602,8 +2706,9 @@
 												<th class="px-4 py-2.5 text-left">Flag Owner</th>
 												<th class="px-4 py-2.5 text-left">Submitter</th>
 												<th class="px-4 py-2.5 text-left">IP</th>
-												<th class="px-4 py-2.5 text-left">Flag Value</th>
+												<th class="px-4 py-2.5 text-left">Evidence</th>
 												<th class="px-4 py-2.5 text-right">Time</th>
+												<th class="px-4 py-2.5 text-right">Actions</th>
 											</tr>
 										</thead>
 										<tbody>
@@ -2613,11 +2718,17 @@
 													<td class="px-4 py-2.5 text-amber-500/90">{ev.owner_username ?? ev.owner_user_id}</td>
 													<td class="px-4 py-2.5 text-down">{ev.submitter_username ?? ev.submitter_user_id}</td>
 													<td class="px-4 py-2.5 text-xs text-stone-400 font-mono">{ev.submitter_ip ?? '-'}</td>
-													<td class="px-4 py-2.5 text-xs text-stone-300 font-mono max-w-xs truncate">{ev.flag_value}</td>
-												<td
-													class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums"
-													title={instantTitle(ev.created_at, 'seconds')}
-												>{formatLocalDateTimeWithZone(ev.created_at, 'seconds')}</td>
+											<td class="px-4 py-2.5 text-xs text-stone-300 font-mono max-w-xs truncate">{ev.flag_value === '[redacted]' ? 'protected' : ev.flag_value}</td>
+										<td
+											class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums"
+											title={instantTitle(ev.created_at, 'seconds')}
+										>{formatLocalDateTimeWithZone(ev.created_at, 'seconds')}</td>
+											<td class="px-4 py-2.5">
+												<div class="flex items-center justify-end gap-3">
+													<button type="button" on:click={() => openUserDetail({ id: ev.submitter_user_id, username: ev.submitter_username })} class="text-xs text-stone-300 hover:underline">Review</button>
+													<button type="button" on:click={() => warnParticipant(ev.submitter_user_id, ev.submitter_username ?? 'participant')} disabled={actionLoading === ev.submitter_user_id} class="text-xs text-warn hover:underline disabled:opacity-50">Warn</button>
+												</div>
+											</td>
 												</tr>
 											{/each}
 										</tbody>
@@ -2669,6 +2780,90 @@
 		{/if}
 	</div>
 </div>
+
+{#if selectedUserSeed}
+	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<button type="button" aria-label="Close participant details" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => { selectedUserSeed = null; selectedUserDetail = null; }}></button>
+		<div class="relative z-10 flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-stone-800 bg-stone-950" role="dialog" aria-modal="true" aria-label="Participant details">
+			<div class="flex items-start justify-between gap-4 border-b border-stone-800 p-5">
+				<div class="min-w-0">
+					<p class="metadata-label text-stone-500">Participant dossier</p>
+					<h2 class="mt-1 truncate text-xl font-semibold text-stone-100">{selectedUserDetail?.user?.username ?? selectedUserSeed.username}</h2>
+					{#if selectedUserDetail?.user?.email}<p class="mt-1 text-xs text-stone-500">{selectedUserDetail.user.email}</p>{/if}
+				</div>
+				<div class="flex shrink-0 items-center gap-3">
+					<button type="button" on:click={() => warnParticipant(selectedUserSeed.id, selectedUserDetail?.user?.username ?? selectedUserSeed.username)} class="text-xs text-warn hover:underline">Warn</button>
+					{#if selectedUserDetail?.user}
+						<button type="button" on:click={() => toggleBan({ id: selectedUserSeed.id, username: selectedUserDetail.user.username, is_banned: selectedUserDetail.user.status === 'banned' })} class="text-xs {selectedUserDetail.user.status === 'banned' ? 'text-up' : 'text-down'} hover:underline">{selectedUserDetail.user.status === 'banned' ? 'Unban' : 'Ban'}</button>
+					{/if}
+					<button type="button" on:click={() => { selectedUserSeed = null; selectedUserDetail = null; }} class="p-1 text-stone-500 transition-colors hover:text-stone-200"><Icon icon="mdi:close" class="h-5 w-5" /></button>
+				</div>
+			</div>
+			<div class="overflow-y-auto p-5">
+				{#if userDetailLoading}
+					<div class="flex min-h-64 items-center justify-center"><Icon icon="mdi:loading" class="h-6 w-6 animate-spin text-stone-600" /></div>
+				{:else if userDetailError}
+					<div class="rounded-md border border-down/20 bg-down/10 p-4 text-sm text-down">{userDetailError}</div>
+				{:else if selectedUserDetail}
+					{@const detail = selectedUserDetail}
+					<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+						{#each [
+							{ label: 'Score', value: detail.user.total_score ?? 0 },
+							{ label: 'Solves', value: detail.user.solve_count ?? 0 },
+							{ label: 'Correct attempts', value: detail.user.correct_submissions ?? 0 },
+							{ label: 'Wrong attempts', value: detail.user.wrong_submissions ?? 0 }
+						] as item}
+							<div class="rounded-lg border border-stone-800 bg-stone-900/40 p-3"><p class="metadata-label text-stone-500">{item.label}</p><p class="mt-1 text-xl font-semibold tabular-nums text-stone-100">{item.value}</p></div>
+						{/each}
+					</div>
+
+					<div class="mt-5 grid gap-4 lg:grid-cols-2">
+						<Card title="Account and team" bodyClass="p-4">
+							<div class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+								<div><p class="metadata-label text-stone-600">Status</p><p class="mt-1 text-stone-300">{detail.user.status}</p></div>
+								<div><p class="metadata-label text-stone-600">Role</p><p class="mt-1 text-stone-300">{detail.user.role}</p></div>
+								<div><p class="metadata-label text-stone-600">Last login</p><p class="mt-1 text-stone-300">{detail.user.last_login?.at ? formatLocalDateTimeWithZone(detail.user.last_login.at, 'seconds') : 'Never'}</p></div>
+								<div><p class="metadata-label text-stone-600">Last IP</p><p class="mt-1 font-mono text-stone-300">{detail.user.last_login?.ip_address ?? '-'}</p></div>
+								<div class="col-span-2"><p class="metadata-label text-stone-600">Team</p><p class="mt-1 text-stone-300">{detail.team?.name ?? 'No team'}{detail.team ? ` · ${Math.floor(detail.team.credits ?? 0)} credits · ${Math.round(detail.team.points ?? 0)} Ledger points` : ''}</p></div>
+							</div>
+						</Card>
+						<Card title={`Instance history (${detail.instances?.length ?? 0})`} bodyClass="p-0">
+							{#if detail.instances?.length}
+								<div class="max-h-52 divide-y divide-stone-800/60 overflow-y-auto">
+									{#each detail.instances as instance}
+										<div class="flex items-start justify-between gap-3 px-4 py-3 text-xs"><div><p class="text-stone-300">{instance.challenge_name}</p><p class="mt-1 font-mono text-stone-600">{instance.id}</p>{#if instance.error_message}<p class="mt-1 text-down">{instance.error_message}</p>{/if}</div><span class="shrink-0 {instance.status === 'running' ? 'text-up' : instance.status === 'failed' ? 'text-down' : 'text-stone-500'}">{instance.status}</span></div>
+									{/each}
+								</div>
+							{:else}<EmptyState icon="mdi:cube-off-outline" text="No instance history." />{/if}
+						</Card>
+					</div>
+
+					<div class="mt-4 grid gap-4 lg:grid-cols-2">
+						<Card title={`Solve history (${detail.solves?.length ?? 0})`} bodyClass="p-0">
+							{#if detail.solves?.length}
+								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
+									{#each detail.solves as solve}
+										<div class="flex items-center justify-between gap-3 px-4 py-3 text-xs"><div><p class="text-stone-300">{solve.challenge_name}{solve.flag_name ? ` · ${solve.flag_name}` : ''}</p><p class="mt-1 text-stone-600" title={instantTitle(solve.solved_at, 'seconds')}>{formatLocalDateTimeWithZone(solve.solved_at, 'seconds')}</p></div><span class="shrink-0 tabular-nums text-up">+{solve.points}</span></div>
+									{/each}
+								</div>
+							{:else}<EmptyState icon="mdi:flag-outline" text="No solves." />{/if}
+						</Card>
+						<Card title={`Submission trail (${detail.user.submission_count ?? 0})`} bodyClass="p-0">
+							<div class="border-b border-stone-800 px-4 py-2 text-[11px] text-stone-600">Raw flags stay protected. Fingerprints correlate repeats without making live secrets transferable.</div>
+							{#if detail.submissions?.length}
+								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
+									{#each detail.submissions as submission}
+										<div class="flex items-start justify-between gap-3 px-4 py-3 text-xs"><div><p class="text-stone-300">{submission.challenge_name}{submission.flag_name ? ` · ${submission.flag_name}` : ''}</p><p class="mt-1 font-mono text-stone-600">sha256:{submission.flag_fingerprint} · {submission.flag_length} chars · {submission.ip_address ?? '-'}</p><p class="mt-1 text-stone-600" title={instantTitle(submission.submitted_at, 'seconds')}>{formatLocalDateTimeWithZone(submission.submitted_at, 'seconds')}</p></div><span class="shrink-0 {submission.correct ? 'text-up' : 'text-down'}">{submission.correct ? 'correct' : 'wrong'}</span></div>
+									{/each}
+								</div>
+							{:else}<EmptyState icon="mdi:form-textbox-password" text="No submissions." />{/if}
+						</Card>
+					</div>
+				{/if}
+			</div>
+		</div>
+	</div>
+{/if}
 
 {#if showCreateModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">

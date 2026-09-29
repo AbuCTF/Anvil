@@ -351,6 +351,7 @@ func (s *Server) setupRouter() {
 				users.PUT("/:id", adminUserHandler.Update)
 				users.POST("/:id/ban", adminUserHandler.Ban)
 				users.POST("/:id/unban", adminUserHandler.Unban)
+				users.POST("/:id/warn", adminUserHandler.Warn)
 				users.DELETE("/:id", adminUserHandler.Delete)
 			}
 

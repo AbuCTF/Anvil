@@ -68,6 +68,7 @@
 </script>
 
 <div class="space-y-6">
+	<div><h2 class="text-base font-semibold text-stone-100">Release control</h2><p class="mt-1 max-w-3xl text-xs leading-relaxed text-stone-500">Run the final event, content, runtime, access and Ledger checks, review each warning, then seal an auditable release candidate. Sealing records exactly what staff approved; it never deploys infrastructure or publishes challenges.</p></div>
 	{#if loading}
 		<div class="flex min-h-[18rem] items-center justify-center"><Icon icon="mdi:loading" class="h-6 w-6 animate-spin text-stone-600" /></div>
 	{:else}

@@ -148,6 +148,16 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 
 	var solveCount int
 	_ = h.db.Pool.QueryRow(ctx, `SELECT COUNT(DISTINCT flag_id) FROM solves WHERE user_id = $1`, userID).Scan(&solveCount)
+	var submissionCount, correctSubmissions int
+	_ = h.db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*), COUNT(*) FILTER (WHERE is_correct) FROM submissions WHERE user_id = $1`,
+		userID,
+	).Scan(&submissionCount, &correctSubmissions)
+	var lastLoginAt *time.Time
+	var lastLoginIP *string
+	_ = h.db.Pool.QueryRow(ctx,
+		`SELECT last_login_at, last_login_ip FROM users WHERE id = $1`, userID,
+	).Scan(&lastLoginAt, &lastLoginIP)
 
 	team := gin.H(nil)
 	if teamID != nil {
@@ -161,31 +171,95 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 
 	instances := []gin.H{}
 	if rows, err := h.db.Pool.Query(ctx,
-		`SELECT i.id, c.name, c.slug, i.status::text, i.created_at, i.expires_at, COALESCE(i.container_id,'')
+		`SELECT i.id, c.name, c.slug, i.status::text, i.created_at, i.expires_at,
+		        COALESCE(i.container_id,''), i.stopped_at, COALESCE(i.error_message,'')
 		 FROM instances i JOIN challenges c ON c.id = i.challenge_id
-		 WHERE i.user_id = $1 AND i.status::text NOT IN ('stopped','failed','expired')
-		 ORDER BY i.created_at DESC`, userID); err == nil {
+		 WHERE i.user_id = $1
+		 ORDER BY i.created_at DESC LIMIT 200`, userID); err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var id, name, slug, st, cid string
+			var id, name, slug, st, cid, errorMessage string
 			var createdAt time.Time
-			var expiresAt *time.Time
-			if rows.Scan(&id, &name, &slug, &st, &createdAt, &expiresAt, &cid) == nil {
+			var expiresAt, stoppedAt *time.Time
+			if rows.Scan(&id, &name, &slug, &st, &createdAt, &expiresAt, &cid, &stoppedAt, &errorMessage) == nil {
 				it := gin.H{"id": id, "challenge_name": name, "challenge_slug": slug, "status": st,
-					"created_at": createdAt.Unix(), "has_runtime": cid != ""}
+					"created_at": createdAt.Unix(), "has_runtime": cid != "", "error_message": errorMessage}
 				if expiresAt != nil {
 					it["expires_at"] = expiresAt.Unix()
+				}
+				if stoppedAt != nil {
+					it["stopped_at"] = stoppedAt.Unix()
 				}
 				instances = append(instances, it)
 			}
 		}
 	}
 
+	solves := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx,
+		`SELECT c.id, c.name, c.slug, f.name, s.points_awarded, s.solved_at
+		 FROM solves s
+		 JOIN challenges c ON c.id = s.challenge_id
+		 LEFT JOIN flags f ON f.id = s.flag_id
+		 WHERE s.user_id = $1
+		 ORDER BY s.solved_at DESC LIMIT 200`, userID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var challengeID, challengeName, challengeSlug string
+			var flagName *string
+			var points int
+			var solvedAt time.Time
+			if rows.Scan(&challengeID, &challengeName, &challengeSlug, &flagName, &points, &solvedAt) == nil {
+				solves = append(solves, gin.H{
+					"challenge_id": challengeID, "challenge_name": challengeName, "challenge_slug": challengeSlug,
+					"flag_name": flagName, "points": points, "solved_at": solvedAt.Unix(),
+				})
+			}
+		}
+	}
+
+	submissions := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx,
+		`SELECT s.id, c.name, c.slug, f.name, s.submitted_flag, s.is_correct,
+		        COALESCE(s.points_awarded, 0), s.ip_address, s.created_at
+		 FROM submissions s
+		 JOIN challenges c ON c.id = s.challenge_id
+		 LEFT JOIN flags f ON f.id = s.flag_id
+		 WHERE s.user_id = $1
+		 ORDER BY s.created_at DESC LIMIT 200`, userID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id, challengeName, challengeSlug, submittedFlag string
+			var flagName, ipAddress *string
+			var correct bool
+			var points int
+			var createdAt time.Time
+			if rows.Scan(&id, &challengeName, &challengeSlug, &flagName, &submittedFlag,
+				&correct, &points, &ipAddress, &createdAt) == nil {
+				submissions = append(submissions, gin.H{
+					"id": id, "challenge_name": challengeName, "challenge_slug": challengeSlug,
+					"flag_name": flagName, "flag_fingerprint": hashFlag(submittedFlag)[:16],
+					"flag_length": len(submittedFlag), "correct": correct, "points": points,
+					"ip_address": ipAddress, "submitted_at": createdAt.Unix(),
+				})
+			}
+		}
+	}
+
+	lastLogin := gin.H{"ip_address": lastLoginIP}
+	if lastLoginAt != nil {
+		lastLogin["at"] = lastLoginAt.Unix()
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"user": gin.H{"id": userID, "username": username, "email": email, "display_name": displayName,
-			"role": role, "status": status, "total_score": totalScore, "solve_count": solveCount},
-		"team":      team,
-		"instances": instances,
+			"role": role, "status": status, "total_score": totalScore, "solve_count": solveCount,
+			"submission_count": submissionCount, "correct_submissions": correctSubmissions,
+			"wrong_submissions": submissionCount - correctSubmissions, "last_login": lastLogin},
+		"team":        team,
+		"instances":   instances,
+		"solves":      solves,
+		"submissions": submissions,
 	})
 }
 
@@ -346,6 +420,72 @@ func (h *AdminUserHandler) Unban(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "user unbanned"})
 }
 
+func (h *AdminUserHandler) Warn(c *gin.Context) {
+	userID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid warning"})
+		return
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	if req.Message == "" || len([]rune(req.Message)) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "warning must be between 1 and 1000 characters"})
+		return
+	}
+	var username string
+	if err := h.db.Pool.QueryRow(c.Request.Context(), `SELECT username FROM users WHERE id = $1`, userID).Scan(&username); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to warn user"})
+		}
+		return
+	}
+	adminID, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to warn user"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	var notificationID uuid.UUID
+	err = tx.QueryRow(c.Request.Context(), `
+		INSERT INTO notification_items
+		(kind, event_type, title, body, severity, audience, user_id, publish_at, pinned, created_by)
+		VALUES ('announcement', 'organizer.warning', 'Organizer warning', $1, 'warning', 'user', $2, NOW(), true, $3)
+		RETURNING id`, req.Message, userID, adminID).Scan(&notificationID)
+	if err != nil {
+		h.logger.Error("failed to warn user", zap.String("user_id", userID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to warn user"})
+		return
+	}
+	metadata, _ := json.Marshal(map[string]interface{}{
+		"username": username, "notification_id": notificationID.String(),
+	})
+	if _, err := tx.Exec(c.Request.Context(), `
+		INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent)
+		VALUES ($1, 'user_warned', 'user', $2, $3::jsonb, $4, $5)`,
+		adminID, userID, metadata, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to warn user"})
+		return
+	}
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to warn user"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"message": "warning sent", "notification_id": notificationID})
+}
+
 func (h *AdminUserHandler) Delete(c *gin.Context) {
 	userID := c.Param("id")
 	ctx := c.Request.Context()
@@ -427,7 +567,7 @@ func countActiveAdminUsers(ctx context.Context, tx pgx.Tx) (int, error) {
 type FlagInput struct {
 	Name              string `json:"name" binding:"required"`
 	Description       string `json:"description"`
-	Flag              string `json:"flag"` // required for static; leave empty for dynamic
+	Flag              string `json:"flag"`   // required for static; leave empty for dynamic
 	Points            int    `json:"points"` // 0 is valid (e.g. survey/free flags)
 	SortOrder         int    `json:"sort_order"`
 	FlagType          string `json:"flag_type"`           // "static" (default) | "dynamic"

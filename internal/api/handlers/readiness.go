@@ -214,6 +214,13 @@ func (h *ReadinessHandler) buildReport(ctx context.Context) (readinessReport, er
 	add("content.published", "Content", "Published challenges", status(content.Published > 0, "blocker"), ternary(content.Published > 0, "Published participant content exists.", "Publish at least one validated challenge."), content.Published)
 	add("content.flags", "Content", "Scoring path", status(content.MissingScoring == 0, "blocker"), ternary(content.MissingScoring == 0, "Every published challenge has a flag or grader.", "Published challenges are missing a flag or grader."), content.MissingScoring)
 	add("content.runtime", "Infrastructure", "Runnable challenge definitions", status(content.MissingRuntime == 0, "blocker"), ternary(content.MissingRuntime == 0, "Published runtime challenges have an image or VM definition.", "Published challenges have incomplete runtime configuration."), content.MissingRuntime)
+	backend := ""
+	if h.config != nil {
+		backend = h.config.Instancer.Backend
+	}
+	dockerOnly := backend != "k8s"
+	runtimeCompatible := !dockerOnly || content.ContainerSpecs == 0
+	add("content.runtime_compatibility", "Infrastructure", "Runtime compatibility", status(runtimeCompatible, "blocker"), ternary(runtimeCompatible, "Published challenge definitions are supported by the active runtime.", "Published service-spec challenges require the Kubernetes runtime."), gin.H{"service_spec_challenges": content.ContainerSpecs, "backend": backend})
 	add("platform.storage", "Infrastructure", "Storage backend", status(h.storageAvailable, "blocker"), ternary(h.storageAvailable, "The attachment and branding backend is connected.", "No storage backend is connected."), nil)
 	add("platform.runtime", "Infrastructure", "Instance runtime", status(h.runtimeAvailable, "blocker"), ternary(h.runtimeAvailable, "An instance runtime is connected.", "No instance runtime is connected."), gin.H{"backend": h.config.Instancer.Backend, "orchestrator": h.config.Container.Orchestrator})
 	pulseEnabled := boolSetting(settings, "market_pulse_enabled")
@@ -235,6 +242,7 @@ type readinessContentSummary struct {
 	Published      int
 	MissingScoring int
 	MissingRuntime int
+	ContainerSpecs int
 }
 
 func (h *ReadinessHandler) readinessContent(ctx context.Context) ([]byte, readinessContentSummary, error) {
@@ -260,9 +268,10 @@ func (h *ReadinessHandler) readinessContent(ctx context.Context) ([]byte, readin
 				)) OR (
 					c.resource_type = 'docker' AND c.exposed_ports IS NOT NULL AND c.exposed_ports <> 'null'::jsonb AND c.exposed_ports <> '[]'::jsonb AND COALESCE(c.container_image, '') = '' AND c.container_spec IS NULL
 				)
-			))::int
+			))::int,
+			COUNT(*) FILTER (WHERE c.status = 'published' AND c.container_spec IS NOT NULL)::int
 		FROM challenges c LEFT JOIN categories category ON category.id = c.category_id
-	`).Scan(&content, &summary.Categories, &summary.Published, &summary.MissingScoring, &summary.MissingRuntime)
+	`).Scan(&content, &summary.Categories, &summary.Published, &summary.MissingScoring, &summary.MissingRuntime, &summary.ContainerSpecs)
 	return content, summary, err
 }
 
