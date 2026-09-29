@@ -62,6 +62,20 @@
 	let teamsError = '';
 	let teamsQuery = '';
 	let teamsSort = 'score';
+	let usersQuery = '';
+	let usersPage = 1;
+	let teamsPage = 1;
+	const adminPageSize = 50;
+	$: normalizedUsersQuery = usersQuery.trim().toLowerCase();
+	$: filteredUsers = normalizedUsersQuery
+		? users.filter((user) => [user.username, user.email, user.role].some((value) => String(value || '').toLowerCase().includes(normalizedUsersQuery)))
+		: users;
+	$: usersPageCount = Math.max(1, Math.ceil(filteredUsers.length / adminPageSize));
+	$: if (usersPage > usersPageCount) usersPage = usersPageCount;
+	$: pagedUsers = filteredUsers.slice((usersPage - 1) * adminPageSize, usersPage * adminPageSize);
+	$: teamsPageCount = Math.max(1, Math.ceil(teams.length / adminPageSize));
+	$: if (teamsPage > teamsPageCount) teamsPage = teamsPageCount;
+	$: pagedTeams = teams.slice((teamsPage - 1) * adminPageSize, teamsPage * adminPageSize);
 
 	let showNodeModal = false;
 	let showTemplateUploadModal = false;
@@ -1163,6 +1177,13 @@
 		}
 	}
 
+	function paginationSummary(page: number, total: number) {
+		if (total === 0) return '0 results';
+		const first = (page - 1) * adminPageSize + 1;
+		const last = Math.min(page * adminPageSize, total);
+		return `${first.toLocaleString()}–${last.toLocaleString()} of ${total.toLocaleString()}`;
+	}
+
 	async function teamUpdate(id: string, data: any) {
 		actionLoading = id;
 		try {
@@ -1730,13 +1751,30 @@
 			{/if}
 
 			{#if activeTab === 'users'}
+				<div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+					<div class="relative w-full sm:max-w-md">
+						<Icon icon="mdi:magnify" class="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-stone-600" />
+						<input
+							type="search"
+							bind:value={usersQuery}
+							on:input={() => usersPage = 1}
+							placeholder="Search username, email, or role..."
+							class="w-full rounded-md border border-stone-800 bg-stone-950 py-2 pl-9 pr-3 text-sm text-stone-200 focus:border-stone-500 focus:outline-none"
+						/>
+					</div>
+					<span class="text-xs tabular-nums text-stone-600">{filteredUsers.length.toLocaleString()} participants</span>
+				</div>
 				{#if users.length === 0}
 					<Card hasHeader={false}>
 						<EmptyState icon="mdi:account-off-outline" text="No users yet." />
 					</Card>
+				{:else if filteredUsers.length === 0}
+					<Card hasHeader={false}>
+						<EmptyState icon="mdi:account-search-outline" text="No participants match that search." />
+					</Card>
 				{:else}
 					<div class="lg:hidden space-y-3">
-						{#each users as user}
+						{#each pagedUsers as user}
 							<div
 								class="cursor-pointer rounded-lg border border-stone-800 bg-stone-900/40 p-4 transition-colors hover:border-stone-700 hover:bg-stone-900/70 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
 								role="button"
@@ -1795,7 +1833,7 @@
 
 					<div class="hidden lg:block">
 						<Card title="Users" bodyClass="">
-							<span slot="meta" class="text-stone-500 text-xs tabular-nums">{users.length}</span>
+							<span slot="meta" class="text-stone-500 text-xs tabular-nums">{filteredUsers.length.toLocaleString()}</span>
 							<div class="overflow-x-auto">
 								<table class="w-full min-w-[680px] text-sm">
 									<thead>
@@ -1806,10 +1844,10 @@
 											<th class="px-4 py-2.5 text-right">Score</th>
 											<th class="px-4 py-2.5 text-right hidden md:table-cell">Joined</th>
 											<th class="px-4 py-2.5 text-right">Actions</th>
-										</tr>
-									</thead>
-									<tbody>
-										{#each users as user}
+									</tr>
+								</thead>
+								<tbody>
+									{#each pagedUsers as user}
 											<tr
 												class="cursor-pointer border-b border-stone-800/60 transition-colors hover:bg-stone-800/30 focus:bg-stone-800/30 focus:outline-none"
 												role="button"
@@ -1871,6 +1909,14 @@
 							</div>
 						</Card>
 					</div>
+					<div class="mt-4 flex items-center justify-between gap-3 rounded-md border border-stone-800 bg-stone-950/40 px-3 py-2">
+						<span class="text-xs tabular-nums text-stone-500">{paginationSummary(usersPage, filteredUsers.length)}</span>
+						<div class="flex items-center gap-2">
+							<button type="button" class={btnGhost} disabled={usersPage === 1} on:click={() => usersPage -= 1}><Icon icon="mdi:chevron-left" class="h-4 w-4" /> Previous</button>
+							<span class="hidden text-xs tabular-nums text-stone-600 sm:inline">Page {usersPage} of {usersPageCount}</span>
+							<button type="button" class={btnGhost} disabled={usersPage === usersPageCount} on:click={() => usersPage += 1}>Next <Icon icon="mdi:chevron-right" class="h-4 w-4" /></button>
+						</div>
+					</div>
 				{/if}
 			{/if}
 
@@ -1879,13 +1925,13 @@
 					<input
 						type="text"
 						bind:value={teamsQuery}
-						on:input={() => loadTeams()}
+						on:input={() => { teamsPage = 1; loadTeams(); }}
 						placeholder="Search teams by name..."
 						class="flex-1 text-sm bg-stone-950 border border-stone-800 rounded-md px-3 py-2 text-stone-200 focus:outline-none focus:border-stone-500"
 					/>
 					<select
 						bind:value={teamsSort}
-						on:change={() => loadTeams()}
+						on:change={() => { teamsPage = 1; loadTeams(); }}
 						class="text-xs bg-stone-950 border border-stone-800 rounded-md px-2 py-2 text-stone-200 focus:outline-none focus:border-stone-500"
 					>
 						<option value="score">Sort: Score</option>
@@ -1904,7 +1950,7 @@
 					</Card>
 				{:else}
 					<div class="space-y-3 lg:hidden">
-						{#each teams as team}
+						{#each pagedTeams as team}
 							<div
 								class="cursor-pointer rounded-lg border border-stone-800 bg-stone-900/40 p-4 transition-colors hover:border-stone-700 hover:bg-stone-900/70 focus:outline-none focus:ring-1 focus:ring-amber-500/50"
 								role="button"
@@ -1935,7 +1981,7 @@
 
 					<div class="hidden lg:block">
 						<Card title="Teams" bodyClass="">
-							<span slot="meta" class="text-stone-500 text-xs tabular-nums">{teams.length}</span>
+							<span slot="meta" class="text-stone-500 text-xs tabular-nums">{teams.length.toLocaleString()}</span>
 							<div class="overflow-x-auto">
 								<table class="w-full min-w-[900px] text-sm">
 									<thead>
@@ -1948,10 +1994,10 @@
 											<th class="hidden px-4 py-2.5 text-left md:table-cell">Join code</th>
 											<th class="hidden px-4 py-2.5 text-right xl:table-cell">Created</th>
 											<th class="px-4 py-2.5 text-right">Actions</th>
-										</tr>
-									</thead>
-									<tbody>
-										{#each teams as team}
+									</tr>
+								</thead>
+								<tbody>
+									{#each pagedTeams as team}
 											<tr
 												class="cursor-pointer border-b border-stone-800/60 transition-colors hover:bg-stone-800/30 focus:bg-stone-800/30 focus:outline-none"
 												role="button"
@@ -1978,6 +2024,14 @@
 								</table>
 							</div>
 						</Card>
+					</div>
+					<div class="mt-4 flex items-center justify-between gap-3 rounded-md border border-stone-800 bg-stone-950/40 px-3 py-2">
+						<span class="text-xs tabular-nums text-stone-500">{paginationSummary(teamsPage, teams.length)}</span>
+						<div class="flex items-center gap-2">
+							<button type="button" class={btnGhost} disabled={teamsPage === 1} on:click={() => teamsPage -= 1}><Icon icon="mdi:chevron-left" class="h-4 w-4" /> Previous</button>
+							<span class="hidden text-xs tabular-nums text-stone-600 sm:inline">Page {teamsPage} of {teamsPageCount}</span>
+							<button type="button" class={btnGhost} disabled={teamsPage === teamsPageCount} on:click={() => teamsPage += 1}>Next <Icon icon="mdi:chevron-right" class="h-4 w-4" /></button>
+						</div>
 					</div>
 				{/if}
 			{/if}
