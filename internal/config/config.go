@@ -163,6 +163,27 @@ func (c Config) Validate() error {
 			return fmt.Errorf("container.tcp_port_max must be between tcp_port_min and 65535")
 		}
 	}
+	orchestrator := strings.ToLower(strings.TrimSpace(c.Container.Orchestrator))
+	if orchestrator == "" {
+		orchestrator = "standalone"
+	}
+	if orchestrator != "standalone" && orchestrator != "swarm" {
+		return fmt.Errorf("container.orchestrator must be standalone or swarm")
+	}
+	if orchestrator == "swarm" && c.Container.HTTPRouting {
+		if strings.TrimSpace(c.Container.HTTPRoutesPath) == "" {
+			return fmt.Errorf("container.http_routes_path is required for Swarm HTTP routing")
+		}
+		if c.Container.SwarmHTTPPortMin < 1024 || c.Container.SwarmHTTPPortMin > 65535 {
+			return fmt.Errorf("container.swarm_http_port_min must be between 1024 and 65535")
+		}
+		if c.Container.SwarmHTTPPortMax < c.Container.SwarmHTTPPortMin || c.Container.SwarmHTTPPortMax > 65535 {
+			return fmt.Errorf("container.swarm_http_port_max must be between swarm_http_port_min and 65535")
+		}
+		if c.Container.TCPRouting && c.Container.SwarmHTTPPortMin <= c.Container.TCPPortMax && c.Container.SwarmHTTPPortMax >= c.Container.TCPPortMin {
+			return fmt.Errorf("container Swarm HTTP and TCP port ranges must not overlap")
+		}
+	}
 	// ledger economy invariant #7 (round-trips lose value) — the only runtime
 	// config-load guard per ctf26-1/metrics.py. validated in every environment.
 	// the roundtrip guard stays hard: points -> credits -> points must lose value
@@ -219,6 +240,7 @@ type JWTConfig struct {
 }
 
 type ContainerConfig struct {
+	Orchestrator       string            `mapstructure:"orchestrator"` // standalone | swarm
 	NetworkName        string            `mapstructure:"network_name"`
 	NetworkSubnet      string            `mapstructure:"network_subnet"`
 	NetworkInternal    bool              `mapstructure:"network_internal"`
@@ -230,6 +252,10 @@ type ContainerConfig struct {
 	HTTPBaseDomain     string            `mapstructure:"http_base_domain"`
 	HTTPExternalPort   int               `mapstructure:"http_external_port"`
 	HTTPExternalScheme string            `mapstructure:"http_external_scheme"`
+	HTTPRoutesPath     string            `mapstructure:"http_routes_path"`
+	SwarmHTTPPortMin   int               `mapstructure:"swarm_http_port_min"`
+	SwarmHTTPPortMax   int               `mapstructure:"swarm_http_port_max"`
+	SwarmDefaultArch   string            `mapstructure:"swarm_default_arch"`
 	TCPRouting         bool              `mapstructure:"tcp_routing"`
 	TCPBaseDomain      string            `mapstructure:"tcp_base_domain"`
 	TCPPortMin         int               `mapstructure:"tcp_port_min"`
@@ -414,6 +440,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("jwt.issuer", "anvil")
 
 	v.SetDefault("container.network_name", "anvil-challenges")
+	v.SetDefault("container.orchestrator", "standalone")
 	v.SetDefault("container.network_subnet", "172.20.0.0/16")
 	v.SetDefault("container.network_internal", false)
 	v.SetDefault("container.default_timeout", "2h")
@@ -424,6 +451,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("container.http_base_domain", "")
 	v.SetDefault("container.http_external_port", 443)
 	v.SetDefault("container.http_external_scheme", "https")
+	v.SetDefault("container.http_routes_path", "")
+	v.SetDefault("container.swarm_http_port_min", 31000)
+	v.SetDefault("container.swarm_http_port_max", 31999)
+	v.SetDefault("container.swarm_default_arch", "amd64")
 	v.SetDefault("container.tcp_routing", false)
 	v.SetDefault("container.tcp_base_domain", "")
 	v.SetDefault("container.tcp_port_min", 30000)

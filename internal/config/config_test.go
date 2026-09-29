@@ -96,6 +96,44 @@ func TestValidateContainerTCPRouting(t *testing.T) {
 	}
 }
 
+func TestValidateSwarmRouting(t *testing.T) {
+	valid := Config{Environment: "development"}
+	valid.Container.Orchestrator = "swarm"
+	valid.Container.HTTPRouting = true
+	valid.Container.HTTPBaseDomain = "instances.demo.example.org"
+	valid.Container.HTTPExternalPort = 443
+	valid.Container.HTTPExternalScheme = "https"
+	valid.Container.HTTPRoutesPath = "/var/lib/anvil/traefik-dynamic"
+	valid.Container.SwarmHTTPPortMin = 31000
+	valid.Container.SwarmHTTPPortMax = 31999
+	valid.Instancer.HMACSecret = "0123456789abcdef0123456789abcdef"
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate() rejected valid Swarm routing config: %v", err)
+	}
+
+	for _, mutate := range []func(*Config){
+		func(c *Config) { c.Container.Orchestrator = "nomad" },
+		func(c *Config) { c.Container.HTTPRoutesPath = "" },
+		func(c *Config) { c.Container.SwarmHTTPPortMin = 80 },
+		func(c *Config) { c.Container.SwarmHTTPPortMax = 30000 },
+	} {
+		cfg := valid
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatal("Validate() accepted invalid Swarm routing config")
+		}
+	}
+
+	overlap := valid
+	overlap.Container.TCPRouting = true
+	overlap.Container.TCPBaseDomain = valid.Container.HTTPBaseDomain
+	overlap.Container.TCPPortMin = 31500
+	overlap.Container.TCPPortMax = 32000
+	if err := overlap.Validate(); err == nil {
+		t.Fatal("Validate() accepted overlapping Swarm HTTP and TCP port ranges")
+	}
+}
+
 func TestLoadWithoutConfigUsesValidDurations(t *testing.T) {
 	t.Chdir(t.TempDir())
 

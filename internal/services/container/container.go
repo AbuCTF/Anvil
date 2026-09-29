@@ -95,13 +95,37 @@ func NewService(cfg config.ContainerConfig, logger *zap.Logger) (*Service, error
 		return s, nil
 	}
 
-	if err := s.ensureNetwork(context.Background()); err != nil {
+	if s.usingSwarm() {
+		if err := s.ensureSwarmManager(ctx); err != nil {
+			return nil, err
+		}
+		if cfg.HTTPRouting {
+			if err := os.MkdirAll(cfg.HTTPRoutesPath, 0o750); err != nil {
+				return nil, fmt.Errorf("create Swarm HTTP routes directory: %w", err)
+			}
+		}
+	} else if err := s.ensureNetwork(context.Background()); err != nil {
 		return nil, fmt.Errorf("failed to ensure network: %w", err)
 	}
 
 	go s.cleanupLoop()
 
 	return s, nil
+}
+
+func (s *Service) usingSwarm() bool {
+	return strings.EqualFold(strings.TrimSpace(s.config.Orchestrator), "swarm")
+}
+
+func (s *Service) ensureSwarmManager(ctx context.Context) error {
+	info, err := s.client.Info(ctx, client.InfoOptions{})
+	if err != nil {
+		return fmt.Errorf("inspect Docker Swarm: %w", err)
+	}
+	if info.Info.Swarm.LocalNodeState != swarm.LocalNodeStateActive || !info.Info.Swarm.ControlAvailable {
+		return fmt.Errorf("container orchestrator is swarm but this Docker daemon is not an active manager")
+	}
+	return nil
 }
 
 func (s *Service) Status() string {
@@ -441,6 +465,9 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 			image = image + ":latest"
 		}
 	}
+	if s.usingSwarm() {
+		return s.createSwarmInstance(ctx, req, image)
+	}
 
 	if err := s.pullImage(ctx, image, req.Platform); err != nil {
 		return nil, fmt.Errorf("failed to pull image: %w", err)
@@ -654,8 +681,11 @@ func (s *Service) CreateInstance(ctx context.Context, req CreateInstanceRequest)
 	}, nil
 }
 
-// StopInstance stops and removes a container.
+// StopInstance stops and removes a standalone container or Swarm service.
 func (s *Service) StopInstance(ctx context.Context, containerID string) error {
+	if strings.HasPrefix(containerID, swarmRuntimePrefix) {
+		return s.stopSwarmInstance(ctx, containerID)
+	}
 	timeout := 10 // seconds
 	if _, err := s.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout}); err != nil {
 		if cerrdefs.IsNotFound(err) {

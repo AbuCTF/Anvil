@@ -63,12 +63,17 @@ services:
       - ANVIL_ZEROPOOL_API_KEY=${ANVIL_ZEROPOOL_API_KEY:-}
       - ANVIL_ZEROPOOL_EVENT_SLUG=${ANVIL_ZEROPOOL_EVENT_SLUG:-h7ctf-2026}
       - ANVIL_CONTAINER_NETWORK_NAME=${ANVIL_CONTAINER_NETWORK_NAME:-anvil-challenges}
+      - ANVIL_CONTAINER_ORCHESTRATOR=${ANVIL_CONTAINER_ORCHESTRATOR:-standalone}
       - ANVIL_CONTAINER_NETWORK_SUBNET=${ANVIL_CONTAINER_NETWORK_SUBNET:-172.20.0.0/16}
       - ANVIL_CONTAINER_NETWORK_INTERNAL=${ANVIL_CONTAINER_NETWORK_INTERNAL:-false}
       - ANVIL_CONTAINER_HTTP_ROUTING=${ANVIL_CONTAINER_HTTP_ROUTING:-false}
       - ANVIL_CONTAINER_HTTP_BASE_DOMAIN=${ANVIL_CONTAINER_HTTP_BASE_DOMAIN:-}
       - ANVIL_CONTAINER_HTTP_EXTERNAL_PORT=${ANVIL_CONTAINER_HTTP_EXTERNAL_PORT:-443}
       - ANVIL_CONTAINER_HTTP_EXTERNAL_SCHEME=${ANVIL_CONTAINER_HTTP_EXTERNAL_SCHEME:-https}
+      - ANVIL_CONTAINER_HTTP_ROUTES_PATH=${ANVIL_CONTAINER_HTTP_ROUTES_PATH:-/var/lib/anvil/traefik-dynamic}
+      - ANVIL_CONTAINER_SWARM_HTTP_PORT_MIN=${ANVIL_CONTAINER_SWARM_HTTP_PORT_MIN:-31000}
+      - ANVIL_CONTAINER_SWARM_HTTP_PORT_MAX=${ANVIL_CONTAINER_SWARM_HTTP_PORT_MAX:-31999}
+      - ANVIL_CONTAINER_SWARM_DEFAULT_ARCH=${ANVIL_CONTAINER_SWARM_DEFAULT_ARCH:-amd64}
       - ANVIL_CONTAINER_TCP_ROUTING=${ANVIL_CONTAINER_TCP_ROUTING:-false}
       - ANVIL_CONTAINER_TCP_BASE_DOMAIN=${ANVIL_CONTAINER_TCP_BASE_DOMAIN:-}
       - ANVIL_CONTAINER_TCP_PORT_MIN=${ANVIL_CONTAINER_TCP_PORT_MIN:-30000}
@@ -85,7 +90,8 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOME}/.ssh:/root/.ssh:ro
-      - ${HOME}/.docker/config.json:/root/.docker/config.json:ro
+      - ${HOME}/.docker:/root/.docker:ro
+      - ${ANVIL_TRAEFIK_DYNAMIC_HOST_PATH:-./data/traefik-dynamic}:/var/lib/anvil/traefik-dynamic
       - ${ANVIL_STORAGE_HOST_PATH:-./data/storage}:${ANVIL_STORAGE_PATH:-/var/lib/anvil/storage}
       - /var/lib/anvil:/var/lib/anvil
     depends_on:
@@ -107,11 +113,14 @@ services:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --providers.docker.watch=true
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
       - --api.dashboard=false
       - --log.level=INFO
       - --accesslog=true
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${ANVIL_TRAEFIK_DYNAMIC_HOST_PATH:-./data/traefik-dynamic}:/etc/traefik/dynamic:ro
     security_opt:
       - no-new-privileges:true
     read_only: true

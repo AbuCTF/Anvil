@@ -35,6 +35,7 @@ jwt:
   issuer: anvil
 
 container:
+  orchestrator: standalone
   network_name: anvil-challenges
   network_subnet: "172.20.0.0/16"
   network_internal: false
@@ -48,6 +49,12 @@ container:
   http_base_domain: ""
   http_external_port: 443
   http_external_scheme: https
+  # Swarm publishes HTTP backends on an internal ingress range and writes one
+  # Traefik file-provider route per instance. Leave blank in standalone mode.
+  http_routes_path: ""
+  swarm_http_port_min: 31000
+  swarm_http_port_max: 31999
+  swarm_default_arch: amd64
   labels:
     managed-by: anvil
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh Anvil Docker registry credentials
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Environment=HOME=/home/ubuntu
+Environment=ANVIL_REGISTRY_HOST=asia-south1-docker.pkg.dev
+Environment=ANVIL_DOCKER_CONFIG_DIR=/home/ubuntu/.docker
+ExecStart=/home/ubuntu/anvil-demo/scripts/refresh-docker-registry-auth.sh
+
