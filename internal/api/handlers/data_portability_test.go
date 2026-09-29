@@ -1,6 +1,25 @@
 package handlers
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+)
+
+func TestAdministrativeExportsRejectConcurrentWork(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewDataHandler(nil, zap.NewNop())
+	handler.exportGate <- struct{}{}
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	handler.Export(context)
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "5" {
+		t.Fatalf("status=%d retry_after=%q body=%s", response.Code, response.Header().Get("Retry-After"), response.Body.String())
+	}
+}
 
 func TestRequestedExportEntitiesIncludesCompetitionResults(t *testing.T) {
 	defaults, err := requestedExportEntities("")
