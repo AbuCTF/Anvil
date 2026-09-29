@@ -197,18 +197,21 @@ func (c Config) Validate() error {
 			return fmt.Errorf("container Swarm HTTP and TCP port ranges must not overlap")
 		}
 	}
-	// ledger economy invariant #7 (round-trips lose value) — the only runtime
-	// config-load guard per ctf26-1/metrics.py. validated in every environment.
-	// the roundtrip guard stays hard: points -> credits -> points must lose value
-	// so there is no profit loop. the old full-grant<mid-tier sub-check modelled the
-	// automatic freeze that converted every team's whole grant at once; credit->point
-	// is now a manual, per-team choice that only opens during the final freeze, so a
-	// team converts its own leftover, not an auto full grant, and that sub-check no
-	// longer describes the deployed flow.
+	// Ledger economy invariants. Round trips must lose value, and hoarding the full
+	// starting grant through settlement must remain worth less than one medium
+	// challenge. The latter applies whether settlement is automatic or confirmed by
+	// each team: otherwise doing nothing can beat meaningful participation.
 	if c.Economy.P2CBase > 0 && c.Economy.C2PRate > 0 {
 		roundtrip := c.Economy.P2CBase * c.Economy.C2PRate
 		if roundtrip >= 1.0 {
 			return fmt.Errorf("economy invariant #7 violated: roundtrip product %.4f must be < 1", roundtrip)
+		}
+		if c.Economy.Grant > 0 && len(c.Economy.Ceilings) > 1 {
+			fullGrantSettlement := c.Economy.Grant * c.Economy.C2PRate
+			if fullGrantSettlement >= c.Economy.Ceilings[1] {
+				return fmt.Errorf("economy invariant #7 violated: full grant settlement %.3f must be below medium ceiling %.3f",
+					fullGrantSettlement, c.Economy.Ceilings[1])
+			}
 		}
 	}
 	return nil
@@ -434,7 +437,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("economy.p2c_base", 1.0)
 	v.SetDefault("economy.p2c_rate_decay", 0.7)
 	v.SetDefault("economy.p2c_min_rate", 0.05)
-	v.SetDefault("economy.c2p_rate", 0.1)
+	v.SetDefault("economy.c2p_rate", 0.015)
 
 	v.SetDefault("zeropool.base_url", "")
 	v.SetDefault("zeropool.api_key", "")

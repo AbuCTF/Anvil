@@ -148,6 +148,28 @@ func TestLoadWithoutConfigUsesValidDurations(t *testing.T) {
 	if cfg.JWT.RefreshExpiry != 168*time.Hour {
 		t.Fatalf("JWT refresh expiry = %s, want 168h", cfg.JWT.RefreshExpiry)
 	}
+	if cfg.Economy.C2PRate != 0.015 {
+		t.Fatalf("economy c2p rate = %v, want validated default 0.015", cfg.Economy.C2PRate)
+	}
+	if got := cfg.Economy.Grant * cfg.Economy.C2PRate; got != 60 {
+		t.Fatalf("full grant settlement = %v, want 60", got)
+	}
+}
+
+func TestValidateRejectsLedgerSettlementAtOrAboveMedium(t *testing.T) {
+	cfg := Config{Environment: "development"}
+	cfg.Economy.Grant = 4000
+	cfg.Economy.Ceilings = []float64{100, 250, 500, 1000}
+	cfg.Economy.P2CBase = 1
+	cfg.Economy.C2PRate = 0.1
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted a full-grant settlement worth more than a medium challenge")
+	}
+
+	cfg.Economy.C2PRate = 0.015
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected the validated 0.015 settlement rate: %v", err)
+	}
 }
 
 func TestLoadAcceptsDeploymentEnvironmentAlias(t *testing.T) {
