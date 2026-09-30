@@ -20,6 +20,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
 	"github.com/anvil-lab/anvil/internal/services/instancer"
+	"github.com/anvil-lab/anvil/internal/services/registryauth"
 	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
@@ -131,10 +132,15 @@ type AdminChallengeHandler struct {
 	db           *database.DB
 	containerSvc *container.Service
 	logger       *zap.Logger
+	registrySvc  *registryauth.Service
 }
 
-func NewAdminChallengeHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, logger *zap.Logger) *AdminChallengeHandler {
-	return &AdminChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
+func NewAdminChallengeHandler(cfg *config.Config, db *database.DB, containerSvc *container.Service, logger *zap.Logger, registryServices ...*registryauth.Service) *AdminChallengeHandler {
+	handler := &AdminChallengeHandler{config: cfg, db: db, containerSvc: containerSvc, logger: logger}
+	if len(registryServices) > 0 {
+		handler.registrySvc = registryServices[0]
+	}
+	return handler
 }
 
 type CategoryHandler struct {
@@ -1208,14 +1214,17 @@ func validatePlatformSetting(key string, value interface{}) error {
 		if err != nil || !strings.EqualFold(address.Address, text) {
 			return errors.New("Invalid value for event.contact_email")
 		}
-	case "event.rules_url", "event.privacy_url", "event.terms_url":
+	case "event.rules_url", "event.privacy_url", "event.terms_url", "event.public_url":
 		text, err := stringValue(0, 1000)
 		if err != nil || text == "" {
 			return err
 		}
 		parsed, err := url.Parse(text)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil {
 			return fmt.Errorf("Invalid value for %s: expected an HTTPS URL", key)
+		}
+		if key == "event.public_url" && (parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "" || parsed.Fragment != "") {
+			return errors.New("Invalid value for event.public_url: expected an HTTPS origin without a path")
 		}
 	case "branding.logo_key", "branding.logo_mime":
 		return errors.New("Branding storage settings are read-only")

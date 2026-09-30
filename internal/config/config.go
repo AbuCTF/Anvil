@@ -27,6 +27,11 @@ type Config struct {
 	Instancer   InstancerConfig `mapstructure:"instancer"`
 	WebVerse    WebVerseConfig  `mapstructure:"webverse"`
 	Graded      GradedConfig    `mapstructure:"graded"`
+	Secrets     SecretsConfig   `mapstructure:"secrets"`
+}
+
+type SecretsConfig struct {
+	EncryptionKey string `mapstructure:"encryption_key"`
 }
 
 // WebVerseConfig drives the WebVerse Labs solve-sync poller. WebVerse is the
@@ -131,6 +136,9 @@ const defaultJWTSecret = "change-me-in-production-please"
 // rejects configuration that would make a production deployment unsafe to
 // start. development keeps permissive defaults for local work.
 func (c Config) Validate() error {
+	if secret := strings.TrimSpace(c.Secrets.EncryptionKey); secret != "" && len([]byte(secret)) < 32 {
+		return fmt.Errorf("secrets.encryption_key must be at least 32 bytes when set")
+	}
 	if strings.EqualFold(strings.TrimSpace(c.Environment), "production") {
 		secret := strings.TrimSpace(c.JWT.Secret)
 		if secret == defaultJWTSecret || len([]byte(secret)) < 32 {
@@ -459,6 +467,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("sso.audience", "anvil")
 
 	v.SetDefault("jwt.secret", defaultJWTSecret)
+	v.SetDefault("secrets.encryption_key", "")
 	v.SetDefault("jwt.access_expiry", "15m")
 	v.SetDefault("jwt.refresh_expiry", "168h")
 	v.SetDefault("jwt.issuer", "anvil")

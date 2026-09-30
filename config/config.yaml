@@ -34,6 +34,9 @@ jwt:
   refresh_expiry: 168h
   issuer: anvil
 
+secrets:
+  encryption_key: ""
+
 container:
   orchestrator: standalone
   network_name: anvil-challenges

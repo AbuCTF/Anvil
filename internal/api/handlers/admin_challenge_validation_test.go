@@ -64,6 +64,12 @@ func TestValidateChallengeRequestRejectsInvalidRuntimeAndFlags(t *testing.T) {
 		{name: "missing image", contains: "needs an image", mutate: func(request *CreateChallengeRequest) {
 			request.Services = []ContainerService{{Name: "app"}}
 		}},
+		{name: "invalid image", contains: "valid registry image reference", mutate: func(request *CreateChallengeRequest) {
+			request.ContainerImage = "https://docker.io/example/app"
+		}},
+		{name: "invalid service image", contains: "valid registry image reference", mutate: func(request *CreateChallengeRequest) {
+			request.Services = []ContainerService{{Name: "app", Image: "example app"}}
+		}},
 		{name: "invalid regex", contains: "invalid regular expression", mutate: func(request *CreateChallengeRequest) {
 			request.Flags = []FlagInput{{Name: "Flag", Flag: "[", FlagType: "regex"}}
 		}},

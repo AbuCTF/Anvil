@@ -5,15 +5,18 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/api/middleware"
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/anvil-lab/anvil/internal/services/mailer"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
@@ -24,17 +27,22 @@ import (
 )
 
 type AuthHandler struct {
-	config *config.Config
-	db     *database.DB
-	logger *zap.Logger
+	config  *config.Config
+	db      *database.DB
+	logger  *zap.Logger
+	mailSvc *mailer.Service
 }
 
-func NewAuthHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *AuthHandler {
-	return &AuthHandler{
+func NewAuthHandler(cfg *config.Config, db *database.DB, logger *zap.Logger, mailServices ...*mailer.Service) *AuthHandler {
+	handler := &AuthHandler{
 		config: cfg,
 		db:     db,
 		logger: logger,
 	}
+	if len(mailServices) > 0 {
+		handler.mailSvc = mailServices[0]
+	}
+	return handler
 }
 
 type RegisterRequest struct {
@@ -51,6 +59,24 @@ type LoginRequest struct {
 
 type TokenAuthRequest struct {
 	Token string `json:"token" binding:"required"`
+}
+
+type activationRequest struct {
+	Token string `json:"token" binding:"required"`
+}
+
+type activateAccountRequest struct {
+	Token    string `json:"token" binding:"required"`
+	Password string `json:"password" binding:"required,min=8"`
+}
+
+type passwordResetStartRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+type passwordResetCompleteRequest struct {
+	Token    string `json:"token" binding:"required"`
+	Password string `json:"password" binding:"required,min=8"`
 }
 
 type AuthResponse struct {
@@ -78,6 +104,243 @@ type TeamResponse struct {
 }
 
 const maxAuthRequestBytes = 16 << 10
+
+func (h *AuthHandler) InspectActivation(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	var request activationRequest
+	if c.ShouldBindJSON(&request) != nil || len(request.Token) != 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired activation link"})
+		return
+	}
+	digest := sha256.Sum256([]byte(request.Token))
+	var username, displayName, eventName string
+	err := h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT u.username, COALESCE(u.display_name, u.username),
+		       COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'platform_name'), 'Anvil')
+		FROM account_activation_tokens a
+		JOIN users u ON u.id = a.user_id
+		WHERE a.token_hash = $1 AND a.purpose = 'activation' AND a.used_at IS NULL AND a.expires_at > NOW() AND u.status = 'active'
+	`, digest[:]).Scan(&username, &displayName, &eventName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired activation link"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"username": username, "display_name": displayName, "event_name": eventName})
+}
+
+func (h *AuthHandler) ActivateAccount(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	var request activateAccountRequest
+	if c.ShouldBindJSON(&request) != nil || len(request.Token) != 64 || len([]byte(request.Password)) > 72 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid activation request"})
+		return
+	}
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to activate account"})
+		return
+	}
+	digest := sha256.Sum256([]byte(request.Token))
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to activate account"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	var activationID, userID uuid.UUID
+	var username string
+	err = tx.QueryRow(c.Request.Context(), `
+		SELECT a.id, u.id, u.username
+		FROM account_activation_tokens a
+		JOIN users u ON u.id = a.user_id
+		WHERE a.token_hash = $1 AND a.purpose = 'activation' AND a.used_at IS NULL AND a.expires_at > NOW() AND u.status = 'active'
+		FOR UPDATE OF a, u
+	`, digest[:]).Scan(&activationID, &userID, &username)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired activation link"})
+		return
+	}
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to activate account"})
+		return
+	}
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE account_activation_tokens SET used_at = NOW() WHERE user_id = $1 AND purpose = 'activation' AND used_at IS NULL`, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to activate account"})
+		return
+	}
+	metadata, _ := json.Marshal(map[string]string{"username": username})
+	if _, err := tx.Exec(c.Request.Context(), `INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user.activated', 'user', $1, $2::jsonb, $3, $4)`, userID, metadata, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to activate account"})
+		return
+	}
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to activate account"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"success": true, "username": username})
+}
+
+func (h *AuthHandler) StartPasswordReset(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	var request passwordResetStartRequest
+	if c.ShouldBindJSON(&request) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Enter a valid email address"})
+		return
+	}
+	request.Email = strings.ToLower(strings.TrimSpace(request.Email))
+	accepted := func() {
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusAccepted, gin.H{"accepted": true})
+	}
+	if h.mailSvc == nil || !h.mailSvc.Ready(c.Request.Context()) {
+		accepted()
+		return
+	}
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		accepted()
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	var userID uuid.UUID
+	var username, participantName string
+	err = tx.QueryRow(c.Request.Context(), `SELECT id, username, COALESCE(display_name, username) FROM users WHERE LOWER(email) = LOWER($1) AND status = 'active' AND COALESCE(password_hash, '') <> '' FOR UPDATE`, request.Email).Scan(&userID, &username, &participantName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		accepted()
+		return
+	}
+	if err != nil {
+		h.logger.Warn("load password reset account", zap.Error(err))
+		accepted()
+		return
+	}
+	publicURL, eventName, err := importEventIdentity(c.Request.Context(), tx)
+	if err != nil {
+		h.logger.Warn("load password reset event identity", zap.Error(err))
+		accepted()
+		return
+	}
+	token, err := generateSecureToken(32)
+	if err != nil {
+		accepted()
+		return
+	}
+	digest := sha256.Sum256([]byte(token))
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE account_activation_tokens SET used_at = NOW() WHERE user_id = $1 AND purpose = 'password_reset' AND used_at IS NULL`, userID); err != nil {
+		accepted()
+		return
+	}
+	if _, err := tx.Exec(c.Request.Context(), `INSERT INTO account_activation_tokens (user_id, purpose, token_hash, expires_at) VALUES ($1, 'password_reset', $2, $3)`, userID, digest[:], expiresAt); err != nil {
+		accepted()
+		return
+	}
+	resetURL := publicURL + "/reset-password#token=" + url.QueryEscape(token)
+	if _, err := h.mailSvc.EnqueueTx(c.Request.Context(), tx, request.Email, "password_reset", map[string]string{
+		"participant_name": participantName,
+		"event_name":       eventName,
+		"reset_url":        resetURL,
+		"expires_at":       expiresAt.Format(time.RFC1123Z),
+	}, nil); err != nil {
+		h.logger.Warn("queue password reset", zap.Error(err))
+		accepted()
+		return
+	}
+	metadata, _ := json.Marshal(map[string]string{"username": username})
+	if _, err := tx.Exec(c.Request.Context(), `INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user.password_reset_requested', 'user', $1, $2::jsonb, $3, $4)`, userID, metadata, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		accepted()
+		return
+	}
+	if tx.Commit(c.Request.Context()) != nil {
+		accepted()
+		return
+	}
+	accepted()
+}
+
+func (h *AuthHandler) InspectPasswordReset(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	var request activationRequest
+	if c.ShouldBindJSON(&request) != nil || len(request.Token) != 64 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired reset link"})
+		return
+	}
+	digest := sha256.Sum256([]byte(request.Token))
+	var username, displayName, eventName string
+	err := h.db.Pool.QueryRow(c.Request.Context(), `
+		SELECT u.username, COALESCE(u.display_name, u.username),
+		       COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'platform_name'), 'Anvil')
+		FROM account_activation_tokens a JOIN users u ON u.id = a.user_id
+		WHERE a.token_hash = $1 AND a.purpose = 'password_reset' AND a.used_at IS NULL AND a.expires_at > NOW() AND u.status = 'active'
+	`, digest[:]).Scan(&username, &displayName, &eventName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired reset link"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"username": username, "display_name": displayName, "event_name": eventName})
+}
+
+func (h *AuthHandler) CompletePasswordReset(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	var request passwordResetCompleteRequest
+	if c.ShouldBindJSON(&request) != nil || len(request.Token) != 64 || len([]byte(request.Password)) > 72 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid password reset request"})
+		return
+	}
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
+		return
+	}
+	digest := sha256.Sum256([]byte(request.Token))
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+	var userID uuid.UUID
+	var username string
+	err = tx.QueryRow(c.Request.Context(), `
+		SELECT u.id, u.username FROM account_activation_tokens a JOIN users u ON u.id = a.user_id
+		WHERE a.token_hash = $1 AND a.purpose = 'password_reset' AND a.used_at IS NULL AND a.expires_at > NOW() AND u.status = 'active'
+		FOR UPDATE OF a, u
+	`, digest[:]).Scan(&userID, &username)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired reset link"})
+		return
+	}
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
+		return
+	}
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE account_activation_tokens SET used_at = NOW() WHERE user_id = $1 AND purpose = 'password_reset' AND used_at IS NULL`, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
+		return
+	}
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1 AND revoked = FALSE`, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
+		return
+	}
+	if _, err := tx.Exec(c.Request.Context(), `DELETE FROM sessions WHERE user_id = $1`, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
+		return
+	}
+	metadata, _ := json.Marshal(map[string]string{"username": username})
+	if _, err := tx.Exec(c.Request.Context(), `INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user.password_reset_completed', 'user', $1, $2::jsonb, $3, $4)`, userID, metadata, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
+		return
+	}
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"success": true, "username": username})
+}
 
 func (h *AuthHandler) Register(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
@@ -381,7 +644,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	var totalScore int
 
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, username, email, password_hash, role, status, display_name, total_score
+		`SELECT id, username, COALESCE(email, ''), COALESCE(password_hash, ''), role, status, display_name, total_score
 		 FROM users
 		 WHERE username = $1 OR email = $1`,
 		req.Username,

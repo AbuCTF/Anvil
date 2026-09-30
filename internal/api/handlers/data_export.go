@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/anvil-lab/anvil/internal/services/mailer"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -24,6 +25,7 @@ type DataHandler struct {
 	db         *database.DB
 	logger     *zap.Logger
 	exportGate chan struct{}
+	mailSvc    *mailer.Service
 }
 
 type exportCollection struct {
@@ -59,7 +61,8 @@ var exportSettingAllowlist = map[string]bool{
 	"scoring_enabled": true, "scoreboard_enabled": true, "teams_mode": true,
 	"economy_mode": true, "arena_enabled": true, "market_pulse_enabled": true,
 	"event.slug": true, "event.timezone": true, "event.contact_email": true,
-	"event.rules_url": true, "event.privacy_url": true, "event.terms_url": true,
+	"event.public_url": true,
+	"event.rules_url":  true, "event.privacy_url": true, "event.terms_url": true,
 	"event.start_at": true, "event.end_at": true, "event.profile_managed": true,
 	"event.setup_completed": true, "scoreboard.history_end_at": true,
 	"participants.team_creation": true, "participants.team_join": true,
@@ -68,8 +71,12 @@ var exportSettingAllowlist = map[string]bool{
 	"branding.accent": true,
 }
 
-func NewDataHandler(db *database.DB, logger *zap.Logger) *DataHandler {
-	return &DataHandler{db: db, logger: logger, exportGate: make(chan struct{}, 1)}
+func NewDataHandler(db *database.DB, logger *zap.Logger, mailServices ...*mailer.Service) *DataHandler {
+	handler := &DataHandler{db: db, logger: logger, exportGate: make(chan struct{}, 1)}
+	if len(mailServices) > 0 {
+		handler.mailSvc = mailServices[0]
+	}
+	return handler
 }
 
 func (h *DataHandler) Summary(c *gin.Context) {

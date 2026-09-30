@@ -18,6 +18,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
+	"github.com/distribution/reference"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/gosimple/slug"
@@ -766,6 +767,11 @@ func validateChallengeRequest(req *CreateChallengeRequest, creating bool) error 
 	if req.ArenaMode != "" && req.ArenaMode != "per_team" && req.ArenaMode != "shared" {
 		return errors.New("arena_mode must be per_team or shared")
 	}
+	if strings.TrimSpace(req.ContainerImage) != "" {
+		if err := validateContainerImageReference(req.ContainerImage); err != nil {
+			return fmt.Errorf("container_image %w", err)
+		}
+	}
 	seenPorts := map[string]bool{}
 	for _, port := range req.ExposedPorts {
 		if port.Port < 1 || port.Port > 65535 {
@@ -801,6 +807,11 @@ func validateChallengeRequest(req *CreateChallengeRequest, creating bool) error 
 		serviceNames[service.Name] = true
 		if strings.TrimSpace(service.Image) == "" && strings.TrimSpace(req.ContainerImage) == "" {
 			return fmt.Errorf("service %q needs an image", service.Name)
+		}
+		if strings.TrimSpace(service.Image) != "" {
+			if err := validateContainerImageReference(service.Image); err != nil {
+				return fmt.Errorf("service %q image %w", service.Name, err)
+			}
 		}
 		for _, port := range service.Ports {
 			if port.Port < 1 || port.Port > 65535 {
@@ -844,6 +855,17 @@ func validateChallengeRequest(req *CreateChallengeRequest, creating bool) error 
 				return fmt.Errorf("flag %q has an unsupported type", flag.Name)
 			}
 		}
+	}
+	return nil
+}
+
+func validateContainerImageReference(value string) error {
+	value = strings.TrimSpace(value)
+	if len(value) > 512 {
+		return errors.New("must be at most 512 characters")
+	}
+	if _, err := reference.ParseNormalizedNamed(value); err != nil {
+		return errors.New("must be a valid registry image reference")
 	}
 	return nil
 }

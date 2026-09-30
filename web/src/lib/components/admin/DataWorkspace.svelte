@@ -26,6 +26,7 @@
 	let exportBusy = false;
 	let importEntity = 'categories';
 	let importMode: 'create' | 'merge' = 'create';
+	let userProvisioning: 'activation_email' | 'sso_only' = 'activation_email';
 	let importFile: File | null = null;
 	let preview: DataImportPreview | null = null;
 	let importBusy = false;
@@ -107,7 +108,7 @@
 		confirmation = '';
 		try {
 			const extension = importFile.name.toLowerCase().endsWith('.json') ? 'json' : 'csv';
-			preview = await api.previewDataImport({ entity: importEntity, format: extension, mode: importMode, source_name: importFile.name, content: await importFile.text() });
+			preview = await api.previewDataImport({ entity: importEntity, format: extension, mode: importMode, source_name: importFile.name, content: await importFile.text(), provisioning: importEntity === 'users' ? userProvisioning : undefined });
 			await load();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Import preview failed';
@@ -122,7 +123,7 @@
 		error = '';
 		try {
 			const applied = await api.applyDataImport(preview.job_id, preview.checksum);
-			result = `Applied ${applied.created} create, ${applied.updated} update and ${applied.skipped} skip operations.`;
+			result = `Applied ${applied.created} create, ${applied.updated} update and ${applied.skipped} skip operations.${applied.activation_emails_queued ? ` ${applied.activation_emails_queued} activation emails queued.` : ''}`;
 			preview = null;
 			importFile = null;
 			confirmation = '';
@@ -186,6 +187,9 @@
 					<label><span class={label}>Entity</span><select class={input} bind:value={importEntity} on:change={() => { preview = null; importFile = null; }}>{#each entities.filter((entity) => entity.importable) as entity}<option value={entity.id}>{entity.label}</option>{/each}</select></label>
 					<label><span class={label}>Mode</span><select class={input} bind:value={importMode}><option value="create">Create only</option><option value="merge">Create and update</option></select></label>
 				</div>
+				{#if importEntity === 'users'}
+					<label><span class={label}>Account access</span><select class={input} bind:value={userProvisioning}><option value="activation_email">Email secure activation links</option><option value="sso_only">Provision for SSO only</option></select><span class="mt-1.5 block text-[11px] leading-relaxed text-stone-600">Activation creates no shared passwords. Each recipient sets their own password from a single-use, 48-hour link.</span></label>
+				{/if}
 				<div class="flex items-center justify-between gap-3"><label class="min-w-0 flex-1"><span class={label}>CSV or JSON file</span><input type="file" accept=".csv,.json,text/csv,application/json" on:change={(event) => { importFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null; preview = null; error = ''; result = ''; }} class="block w-full text-xs text-stone-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-2 file:text-xs file:text-stone-300" /></label><button type="button" on:click={downloadTemplate} class="mt-5 shrink-0 text-xs text-stone-400 hover:text-stone-200">CSV template</button></div>
 				<div class="flex flex-wrap gap-2 text-[10px] text-stone-500"><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5 MB</span><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5,000 rows</span><span class="rounded-full border border-stone-800 px-2 py-1">CSV · JSON array · Anvil JSON export</span></div>
 				{#if importEntity === 'challenges'}
