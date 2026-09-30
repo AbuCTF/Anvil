@@ -23,6 +23,7 @@
 
 	let flagInput = '';
 	let submitting = false;
+	let confirmingFlag = false;
 	let submitResult: { correct: boolean; message: string } | null = null;
 	let submitAttempt = 0;
 	let showCelebration = false;
@@ -377,14 +378,99 @@
 		}
 	}
 
+	function isInvisibleFlagCharacter(character: string): boolean {
+		const code = character.codePointAt(0) ?? 0;
+		return character !== ' ' && (
+			/\s/u.test(character) ||
+			(code >= 0 && code <= 0x1f) ||
+			(code >= 0x7f && code <= 0x9f) ||
+			code === 0x00ad ||
+			code === 0x061c ||
+			code === 0x180e ||
+			(code >= 0x200b && code <= 0x200f) ||
+			(code >= 0x202a && code <= 0x202e) ||
+			(code >= 0x2060 && code <= 0x2064) ||
+			(code >= 0x2066 && code <= 0x206f) ||
+			code === 0xfeff
+		);
+	}
+
+	function visibleFlag(value: string): string {
+		const names: Record<string, string> = {
+			' ': '·',
+			'\t': '⇥',
+			'\n': '↵\n',
+			'\r': '␍',
+			'\u00a0': '[NBSP]',
+			'\u200b': '[ZWSP]',
+			'\u200c': '[ZWNJ]',
+			'\u200d': '[ZWJ]',
+			'\u2060': '[WORD JOINER]',
+			'\ufeff': '[BOM]'
+		};
+		return Array.from(value, (character) => {
+			if (names[character]) return names[character];
+			const code = character.codePointAt(0) ?? 0;
+			if (isInvisibleFlagCharacter(character)) {
+				return `[U+${code.toString(16).toUpperCase().padStart(4, '0')}]`;
+			}
+			return character;
+		}).join('');
+	}
+
+	function hasInvisibleFlagCharacter(value: string): boolean {
+		return Array.from(value).some(isInvisibleFlagCharacter);
+	}
+
 	async function submitFlag() {
-		if (!slug || !flagInput.trim()) return;
+		if (!slug || submitting || confirmingFlag) return;
+		const typedFlag = flagInput;
+		const submittedFlag = typedFlag.trim();
+		if (!submittedFlag) return;
+
+		const trimmed = typedFlag !== submittedFlag;
+		const invisible = hasInvisibleFlagCharacter(submittedFlag);
+		const internalWhitespace = /\s/u.test(submittedFlag);
+		let message = 'Review the exact value below before it is submitted.';
+		if (trimmed && invisible) {
+			message = 'Leading or trailing whitespace will be removed. Other invisible characters remain part of the flag and will be submitted.';
+		} else if (trimmed) {
+			message = 'Leading or trailing whitespace was found and will be removed before submission.';
+		} else if (invisible) {
+			message = 'Invisible characters were found. They will be submitted as part of the flag.';
+		} else if (internalWhitespace) {
+			message = 'Whitespace inside the flag will be submitted exactly as shown.';
+		}
+
+		const typedPreview = visibleFlag(typedFlag);
+		const submittedPreview = visibleFlag(submittedFlag);
+		const detail = trimmed
+			? `Typed\n${typedPreview}\n\nWill submit\n${submittedPreview}`
+			: submittedPreview;
+
+		confirmingFlag = true;
+		let confirmed = false;
+		try {
+			confirmed = await confirmDialog({
+				title: 'Confirm flag submission',
+				message,
+				detail,
+				detailLabel: 'Visible-character preview',
+				detailHint: 'Spaces appear as ·, tabs as ⇥, line breaks as ↵, and invisible Unicode characters use labels.',
+				detailTone: trimmed || invisible || internalWhitespace ? 'warning' : 'default',
+				confirmLabel: trimmed ? 'Submit cleaned flag' : 'Submit flag'
+			});
+		} finally {
+			confirmingFlag = false;
+		}
+		if (!confirmed) return;
+
 		submitting = true;
 		submitResult = null;
 		submitAttempt++;
 
 		try {
-			const result = await api.submitFlag(slug, flagInput.trim());
+			const result = await api.submitFlag(slug, submittedFlag);
 			submitResult = { correct: result.correct, message: result.message };
 			if (result.correct) {
 				flagInput = '';
@@ -1497,8 +1583,8 @@
 									aria-label="Flag"
 									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-md text-stone-100 text-sm font-mono placeholder-stone-600 focus:outline-none focus:border-stone-600"
 								/>
-								<button type="submit" disabled={submitting || !flagInput.trim()} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-									{submitting ? 'Checking…' : 'Submit'}
+								<button type="submit" disabled={submitting || confirmingFlag || !flagInput.trim()} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+									{submitting ? 'Checking…' : confirmingFlag ? 'Reviewing…' : 'Review and submit'}
 								</button>
 							</form>
 
