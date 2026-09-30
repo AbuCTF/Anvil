@@ -71,7 +71,7 @@
 			role={state.kind === 'alert' ? 'alertdialog' : 'dialog'}
 			aria-modal="true"
 			aria-labelledby={state.title ? 'dialog-title' : undefined}
-			aria-describedby="dialog-message"
+			aria-describedby={state.detail ? 'dialog-message dialog-detail' : 'dialog-message'}
 		>
 			{#if state.title}
 				<h2 id="dialog-title" class="text-base font-semibold tracking-tight text-stone-100">
@@ -84,6 +84,27 @@
 			>
 				{state.message}
 			</p>
+
+			{#if state.detail}
+				<div
+					class="mt-3 rounded-md border p-3 {state.detailTone === 'warning'
+						? 'border-amber-500/30 bg-amber-500/5'
+						: 'border-stone-800 bg-stone-900/60'}"
+				>
+					{#if state.detailLabel}
+						<p class="text-xs font-medium {state.detailTone === 'warning' ? 'text-amber-400' : 'text-stone-400'}">
+							{state.detailLabel}
+						</p>
+					{/if}
+					<pre
+						id="dialog-detail"
+						class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-sm leading-relaxed text-stone-100"
+					>{state.detail}</pre>
+					{#if state.detailHint}
+						<p class="mt-2 text-xs leading-relaxed text-stone-500">{state.detailHint}</p>
+					{/if}
+				</div>
+			{/if}
 
 			{#if state.kind === 'prompt'}
 				<input

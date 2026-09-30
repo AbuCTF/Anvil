@@ -12,6 +12,10 @@ export interface DialogRequest {
 	confirmLabel?: string;
 	cancelLabel?: string;
 	danger?: boolean;
+	detail?: string;
+	detailLabel?: string;
+	detailHint?: string;
+	detailTone?: 'default' | 'warning';
 	// prompt only
 	defaultValue?: string;
 	placeholder?: string;
