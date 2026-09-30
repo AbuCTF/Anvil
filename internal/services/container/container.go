@@ -32,8 +32,22 @@ type Service struct {
 	client *client.Client
 	logger *zap.Logger
 
-	networkID string
-	portMu    sync.Mutex
+	networkID    string
+	portMu       sync.Mutex
+	registryAuth func(context.Context, string) string
+}
+
+func (s *Service) SetRegistryAuthResolver(resolver func(context.Context, string) string) {
+	s.registryAuth = resolver
+}
+
+func (s *Service) registryAuthFor(ctx context.Context, image string) string {
+	if s.registryAuth != nil {
+		if encoded := s.registryAuth(ctx, image); encoded != "" {
+			return encoded
+		}
+	}
+	return getRegistryAuth(image)
 }
 
 // SwarmNodeInfo is the manager's live view of a Docker runtime node. It is
@@ -817,7 +831,7 @@ func (s *Service) pullImage(ctx context.Context, image string, platform string) 
 
 	s.logger.Info("Pulling image", zap.String("image", image), zap.String("platform", platform))
 
-	authStr := getRegistryAuth(image)
+	authStr := s.registryAuthFor(ctx, image)
 	pullOpts := client.ImagePullOptions{}
 	if parsed := parsePlatform(platform); parsed != nil {
 		pullOpts.Platforms = []ocispec.Platform{*parsed}

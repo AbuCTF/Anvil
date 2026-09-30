@@ -10,6 +10,8 @@ import (
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
 	"github.com/anvil-lab/anvil/internal/services/instancer"
+	"github.com/anvil-lab/anvil/internal/services/mailer"
+	"github.com/anvil-lab/anvil/internal/services/registryauth"
 	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/upload"
 	"github.com/anvil-lab/anvil/internal/services/vm"
@@ -27,6 +29,8 @@ type Server struct {
 	uploadSvc    *upload.Service
 	storageSvc   storage.StorageBackend
 	vpnSvc       *vpn.Service
+	mailSvc      *mailer.Service
+	registrySvc  *registryauth.Service
 	logger       *zap.Logger
 	router       *gin.Engine
 }
@@ -41,6 +45,7 @@ func NewServer(
 	storageSvc storage.StorageBackend,
 	vpnSvc *vpn.Service,
 	logger *zap.Logger,
+	extraServices ...any,
 ) *Server {
 	if cfg.Environment == "production" {
 		gin.SetMode(gin.ReleaseMode)
@@ -56,6 +61,14 @@ func NewServer(
 		storageSvc:   storageSvc,
 		vpnSvc:       vpnSvc,
 		logger:       logger,
+	}
+	for _, service := range extraServices {
+		switch typed := service.(type) {
+		case *mailer.Service:
+			s.mailSvc = typed
+		case *registryauth.Service:
+			s.registrySvc = typed
+		}
 	}
 
 	s.setupRouter()
@@ -112,7 +125,7 @@ func (s *Server) setupRouter() {
 
 			auth := public.Group("/auth")
 			{
-				authHandler := handlers.NewAuthHandler(s.config, s.db, s.logger)
+				authHandler := handlers.NewAuthHandler(s.config, s.db, s.logger, s.mailSvc)
 				auth.POST("/register", authHandler.Register)
 				if s.config.RateLimit.Enabled {
 					auth.POST("/login", middleware.RateLimitEndpoint(
@@ -127,6 +140,19 @@ func (s *Server) setupRouter() {
 				auth.POST("/discord/callback", authHandler.DiscordCallback) // walk-in: code -> zeropool provision -> anvil session
 				auth.POST("/refresh", authHandler.RefreshToken)
 				auth.POST("/logout", authHandler.Logout)
+				if s.config.RateLimit.Enabled {
+					auth.POST("/activation/inspect", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.InspectActivation)
+					auth.POST("/activation/complete", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.ActivateAccount)
+					auth.POST("/password-reset/request", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.StartPasswordReset)
+					auth.POST("/password-reset/inspect", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.InspectPasswordReset)
+					auth.POST("/password-reset/complete", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.CompletePasswordReset)
+				} else {
+					auth.POST("/activation/inspect", authHandler.InspectActivation)
+					auth.POST("/activation/complete", authHandler.ActivateAccount)
+					auth.POST("/password-reset/request", authHandler.StartPasswordReset)
+					auth.POST("/password-reset/inspect", authHandler.InspectPasswordReset)
+					auth.POST("/password-reset/complete", authHandler.CompletePasswordReset)
+				}
 			}
 
 			// public challenge listing, optionally enriched with per-user progress
@@ -318,7 +344,7 @@ func (s *Server) setupRouter() {
 
 			data := admin.Group("/data")
 			{
-				dataHandler := handlers.NewDataHandler(s.db, s.logger)
+				dataHandler := handlers.NewDataHandler(s.db, s.logger, s.mailSvc)
 				data.GET("/summary", dataHandler.Summary)
 				data.GET("/export", dataHandler.Export)
 				data.GET("/templates/:entity", dataHandler.Template)
@@ -398,9 +424,13 @@ func (s *Server) setupRouter() {
 
 			challenges := admin.Group("/challenges")
 			{
-				adminChallengeHandler := handlers.NewAdminChallengeHandler(s.config, s.db, s.containerSvc, s.logger)
+				adminChallengeHandler := handlers.NewAdminChallengeHandler(s.config, s.db, s.containerSvc, s.logger, s.registrySvc)
 				challenges.GET("", adminChallengeHandler.List)
 				challenges.POST("", adminChallengeHandler.Create)
+				challenges.POST("/registry/inspect", adminChallengeHandler.InspectRegistryImage)
+				challenges.GET("/registry/credentials", adminChallengeHandler.ListRegistryCredentials)
+				challenges.PUT("/registry/credentials/:registry", adminChallengeHandler.SaveRegistryCredential)
+				challenges.DELETE("/registry/credentials/:registry", adminChallengeHandler.DeleteRegistryCredential)
 				challenges.POST("/ova", adminChallengeHandler.CreateOVAChallenge)
 				challenges.GET("/:id", adminChallengeHandler.Get)
 				challenges.GET("/:id/detail", adminChallengeHandler.Detail)
@@ -441,7 +471,7 @@ func (s *Server) setupRouter() {
 				categories.DELETE("/:id", categoryHandler.Delete)
 			}
 
-			adminChalMonitor := handlers.NewAdminChallengeHandler(s.config, s.db, s.containerSvc, s.logger)
+			adminChalMonitor := handlers.NewAdminChallengeHandler(s.config, s.db, s.containerSvc, s.logger, s.registrySvc)
 			admin.GET("/instance-flags", adminChalMonitor.ListInstanceFlags)
 			admin.GET("/flag-shares", adminChalMonitor.ListFlagShareEvents)
 
@@ -473,6 +503,21 @@ func (s *Server) setupRouter() {
 				settings.GET("", settingsHandler.List)
 				settings.GET("/economy-policy", settingsHandler.EconomyPolicy)
 				settings.PUT("", settingsHandler.Update)
+			}
+
+			mail := admin.Group("/mail")
+			{
+				mailHandler := handlers.NewMailHandler(s.config, s.db, s.logger)
+				mail.GET("/providers", mailHandler.ListProviders)
+				mail.POST("/providers", mailHandler.CreateProvider)
+				mail.PUT("/providers/:id", mailHandler.UpdateProvider)
+				mail.DELETE("/providers/:id", mailHandler.DeleteProvider)
+				mail.POST("/providers/:id/test", mailHandler.TestProvider)
+				mail.GET("/templates", mailHandler.ListTemplates)
+				mail.POST("/templates", mailHandler.CreateTemplate)
+				mail.PUT("/templates/:slug", mailHandler.UpdateTemplate)
+				mail.POST("/templates/preview", mailHandler.PreviewTemplate)
+				mail.GET("/deliveries", mailHandler.ListDeliveries)
 			}
 
 			// economy freeze flip: blind the board (players convert credits<->points themselves)

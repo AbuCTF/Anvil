@@ -95,7 +95,7 @@
 				</div>
 
 				<div>
-					<label for="password" class="block text-sm font-medium text-stone-300 mb-1.5">Password</label>
+					<div class="mb-1.5 flex items-center justify-between gap-3"><label for="password" class="block text-sm font-medium text-stone-300">Password</label><a href="/forgot-password" class="text-xs text-stone-500 hover:text-stone-200">Forgot password?</a></div>
 					<input
 						id="password"
 						type="password"

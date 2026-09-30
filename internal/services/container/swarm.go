@@ -405,7 +405,7 @@ func (s *Service) createSwarmInstance(ctx context.Context, req CreateInstanceReq
 	}
 	createResult, createErr := s.client.ServiceCreate(ctx, client.ServiceCreateOptions{
 		Spec:                spec,
-		EncodedRegistryAuth: getRegistryAuth(image),
+		EncodedRegistryAuth: s.registryAuthFor(ctx, image),
 		QueryRegistry:       true,
 	})
 	s.portMu.Unlock()

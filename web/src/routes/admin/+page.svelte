@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy, onMount } from 'svelte';
-	import { api, type AdminAnnouncement, type EconomyPolicyDocument, type GradedAdminInfo } from '$api';
+	import { api, type AdminAnnouncement, type EconomyPolicyDocument, type GradedAdminInfo, type RegistryImageInspection } from '$api';
 	import Icon from '@iconify/svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
@@ -16,6 +16,8 @@
 	import TeamDossier from '$lib/components/admin/TeamDossier.svelte';
 	import ChallengeDossier from '$lib/components/admin/ChallengeDossier.svelte';
 	import HelpTip from '$lib/components/HelpTip.svelte';
+	import MailWorkspace from '$lib/components/admin/MailWorkspace.svelte';
+	import RegistryCredentials from '$lib/components/admin/RegistryCredentials.svelte';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -157,6 +159,9 @@
 	};
 	let uploadLoading = false;
 	let uploadError = '';
+	let imageInspection: RegistryImageInspection | null = null;
+	let imageInspectionError = '';
+	let imageInspecting = false;
 	let ovaFile: File | null = null;
 	let uploadProgress = 0;
 
@@ -928,7 +933,32 @@
 
 	function openCreateChallenge() {
 		applyChallengeDefaults();
+		imageInspection = null;
+		imageInspectionError = '';
 		showCreateModal = true;
+	}
+
+	async function inspectChallengeImage() {
+		imageInspection = null;
+		imageInspectionError = '';
+		const image = newChallenge.docker_image.trim();
+		if (!image) {
+			imageInspectionError = 'Enter a Docker Hub image first.';
+			return;
+		}
+		imageInspecting = true;
+		try {
+			const inspection = await api.inspectRegistryImage(image, newChallenge.container_platform);
+			imageInspection = inspection;
+			newChallenge.docker_image = inspection.immutable_reference;
+			if (!newChallenge.container_platform && inspection.selected_platform) {
+				newChallenge.container_platform = `${inspection.selected_platform.os}/${inspection.selected_platform.architecture}`;
+			}
+		} catch (e) {
+			imageInspectionError = e instanceof Error ? e.message : 'Could not inspect the image.';
+		} finally {
+			imageInspecting = false;
+		}
 	}
 
 	function changeChallengeDifficulty(e: Event) {
@@ -2186,6 +2216,7 @@
 						{/if}
 					</Card>
 				</div>
+				<MailWorkspace />
 			{/if}
 
 			{#if activeTab === 'infrastructure'}
@@ -3314,21 +3345,37 @@
 								</div>
 							{/if}
 							{#if newChallenge.type === 'container'}
-							<label class="block">
-								<span class={labelCls}>Docker Image *</span>
+							<div class="block">
+								<div class="mb-1.5 flex items-center justify-between gap-3">
+									<span class="metadata-label text-stone-400">Docker image *</span>
+									<button type="button" on:click={inspectChallengeImage} disabled={imageInspecting || !newChallenge.docker_image.trim()} class="text-xs text-stone-400 transition-colors hover:text-stone-200 disabled:cursor-not-allowed disabled:opacity-40">
+										{imageInspecting ? 'Inspecting…' : 'Inspect registry image'}
+									</button>
+								</div>
 								<input
 									type="text"
 									bind:value={newChallenge.docker_image}
+									on:input={() => { imageInspection = null; imageInspectionError = ''; }}
 									required
 									class="w-full font-mono {fieldCls}"
-									placeholder="ghcr.io/abuctf/token-overflow:latest"
+									placeholder="organization/challenge:release"
 								/>
-								<p class="text-stone-500 text-xs mt-2">Pre-built image from a registry (GHCR, Docker Hub, etc.)</p>
-							</label>
+								<p class="mt-2 text-xs text-stone-500">Docker Hub and GHCR images can be checked and pinned to an immutable digest before the challenge is saved. Other configured registries remain supported by direct reference.</p>
+								{#if imageInspection}
+									<div class="mt-3 rounded-md border border-up/20 bg-up/[0.05] px-3 py-2.5 text-xs">
+										<div class="flex items-center gap-2 text-up"><Icon icon="mdi:check-circle-outline" class="h-4 w-4" /><span class="font-medium">Verified and pinned</span></div>
+										<p class="mt-1 break-all font-mono text-stone-400">{imageInspection.immutable_reference}</p>
+										<p class="mt-1 text-stone-500">{imageInspection.selected_platform?.os}/{imageInspection.selected_platform?.architecture}{imageInspection.size_bytes ? ` · ${formatFileSize(imageInspection.size_bytes)}` : ''}{imageInspection.rate_limit_remaining ? ` · ${imageInspection.rate_limit_remaining} pulls remaining` : ''}</p>
+									</div>
+								{:else if imageInspectionError}
+									<div class="mt-3 flex items-start gap-2 rounded-md border border-down/20 bg-down/[0.05] px-3 py-2.5 text-xs text-down"><Icon icon="mdi:alert-circle-outline" class="mt-0.5 h-4 w-4 shrink-0" /><span>{imageInspectionError}</span></div>
+								{/if}
+							</div>
+							<RegistryCredentials />
 
 							<label class="block">
 								<span class={labelCls}>Platform</span>
-								<select bind:value={newChallenge.container_platform} class="w-full {fieldCls}">
+								<select bind:value={newChallenge.container_platform} on:change={() => { imageInspection = null; imageInspectionError = ''; }} class="w-full {fieldCls}">
 									<option value="">Auto (native architecture)</option>
 									<option value="linux/amd64">linux/amd64</option>
 									<option value="linux/arm64">linux/arm64</option>

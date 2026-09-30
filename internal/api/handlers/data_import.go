@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,11 +27,12 @@ const maxImportBytes = 5 << 20
 const maxImportRows = 5000
 
 type importPreviewRequest struct {
-	Entity     string `json:"entity"`
-	Format     string `json:"format"`
-	Mode       string `json:"mode"`
-	SourceName string `json:"source_name"`
-	Content    string `json:"content"`
+	Entity       string `json:"entity"`
+	Format       string `json:"format"`
+	Mode         string `json:"mode"`
+	SourceName   string `json:"source_name"`
+	Content      string `json:"content"`
+	Provisioning string `json:"provisioning"`
 }
 
 type importApplyRequest struct {
@@ -60,6 +62,10 @@ type importPlan struct {
 
 type importPayload struct {
 	Rows []map[string]string `json:"rows"`
+}
+
+type importOptions struct {
+	Provisioning string `json:"provisioning,omitempty"`
 }
 
 type importQuery interface {
@@ -129,6 +135,7 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	request.Format = strings.ToLower(strings.TrimSpace(request.Format))
 	request.Mode = strings.ToLower(strings.TrimSpace(request.Mode))
 	request.SourceName = strings.TrimSpace(request.SourceName)
+	request.Provisioning = strings.ToLower(strings.TrimSpace(request.Provisioning))
 	if _, ok := importSpecs[request.Entity]; !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported import entity"})
 		return
@@ -139,6 +146,22 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	}
 	if request.Mode != "create" && request.Mode != "merge" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "mode must be create or merge"})
+		return
+	}
+	if request.Entity == "users" {
+		if request.Provisioning == "" {
+			request.Provisioning = "sso_only"
+		}
+		if request.Provisioning != "sso_only" && request.Provisioning != "activation_email" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "provisioning must be sso_only or activation_email"})
+			return
+		}
+		if request.Provisioning == "activation_email" && (h.mailSvc == nil || !h.mailSvc.Ready(c.Request.Context())) {
+			c.JSON(http.StatusConflict, gin.H{"error": "configure and successfully test an active mail provider before emailing account activations"})
+			return
+		}
+	} else if request.Provisioning != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "provisioning is only available for user imports"})
 		return
 	}
 	if request.SourceName == "" || len(request.SourceName) > 255 {
@@ -168,7 +191,19 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	}
 	_, _ = h.db.Pool.Exec(c.Request.Context(), `UPDATE data_import_jobs SET status = 'expired', payload = '{"rows":[]}'::jsonb WHERE status = 'pending' AND expires_at <= NOW()`)
 	plan := h.planImport(c.Request.Context(), h.db.Pool, request.Entity, request.Mode, rows, issues)
+	if request.Entity == "users" && request.Provisioning == "activation_email" {
+		for index, rowPlan := range plan.Rows {
+			if rowPlan.Action == "create" && strings.TrimSpace(rows[index]["email"]) == "" {
+				plan.Errors = append(plan.Errors, importIssue{Row: rowPlan.Row, Field: "email", Message: "is required when activation links are enabled"})
+			}
+		}
+		if _, _, err := importEventIdentity(c.Request.Context(), h.db.Pool); err != nil {
+			plan.Errors = append(plan.Errors, importIssue{Row: 0, Field: "event.public_url", Message: err.Error()})
+		}
+		refreshImportPlanChecksum(&plan)
+	}
 	payload, _ := json.Marshal(importPayload{Rows: rows})
+	options, _ := json.Marshal(importOptions{Provisioning: request.Provisioning})
 	planJSON, _ := json.Marshal(plan)
 	sum := sha256.Sum256([]byte(request.Content))
 	checksum := hex.EncodeToString(sum[:])
@@ -183,9 +218,9 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	}
 	_, err := h.db.Pool.Exec(c.Request.Context(), `
 		INSERT INTO data_import_jobs
-		(id, created_by, entity, source_format, import_mode, source_name, checksum, row_count, plan, payload, status, error)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12)
-	`, jobID, uid, request.Entity, request.Format, request.Mode, request.SourceName, checksum, len(rows), planJSON, payload, jobStatus, jobError)
+		(id, created_by, entity, source_format, import_mode, source_name, checksum, row_count, plan, payload, options, status, error)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12, $13)
+	`, jobID, uid, request.Entity, request.Format, request.Mode, request.SourceName, checksum, len(rows), planJSON, payload, options, jobStatus, jobError)
 	if err != nil {
 		h.logger.Error("store import preview", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store import preview"})
@@ -194,12 +229,12 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	if err := logAdminAction(h.db, c, uid.String(), "data_import_previewed", "data_import_job", jobID.String(), map[string]any{"entity": request.Entity, "mode": request.Mode, "rows": len(rows), "errors": len(plan.Errors), "checksum": checksum}); err != nil {
 		h.logger.Warn("audit import preview", zap.Error(err))
 	}
-	c.JSON(http.StatusCreated, gin.H{"job_id": jobID, "checksum": checksum, "entity": request.Entity, "mode": request.Mode, "source_name": request.SourceName, "row_count": len(rows), "expires_at": time.Now().UTC().Add(24 * time.Hour), "plan": plan})
+	c.JSON(http.StatusCreated, gin.H{"job_id": jobID, "checksum": checksum, "entity": request.Entity, "mode": request.Mode, "source_name": request.SourceName, "row_count": len(rows), "expires_at": time.Now().UTC().Add(24 * time.Hour), "provisioning": request.Provisioning, "plan": plan})
 }
 
 func (h *DataHandler) ListImports(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
-		SELECT id, entity, source_format, import_mode, source_name, checksum, row_count, plan, status, result, error, applied_at, expires_at, created_at
+		SELECT id, entity, source_format, import_mode, source_name, checksum, row_count, plan, options, status, result, error, applied_at, expires_at, created_at
 		FROM data_import_jobs ORDER BY created_at DESC LIMIT 50
 	`)
 	if err != nil {
@@ -212,15 +247,15 @@ func (h *DataHandler) ListImports(c *gin.Context) {
 		var id uuid.UUID
 		var entity, format, mode, sourceName, checksum, status string
 		var rowCount int
-		var plan, result json.RawMessage
+		var plan, options, result json.RawMessage
 		var errorText *string
 		var appliedAt *time.Time
 		var expiresAt, createdAt time.Time
-		if err := rows.Scan(&id, &entity, &format, &mode, &sourceName, &checksum, &rowCount, &plan, &status, &result, &errorText, &appliedAt, &expiresAt, &createdAt); err != nil {
+		if err := rows.Scan(&id, &entity, &format, &mode, &sourceName, &checksum, &rowCount, &plan, &options, &status, &result, &errorText, &appliedAt, &expiresAt, &createdAt); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load imports"})
 			return
 		}
-		items = append(items, gin.H{"id": id, "entity": entity, "format": format, "mode": mode, "source_name": sourceName, "checksum": checksum, "row_count": rowCount, "plan": plan, "status": status, "result": result, "error": errorText, "applied_at": appliedAt, "expires_at": expiresAt, "created_at": createdAt})
+		items = append(items, gin.H{"id": id, "entity": entity, "format": format, "mode": mode, "source_name": sourceName, "checksum": checksum, "row_count": rowCount, "plan": plan, "options": options, "status": status, "result": result, "error": errorText, "applied_at": appliedAt, "expires_at": expiresAt, "created_at": createdAt})
 	}
 	c.JSON(http.StatusOK, gin.H{"imports": items})
 }
@@ -248,12 +283,12 @@ func (h *DataHandler) ApplyImport(c *gin.Context) {
 	}
 	defer tx.Rollback(c.Request.Context())
 	var entity, mode, checksum, status string
-	var planJSON, payloadJSON, resultJSON json.RawMessage
+	var planJSON, payloadJSON, optionsJSON, resultJSON json.RawMessage
 	var expiresAt time.Time
 	err = tx.QueryRow(c.Request.Context(), `
-		SELECT entity, import_mode, checksum, status, plan, payload, COALESCE(result, '{}'::jsonb), expires_at
+		SELECT entity, import_mode, checksum, status, plan, payload, options, COALESCE(result, '{}'::jsonb), expires_at
 		FROM data_import_jobs WHERE id = $1 FOR UPDATE
-	`, jobID).Scan(&entity, &mode, &checksum, &status, &planJSON, &payloadJSON, &resultJSON, &expiresAt)
+	`, jobID).Scan(&entity, &mode, &checksum, &status, &planJSON, &payloadJSON, &optionsJSON, &resultJSON, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "import job not found"})
 		return
@@ -283,7 +318,8 @@ func (h *DataHandler) ApplyImport(c *gin.Context) {
 	}
 	var storedPlan importPlan
 	var payload importPayload
-	if json.Unmarshal(planJSON, &storedPlan) != nil || json.Unmarshal(payloadJSON, &payload) != nil {
+	var options importOptions
+	if json.Unmarshal(planJSON, &storedPlan) != nil || json.Unmarshal(payloadJSON, &payload) != nil || json.Unmarshal(optionsJSON, &options) != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "stored import preview is invalid"})
 		return
 	}
@@ -305,6 +341,17 @@ func (h *DataHandler) ApplyImport(c *gin.Context) {
 		h.recordImportFailure(c.Request.Context(), jobID, err.Error())
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
+	}
+	if entity == "users" && options.Provisioning == "activation_email" {
+		queued, provisionErr := h.provisionImportedUsers(c.Request.Context(), tx, payload.Rows, currentPlan, uid)
+		if provisionErr != nil {
+			h.logger.Error("provision imported users", zap.String("job_id", jobID.String()), zap.Error(provisionErr))
+			_ = tx.Rollback(c.Request.Context())
+			h.recordImportFailure(c.Request.Context(), jobID, provisionErr.Error())
+			c.JSON(http.StatusConflict, gin.H{"error": provisionErr.Error()})
+			return
+		}
+		result["activation_emails_queued"] = queued
 	}
 	resultJSON, _ = json.Marshal(result)
 	if _, err := tx.Exec(c.Request.Context(), `
@@ -543,6 +590,11 @@ func (h *DataHandler) planImport(ctx context.Context, query importQuery, entity,
 			plan.Errors = append(plan.Errors, importIssue{Row: 0, Field: "name", Message: fmt.Sprintf("import would exceed the maximum of %d teams", maximum)})
 		}
 	}
+	refreshImportPlanChecksum(&plan)
+	return plan
+}
+
+func refreshImportPlanChecksum(plan *importPlan) {
 	state, _ := json.Marshal(struct {
 		Create int             `json:"create"`
 		Update int             `json:"update"`
@@ -552,7 +604,28 @@ func (h *DataHandler) planImport(ctx context.Context, query importQuery, entity,
 	}{plan.Create, plan.Update, plan.Skip, plan.Errors, plan.Rows})
 	sum := sha256.Sum256(state)
 	plan.StateChecksum = hex.EncodeToString(sum[:])
-	return plan
+}
+
+func importEventIdentity(ctx context.Context, query importQuery) (string, string, error) {
+	var publicURL, eventName string
+	err := query.QueryRow(ctx, `
+		SELECT
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'event.public_url'), ''),
+			COALESCE(MAX(value #>> '{}') FILTER (WHERE key = 'platform_name'), 'Anvil')
+		FROM platform_settings WHERE key IN ('event.public_url', 'platform_name')
+	`).Scan(&publicURL, &eventName)
+	if err != nil {
+		return "", "", errors.New("could not load the event link settings")
+	}
+	publicURL = strings.TrimRight(strings.TrimSpace(publicURL), "/")
+	parsed, err := url.Parse(publicURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" {
+		return "", "", errors.New("set a clean HTTPS event URL before emailing account activations")
+	}
+	if strings.TrimSpace(eventName) == "" {
+		eventName = "Anvil"
+	}
+	return publicURL, eventName, nil
 }
 
 func (h *DataHandler) validateImportRow(ctx context.Context, query importQuery, entity string, rowNumber int, row map[string]string) []importIssue {
@@ -715,6 +788,56 @@ func (h *DataHandler) applyImportRows(ctx context.Context, tx pgx.Tx, entity, mo
 	}
 	applied["created"], applied["updated"], applied["skipped"] = created, updated, skipped
 	return applied, nil
+}
+
+func (h *DataHandler) provisionImportedUsers(ctx context.Context, tx pgx.Tx, rows []map[string]string, plan importPlan, createdBy uuid.UUID) (int, error) {
+	if h.mailSvc == nil || !h.mailSvc.Ready(ctx) {
+		return 0, errors.New("mail delivery is not ready; test an active provider and preview the import again")
+	}
+	publicURL, eventName, err := importEventIdentity(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	queued := 0
+	for index, rowPlan := range plan.Rows {
+		if rowPlan.Action != "create" {
+			continue
+		}
+		row := rows[index]
+		var userID uuid.UUID
+		if err := tx.QueryRow(ctx, `UPDATE users SET email_verified = FALSE WHERE username = $1 RETURNING id`, row["username"]).Scan(&userID); err != nil {
+			return 0, err
+		}
+		token, err := generateSecureToken(32)
+		if err != nil {
+			return 0, err
+		}
+		digest := sha256.Sum256([]byte(token))
+		expiresAt := time.Now().UTC().Add(48 * time.Hour)
+		if _, err := tx.Exec(ctx, `UPDATE account_activation_tokens SET used_at = NOW() WHERE user_id = $1 AND purpose = 'activation' AND used_at IS NULL`, userID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO account_activation_tokens (user_id, purpose, token_hash, expires_at, created_by) VALUES ($1, 'activation', $2, $3, $4)`, userID, digest[:], expiresAt, createdBy); err != nil {
+			return 0, err
+		}
+		participantName := strings.TrimSpace(row["display_name"])
+		if participantName == "" {
+			participantName = row["username"]
+		}
+		activationURL := publicURL + "/activate#token=" + url.QueryEscape(token)
+		_, err = h.mailSvc.EnqueueTx(ctx, tx, row["email"], "account_activation", map[string]string{
+			"participant_name": participantName,
+			"event_name":       eventName,
+			"activation_url":   activationURL,
+			"username":         row["username"],
+			"expires_at":       expiresAt.Format(time.RFC1123Z),
+		}, &createdBy)
+		if err != nil {
+			return 0, err
+		}
+		queued++
+	}
+	return queued, nil
 }
 
 func applyImportCreate(ctx context.Context, tx pgx.Tx, entity string, row map[string]string) error {

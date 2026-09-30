@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/anvil-lab/anvil/internal/game"
 	"github.com/anvil-lab/anvil/internal/services/container"
 	"github.com/anvil-lab/anvil/internal/services/instancer"
+	"github.com/anvil-lab/anvil/internal/services/mailer"
+	"github.com/anvil-lab/anvil/internal/services/registryauth"
 	"github.com/anvil-lab/anvil/internal/services/storage"
 	"github.com/anvil-lab/anvil/internal/services/upload"
 	"github.com/anvil-lab/anvil/internal/services/vm"
@@ -58,10 +61,26 @@ func main() {
 
 	sugar.Info("Database migrations completed")
 
+	mailSecret := strings.TrimSpace(cfg.Secrets.EncryptionKey)
+	if mailSecret == "" {
+		mailSecret = cfg.JWT.Secret
+	}
+	mailSvc, err := mailer.NewService(mailSecret, db, logger)
+	if err != nil {
+		sugar.Fatalf("Failed to initialize mail service: %v", err)
+	}
+	mailCtx, mailCancel := context.WithCancel(context.Background())
+	go mailSvc.Run(mailCtx)
+	registrySvc, err := registryauth.NewService(mailSecret, db)
+	if err != nil {
+		sugar.Fatalf("Failed to initialize registry credential service: %v", err)
+	}
+
 	containerSvc, err := container.NewService(cfg.Container, logger)
 	if err != nil {
 		sugar.Fatalf("Failed to initialize container service: %v", err)
 	}
+	containerSvc.SetRegistryAuthResolver(registrySvc.EncodedAuth)
 
 	instancerSvc, err := instancer.NewService(cfg.Instancer, logger)
 	if err != nil {
@@ -378,7 +397,7 @@ func main() {
 	webverseCtx, webverseCancel := context.WithCancel(context.Background())
 	go handlers.NewWebVersePoller(cfg, db, logger).Run(webverseCtx)
 
-	server := api.NewServer(cfg, db, containerSvc, instancerSvc, vmSvc, uploadSvc, storageSvc, vpnSvc, logger)
+	server := api.NewServer(cfg, db, containerSvc, instancerSvc, vmSvc, uploadSvc, storageSvc, vpnSvc, logger, mailSvc, registrySvc)
 
 	// extended timeouts for large file uploads
 	httpServer := &http.Server{
@@ -405,6 +424,7 @@ func main() {
 
 	gameCancel()
 	webverseCancel()
+	mailCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()

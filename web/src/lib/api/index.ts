@@ -125,6 +125,84 @@ export interface InviteCodeSummary {
 	created_at: string;
 }
 
+export interface RegistryImageInspection {
+	registry: string;
+	repository: string;
+	reference: string;
+	digest: string;
+	immutable_reference: string;
+	media_type: string;
+	size_bytes?: number;
+	platforms: Array<{ os: string; architecture: string; variant?: string; digest?: string }>;
+	selected_platform?: { os: string; architecture: string; variant?: string; digest?: string };
+	rate_limit_remaining?: string;
+}
+
+export interface RegistryCredential {
+	registry: 'docker.io' | 'ghcr.io';
+	username: string;
+	secret_configured: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface MailProvider {
+	id: string;
+	name: string;
+	host: string;
+	port: number;
+	username: string;
+	password_configured: boolean;
+	security: 'starttls' | 'tls';
+	from_name: string;
+	from_address: string;
+	reply_to: string;
+	priority: number;
+	daily_limit?: number;
+	hourly_limit?: number;
+	minute_limit?: number;
+	daily_used: number;
+	hourly_used: number;
+	minute_used: number;
+	is_active: boolean;
+	is_healthy: boolean;
+	failure_count: number;
+	circuit_open_until?: string;
+	last_error_code?: string;
+	last_error_at?: string;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface MailTemplate {
+	id: string;
+	slug: string;
+	name: string;
+	description: string;
+	subject: string;
+	body_html: string;
+	body_text: string;
+	variables: string[];
+	is_active: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface MailDelivery {
+	id: string;
+	recipient: string;
+	template_slug?: string;
+	status: 'queued' | 'sending' | 'sent' | 'failed' | 'cancelled';
+	attempts: number;
+	max_attempts: number;
+	provider_name?: string;
+	error_code?: string;
+	message_id?: string;
+	not_before: string;
+	sent_at?: string;
+	created_at: string;
+}
+
 export interface DataImportPlan {
 	create: number;
 	update: number;
@@ -563,6 +641,41 @@ class ApiClient {
 		}, false);
 	}
 
+	async inspectActivation(token: string) {
+		return this.request<{ username: string; display_name: string; event_name: string }>('/auth/activation/inspect', {
+			method: 'POST',
+			body: JSON.stringify({ token })
+		}, false);
+	}
+
+	async completeActivation(token: string, password: string) {
+		return this.request<{ success: boolean; username: string }>('/auth/activation/complete', {
+			method: 'POST',
+			body: JSON.stringify({ token, password })
+		}, false);
+	}
+
+	async requestPasswordReset(email: string) {
+		return this.request<{ accepted: boolean }>('/auth/password-reset/request', {
+			method: 'POST',
+			body: JSON.stringify({ email })
+		}, false);
+	}
+
+	async inspectPasswordReset(token: string) {
+		return this.request<{ username: string; display_name: string; event_name: string }>('/auth/password-reset/inspect', {
+			method: 'POST',
+			body: JSON.stringify({ token })
+		}, false);
+	}
+
+	async completePasswordReset(token: string, password: string) {
+		return this.request<{ success: boolean; username: string }>('/auth/password-reset/complete', {
+			method: 'POST',
+			body: JSON.stringify({ token, password })
+		}, false);
+	}
+
 	async tokenAuth(token: string) {
 		return this.request<{
 			access_token: string;
@@ -943,6 +1056,28 @@ class ApiClient {
 		});
 	}
 
+	async inspectRegistryImage(image: string, platform = '') {
+		return this.request<RegistryImageInspection>('/admin/challenges/registry/inspect', {
+			method: 'POST',
+			body: JSON.stringify({ image, platform })
+		});
+	}
+
+	async getRegistryCredentials() {
+		return this.request<{ credentials: RegistryCredential[] }>('/admin/challenges/registry/credentials', { cache: 'no-store' });
+	}
+
+	async saveRegistryCredential(registry: 'docker.io' | 'ghcr.io', username: string, token: string) {
+		return this.request<{ success: boolean }>(`/admin/challenges/registry/credentials/${encodeURIComponent(registry)}`, {
+			method: 'PUT',
+			body: JSON.stringify({ username, token })
+		});
+	}
+
+	async deleteRegistryCredential(registry: 'docker.io' | 'ghcr.io') {
+		return this.request<{ success: boolean }>(`/admin/challenges/registry/credentials/${encodeURIComponent(registry)}`, { method: 'DELETE' });
+	}
+
 	async getAdminChallengeDetail(challengeId: string) {
 		return this.request<any>(`/admin/challenges/${challengeId}/detail`, { cache: 'no-store' });
 	}
@@ -1214,12 +1349,52 @@ class ApiClient {
 		return this.request<{ users: number; teams: number; categories: number; challenges: number; solves: number; pending_imports: number }>('/admin/data/summary', { cache: 'no-store' });
 	}
 
-	async previewDataImport(data: { entity: string; format: 'csv' | 'json'; mode: 'create' | 'merge'; source_name: string; content: string }) {
+	async getMailProviders() {
+		return this.request<{ providers: MailProvider[] }>('/admin/mail/providers', { cache: 'no-store' });
+	}
+
+	async createMailProvider(data: Record<string, unknown>) {
+		return this.request<{ id: string }>('/admin/mail/providers', { method: 'POST', body: JSON.stringify(data) });
+	}
+
+	async updateMailProvider(id: string, data: Record<string, unknown>) {
+		return this.request<{ success: boolean }>(`/admin/mail/providers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) });
+	}
+
+	async deleteMailProvider(id: string) {
+		return this.request<{ success: boolean }>(`/admin/mail/providers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+	}
+
+	async testMailProvider(id: string, recipient: string) {
+		return this.request<{ sent: boolean; message_id: string }>(`/admin/mail/providers/${encodeURIComponent(id)}/test`, { method: 'POST', body: JSON.stringify({ recipient }) });
+	}
+
+	async getMailTemplates() {
+		return this.request<{ templates: MailTemplate[]; allowed_variables: string[] }>('/admin/mail/templates', { cache: 'no-store' });
+	}
+
+	async createMailTemplate(data: Record<string, unknown>) {
+		return this.request<{ success: boolean; slug: string; variables: string[] }>('/admin/mail/templates', { method: 'POST', body: JSON.stringify(data) });
+	}
+
+	async updateMailTemplate(slug: string, data: Record<string, unknown>) {
+		return this.request<{ success: boolean; slug: string; variables: string[] }>(`/admin/mail/templates/${encodeURIComponent(slug)}`, { method: 'PUT', body: JSON.stringify(data) });
+	}
+
+	async previewMailTemplate(data: { subject: string; body_html: string; body_text: string; values: Record<string, string> }) {
+		return this.request<{ subject: string; body_html: string; body_text: string }>('/admin/mail/templates/preview', { method: 'POST', body: JSON.stringify(data) });
+	}
+
+	async getMailDeliveries() {
+		return this.request<{ deliveries: MailDelivery[] }>('/admin/mail/deliveries', { cache: 'no-store' });
+	}
+
+	async previewDataImport(data: { entity: string; format: 'csv' | 'json'; mode: 'create' | 'merge'; source_name: string; content: string; provisioning?: 'sso_only' | 'activation_email' }) {
 		return this.request<DataImportPreview>('/admin/data/imports/preview', { method: 'POST', body: JSON.stringify(data) });
 	}
 
 	async applyDataImport(id: string, checksum: string) {
-		return this.request<{ entity: string; mode: string; created: number; updated: number; skipped: number }>(`/admin/data/imports/${encodeURIComponent(id)}/apply`, { method: 'POST', body: JSON.stringify({ checksum }) });
+		return this.request<{ entity: string; mode: string; created: number; updated: number; skipped: number; activation_emails_queued?: number }>(`/admin/data/imports/${encodeURIComponent(id)}/apply`, { method: 'POST', body: JSON.stringify({ checksum }) });
 	}
 
 	async getDataImports() {
