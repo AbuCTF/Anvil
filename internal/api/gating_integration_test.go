@@ -364,6 +364,17 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	if body["error"] != "your timer on this challenge ran out; open it again first" {
 		t.Errorf("expired submit message = %v", body["error"])
 	}
+	code, body, _ = call("GET", "/api/v1/economy/me", &p4, "")
+	expect("expired balance refresh", code, 200, body)
+	if open, ok := body["open"].([]any); !ok || len(open) != 0 {
+		t.Errorf("expired balance retained stale opens: %v", body["open"])
+	}
+	var expiredStatus string
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT status FROM economy_challenge_state WHERE team_id = $1 AND challenge_id = $2`, teamC, c1).
+		Scan(&expiredStatus); err != nil || expiredStatus != "expired" {
+		t.Errorf("balance expiry status = %q err=%v, want expired", expiredStatus, err)
+	}
 	code, body, _ = call("POST", "/api/v1/instances", &p4, `{"challenge_slug":"box-two"}`)
 	expect("expired team instance start", code, 403, body)
 	code, body, _ = call("POST", "/api/v1/challenges/static-one/extend", &p4, "")

@@ -722,6 +722,14 @@ func (h *EconomyHandler) Balance(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read balance"})
 		return
 	}
+	if _, err := h.db.Pool.Exec(ctx,
+		`UPDATE economy_challenge_state SET status = 'expired'
+		 WHERE team_id = $1 AND status = 'open' AND expires_at IS NOT NULL AND expires_at < NOW()`, teamID,
+	); err != nil {
+		h.logger.Error("failed to expire stale challenge opens", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to refresh challenge timers"})
+		return
+	}
 	rows, err := h.db.Pool.Query(ctx,
 		`SELECT c.slug, c.name, e.status, e.expires_at, e.wrong_subs, e.current_value
 		 FROM economy_challenge_state e JOIN challenges c ON c.id = e.challenge_id
