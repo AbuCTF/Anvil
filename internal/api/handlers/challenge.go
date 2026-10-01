@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -27,6 +28,141 @@ import (
 func hashFlagForComparison(flag string) string {
 	hash := sha256.Sum256([]byte(flag))
 	return hex.EncodeToString(hash[:])
+}
+
+func evidenceUserAgent(c *gin.Context) string {
+	value := strings.ToValidUTF8(strings.TrimSpace(c.Request.UserAgent()), "")
+	runes := []rune(value)
+	if len(runes) > 1024 {
+		return string(runes[:1024])
+	}
+	return value
+}
+
+func evidenceRequestID(c *gin.Context) string {
+	value := strings.TrimSpace(c.GetString("request_id"))
+	if len(value) > 128 {
+		return value[:128]
+	}
+	return value
+}
+
+type requestGeo struct {
+	CountryCode string
+	Region      string
+	City        string
+	Latitude    *float64
+	Longitude   *float64
+}
+
+func evidenceText(value string, limit int) string {
+	runes := []rune(strings.ToValidUTF8(strings.TrimSpace(value), ""))
+	if len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return string(runes)
+}
+
+func requestCameFromTrustedProxy(c *gin.Context, trustedProxies []string) bool {
+	host, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+	if err != nil {
+		host = c.Request.RemoteAddr
+	}
+	peer := net.ParseIP(strings.TrimSpace(host))
+	if peer == nil {
+		return false
+	}
+	for _, raw := range trustedProxies {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if proxy := net.ParseIP(raw); proxy != nil && proxy.Equal(peer) {
+			return true
+		}
+		_, network, err := net.ParseCIDR(raw)
+		if err == nil && network.Contains(peer) {
+			return true
+		}
+	}
+	return false
+}
+
+func requestGeoEvidence(c *gin.Context, trustedProxies []string) requestGeo {
+	if !requestCameFromTrustedProxy(c, trustedProxies) {
+		return requestGeo{}
+	}
+	country := strings.ToUpper(evidenceText(c.GetHeader("X-Anvil-Geo-Country"), 2))
+	if country == "" {
+		country = strings.ToUpper(evidenceText(c.GetHeader("CF-IPCountry"), 2))
+	}
+	if country == "XX" || country == "T1" || len(country) != 2 {
+		country = ""
+	}
+	geo := requestGeo{
+		CountryCode: country,
+		Region:      evidenceText(c.GetHeader("X-Anvil-Geo-Region"), 120),
+		City:        evidenceText(c.GetHeader("X-Anvil-Geo-City"), 120),
+	}
+	latitude, latErr := strconv.ParseFloat(strings.TrimSpace(c.GetHeader("X-Anvil-Geo-Latitude")), 64)
+	longitude, lonErr := strconv.ParseFloat(strings.TrimSpace(c.GetHeader("X-Anvil-Geo-Longitude")), 64)
+	if latErr == nil && lonErr == nil && latitude >= -90 && latitude <= 90 && longitude >= -180 && longitude <= 180 {
+		geo.Latitude = &latitude
+		geo.Longitude = &longitude
+	}
+	return geo
+}
+
+func (h *ChallengeHandler) recordFlagShareEvent(c *gin.Context, challengeID, flagID, ownerUserID, ownerInstanceID string, submitterUserID uuid.UUID, flagValue string) error {
+	geo := requestGeoEvidence(c, h.config.Server.TrustedProxies)
+	_, err := h.db.Pool.Exec(c.Request.Context(), `
+		INSERT INTO flag_share_events (
+			id, challenge_id, flag_id, owner_user_id, owner_instance_id,
+			submitter_user_id, flag_value, submitter_ip, created_at,
+			flag_fingerprint, flag_length, challenge_name, challenge_slug, flag_name,
+			owner_username, owner_email, submitter_username, submitter_email,
+			owner_team_id, submitter_team_id,
+			owner_team_name, submitter_team_name, owner_ip, owner_user_agent,
+			submitter_user_agent, request_id, country_code, region, city,
+			latitude, longitude, evidence_source, review_status
+		)
+		SELECT
+			uuid_generate_v4(), $1, $2, owner.id, NULLIF($4, '')::uuid,
+			submitter.id, '[redacted]', $6, NOW(),
+			$7, $16, challenge.name, challenge.slug, flag.name,
+			owner.username, owner.email, submitter.username, submitter.email,
+			owner.team_id, submitter.team_id,
+			owner_team.name, submitter_team.name,
+			(
+				SELECT fa.ip_address FROM flag_attempts fa
+				WHERE fa.user_id = owner.id
+				  AND fa.challenge_id = $1
+				  AND fa.submitted_flag = $5
+				  AND fa.is_correct = TRUE
+				ORDER BY fa.created_at DESC LIMIT 1
+			),
+			(
+				SELECT fa.user_agent FROM flag_attempts fa
+				WHERE fa.user_id = owner.id
+				  AND fa.challenge_id = $1
+				  AND fa.submitted_flag = $5
+				  AND fa.is_correct = TRUE
+				ORDER BY fa.created_at DESC LIMIT 1
+			),
+			$8, $9, NULLIF($10, ''), NULLIF($11, ''), NULLIF($12, ''),
+			$13, $14, 'live', 'open'
+		FROM challenges challenge
+		JOIN flags flag ON flag.id = $2 AND flag.challenge_id = challenge.id
+		JOIN users owner ON owner.id = $15
+		JOIN users submitter ON submitter.id = $3
+		LEFT JOIN teams owner_team ON owner_team.id = owner.team_id
+		LEFT JOIN teams submitter_team ON submitter_team.id = submitter.team_id
+		WHERE challenge.id = $1`,
+		challengeID, flagID, submitterUserID, ownerInstanceID, flagValue,
+		c.ClientIP(), hashFlagForComparison(flagValue), evidenceUserAgent(c), evidenceRequestID(c),
+		geo.CountryCode, geo.Region, geo.City, geo.Latitude, geo.Longitude, ownerUserID, len([]rune(flagValue)),
+	)
+	return err
 }
 
 type ChallengeService struct {
@@ -1402,14 +1538,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 				submitterTeamID, _ := resolveTeamID(c.Request.Context(), h.db, uid)
 				sameTeam := submitterTeamID != nil && priorTeamID != nil && *submitterTeamID == *priorTeamID
 				if !sameTeam {
-					if _, err := h.db.Pool.Exec(c.Request.Context(),
-						`INSERT INTO flag_share_events
-							(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
-							 submitter_user_id, flag_value, submitter_ip, created_at)
-						 VALUES
-							(uuid_generate_v4(), $1, $2, $3, NULL, $4, $5, $6, NOW())`,
-						challengeID, matchedFlag.ID, priorUserID, uid, "sha256:"+hashFlagForComparison(submittedFlag), c.ClientIP(),
-					); err != nil {
+					if err := h.recordFlagShareEvent(c, challengeID, matchedFlag.ID, priorUserID, "", uid, submittedFlag); err != nil {
 						h.logger.Error("failed to log regex flag share event", zap.Error(err))
 						c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
 						return
@@ -1478,14 +1607,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 					ownerTeamID, _ = resolveTeamID(c.Request.Context(), h.db, ownerUUID)
 				}
 				if submitterTeamID == nil || ownerTeamID == nil || *submitterTeamID != *ownerTeamID {
-					_, logErr := h.db.Pool.Exec(c.Request.Context(),
-						`INSERT INTO flag_share_events
-							(id, challenge_id, flag_id, owner_user_id, owner_instance_id,
-							 submitter_user_id, flag_value, submitter_ip, created_at)
-						VALUES
-							(uuid_generate_v4(), $1, $2, $3, $4, $5, $6, $7, NOW())`,
-						challengeID, sharedFlagID, ownerUserID, ownerInstanceID,
-						uid, "sha256:"+hashFlagForComparison(submittedFlag), c.ClientIP())
+					logErr := h.recordFlagShareEvent(c, challengeID, sharedFlagID, ownerUserID, ownerInstanceID, uid, submittedFlag)
 					if logErr != nil {
 						h.logger.Error("failed to log flag share event", zap.Error(logErr))
 						c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})
@@ -1524,14 +1646,14 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	attemptResult, err := h.db.Pool.Exec(c.Request.Context(),
 		`WITH recorded_attempt AS (
 			INSERT INTO flag_attempts
-				(id, user_id, challenge_id, flag_id, submitted_flag, is_correct, ip_address, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+				(id, user_id, challenge_id, flag_id, submitted_flag, is_correct, ip_address, user_agent, request_id, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
 			RETURNING 1
 		)
 		UPDATE challenges
 		SET total_attempts = total_attempts + 1
 		WHERE id = $3 AND EXISTS (SELECT 1 FROM recorded_attempt)`,
-		attemptID, uid, challengeID, matchedFlagID, submittedFlag, found, c.ClientIP())
+		attemptID, uid, challengeID, matchedFlagID, submittedFlag, found, c.ClientIP(), evidenceUserAgent(c), evidenceRequestID(c))
 	if err != nil {
 		h.logger.Error("failed to record flag attempt", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "submission failed"})

@@ -57,8 +57,8 @@ func Logger(logger *zap.Logger) gin.HandlerFunc {
 
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		requestID := c.GetHeader("X-Request-ID")
-		if requestID == "" {
+		requestID := strings.TrimSpace(c.GetHeader("X-Request-ID"))
+		if requestID == "" || len(requestID) > 128 {
 			requestID = uuid.New().String()
 		}
 		c.Set("request_id", requestID)

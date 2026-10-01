@@ -2786,41 +2786,91 @@ func (h *AdminChallengeHandler) DeleteHint(c *gin.Context) {
 func (h *AdminChallengeHandler) ListFlagShareEvents(c *gin.Context) {
 	challengeIDFilter := c.Query("challenge_id")
 	submitterFilter := c.Query("submitter_id")
+	statusFilter := strings.ToLower(strings.TrimSpace(c.Query("status")))
+	evidenceFilter := strings.ToLower(strings.TrimSpace(c.Query("evidence_source")))
 	limit := 500
 
-	var cid, sid interface{} = nil, nil
+	var cid, sid interface{}
 	if challengeIDFilter != "" {
-		cid = challengeIDFilter
+		parsed, err := uuid.Parse(challengeIDFilter)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge_id"})
+			return
+		}
+		cid = parsed
 	}
 	if submitterFilter != "" {
-		sid = submitterFilter
+		parsed, err := uuid.Parse(submitterFilter)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid submitter_id"})
+			return
+		}
+		sid = parsed
+	}
+	if statusFilter != "" && statusFilter != "open" && statusFilter != "reviewing" && statusFilter != "confirmed" && statusFilter != "dismissed" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid status"})
+		return
+	}
+	if evidenceFilter != "" && evidenceFilter != "live" && evidenceFilter != "redacted" && evidenceFilter != "demo_simulated" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid evidence_source"})
+		return
 	}
 
 	rows, err := h.db.Pool.Query(c.Request.Context(),
 		`SELECT
 			fse.id,
 			fse.created_at,
-			fse.challenge_id,
-			ch.name        AS challenge_name,
-			fse.flag_id,
-			f.name         AS flag_name,
-			fse.flag_value,
-			fse.owner_user_id,
-			owner.username AS owner_username,
-			fse.submitter_user_id,
-			sub.username   AS submitter_username,
+			fse.challenge_id::text,
+			COALESCE(fse.challenge_name, ch.name) AS challenge_name,
+			fse.challenge_slug,
+			fse.flag_id::text,
+			COALESCE(fse.flag_name, f.name) AS flag_name,
+			LEFT(COALESCE(fse.flag_fingerprint, encode(digest(fse.flag_value, 'sha256'), 'hex')), 16),
+			fse.flag_length,
+			fse.owner_user_id::text,
+			COALESCE(fse.owner_username, owner.username) AS owner_username,
+			COALESCE(fse.owner_email, owner.email),
+			owner.status::text,
+			fse.owner_team_id::text,
+			COALESCE(fse.owner_team_name, owner_team.name),
+			fse.owner_ip,
+			fse.owner_user_agent,
+			fse.submitter_user_id::text,
+			COALESCE(fse.submitter_username, sub.username) AS submitter_username,
+			COALESCE(fse.submitter_email, sub.email),
+			sub.status::text,
+			fse.submitter_team_id::text,
+			COALESCE(fse.submitter_team_name, submitter_team.name),
 			fse.submitter_ip,
-			fse.owner_instance_id
+			fse.submitter_user_agent,
+			fse.owner_instance_id::text,
+			fse.request_id,
+			fse.country_code,
+			fse.region,
+			fse.city,
+			fse.latitude,
+			fse.longitude,
+			fse.evidence_source,
+			fse.review_status,
+			fse.review_note,
+			fse.reviewed_by::text,
+			reviewer.username,
+			fse.reviewed_at
 		FROM flag_share_events fse
-		JOIN challenges ch  ON ch.id  = fse.challenge_id
-		JOIN flags      f   ON f.id   = fse.flag_id
-		JOIN users      owner ON owner.id = fse.owner_user_id
-		JOIN users      sub   ON sub.id   = fse.submitter_user_id
+		LEFT JOIN challenges ch  ON ch.id  = fse.challenge_id
+		LEFT JOIN flags      f   ON f.id   = fse.flag_id
+		LEFT JOIN users      owner ON owner.id = fse.owner_user_id
+		LEFT JOIN users      sub   ON sub.id   = fse.submitter_user_id
+		LEFT JOIN teams owner_team ON owner_team.id = owner.team_id
+		LEFT JOIN teams submitter_team ON submitter_team.id = sub.team_id
+		LEFT JOIN users reviewer ON reviewer.id = fse.reviewed_by
 		WHERE ($1::uuid IS NULL OR fse.challenge_id      = $1)
 		  AND ($2::uuid IS NULL OR fse.submitter_user_id = $2)
+		  AND ($3 = '' OR fse.review_status = $3)
+		  AND ($4 = '' OR fse.evidence_source = $4)
 		ORDER BY fse.created_at DESC
-		LIMIT $3`,
-		cid, sid, limit)
+		LIMIT $5`,
+		cid, sid, statusFilter, evidenceFilter, limit)
 	if err != nil {
 		h.logger.Error("failed to list flag share events", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flag share events"})
@@ -2829,46 +2879,153 @@ func (h *AdminChallengeHandler) ListFlagShareEvents(c *gin.Context) {
 	defer rows.Close()
 
 	type shareRow struct {
-		ID                string  `json:"id"`
-		CreatedAt         int64   `json:"created_at"`
-		ChallengeID       string  `json:"challenge_id"`
-		ChallengeName     string  `json:"challenge_name"`
-		FlagID            string  `json:"flag_id"`
-		FlagName          string  `json:"flag_name"`
-		FlagFingerprint   string  `json:"flag_fingerprint"`
-		FlagLength        int     `json:"flag_length"`
-		OwnerUserID       string  `json:"owner_user_id"`
-		OwnerUsername     string  `json:"owner_username"`
-		SubmitterUserID   string  `json:"submitter_user_id"`
-		SubmitterUsername string  `json:"submitter_username"`
-		SubmitterIP       *string `json:"submitter_ip"`
-		OwnerInstanceID   *string `json:"owner_instance_id"`
+		ID                 string   `json:"id"`
+		CreatedAt          int64    `json:"created_at"`
+		ChallengeID        *string  `json:"challenge_id"`
+		ChallengeName      string   `json:"challenge_name"`
+		ChallengeSlug      *string  `json:"challenge_slug"`
+		FlagID             *string  `json:"flag_id"`
+		FlagName           string   `json:"flag_name"`
+		FlagFingerprint    string   `json:"flag_fingerprint"`
+		FlagLength         *int     `json:"flag_length"`
+		OwnerUserID        *string  `json:"owner_user_id"`
+		OwnerUsername      string   `json:"owner_username"`
+		OwnerEmail         *string  `json:"owner_email"`
+		OwnerStatus        *string  `json:"owner_status"`
+		OwnerTeamID        *string  `json:"owner_team_id"`
+		OwnerTeamName      *string  `json:"owner_team_name"`
+		OwnerIP            *string  `json:"owner_ip"`
+		OwnerUserAgent     *string  `json:"owner_user_agent"`
+		SubmitterUserID    *string  `json:"submitter_user_id"`
+		SubmitterUsername  string   `json:"submitter_username"`
+		SubmitterEmail     *string  `json:"submitter_email"`
+		SubmitterStatus    *string  `json:"submitter_status"`
+		SubmitterTeamID    *string  `json:"submitter_team_id"`
+		SubmitterTeamName  *string  `json:"submitter_team_name"`
+		SubmitterIP        *string  `json:"submitter_ip"`
+		SubmitterUserAgent *string  `json:"submitter_user_agent"`
+		OwnerInstanceID    *string  `json:"owner_instance_id"`
+		RequestID          *string  `json:"request_id"`
+		CountryCode        *string  `json:"country_code"`
+		Region             *string  `json:"region"`
+		City               *string  `json:"city"`
+		Latitude           *float64 `json:"latitude"`
+		Longitude          *float64 `json:"longitude"`
+		EvidenceSource     string   `json:"evidence_source"`
+		ReviewStatus       string   `json:"review_status"`
+		ReviewNote         *string  `json:"review_note"`
+		ReviewedBy         *string  `json:"reviewed_by"`
+		ReviewerUsername   *string  `json:"reviewer_username"`
+		ReviewedAt         *int64   `json:"reviewed_at"`
 	}
 
 	var results []shareRow
 	for rows.Next() {
 		var r shareRow
-		var flagValue string
 		var createdAt time.Time
+		var reviewedAt *time.Time
 		if err := rows.Scan(
-			&r.ID, &createdAt, &r.ChallengeID, &r.ChallengeName,
-			&r.FlagID, &r.FlagName, &flagValue,
-			&r.OwnerUserID, &r.OwnerUsername,
-			&r.SubmitterUserID, &r.SubmitterUsername,
-			&r.SubmitterIP, &r.OwnerInstanceID,
+			&r.ID, &createdAt, &r.ChallengeID, &r.ChallengeName, &r.ChallengeSlug,
+			&r.FlagID, &r.FlagName, &r.FlagFingerprint, &r.FlagLength,
+			&r.OwnerUserID, &r.OwnerUsername, &r.OwnerEmail, &r.OwnerStatus,
+			&r.OwnerTeamID, &r.OwnerTeamName, &r.OwnerIP, &r.OwnerUserAgent,
+			&r.SubmitterUserID, &r.SubmitterUsername, &r.SubmitterEmail, &r.SubmitterStatus,
+			&r.SubmitterTeamID, &r.SubmitterTeamName, &r.SubmitterIP, &r.SubmitterUserAgent,
+			&r.OwnerInstanceID, &r.RequestID,
+			&r.CountryCode, &r.Region, &r.City, &r.Latitude, &r.Longitude,
+			&r.EvidenceSource, &r.ReviewStatus, &r.ReviewNote,
+			&r.ReviewedBy, &r.ReviewerUsername, &reviewedAt,
 		); err != nil {
-			continue
+			h.logger.Error("failed to scan flag share event", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flag share events"})
+			return
 		}
-		r.FlagFingerprint = hashFlag(flagValue)[:16]
-		r.FlagLength = len(flagValue)
 		r.CreatedAt = createdAt.Unix()
+		if reviewedAt != nil {
+			value := reviewedAt.Unix()
+			r.ReviewedAt = &value
+		}
 		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed while listing flag share events", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flag share events"})
+		return
 	}
 	if results == nil {
 		results = []shareRow{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"flag_shares": results, "total": len(results)})
+}
+
+func (h *AdminChallengeHandler) ReviewFlagShareEvent(c *gin.Context) {
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid event id"})
+		return
+	}
+	adminID, ok := contextUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	var req struct {
+		Status string `json:"status" binding:"required"`
+		Note   string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "status is required"})
+		return
+	}
+	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	req.Note = strings.TrimSpace(req.Note)
+	if req.Status != "open" && req.Status != "reviewing" && req.Status != "confirmed" && req.Status != "dismissed" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid review status"})
+		return
+	}
+	if len([]rune(req.Note)) > 2000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "review note is too long"})
+		return
+	}
+
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update review"})
+		return
+	}
+	defer tx.Rollback(c.Request.Context())
+
+	result, err := tx.Exec(c.Request.Context(), `
+		UPDATE flag_share_events
+		SET review_status = $2::varchar,
+		    review_note = NULLIF($3, ''),
+		    reviewed_by = CASE WHEN $2::text = 'open' THEN NULL::uuid ELSE $4::uuid END,
+		    reviewed_at = CASE WHEN $2::text = 'open' THEN NULL ELSE NOW() END
+		WHERE id = $1`, eventID, req.Status, req.Note, adminID)
+	if err != nil {
+		h.logger.Error("failed to update flag share review", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update review"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "flag share event not found"})
+		return
+	}
+	metadata, _ := json.Marshal(gin.H{"status": req.Status, "note": req.Note})
+	if _, err := tx.Exec(c.Request.Context(), `
+		INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent)
+		VALUES ($1, 'flag_share_reviewed', 'flag_share_event', $2, $3::jsonb, $4, $5)`,
+		adminID, eventID, string(metadata), c.ClientIP(), evidenceUserAgent(c)); err != nil {
+		h.logger.Error("failed to audit flag share review", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update review"})
+		return
+	}
+	if err := tx.Commit(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update review"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "status": req.Status})
 }
 
 // all generated dynamic flags; admin monitoring only

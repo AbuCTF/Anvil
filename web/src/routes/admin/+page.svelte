@@ -6,6 +6,7 @@
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
+	import SecurityIntelligence from '$lib/components/admin/SecurityIntelligence.svelte';
 	import { difficultyClass, resourceClass, resourceIcon, resourceLabel } from '$lib/rank';
 	import { formatLocalDateLong, formatLocalDateTime, formatLocalDateTimeWithZone, instantTitle, viewerTimeZone } from '$lib/time';
 	import { confirmDialog, alertDialog, promptDialog } from '$lib/stores/dialog';
@@ -63,11 +64,6 @@
 	let infrastructureRefreshing = false;
 	let infrastructureUpdatedAt: Date | null = null;
 	let infrastructureTimer: ReturnType<typeof setInterval> | undefined;
-
-	let intelLoading = false;
-	let flagShares: any[] = [];
-	let instanceFlags: any[] = [];
-	let intelError = '';
 
 	let teams: any[] = [];
 	let teamsLoading = false;
@@ -747,23 +743,6 @@
 		}
 	}
 
-	async function loadIntel() {
-		intelLoading = true;
-		intelError = '';
-		try {
-			const [sharesRes, flagsRes] = await Promise.all([
-				api.getFlagShares(),
-				api.getInstanceFlags()
-			]);
-			flagShares = sharesRes.flag_shares || [];
-			instanceFlags = flagsRes.instance_flags || [];
-		} catch (e) {
-			intelError = e instanceof Error ? e.message : 'Failed to load audit data';
-		} finally {
-			intelLoading = false;
-		}
-	}
-
 	async function loadAnnouncements() {
 		announcementsLoading = true;
 		announcementsError = '';
@@ -829,9 +808,6 @@
 
 	function setTab(id: string) {
 		activeTab = id;
-		if (id === 'intel' && flagShares.length === 0 && instanceFlags.length === 0) {
-			loadIntel();
-		}
 		if (id === 'teams' && teams.length === 0) {
 			loadTeams();
 		}
@@ -2877,121 +2853,7 @@
 					</Card>
 				</div>
 			{:else if activeTab === 'intel'}
-				<div class="space-y-8">
-					{#if intelError}
-						<div class="flex items-center justify-between gap-3 rounded-lg border border-down/20 bg-down/10 px-4 py-3 text-sm text-down" aria-live="polite">
-							<span>Audit data could not be loaded: {intelError}</span>
-							<button type="button" on:click={loadIntel} class="shrink-0 text-stone-300 hover:text-stone-100">Retry</button>
-						</div>
-					{/if}
-					<div>
-						<p class="metadata-label text-stone-600">Integrity operations</p>
-						<div class="mt-1 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><h2 class="text-xl font-semibold text-stone-100">Evidence without secret exposure</h2><p class="mt-1 text-sm text-stone-500">Review suspicious submissions, contact participants and correlate generated flags without displaying reusable flag material.</p></div><button type="button" on:click={loadIntel} disabled={intelLoading} class={btnGhost}><Icon icon="mdi:refresh" class="h-4 w-4 {intelLoading ? 'animate-spin' : ''}" />Refresh evidence</button></div>
-						<div class="mt-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-							{#each [
-								{ label: 'Share alerts', value: flagShares.length, tone: flagShares.length ? 'text-down' : 'text-up' },
-								{ label: 'Dynamic flags indexed', value: instanceFlags.length, tone: 'text-stone-200' },
-								{ label: 'Raw secrets shown', value: 0, tone: 'text-up' },
-								{ label: 'Evidence state', value: intelError ? 'degraded' : 'current', tone: intelError ? 'text-warn' : 'text-up' }
-							] as item}<div class="rounded-lg border border-stone-800 bg-stone-900/40 p-4"><p class="metadata-label text-stone-600">{item.label}</p><p class="mt-2 text-xl font-semibold capitalize tabular-nums {item.tone}">{item.value}</p></div>{/each}
-						</div>
-					</div>
-					<div>
-						<div class="flex items-center justify-between mb-4">
-							<div>
-								<h3 class="text-sm font-semibold text-stone-200">Flag Share Events</h3>
-								<p class="mt-1 text-xs text-stone-500">Valid flag material is never exposed here. Evidence uses participant, challenge, IP, time, and a non-reversible fingerprint.</p>
-							</div>
-								<span class="rounded-full border border-stone-800 px-2 py-1 text-[10px] text-stone-500">Priority review queue</span>
-						</div>
-						{#if intelLoading}
-							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-8 flex justify-center">
-								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />
-							</div>
-						{:else if flagShares.length === 0}
-							<Card hasHeader={false}>
-								<EmptyState icon="mdi:shield-check-outline" text="No flag share events detected." />
-							</Card>
-						{:else}
-							<Card hasHeader={false} bodyClass="">
-								<div class="overflow-x-auto">
-									<table class="w-full min-w-[760px] text-sm">
-										<thead>
-											<tr class="metadata-label text-stone-500 border-b border-stone-800">
-												<th class="px-4 py-2.5 text-left">Challenge</th>
-												<th class="px-4 py-2.5 text-left">Flag Owner</th>
-												<th class="px-4 py-2.5 text-left">Submitter</th>
-												<th class="px-4 py-2.5 text-left">IP</th>
-												<th class="px-4 py-2.5 text-left">Evidence</th>
-												<th class="px-4 py-2.5 text-right">Time</th>
-												<th class="px-4 py-2.5 text-right">Actions</th>
-											</tr>
-										</thead>
-										<tbody>
-											{#each flagShares as ev}
-												<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
-													<td class="px-4 py-2.5 text-stone-200">{ev.challenge_name ?? ev.challenge_id}</td>
-													<td class="px-4 py-2.5 text-amber-500/90">{ev.owner_username ?? ev.owner_user_id}</td>
-													<td class="px-4 py-2.5 text-down">{ev.submitter_username ?? ev.submitter_user_id}</td>
-													<td class="px-4 py-2.5 text-xs text-stone-400 font-mono">{ev.submitter_ip ?? '-'}</td>
-											<td class="px-4 py-2.5 text-xs text-stone-300 font-mono max-w-xs truncate">sha256:{ev.flag_fingerprint} · {ev.flag_length} chars</td>
-										<td
-											class="px-4 py-2.5 text-right text-xs text-stone-500 tabular-nums"
-											title={instantTitle(ev.created_at, 'seconds')}
-										>{formatLocalDateTimeWithZone(ev.created_at, 'seconds')}</td>
-											<td class="px-4 py-2.5">
-												<div class="flex items-center justify-end gap-3">
-													<button type="button" on:click={() => openUserDetail({ id: ev.submitter_user_id, username: ev.submitter_username })} class="text-xs text-stone-300 hover:underline">Review</button>
-													<button type="button" on:click={() => warnParticipant(ev.submitter_user_id, ev.submitter_username ?? 'participant')} disabled={actionLoading === ev.submitter_user_id} class="text-xs text-warn hover:underline disabled:opacity-50">Warn</button>
-												</div>
-											</td>
-												</tr>
-											{/each}
-										</tbody>
-									</table>
-								</div>
-							</Card>
-						{/if}
-					</div>
-
-					<div>
-						<div class="mb-4"><h3 class="text-sm font-semibold text-stone-200">Generated flag index ({instanceFlags.length})</h3><p class="mt-1 text-xs text-stone-500">Only a shortened SHA-256 fingerprint and length are returned. Use these to correlate evidence; raw per-instance flags stay inside the runtime and verification path.</p></div>
-						{#if intelLoading}
-							<div class="bg-stone-900/40 border border-stone-800 rounded-lg p-8 flex justify-center">
-								<Icon icon="mdi:loading" class="w-5 h-5 text-stone-600 animate-spin" />
-							</div>
-						{:else if instanceFlags.length === 0}
-							<Card hasHeader={false}>
-								<EmptyState icon="mdi:flag-outline" text="No instance flags generated yet." />
-							</Card>
-						{:else}
-							<Card hasHeader={false} bodyClass="">
-								<div class="overflow-x-auto">
-									<table class="w-full min-w-[640px] text-sm">
-										<thead>
-											<tr class="metadata-label text-stone-500 border-b border-stone-800">
-												<th class="px-4 py-2.5 text-left">User</th>
-												<th class="px-4 py-2.5 text-left">Challenge</th>
-											<th class="px-4 py-2.5 text-left">Fingerprint</th>
-												<th class="px-4 py-2.5 text-left">Instance ID</th>
-											</tr>
-										</thead>
-										<tbody>
-											{#each instanceFlags as fl}
-												<tr class="border-b border-stone-800/60 hover:bg-stone-800/20 transition-colors">
-													<td class="px-4 py-2.5 text-stone-200">{fl.username ?? fl.user_id}</td>
-													<td class="px-4 py-2.5 text-stone-300">{fl.challenge_name ?? fl.challenge_id}</td>
-											<td class="px-4 py-2.5 text-xs text-stone-400 font-mono max-w-xs truncate">sha256:{fl.flag_fingerprint} · {fl.flag_length} chars</td>
-													<td class="px-4 py-2.5 text-xs text-stone-500 font-mono">{fl.instance_id}</td>
-												</tr>
-											{/each}
-										</tbody>
-									</table>
-								</div>
-							</Card>
-						{/if}
-					</div>
-				</div>
+				<SecurityIntelligence />
 			{/if}
 		{/if}
 	</div>

@@ -482,6 +482,7 @@ func (s *Server) setupRouter() {
 			adminChalMonitor := handlers.NewAdminChallengeHandler(s.config, s.db, s.containerSvc, s.logger, s.registrySvc)
 			admin.GET("/instance-flags", adminChalMonitor.ListInstanceFlags)
 			admin.GET("/flag-shares", adminChalMonitor.ListFlagShareEvents)
+			admin.PATCH("/flag-shares/:id/review", adminChalMonitor.ReviewFlagShareEvent)
 
 			instances := admin.Group("/instances")
 			{

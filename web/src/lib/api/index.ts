@@ -1506,9 +1506,16 @@ class ApiClient {
 		return this.request<{ instance_flags: any[]; total: number }>(`/admin/instance-flags${q}`);
 	}
 
-	async getFlagShares(params?: { challenge_id?: string; submitter_id?: string }) {
+	async getFlagShares(params?: { challenge_id?: string; submitter_id?: string; status?: string; evidence_source?: string }) {
 		const q = params && Object.keys(params).length ? '?' + new URLSearchParams(params as Record<string, string>).toString() : '';
 		return this.request<{ flag_shares: any[]; total: number }>(`/admin/flag-shares${q}`);
+	}
+
+	async reviewFlagShare(id: string, status: 'open' | 'reviewing' | 'confirmed' | 'dismissed', note: string) {
+		return this.request<{ success: boolean; status: string }>(`/admin/flag-shares/${id}/review`, {
+			method: 'PATCH',
+			body: JSON.stringify({ status, note })
+		});
 	}
 }
 

@@ -70,6 +70,8 @@ sudo systemctl enable --now wg-status-sync.timer
 - `/` → `127.0.0.1:3000`
 - `set_real_ip_from` Cloudflare ranges + `real_ip_header CF-Connecting-IP`
 
+Anvil accepts forwarded client addresses only from `server.trusted_proxies`. Keep that list limited to the reverse proxies that can actually reach the API. For optional security-event geolocation, the trusted edge can overwrite `X-Anvil-Geo-Country`, `X-Anvil-Geo-Region`, `X-Anvil-Geo-City`, `X-Anvil-Geo-Latitude`, and `X-Anvil-Geo-Longitude` from a local GeoIP database. Cloudflare's `CF-IPCountry` is also accepted from a trusted peer. Never pass client-supplied values through unchanged. Geolocation is stored as approximate review context and is not treated as proof of misconduct.
+
 For large uploads (VM images, bypasses Cloudflare 100MB limit):
 - `upload.your-domain.com` A record → server IP, **DNS only**
 - Separate nginx block: `client_max_body_size 0`, `proxy_request_buffering off`
