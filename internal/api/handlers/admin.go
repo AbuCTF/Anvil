@@ -662,8 +662,8 @@ type FlagInput struct {
 	Flag              string `json:"flag"`   // required for static; leave empty for dynamic
 	Points            int    `json:"points"` // 0 is valid (e.g. survey/free flags)
 	SortOrder         int    `json:"sort_order"`
-	FlagType          string `json:"flag_type"`           // "static" (default) | "dynamic"
-	DynamicFlagPrefix string `json:"dynamic_flag_prefix"` // e.g. "H7CTF" → "H7CTF{uuid}"
+	FlagType          string `json:"flag_type"` // "static" (default) | "dynamic"
+	DynamicFlagPrefix string `json:"dynamic_flag_prefix"`
 }
 
 type CreateChallengeRequest struct {
@@ -2051,6 +2051,83 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "challenge updated"})
 }
 
+func (h *AdminChallengeHandler) UpdateMetadata(c *gin.Context) {
+	challengeID := c.Param("id")
+	if _, err := uuid.Parse(challengeID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge id"})
+		return
+	}
+	var request struct {
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+		Difficulty  *string `json:"difficulty"`
+		BasePoints  *int    `json:"base_points"`
+	}
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid challenge metadata"})
+		return
+	}
+	if request.Name == nil && request.Description == nil && request.Difficulty == nil && request.BasePoints == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no metadata changes provided"})
+		return
+	}
+	if request.Name != nil {
+		value := strings.TrimSpace(*request.Name)
+		if value == "" || len([]rune(value)) > 200 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "name must be between 1 and 200 characters"})
+			return
+		}
+		request.Name = &value
+	}
+	if request.Difficulty != nil {
+		value := strings.ToLower(strings.TrimSpace(*request.Difficulty))
+		if value != "easy" && value != "medium" && value != "hard" && value != "insane" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "difficulty must be easy, medium, hard, or insane"})
+			return
+		}
+		request.Difficulty = &value
+	}
+	if request.BasePoints != nil && (*request.BasePoints < 0 || *request.BasePoints > 1_000_000) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "base_points must be between 0 and 1000000"})
+		return
+	}
+	result, err := h.db.Pool.Exec(c.Request.Context(), `
+		UPDATE challenges SET
+			name = COALESCE($2, name),
+			description = COALESCE($3, description),
+			difficulty = COALESCE($4, difficulty),
+			base_points = COALESCE($5, base_points),
+			updated_at = NOW()
+		WHERE id = $1
+	`, challengeID, request.Name, request.Description, request.Difficulty, request.BasePoints)
+	if err != nil {
+		h.logger.Error("failed to update challenge metadata", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge metadata"})
+		return
+	}
+	if result.RowsAffected() != 1 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	}
+	if uid, ok := contextUserID(c); ok {
+		changes := map[string]interface{}{}
+		if request.Name != nil {
+			changes["name"] = *request.Name
+		}
+		if request.Description != nil {
+			changes["description"] = *request.Description
+		}
+		if request.Difficulty != nil {
+			changes["difficulty"] = *request.Difficulty
+		}
+		if request.BasePoints != nil {
+			changes["base_points"] = *request.BasePoints
+		}
+		_ = logAdminAction(h.db, c, uid.String(), "challenge_metadata_updated", "challenge", challengeID, changes)
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "challenge metadata updated"})
+}
+
 func (h *AdminChallengeHandler) Delete(c *gin.Context) {
 	challengeID := c.Param("id")
 	ctx := c.Request.Context()
@@ -2218,8 +2295,8 @@ type CreateFlagRequest struct {
 	Points            int    `json:"points"`
 	Order             int    `json:"order"`
 	CaseSensitive     *bool  `json:"case_sensitive"`
-	FlagType          string `json:"flag_type"`           // "static" | "dynamic"
-	DynamicFlagPrefix string `json:"dynamic_flag_prefix"` // e.g. "H7CTF"
+	FlagType          string `json:"flag_type"` // "static" | "dynamic"
+	DynamicFlagPrefix string `json:"dynamic_flag_prefix"`
 }
 
 func (h *AdminChallengeHandler) ListFlags(c *gin.Context) {

@@ -77,7 +77,7 @@
 	let showKoth = false;
 
 	// icons only - the accent color always comes from the muted categoryColor palette.
-	// keyed by the lowercased category name; keep both the live H7 names and the
+	// keyed by the lowercased category name; keep current and common aliases
 	// generic aliases so this maps cleanly across events.
 	const categoryIcons: Record<string, { icon: string; size: number }> = {
 		ai: { icon: 'mdi:brain', size: 14.5 },

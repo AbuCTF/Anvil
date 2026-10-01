@@ -88,7 +88,7 @@ func main() {
 	maxLife, _ := time.ParseDuration(env("INSTANCER_MAX_LIFETIME", "0"))
 	httpPort, _ := strconv.Atoi(env("INSTANCER_HTTP_PORT", "443"))
 	cfg := controller.Config{
-		BaseDomain:            env("INSTANCER_BASE_DOMAIN", "h7tex.com"),
+		BaseDomain:            env("INSTANCER_BASE_DOMAIN", "ctf.example.com"),
 		RuntimeClass:          env("INSTANCER_RUNTIME_CLASS", "gvisor"),
 		TraefikNamespace:      env("INSTANCER_TRAEFIK_NAMESPACE", "traefik"),
 		HTTPEntryPoint:        env("INSTANCER_HTTP_ENTRYPOINT", "websecure"),

@@ -123,7 +123,7 @@ Off by default — Anvil is a B2R/Jeopardy platform until `game.enabled` is set.
 | `enabled` | master switch (default `false`) |
 | `tick_interval` | game heartbeat (default `2m`) |
 | `flag_valid_ticks` | how long a stolen flag stays submittable (default `10`) |
-| `flag_prefix` | flag wrapper `PREFIX{...}` (default `H7CTF`) |
+| `flag_prefix` | flag wrapper `PREFIX{...}` (default `CTF`) |
 | `koth.round_interval` | KotH round length / hill reset cadence (default `15m`) |
 | `scoring.*` | attack / defense / SLA / KotH weights |
 

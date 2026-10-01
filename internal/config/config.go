@@ -69,8 +69,8 @@ type GradedConfig struct {
 type InstancerConfig struct {
 	Backend    string        `mapstructure:"backend"`     // docker | k8s
 	HMACSecret string        `mapstructure:"hmac_secret"` // derives the per-team instance id/hostname
-	BaseDomain string        `mapstructure:"base_domain"` // e.g. h7tex.com
-	Timeout    time.Duration `mapstructure:"timeout"`     // instance TTL when the challenge sets none
+	BaseDomain string        `mapstructure:"base_domain"`
+	Timeout    time.Duration `mapstructure:"timeout"` // instance TTL when the challenge sets none
 }
 
 // Ledger economy parameters. Band arrays index by difficulty: 0=easy,
@@ -112,6 +112,7 @@ type SSOConfig struct {
 	SharedSecret string `mapstructure:"shared_secret"` // hs256 secret shared with zeropool
 	Issuer       string `mapstructure:"issuer"`        // expected token iss (e.g. "zeropool")
 	Audience     string `mapstructure:"audience"`      // expected token aud (e.g. "anvil")
+	LoginURL     string `mapstructure:"login_url"`
 }
 
 // ZeroPoolConfig is the server-to-server link to ZeroPool (the identity store):
@@ -455,7 +456,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("zeropool.base_url", "")
 	v.SetDefault("zeropool.api_key", "")
-	v.SetDefault("zeropool.event_slug", "h7ctf-2026")
+	v.SetDefault("zeropool.event_slug", "event")
 	v.SetDefault("discord.enabled", false)
 	v.SetDefault("discord.client_id", "")
 	v.SetDefault("discord.client_secret", "")
@@ -465,6 +466,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("sso.shared_secret", "") // must be defaulted so the env-bind loop (allkeys) binds anvil_sso_shared_secret
 	v.SetDefault("sso.issuer", "zeropool")
 	v.SetDefault("sso.audience", "anvil")
+	v.SetDefault("sso.login_url", "")
 
 	v.SetDefault("jwt.secret", defaultJWTSecret)
 	v.SetDefault("secrets.encryption_key", "")
@@ -497,7 +499,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("instancer.backend", "docker")
 	v.SetDefault("instancer.hmac_secret", "")
-	v.SetDefault("instancer.base_domain", "h7tex.com")
+	v.SetDefault("instancer.base_domain", "ctf.example.com")
 	v.SetDefault("instancer.timeout", "1h")
 
 	// webverse solve-sync poller. off by default (master switch). every key gets a
@@ -523,7 +525,7 @@ func setDefaults(v *viper.Viper) {
 		"worldoutter": "worldoutter",
 		"justified":   "justified",
 	})
-	v.SetDefault("graded.report_url", "https://ctf.h7tex.com/api/v1/graded/report")
+	v.SetDefault("graded.report_url", "https://ctf.example.com/api/v1/graded/report")
 	v.SetDefault("graded.reports_per_minute", 60)
 
 	v.SetDefault("vpn.enabled", true)
@@ -565,7 +567,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.enabled", false)
 	v.SetDefault("game.tick_interval", "2m")
 	v.SetDefault("game.flag_valid_ticks", 10)
-	v.SetDefault("game.flag_prefix", "H7CTF")
+	v.SetDefault("game.flag_prefix", "CTF")
 	v.SetDefault("game.koth.round_interval", "15m")
 	v.SetDefault("game.koth.reset_enabled", true)
 	v.SetDefault("game.scoring.attack_base", 100)

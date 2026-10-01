@@ -169,7 +169,7 @@ func TestDefaultEconomyMatchesVersionedPreset(t *testing.T) {
 			builtInEconomyPreset.ID, builtInEconomyPreset.Version, cfg.Economy, want)
 	}
 	descriptor := cfg.EconomyPolicyDescriptor()
-	if descriptor.ID != "h7-ledger" || descriptor.Version != "1.7" || descriptor.Name != "Ledger" {
+	if descriptor.ID != "ledger" || descriptor.Version != "1.7" || descriptor.Name != "Ledger" {
 		t.Fatalf("unexpected policy identity: %+v", descriptor)
 	}
 	if !reflect.DeepEqual(builtInEconomyPreset.DifficultyOrder, []string{"easy", "medium", "hard", "insane"}) {

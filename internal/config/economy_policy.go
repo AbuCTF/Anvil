@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 )
 
-//go:embed presets/h7-ledger-v1.json
+//go:embed presets/ledger-v1.json
 var defaultEconomyPresetJSON []byte
 
 type economyPreset struct {

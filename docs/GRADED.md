@@ -22,7 +22,7 @@ to reach Anvil). Anvil fills these placeholders in that role's env only:
 | `${GRADER_SECRET}` | this instance's signing key: `hex(HMAC-SHA256(challenge secret, INSTANCE_ID))` |
 | `${INSTANCE_ID}`   | this instance's id, sent as `X-Anvil-Instance`                         |
 | `${ANVIL_TEAM_ID}` | the owning team's uuid, sent as `team_id`                              |
-| `${GRADER_URL}`    | `https://ctf.h7tex.com/api/v1/graded/report` (evaluate is the sibling `/evaluate`) |
+| `${GRADER_URL}`    | `https://ctf.example.com/api/v1/graded/report` (evaluate is the sibling `/evaluate`) |
 
 ```yaml
 services:

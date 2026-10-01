@@ -48,7 +48,7 @@ func TestImportedAccountActivation(t *testing.T) {
 	ctx := context.Background()
 	adminID := uuid.New()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
-	adminName, importedName, activatedName, generatedName := "activation-admin-"+suffix, "invited-"+suffix, "activate-"+suffix, "credential_"+suffix
+	adminName, importedName, activatedName, generatedName, manualName := "activation-admin-"+suffix, "invited-"+suffix, "activate-"+suffix, "credential_"+suffix, "manual_"+suffix
 	if _, err := db.Pool.Exec(ctx, `INSERT INTO users (id, username, email, role, status) VALUES ($1, $2, $3, 'admin', 'active')`, adminID, adminName, adminName+"@example.test"); err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}
@@ -56,8 +56,8 @@ func TestImportedAccountActivation(t *testing.T) {
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM data_import_jobs WHERE created_by = $1`, adminID)
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM mail_deliveries WHERE created_by = $1`, adminID)
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM mail_providers WHERE created_by = $1`, adminID)
-		_, _ = db.Pool.Exec(ctx, `DELETE FROM audit_log WHERE user_id IN (SELECT id FROM users WHERE username IN ($1, $2, $3, $4))`, adminName, importedName, activatedName, generatedName)
-		_, _ = db.Pool.Exec(ctx, `DELETE FROM users WHERE username IN ($1, $2, $3, $4)`, adminName, importedName, activatedName, generatedName)
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM audit_log WHERE user_id IN (SELECT id FROM users WHERE username IN ($1, $2, $3, $4, $5))`, adminName, importedName, activatedName, generatedName, manualName)
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM users WHERE username IN ($1, $2, $3, $4, $5)`, adminName, importedName, activatedName, generatedName, manualName)
 	}()
 
 	cfg, err := config.Load()
@@ -114,6 +114,21 @@ func TestImportedAccountActivation(t *testing.T) {
 	}
 	if _, err := db.Pool.Exec(ctx, `UPDATE platform_settings SET value = '"https://ctf.example.test"'::jsonb WHERE key = 'event.public_url'`); err != nil {
 		t.Fatalf("set public url: %v", err)
+	}
+
+	manual := request(http.MethodPost, "/api/v1/admin/users", signed, map[string]any{
+		"email": manualName + "@example.test", "display_name": "Manual Participant", "role": "user", "provisioning": "generated_credentials",
+	})
+	if manual.Code != http.StatusCreated || !strings.Contains(manual.Body.String(), `"username":"`+manualName+`"`) || !strings.Contains(manual.Body.String(), `"emails_queued":1`) {
+		t.Fatalf("manual participant status=%d body=%s", manual.Code, manual.Body.String())
+	}
+	var manualMustChange bool
+	var manualDeliveryCount int
+	if err := db.Pool.QueryRow(ctx, `SELECT must_change_password FROM users WHERE username = $1`, manualName).Scan(&manualMustChange); err != nil || !manualMustChange {
+		t.Fatalf("manual participant must_change=%t error=%v", manualMustChange, err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT COUNT(*)::int FROM mail_deliveries WHERE created_by = $1 AND recipient = $2 AND template_slug = 'account_credentials'`, adminID, manualName+"@example.test").Scan(&manualDeliveryCount); err != nil || manualDeliveryCount != 1 {
+		t.Fatalf("manual participant deliveries=%d error=%v", manualDeliveryCount, err)
 	}
 
 	csv := "username,email,display_name,role,status,email_verified\n" + importedName + "," + importedName + "@example.test,Invited Player,user,active,false\n"
