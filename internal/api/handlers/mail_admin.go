@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"html"
 	"net/http"
@@ -313,11 +314,7 @@ func (h *MailHandler) TestProvider(c *gin.Context) {
 		status, errorCode = "failed", mailErrorCode(sendErr)
 		h.logger.Warn("mail provider test failed", zap.String("provider_id", id.String()), zap.String("error_code", errorCode), zap.Error(sendErr))
 	}
-	if _, err := h.db.Pool.Exec(c.Request.Context(), `
-		UPDATE mail_deliveries SET status = $2, error_code = NULLIF($3, ''), message_id = NULLIF($4, ''),
-			sent_at = CASE WHEN $2 = 'sent' THEN NOW() ELSE NULL END, updated_at = NOW()
-		WHERE id = $1
-	`, deliveryID, status, errorCode, messageID); err != nil {
+	if err := h.finalizeProviderTestDelivery(c.Request.Context(), deliveryID, status, errorCode, messageID); err != nil {
 		h.logger.Error("finalize mail provider test", zap.String("delivery_id", deliveryID.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "test delivery result could not be recorded"})
 		return
@@ -330,6 +327,15 @@ func (h *MailHandler) TestProvider(c *gin.Context) {
 	_, _ = h.db.Pool.Exec(c.Request.Context(), `UPDATE mail_providers SET is_healthy = TRUE, failure_count = 0, circuit_open_until = NULL, last_error_code = NULL, last_error_at = NULL, updated_at = NOW() WHERE id = $1`, id)
 	_ = logAdminAction(h.db, c, uid.String(), "mail_provider_tested", "mail_provider", id.String(), map[string]any{"success": true})
 	c.JSON(http.StatusOK, gin.H{"sent": true, "message_id": messageID})
+}
+
+func (h *MailHandler) finalizeProviderTestDelivery(ctx context.Context, deliveryID uuid.UUID, status, errorCode, messageID string) error {
+	_, err := h.db.Pool.Exec(ctx, `
+		UPDATE mail_deliveries SET status = $2::varchar, error_code = NULLIF($3, ''), message_id = NULLIF($4, ''),
+			sent_at = CASE WHEN $2::varchar = 'sent' THEN NOW() ELSE NULL END, updated_at = NOW()
+		WHERE id = $1
+	`, deliveryID, status, errorCode, messageID)
+	return err
 }
 
 func (h *MailHandler) ListTemplates(c *gin.Context) {
