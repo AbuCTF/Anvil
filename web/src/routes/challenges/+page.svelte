@@ -248,11 +248,6 @@
 		{#if (eventPhase === 'scheduled' || preStart) && !isStaff}
 			<KickoffCountdown />
 		{:else}
-		{#if eventPhase === 'ended'}
-			<div class="mb-6 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3 text-sm text-amber-500">
-				The event has ended. Challenges are now closed and submissions are no longer accepted. Thanks for playing - final results will be published soon.
-			</div>
-		{/if}
 			{#if isStaff && eventPhase === 'scheduled'}
 				<div class="mb-6 inline-flex items-center gap-1.5 rounded-full border border-info/25 bg-info/[0.06] px-3 py-1 text-xs font-medium text-info">
 						<Icon icon="mdi:eye-outline" class="h-3.5 w-3.5" />

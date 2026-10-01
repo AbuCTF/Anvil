@@ -74,21 +74,22 @@ var mailTemplateSlugPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{2,63}$`)
 var mailTemplateVariablePattern = regexp.MustCompile(`\{\{([a-z][a-z0-9_]*)\}\}`)
 
 var mailTemplateVariables = map[string]bool{
-	"participant_name": true,
-	"event_name":       true,
-	"activation_url":   true,
-	"reset_url":        true,
-	"login_url":        true,
-	"username":         true,
-	"expires_at":       true,
-	"event_start":      true,
-	"event_end":        true,
-	"support_email":    true,
-	"team_name":        true,
-	"update_title":     true,
-	"update_body":      true,
-	"rank":             true,
-	"score":            true,
+	"participant_name":   true,
+	"event_name":         true,
+	"activation_url":     true,
+	"reset_url":          true,
+	"login_url":          true,
+	"username":           true,
+	"temporary_password": true,
+	"expires_at":         true,
+	"event_start":        true,
+	"event_end":          true,
+	"support_email":      true,
+	"team_name":          true,
+	"update_title":       true,
+	"update_body":        true,
+	"rank":               true,
+	"score":              true,
 }
 
 func NewMailHandler(cfg *config.Config, db *database.DB, logger *zap.Logger) *MailHandler {

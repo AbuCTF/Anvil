@@ -38,6 +38,8 @@ func TestValidatePlatformSetting(t *testing.T) {
 		{name: "event timezone", key: "event.timezone", value: "Asia/Kolkata"},
 		{name: "bad event timezone", key: "event.timezone", value: "India/Somewhere", wantErr: true},
 		{name: "event contact", key: "event.contact_email", value: "ctf@example.com"},
+		{name: "flag format", key: "event.flag_format", value: "KPMGCTF{...}"},
+		{name: "flag format missing variable", key: "event.flag_format", value: "KPMGCTF", wantErr: true},
 		{name: "empty event contact", key: "event.contact_email", value: ""},
 		{name: "bad event contact", key: "event.contact_email", value: "hello", wantErr: true},
 		{name: "rules url", key: "event.rules_url", value: "https://example.com/rules"},

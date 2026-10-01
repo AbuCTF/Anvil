@@ -18,6 +18,7 @@
 	import HelpTip from '$lib/components/HelpTip.svelte';
 	import MailWorkspace from '$lib/components/admin/MailWorkspace.svelte';
 	import RegistryCredentials from '$lib/components/admin/RegistryCredentials.svelte';
+	import RegistryBulkImport from '$lib/components/admin/RegistryBulkImport.svelte';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -27,6 +28,7 @@
 	let error = '';
 	let categoriesError = '';
 	let showCreateModal = false;
+	let showRegistryImportModal = false;
 	let showEditModal = false;
 	let editingChallenge: any = null;
 	let actionLoading = '';
@@ -1513,10 +1515,7 @@
 		<PageHeader title="Admin" subtitle="Platform management">
 			<div slot="actions">
 				{#if activeTab === 'challenges'}
-					<button on:click={openCreateChallenge} class={btnPrimary}>
-						<Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />
-						New Challenge
-					</button>
+					<div class="flex flex-wrap gap-2"><button on:click={() => showRegistryImportModal = true} class={btnGhost}><Icon icon="mdi:package-variant-closed-plus" class="w-3.5 h-3.5 shrink-0" />Import registry</button><button on:click={openCreateChallenge} class={btnPrimary}><Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />New Challenge</button></div>
 				{:else if activeTab === 'infrastructure'}
 					<div class="flex flex-wrap gap-2">
 						<button on:click={() => showTemplateUploadModal = true} class={btnGhost}>
@@ -3118,11 +3117,15 @@
 	/>
 {/if}
 
+{#if showRegistryImportModal}
+	<RegistryBulkImport {categories} onClose={() => showRegistryImportModal = false} onApplied={loadDashboard} />
+{/if}
+
 {#if showCreateModal}
 	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
 		<button type="button" aria-label="Close dialog" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showCreateModal = false}></button>
-		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-lg w-full max-w-5xl max-h-[94vh] flex flex-col" role="dialog" aria-modal="true">
-			<div class="p-6 border-b border-stone-800 flex-shrink-0">
+		<div class="relative z-10 bg-stone-950 border border-stone-800 rounded-xl w-full max-w-6xl max-h-[94vh] flex flex-col shadow-2xl" role="dialog" aria-modal="true">
+			<div class="p-4 sm:p-6 border-b border-stone-800 flex-shrink-0">
 				<div class="flex items-center justify-between mb-4">
 					<h2 class="text-lg font-semibold text-stone-100 flex items-center gap-2">
 						<Icon icon="mdi:plus-circle-outline" class="w-5 h-5 text-stone-400" />
@@ -3133,7 +3136,7 @@
 					</button>
 				</div>
 
-				<div class="grid grid-cols-2 gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md sm:grid-cols-5">
+				<div class="grid grid-cols-2 gap-1.5 p-1.5 bg-stone-900/40 border border-stone-800 rounded-lg sm:grid-cols-5">
 					<button
 						type="button"
 						on:click={() => newChallenge.type = 'container'}
@@ -3190,7 +3193,7 @@
 					</div>
 				{/if}
 
-				<form on:submit|preventDefault={handleCreateChallenge} class="p-6 space-y-5">
+				<form on:submit|preventDefault={handleCreateChallenge} class="p-4 sm:p-6 space-y-6">
 					{#if uploadError}
 						<div class="flex items-start gap-2 py-3 px-4 bg-down/10 border border-down/30 rounded-md text-down text-sm">
 							<Icon icon="mdi:alert-circle-outline" class="w-4 h-4 shrink-0 mt-0.5" />
@@ -3198,7 +3201,7 @@
 						</div>
 					{/if}
 
-					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+					<section class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5"><div class="mb-5"><h3 class="text-sm font-semibold text-stone-200">Challenge basics</h3><p class="mt-1 text-xs text-stone-600">Identity, scoring, participant copy, and target model.</p></div><div class="grid grid-cols-1 md:grid-cols-2 gap-5">
 						<label class="block md:col-span-2">
 							<span class={labelCls}>Challenge Name *</span>
 							<input
@@ -3309,10 +3312,10 @@
 							</select>
 							<p class="mt-1.5 text-xs text-stone-600">Attack-defense services are configured in Arena; this chooses whether this challenge provisions per team or as one contested target.</p>
 						</label>
-					</div>
+					</div></section>
 
 					{#if newChallenge.type === 'container' || newChallenge.type === 'multi' || newChallenge.type === 'download' || newChallenge.type === 'external'}
-						<div class="pt-4 border-t border-stone-800 space-y-5">
+						<div class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5 space-y-5"><div><h3 class="text-sm font-semibold text-stone-200">Delivery and runtime</h3><p class="mt-1 text-xs text-stone-600">How participants receive, connect to, and solve this challenge.</p></div>
 							{#if newChallenge.type === 'download'}
 								<div class="flex items-start gap-2 py-2.5 px-3 bg-stone-900/40 border border-stone-800 rounded-md text-stone-400 text-xs">
 									<Icon icon="mdi:information-outline" class="w-4 h-4 shrink-0 mt-0.5" />
@@ -3455,10 +3458,10 @@
 											{#if fl.flag_type === 'static'}
 											<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="flag&#123;value&#125;" />
 										{:else if fl.flag_type === 'regex'}
-											<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="H7CTF&#123;[a-f0-9-]+&#125; - container generates flag, regex validates" />
+							<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="flag&#123;[a-f0-9-]+&#125; - container generates flag, regex validates" />
 												<p class="text-stone-600 text-xs mt-1">Duplicate submissions across users trigger flag-share alerts in Audit</p>
 											{:else}
-											<input type="text" bind:value={fl.dynamic_flag_prefix} required class="w-full font-mono {fieldCls}" placeholder="Prefix (e.g. H7CTF) - generates H7CTF&#123;uuid&#125; per user" />
+							<input type="text" bind:value={fl.dynamic_flag_prefix} required class="w-full font-mono {fieldCls}" placeholder="Prefix (e.g. CTF) - generates prefix&#123;uuid&#125; per user" />
 											{/if}
 										</div>
 									{/each}
@@ -3489,7 +3492,7 @@
 							{/if}
 						</div>
 					{:else if newChallenge.type === 'ova'}
-						<div class="pt-4 border-t border-stone-800 space-y-5">
+						<div class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5 space-y-5"><div><h3 class="text-sm font-semibold text-stone-200">Virtual machine</h3><p class="mt-1 text-xs text-stone-600">Choose a prepared image, define flags, and set lifecycle limits.</p></div>
 							<div>
 								<span class={labelCls}>VM Source</span>
 								<div class="flex gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md">
@@ -3624,7 +3627,7 @@
 					{/if}
 
 					{#if newChallenge.type !== 'external'}
-					<div class="pt-4 border-t border-stone-800 space-y-3">
+					<div class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5 space-y-3">
 						<div class="flex items-center justify-between">
 							<span class="metadata-label block text-stone-400">File Attachments <span class="text-stone-500 font-normal">(optional)</span></span>
 							<label class="text-xs leading-none text-stone-400 hover:text-stone-200 transition-colors cursor-pointer flex items-center gap-1">
@@ -3670,7 +3673,7 @@
 					</div>
 					{/if}
 
-					<div class="flex gap-3 pt-4">
+					<div class="sticky bottom-0 z-20 flex gap-3 border-t border-stone-800 bg-stone-950/95 py-4 backdrop-blur">
 						<button type="submit" disabled={uploadLoading} class="flex-1 {btnPrimary}">
 							{#if uploadLoading}
 									<Icon icon="mdi:loading" class="w-3.5 h-3.5 shrink-0 animate-spin" />
@@ -3958,7 +3961,7 @@
 										<option value="dynamic">Dynamic</option>
 									</select>
 									{#if f.flag_type === 'dynamic'}
-										<input type="text" bind:value={f.dynamic_flag_prefix} placeholder="Prefix e.g. H7CTF" class="flex-1 font-mono {fieldCls}" />
+										<input type="text" bind:value={f.dynamic_flag_prefix} placeholder="Prefix e.g. CTF" class="flex-1 font-mono {fieldCls}" />
 									{:else}
 										<input type="text" bind:value={f.flag} placeholder={f.has_value ? '•••••••• (unchanged - type to replace)' : (f.flag_type === 'regex' ? 'regex pattern' : 'flag value')} class="flex-1 font-mono {fieldCls}" />
 									{/if}

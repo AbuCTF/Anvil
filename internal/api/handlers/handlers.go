@@ -1187,6 +1187,14 @@ func validatePlatformSetting(key string, value interface{}) error {
 	case "platform_description":
 		_, err := stringValue(0, 280)
 		return err
+	case "event.flag_format":
+		text, err := stringValue(3, 100)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(text, "...") || strings.ContainsAny(text, "\r\n\t") {
+			return errors.New("Invalid value for event.flag_format: include ... as the variable portion")
+		}
 	case "event.slug":
 		text, err := stringValue(1, 64)
 		if err != nil {

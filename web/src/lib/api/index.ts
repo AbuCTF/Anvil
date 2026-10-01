@@ -36,6 +36,7 @@ export interface PlatformInfoResponse {
 	privacy_url?: string;
 	terms_url?: string;
 	accent: 'cyan' | 'amber' | 'emerald' | 'violet';
+	flag_format: string;
 	registration_mode: string;
 	scoring_enabled: boolean;
 	scoreboard_enabled: boolean;
@@ -146,6 +147,17 @@ export interface RegistryCredential {
 	updated_at: string;
 }
 
+export interface DiscoveredRegistryRepository {
+	name: string;
+	image: string;
+	description?: string;
+	visibility: 'public' | 'private' | string;
+	updated_at?: string;
+	suggested_slug: string;
+	already_imported: boolean;
+	slug_conflict: boolean;
+}
+
 export interface MailProvider {
 	id: string;
 	name: string;
@@ -220,6 +232,7 @@ export interface DataImportPreview {
 	source_name: string;
 	row_count: number;
 	expires_at: string;
+	provisioning?: 'sso_only' | 'activation_email' | 'generated_credentials';
 	plan: DataImportPlan;
 }
 
@@ -595,12 +608,25 @@ class ApiClient {
 	// auth
 	async login(username: string, password: string) {
 		return this.request<{
-			access_token: string;
-			refresh_token: string;
-			user: any;
+			access_token?: string;
+			refresh_token?: string;
+			user?: any;
+			password_change_required?: boolean;
+			password_change_token?: string;
 		}>('/auth/login', {
 			method: 'POST',
 			body: JSON.stringify({ username, password })
+		}, false);
+	}
+
+	async completeInitialPasswordChange(token: string, password: string) {
+		return this.request<{
+			access_token: string;
+			refresh_token: string;
+			user: any;
+		}>('/auth/password-change/complete', {
+			method: 'POST',
+			body: JSON.stringify({ token, password })
 		}, false);
 	}
 
@@ -1063,6 +1089,19 @@ class ApiClient {
 		});
 	}
 
+	async discoverRegistryRepositories(registry: 'docker.io' | 'ghcr.io', namespace: string) {
+		return this.request<{
+			registry: string;
+			namespace: string;
+			repositories: DiscoveredRegistryRepository[];
+			credential_used: boolean;
+			truncated: boolean;
+		}>('/admin/challenges/registry/discover', {
+			method: 'POST',
+			body: JSON.stringify({ registry, namespace })
+		});
+	}
+
 	async getRegistryCredentials() {
 		return this.request<{ credentials: RegistryCredential[] }>('/admin/challenges/registry/credentials', { cache: 'no-store' });
 	}
@@ -1389,12 +1428,21 @@ class ApiClient {
 		return this.request<{ deliveries: MailDelivery[] }>('/admin/mail/deliveries', { cache: 'no-store' });
 	}
 
-	async previewDataImport(data: { entity: string; format: 'csv' | 'json'; mode: 'create' | 'merge'; source_name: string; content: string; provisioning?: 'sso_only' | 'activation_email' }) {
+	async inspectDataWorkbook(data: { entity: string; content: string }) {
+		return this.request<{
+			sheets: Array<{ name: string; rows: number; recognized_headers: number; missing_required_headers: string[]; headers: Array<{ source: string; normalized: string; suggested_field: string }> }>;
+			recommended_sheet: string;
+			fields: string[];
+			required_fields: string[];
+		}>('/admin/data/imports/workbook/inspect', { method: 'POST', body: JSON.stringify(data) });
+	}
+
+	async previewDataImport(data: { entity: string; format: 'csv' | 'json' | 'xlsx'; mode: 'create' | 'merge'; source_name: string; content: string; sheet?: string; column_map?: Record<string, string>; provisioning?: 'sso_only' | 'activation_email' | 'generated_credentials' }) {
 		return this.request<DataImportPreview>('/admin/data/imports/preview', { method: 'POST', body: JSON.stringify(data) });
 	}
 
 	async applyDataImport(id: string, checksum: string) {
-		return this.request<{ entity: string; mode: string; created: number; updated: number; skipped: number; activation_emails_queued?: number }>(`/admin/data/imports/${encodeURIComponent(id)}/apply`, { method: 'POST', body: JSON.stringify({ checksum }) });
+		return this.request<{ entity: string; mode: string; created: number; updated: number; skipped: number; activation_emails_queued?: number; credential_emails_queued?: number }>(`/admin/data/imports/${encodeURIComponent(id)}/apply`, { method: 'POST', body: JSON.stringify({ checksum }) });
 	}
 
 	async getDataImports() {

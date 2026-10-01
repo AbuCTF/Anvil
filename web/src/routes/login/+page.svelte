@@ -48,6 +48,11 @@
 		error = '';
 		try {
 			const response = await api.login(username, password);
+			if (response.password_change_required && response.password_change_token) {
+				window.location.href = `/change-password#token=${encodeURIComponent(response.password_change_token)}`;
+				return;
+			}
+			if (!response.access_token || !response.user) throw new Error('Login response was incomplete');
 			localStorage.setItem('accessToken', response.access_token);
 			if (response.refresh_token) localStorage.setItem('refreshToken', response.refresh_token);
 			auth.login(response.access_token, response.user, response.refresh_token);

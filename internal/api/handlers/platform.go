@@ -34,6 +34,7 @@ type platformInfoResponse struct {
 	PrivacyURL         string                         `json:"privacy_url,omitempty"`
 	TermsURL           string                         `json:"terms_url,omitempty"`
 	Accent             string                         `json:"accent"`
+	FlagFormat         string                         `json:"flag_format"`
 	RegistrationMode   string                         `json:"registration_mode"`
 	ScoringEnabled     bool                           `json:"scoring_enabled"`
 	ScoreboardEnabled  bool                           `json:"scoreboard_enabled"`
@@ -86,6 +87,10 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	if err != nil {
 		h.logger.Warn("failed to read notifications.sound_allowed", zap.Error(err))
 	}
+	flagFormat, err := textSettingOrDefault(ctx, h.db, "event.flag_format", "flag{...}")
+	if err != nil {
+		h.logger.Warn("failed to read event.flag_format", zap.Error(err))
+	}
 	teamCreation, err := textSettingOrDefault(ctx, h.db, "participants.team_creation", "open")
 	if err != nil {
 		h.logger.Warn("failed to read participants.team_creation", zap.Error(err))
@@ -115,6 +120,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		PrivacyURL:         profile.PrivacyURL,
 		TermsURL:           profile.TermsURL,
 		Accent:             profile.Accent,
+		FlagFormat:         flagFormat,
 		RegistrationMode:   registrationMode,
 		ScoringEnabled:     scoring,
 		ScoreboardEnabled:  scoreboard,

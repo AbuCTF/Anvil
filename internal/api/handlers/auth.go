@@ -79,13 +79,20 @@ type passwordResetCompleteRequest struct {
 	Password string `json:"password" binding:"required,min=8"`
 }
 
+type initialPasswordChangeRequest struct {
+	Token    string `json:"token" binding:"required"`
+	Password string `json:"password" binding:"required,min=8"`
+}
+
 type AuthResponse struct {
-	AccessToken  string        `json:"access_token"`
-	RefreshToken string        `json:"refresh_token"`
-	ExpiresIn    int           `json:"expires_in"`
-	TokenType    string        `json:"token_type"`
-	User         *UserResponse `json:"user,omitempty"`
-	Team         *TeamResponse `json:"team,omitempty"`
+	AccessToken            string        `json:"access_token,omitempty"`
+	RefreshToken           string        `json:"refresh_token,omitempty"`
+	ExpiresIn              int           `json:"expires_in"`
+	TokenType              string        `json:"token_type"`
+	User                   *UserResponse `json:"user,omitempty"`
+	Team                   *TeamResponse `json:"team,omitempty"`
+	PasswordChangeRequired bool          `json:"password_change_required,omitempty"`
+	PasswordChangeToken    string        `json:"password_change_token,omitempty"`
 }
 
 type UserResponse struct {
@@ -161,7 +168,7 @@ func (h *AuthHandler) ActivateAccount(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired activation link"})
 		return
 	}
-	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to activate account"})
 		return
 	}
@@ -313,7 +320,7 @@ func (h *AuthHandler) CompletePasswordReset(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired reset link"})
 		return
 	}
-	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
 		return
 	}
@@ -642,13 +649,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	var username, email, passwordHash, role, status string
 	var displayName *string
 	var totalScore int
+	var mustChangePassword bool
 
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, username, COALESCE(email, ''), COALESCE(password_hash, ''), role, status, display_name, total_score
+		`SELECT id, username, COALESCE(email, ''), COALESCE(password_hash, ''), role, status, display_name, total_score, must_change_password
 		 FROM users
 		 WHERE username = $1 OR email = $1`,
 		req.Username,
-	).Scan(&userID, &username, &email, &passwordHash, &role, &status, &displayName, &totalScore)
+	).Scan(&userID, &username, &email, &passwordHash, &role, &status, &displayName, &totalScore, &mustChangePassword)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusUnauthorized, gin.H{
@@ -671,6 +679,22 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if status != "active" {
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": "Account is " + status,
+		})
+		return
+	}
+	if mustChangePassword {
+		passwordChangeToken, err := h.generatePasswordChangeToken(userID, username, role)
+		if err != nil {
+			h.logger.Error("Failed to generate password change token", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to complete login"})
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.JSON(http.StatusOK, AuthResponse{
+			ExpiresIn:              900,
+			TokenType:              "PasswordChange",
+			PasswordChangeRequired: true,
+			PasswordChangeToken:    passwordChangeToken,
 		})
 		return
 	}
@@ -712,6 +736,90 @@ func (h *AuthHandler) Login(c *gin.Context) {
 			TotalScore:  totalScore,
 			Rank:        rank,
 		},
+	})
+}
+
+func (h *AuthHandler) CompleteInitialPasswordChange(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxAuthRequestBytes)
+	var request initialPasswordChangeRequest
+	if c.ShouldBindJSON(&request) != nil || len(request.Token) > 4096 || len([]byte(request.Password)) > 72 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid password change request"})
+		return
+	}
+	claims, err := h.parsePasswordChangeToken(request.Token)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired password change session"})
+		return
+	}
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	defer tx.Rollback(ctx)
+	var username, email, role, status string
+	var displayName *string
+	var totalScore int
+	var mustChangePassword bool
+	err = tx.QueryRow(ctx, `
+		SELECT username, COALESCE(email, ''), role, status, display_name, total_score, must_change_password
+		FROM users WHERE id = $1 FOR UPDATE
+	`, claims.UserID).Scan(&username, &email, &role, &status, &displayName, &totalScore, &mustChangePassword)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password change session is no longer active"})
+		return
+	}
+	if err != nil {
+		h.logger.Error("Failed to load account during initial password change", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	if !mustChangePassword || status != "active" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password change session is no longer active"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, last_login_at = NOW(), last_login_ip = $3, updated_at = NOW() WHERE id = $1`, claims.UserID, string(hashedPassword), c.ClientIP()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1 AND revoked = FALSE`, claims.UserID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, claims.UserID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	tokens, err := h.generateTokensWithStore(ctx, tx, claims.UserID, username, role, "user")
+	if err != nil {
+		h.logger.Error("Failed to issue tokens after initial password change", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	metadata, _ := json.Marshal(map[string]string{"username": username})
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user.initial_password_changed', 'user', $1, $2::jsonb, $3, $4)`, claims.UserID, metadata, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	rank, err := currentUserRank(ctx, h.db, claims.UserID)
+	if err != nil {
+		h.logger.Warn("Failed to load rank after initial password change", zap.String("user_id", claims.UserID.String()), zap.Error(err))
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, AuthResponse{
+		AccessToken: tokens.access, RefreshToken: tokens.refresh,
+		ExpiresIn: int(h.config.JWT.AccessExpiry.Seconds()), TokenType: "Bearer",
+		User: &UserResponse{ID: claims.UserID, Username: username, Email: email, DisplayName: displayName, Role: role, TotalScore: totalScore, Rank: rank},
 	})
 }
 
@@ -1287,6 +1395,38 @@ func (h *AuthHandler) provisionAndRespond(c *gin.Context, ctx context.Context, t
 
 func (h *AuthHandler) generateTokens(ctx context.Context, userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
 	return h.generateTokensWithStore(ctx, h.db.Pool, userID, username, role, tokenType)
+}
+
+func (h *AuthHandler) generatePasswordChangeToken(userID uuid.UUID, username, role string) (string, error) {
+	claims := middleware.Claims{
+		UserID: userID, Username: username, Role: role, TokenType: "password_change",
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(15 * time.Minute)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()), Issuer: h.config.JWT.Issuer, ID: uuid.NewString(),
+		},
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString([]byte(h.config.JWT.Secret))
+}
+
+func (h *AuthHandler) parsePasswordChangeToken(tokenString string) (*middleware.Claims, error) {
+	options := []jwt.ParserOption{jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()})}
+	if h.config.JWT.Issuer != "" {
+		options = append(options, jwt.WithIssuer(h.config.JWT.Issuer))
+	}
+	token, err := jwt.ParseWithClaims(tokenString, &middleware.Claims{}, func(token *jwt.Token) (any, error) {
+		if token.Method != jwt.SigningMethodHS256 {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		return []byte(h.config.JWT.Secret), nil
+	}, options...)
+	if err != nil || !token.Valid {
+		return nil, errors.New("invalid token")
+	}
+	claims, ok := token.Claims.(*middleware.Claims)
+	if !ok || claims.TokenType != "password_change" || claims.UserID == uuid.Nil {
+		return nil, errors.New("invalid token claims")
+	}
+	return claims, nil
 }
 
 type tokenStore interface {

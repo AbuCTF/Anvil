@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
@@ -20,19 +21,37 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/xuri/excelize/v2"
 	"go.uber.org/zap"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const maxImportBytes = 5 << 20
 const maxImportRows = 5000
+const maxImportRequestBytes = 7 << 20
+const maxWorkbookUnzipBytes = 64 << 20
+const maxWorkbookXMLBytes = 16 << 20
 
 type importPreviewRequest struct {
-	Entity       string `json:"entity"`
-	Format       string `json:"format"`
-	Mode         string `json:"mode"`
-	SourceName   string `json:"source_name"`
-	Content      string `json:"content"`
-	Provisioning string `json:"provisioning"`
+	Entity       string            `json:"entity"`
+	Format       string            `json:"format"`
+	Mode         string            `json:"mode"`
+	SourceName   string            `json:"source_name"`
+	Content      string            `json:"content"`
+	Provisioning string            `json:"provisioning"`
+	Sheet        string            `json:"sheet"`
+	ColumnMap    map[string]string `json:"column_map"`
+}
+
+type workbookInspectRequest struct {
+	Entity  string `json:"entity"`
+	Content string `json:"content"`
+}
+
+type workbookHeader struct {
+	Source         string `json:"source"`
+	Normalized     string `json:"normalized"`
+	SuggestedField string `json:"suggested_field"`
 }
 
 type importApplyRequest struct {
@@ -99,6 +118,31 @@ var importSpecs = map[string]importSpec{
 	},
 }
 
+var importHeaderAliases = map[string]map[string]string{
+	"categories": {
+		"category": "name", "category_name": "name", "category_slug": "slug", "order": "sort_order", "colour": "color",
+	},
+	"challenges": {
+		"title": "name", "challenge_name": "name", "challenge_slug": "slug", "category": "category_slug", "author": "author_name",
+		"points": "base_points", "score": "base_points", "value": "base_points", "image": "container_image", "docker_image": "container_image",
+		"repository": "container_image", "tag": "container_tag", "ports": "exposed_ports", "release": "release_date", "type": "delivery_type",
+	},
+	"users": {
+		"user_name": "username", "user_id": "username", "userid": "username", "login": "username", "login_id": "username",
+		"participant_id": "username", "employee_id": "username", "roll_number": "username", "roll_no": "username", "registration_number": "username", "registration_no": "username",
+		"email_address": "email", "email_id": "email", "e_mail": "email", "mail": "email",
+		"name": "display_name", "full_name": "display_name", "participant_name": "display_name", "student_name": "display_name", "employee_name": "display_name",
+		"user_role": "role", "account_role": "role", "account_status": "status", "verified": "email_verified", "is_verified": "email_verified",
+	},
+	"teams": {
+		"team": "name", "team_name": "name", "group": "name", "group_name": "name", "team_size": "max_members", "maximum_members": "max_members",
+	},
+	"team_members": {
+		"user": "username", "user_name": "username", "participant": "username", "participant_username": "username", "member": "username",
+		"team": "team_name", "teamname": "team_name", "group": "team_name", "group_name": "team_name",
+	},
+}
+
 var importSlug = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,198}[a-z0-9])?$`)
 var importUsername = regexp.MustCompile(`^[A-Za-z0-9_-]{3,50}$`)
 var importColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
@@ -119,8 +163,91 @@ func (h *DataHandler) Template(c *gin.Context) {
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", data)
 }
 
+func (h *DataHandler) InspectWorkbook(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxImportRequestBytes)
+	var request workbookInspectRequest
+	if c.ShouldBindJSON(&request) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workbook request"})
+		return
+	}
+	request.Entity = strings.ToLower(strings.TrimSpace(request.Entity))
+	spec, ok := importSpecs[request.Entity]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported import entity"})
+		return
+	}
+	content, err := decodeImportWorkbook(request.Content)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	workbook, err := openImportWorkbook(content)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "the file is not a readable .xlsx workbook"})
+		return
+	}
+	defer workbook.Close()
+	sheets := []gin.H{}
+	recommended := ""
+	bestScore := -1
+	for _, name := range workbook.GetSheetList() {
+		rows, err := workbook.Rows(name)
+		if err != nil {
+			continue
+		}
+		headers := []workbookHeader{}
+		rowCount := 0
+		for rows.Next() {
+			columns, rowErr := rows.Columns()
+			if rowErr != nil {
+				err = rowErr
+				break
+			}
+			rowCount++
+			if rowCount == 1 {
+				for _, header := range columns {
+					normalized := normalizeImportHeader(header)
+					headers = append(headers, workbookHeader{Source: strings.TrimSpace(header), Normalized: normalized, SuggestedField: canonicalImportHeader(request.Entity, normalized)})
+				}
+			}
+			if rowCount > maxImportRows+1 {
+				break
+			}
+		}
+		_ = rows.Close()
+		if err != nil {
+			continue
+		}
+		recognized := 0
+		headerSet := map[string]bool{}
+		for _, header := range headers {
+			if header.SuggestedField != "" {
+				headerSet[header.SuggestedField] = true
+				recognized++
+			}
+		}
+		missing := []string{}
+		for _, required := range spec.Required {
+			if !headerSet[required] {
+				missing = append(missing, required)
+			}
+		}
+		sheets = append(sheets, gin.H{"name": name, "rows": max(rowCount-1, 0), "recognized_headers": recognized, "missing_required_headers": missing, "headers": headers})
+		score := recognized*10 - len(missing)*100
+		if len(headers) > 0 && score > bestScore {
+			bestScore = score
+			recommended = name
+		}
+	}
+	if len(sheets) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "the workbook has no readable sheets"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"sheets": sheets, "recommended_sheet": recommended, "fields": spec.Headers, "required_fields": spec.Required})
+}
+
 func (h *DataHandler) PreviewImport(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxImportBytes+(64<<10))
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxImportRequestBytes)
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
@@ -136,12 +263,36 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	request.Mode = strings.ToLower(strings.TrimSpace(request.Mode))
 	request.SourceName = strings.TrimSpace(request.SourceName)
 	request.Provisioning = strings.ToLower(strings.TrimSpace(request.Provisioning))
-	if _, ok := importSpecs[request.Entity]; !ok {
+	request.Sheet = strings.TrimSpace(request.Sheet)
+	spec, ok := importSpecs[request.Entity]
+	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported import entity"})
 		return
 	}
-	if request.Format != "csv" && request.Format != "json" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "format must be csv or json"})
+	if len(request.ColumnMap) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "column mapping contains too many fields"})
+		return
+	}
+	allowedColumns := map[string]bool{}
+	for _, header := range spec.Headers {
+		allowedColumns[header] = true
+	}
+	normalizedColumnMap := make(map[string]string, len(request.ColumnMap))
+	for source, target := range request.ColumnMap {
+		normalizedSource := normalizeImportHeader(source)
+		if normalizedSource == "" || len(normalizedSource) > 100 || (target != "" && !allowedColumns[target]) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "column mapping contains an unsupported field"})
+			return
+		}
+		if _, duplicate := normalizedColumnMap[normalizedSource]; duplicate {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "column mapping contains duplicate source fields"})
+			return
+		}
+		normalizedColumnMap[normalizedSource] = target
+	}
+	request.ColumnMap = normalizedColumnMap
+	if request.Format != "csv" && request.Format != "json" && request.Format != "xlsx" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "format must be csv, json, or xlsx"})
 		return
 	}
 	if request.Mode != "create" && request.Mode != "merge" {
@@ -152,12 +303,12 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 		if request.Provisioning == "" {
 			request.Provisioning = "sso_only"
 		}
-		if request.Provisioning != "sso_only" && request.Provisioning != "activation_email" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "provisioning must be sso_only or activation_email"})
+		if request.Provisioning != "sso_only" && request.Provisioning != "activation_email" && request.Provisioning != "generated_credentials" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "provisioning must be sso_only, activation_email, or generated_credentials"})
 			return
 		}
-		if request.Provisioning == "activation_email" && (h.mailSvc == nil || !h.mailSvc.Ready(c.Request.Context())) {
-			c.JSON(http.StatusConflict, gin.H{"error": "configure and successfully test an active mail provider before emailing account activations"})
+		if request.Provisioning != "sso_only" && (h.mailSvc == nil || !h.mailSvc.Ready(c.Request.Context())) {
+			c.JSON(http.StatusConflict, gin.H{"error": "configure and successfully test an active mail provider before emailing participant access"})
 			return
 		}
 	} else if request.Provisioning != "" {
@@ -168,14 +319,33 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "source_name is required"})
 		return
 	}
-	if len(request.Content) == 0 || len(request.Content) > maxImportBytes {
+	if len(request.Content) == 0 || len(request.Content) > maxImportRequestBytes {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "import content must be between 1 byte and 5 MB"})
 		return
 	}
-	rows, issues := parseImportContent(request.Entity, request.Format, []byte(request.Content))
+	content := []byte(request.Content)
+	if request.Format == "xlsx" {
+		if request.Sheet == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "select a workbook sheet"})
+			return
+		}
+		decoded, err := decodeImportWorkbook(request.Content)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		content = decoded
+	} else if len(content) > maxImportBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "import content must be at most 5 MB"})
+		return
+	}
+	rows, issues := parseImportContent(request.Entity, request.Format, content, request.Sheet, request.ColumnMap)
 	if len(rows) > maxImportRows {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "imports are limited to 5000 rows"})
 		return
+	}
+	if request.Entity == "users" && request.Provisioning == "generated_credentials" {
+		issues = append(issues, prepareGeneratedCredentialUsernames(c.Request.Context(), h.db.Pool, rows)...)
 	}
 	if request.Entity == "teams" {
 		var defaultSize int
@@ -191,10 +361,10 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	}
 	_, _ = h.db.Pool.Exec(c.Request.Context(), `UPDATE data_import_jobs SET status = 'expired', payload = '{"rows":[]}'::jsonb WHERE status = 'pending' AND expires_at <= NOW()`)
 	plan := h.planImport(c.Request.Context(), h.db.Pool, request.Entity, request.Mode, rows, issues)
-	if request.Entity == "users" && request.Provisioning == "activation_email" {
+	if request.Entity == "users" && request.Provisioning != "sso_only" {
 		for index, rowPlan := range plan.Rows {
 			if rowPlan.Action == "create" && strings.TrimSpace(rows[index]["email"]) == "" {
-				plan.Errors = append(plan.Errors, importIssue{Row: rowPlan.Row, Field: "email", Message: "is required when activation links are enabled"})
+				plan.Errors = append(plan.Errors, importIssue{Row: rowPlan.Row, Field: "email", Message: "is required when email provisioning is enabled"})
 			}
 		}
 		if _, _, err := importEventIdentity(c.Request.Context(), h.db.Pool); err != nil {
@@ -205,7 +375,10 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 	payload, _ := json.Marshal(importPayload{Rows: rows})
 	options, _ := json.Marshal(importOptions{Provisioning: request.Provisioning})
 	planJSON, _ := json.Marshal(plan)
-	sum := sha256.Sum256([]byte(request.Content))
+	columnMapJSON, _ := json.Marshal(request.ColumnMap)
+	checksumInput := append(append([]byte{}, content...), []byte("\x00"+request.Sheet+"\x00")...)
+	checksumInput = append(checksumInput, columnMapJSON...)
+	sum := sha256.Sum256(checksumInput)
 	checksum := hex.EncodeToString(sum[:])
 	jobID := uuid.New()
 	jobStatus := "pending"
@@ -353,6 +526,17 @@ func (h *DataHandler) ApplyImport(c *gin.Context) {
 		}
 		result["activation_emails_queued"] = queued
 	}
+	if entity == "users" && options.Provisioning == "generated_credentials" {
+		queued, provisionErr := h.provisionImportedCredentials(c.Request.Context(), tx, payload.Rows, currentPlan, uid)
+		if provisionErr != nil {
+			h.logger.Error("provision imported credentials", zap.String("job_id", jobID.String()), zap.Error(provisionErr))
+			_ = tx.Rollback(c.Request.Context())
+			h.recordImportFailure(c.Request.Context(), jobID, provisionErr.Error())
+			c.JSON(http.StatusConflict, gin.H{"error": provisionErr.Error()})
+			return
+		}
+		result["credential_emails_queued"] = queued
+	}
 	resultJSON, _ = json.Marshal(result)
 	if _, err := tx.Exec(c.Request.Context(), `
 		UPDATE data_import_jobs SET status = 'applied', result = $2::jsonb, payload = '{"rows":[]}'::jsonb, applied_at = NOW() WHERE id = $1
@@ -391,9 +575,12 @@ func (h *DataHandler) recordImportFailure(ctx context.Context, jobID uuid.UUID, 
 	}
 }
 
-func parseImportContent(entity, format string, content []byte) ([]map[string]string, []importIssue) {
+func parseImportContent(entity, format string, content []byte, sheet string, columnMap map[string]string) ([]map[string]string, []importIssue) {
 	if format == "csv" {
 		return parseImportCSV(entity, content)
+	}
+	if format == "xlsx" {
+		return parseImportWorkbookForEntity(entity, content, sheet, columnMap)
 	}
 	return parseImportJSON(entity, content)
 }
@@ -409,28 +596,115 @@ func parseImportCSV(entity string, content []byte) ([]map[string]string, []impor
 	if len(records) == 0 {
 		return nil, []importIssue{{Row: 1, Message: "CSV is empty"}}
 	}
+	return parseImportTable(entity, records, true, nil)
+}
+
+func parseImportWorkbook(content []byte, sheet string, mappings ...map[string]string) ([]map[string]string, []importIssue) {
+	columnMap := map[string]string(nil)
+	if len(mappings) > 0 {
+		columnMap = mappings[0]
+	}
+	return parseImportWorkbookForEntity("", content, sheet, columnMap)
+}
+
+func parseImportWorkbookForEntity(entity string, content []byte, sheet string, columnMap map[string]string) ([]map[string]string, []importIssue) {
+	workbook, err := openImportWorkbook(content)
+	if err != nil {
+		return nil, []importIssue{{Row: 1, Message: "the file is not a readable .xlsx workbook"}}
+	}
+	defer workbook.Close()
+	found := false
+	for _, candidate := range workbook.GetSheetList() {
+		if candidate == sheet {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, []importIssue{{Row: 1, Field: "sheet", Message: "the selected sheet is not present in the workbook"}}
+	}
+	iterator, err := workbook.Rows(sheet)
+	if err != nil {
+		return nil, []importIssue{{Row: 1, Field: "sheet", Message: "the selected sheet could not be read"}}
+	}
+	defer iterator.Close()
+	records := [][]string{}
+	for iterator.Next() {
+		row, err := iterator.Columns()
+		if err != nil {
+			return nil, []importIssue{{Row: len(records) + 1, Message: "the workbook row could not be read"}}
+		}
+		records = append(records, row)
+		if len(records) > maxImportRows+1 {
+			return nil, []importIssue{{Row: maxImportRows + 2, Message: "imports are limited to 5000 data rows"}}
+		}
+	}
+	if err := iterator.Error(); err != nil {
+		return nil, []importIssue{{Row: len(records) + 1, Message: "the workbook sheet could not be read"}}
+	}
+	if len(records) == 0 {
+		return nil, []importIssue{{Row: 1, Message: "the selected sheet is empty"}}
+	}
+	return parseImportTable(entity, records, false, columnMap)
+}
+
+func parseImportTable(entity string, records [][]string, strictColumns bool, columnMap map[string]string) ([]map[string]string, []importIssue) {
 	headers := make([]string, len(records[0]))
 	seen := map[string]bool{}
 	issues := []importIssue{}
 	for index, header := range records[0] {
-		header = normalizeImportHeader(header)
-		headers[index] = header
-		if header == "" || seen[header] {
-			issues = append(issues, importIssue{Row: 1, Field: header, Message: "header is empty or duplicated"})
+		source := normalizeImportHeader(header)
+		if source == "" {
+			issues = append(issues, importIssue{Row: 1, Message: "header is empty"})
+			continue
 		}
-		seen[header] = true
+		target, mapped := columnMap[source]
+		if !mapped {
+			target = canonicalImportHeader(entity, source)
+			if target == "" {
+				target = source
+			}
+		}
+		headers[index] = target
+		if target != "" && seen[target] {
+			issues = append(issues, importIssue{Row: 1, Field: target, Message: "multiple source columns map to this field"})
+		}
+		if target != "" {
+			seen[target] = true
+		}
 	}
 	rows := make([]map[string]string, 0, len(records)-1)
 	for index, record := range records[1:] {
-		if len(record) != len(headers) {
+		if strictColumns && len(record) != len(headers) {
 			issues = append(issues, importIssue{Row: index + 2, Message: "column count does not match the header"})
 			continue
 		}
+		if len(record) > len(headers) {
+			hasExtraValue := false
+			for _, value := range record[len(headers):] {
+				if strings.TrimSpace(value) != "" {
+					hasExtraValue = true
+					break
+				}
+			}
+			if hasExtraValue {
+				issues = append(issues, importIssue{Row: index + 2, Message: "row has values beyond the last header"})
+				continue
+			}
+			record = record[:len(headers)]
+		}
 		row := make(map[string]string, len(headers))
 		empty := true
-		for column, value := range record {
+		for column, header := range headers {
+			if header == "" {
+				continue
+			}
+			value := ""
+			if column < len(record) {
+				value = record[column]
+			}
 			value = strings.TrimSpace(value)
-			row[headers[column]] = value
+			row[header] = value
 			if value != "" {
 				empty = false
 			}
@@ -440,6 +714,24 @@ func parseImportCSV(entity string, content []byte) ([]map[string]string, []impor
 		}
 	}
 	return rows, issues
+}
+
+func decodeImportWorkbook(encoded string) ([]byte, error) {
+	if len(encoded) == 0 || len(encoded) > maxImportRequestBytes {
+		return nil, errors.New("workbook must be between 1 byte and 5 MB")
+	}
+	content, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, errors.New("workbook content is not valid base64")
+	}
+	if len(content) == 0 || len(content) > maxImportBytes {
+		return nil, errors.New("workbook must be at most 5 MB")
+	}
+	return content, nil
+}
+
+func openImportWorkbook(content []byte) (*excelize.File, error) {
+	return excelize.OpenReader(bytes.NewReader(content), excelize.Options{UnzipSizeLimit: maxWorkbookUnzipBytes, UnzipXMLSizeLimit: maxWorkbookXMLBytes})
 }
 
 func parseImportJSON(entity string, content []byte) ([]map[string]string, []importIssue) {
@@ -456,7 +748,11 @@ func parseImportJSON(entity string, content []byte) ([]map[string]string, []impo
 	for index, record := range records {
 		row := make(map[string]string, len(record))
 		for key, value := range record {
-			key = normalizeImportHeader(key)
+			normalized := normalizeImportHeader(key)
+			key = canonicalImportHeader(entity, normalized)
+			if key == "" {
+				key = normalized
+			}
 			switch typed := value.(type) {
 			case nil:
 				row[key] = ""
@@ -511,7 +807,131 @@ func importJSONRecords(entity string, document any) ([]map[string]any, error) {
 }
 
 func normalizeImportHeader(value string) string {
-	return strings.ToLower(strings.ReplaceAll(strings.TrimSpace(value), " ", "_"))
+	var normalized strings.Builder
+	separator := false
+	for _, character := range strings.ToLower(strings.TrimSpace(value)) {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
+			if separator && normalized.Len() > 0 {
+				normalized.WriteByte('_')
+			}
+			normalized.WriteRune(character)
+			separator = false
+		} else {
+			separator = true
+		}
+	}
+	return strings.Trim(normalized.String(), "_")
+}
+
+func canonicalImportHeader(entity, normalized string) string {
+	if normalized == "" {
+		return ""
+	}
+	spec, ok := importSpecs[entity]
+	if !ok {
+		return normalized
+	}
+	for _, header := range spec.Headers {
+		if header == normalized {
+			return header
+		}
+	}
+	return importHeaderAliases[entity][normalized]
+}
+
+func prepareGeneratedCredentialUsernames(ctx context.Context, query importQuery, rows []map[string]string) []importIssue {
+	issues := []importIssue{}
+	reserved := map[string]bool{}
+	seenEmails := map[string]int{}
+	for _, row := range rows {
+		if username := strings.TrimSpace(row["username"]); username != "" {
+			reserved[strings.ToLower(username)] = true
+		}
+	}
+	for index, row := range rows {
+		rowNumber := index + 2
+		email := strings.ToLower(strings.TrimSpace(row["email"]))
+		row["email"] = email
+		if email != "" {
+			if first, exists := seenEmails[email]; exists {
+				issues = append(issues, importIssue{Row: rowNumber, Field: "email", Message: fmt.Sprintf("duplicates row %d", first)})
+			} else {
+				seenEmails[email] = rowNumber
+			}
+		}
+		if strings.TrimSpace(row["username"]) != "" {
+			continue
+		}
+		if email != "" {
+			var existing string
+			err := query.QueryRow(ctx, `SELECT username FROM users WHERE LOWER(email) = LOWER($1)`, email).Scan(&existing)
+			if err == nil {
+				row["username"] = existing
+				reserved[strings.ToLower(existing)] = true
+				continue
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				issues = append(issues, importIssue{Row: rowNumber, Field: "username", Message: "could not derive a unique username"})
+				continue
+			}
+		}
+		base := generatedUsernameBase(email, row["display_name"])
+		issueCount := len(issues)
+		for sequence := 1; sequence <= maxImportRows+1; sequence++ {
+			candidate := base
+			if sequence > 1 {
+				suffix := "_" + strconv.Itoa(sequence)
+				candidate = strings.TrimRight(base[:min(len(base), 50-len(suffix))], "_") + suffix
+			}
+			if reserved[strings.ToLower(candidate)] {
+				continue
+			}
+			var exists bool
+			if err := query.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE LOWER(username) = LOWER($1))`, candidate).Scan(&exists); err != nil {
+				issues = append(issues, importIssue{Row: rowNumber, Field: "username", Message: "could not derive a unique username"})
+				break
+			}
+			if exists {
+				continue
+			}
+			row["username"] = candidate
+			reserved[strings.ToLower(candidate)] = true
+			break
+		}
+		if row["username"] == "" && len(issues) == issueCount {
+			issues = append(issues, importIssue{Row: rowNumber, Field: "username", Message: "could not derive a unique username"})
+		}
+	}
+	return issues
+}
+
+func generatedUsernameBase(email, displayName string) string {
+	value := displayName
+	if separator := strings.Index(email, "@"); separator > 0 {
+		value = email[:separator]
+	}
+	var output strings.Builder
+	separatorPending := false
+	for _, character := range strings.ToLower(value) {
+		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') {
+			if separatorPending && output.Len() > 0 {
+				output.WriteByte('_')
+			}
+			output.WriteRune(character)
+			separatorPending = false
+		} else {
+			separatorPending = true
+		}
+	}
+	base := strings.Trim(output.String(), "_")
+	if len(base) < 3 {
+		base = "participant_" + base
+	}
+	base = strings.TrimRight(base[:min(len(base), 50)], "_")
+	if len(base) < 3 {
+		return "participant"
+	}
+	return base
 }
 
 func (h *DataHandler) planImport(ctx context.Context, query importQuery, entity, mode string, rows []map[string]string, initial []importIssue) importPlan {
@@ -831,6 +1251,51 @@ func (h *DataHandler) provisionImportedUsers(ctx context.Context, tx pgx.Tx, row
 			"activation_url":   activationURL,
 			"username":         row["username"],
 			"expires_at":       expiresAt.Format(time.RFC1123Z),
+		}, &createdBy)
+		if err != nil {
+			return 0, err
+		}
+		queued++
+	}
+	return queued, nil
+}
+
+func (h *DataHandler) provisionImportedCredentials(ctx context.Context, tx pgx.Tx, rows []map[string]string, plan importPlan, createdBy uuid.UUID) (int, error) {
+	if h.mailSvc == nil || !h.mailSvc.Ready(ctx) {
+		return 0, errors.New("mail delivery is not ready; test an active provider and preview the import again")
+	}
+	publicURL, eventName, err := importEventIdentity(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	queued := 0
+	for index, rowPlan := range plan.Rows {
+		if rowPlan.Action != "create" {
+			continue
+		}
+		row := rows[index]
+		temporaryPassword, err := generateSecureToken(12)
+		if err != nil {
+			return 0, err
+		}
+		hashedPassword, err := bcrypt.GenerateFromPassword([]byte(temporaryPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return 0, err
+		}
+		var userID uuid.UUID
+		if err := tx.QueryRow(ctx, `UPDATE users SET password_hash = $2, email_verified = FALSE, must_change_password = TRUE, updated_at = NOW() WHERE username = $1 RETURNING id`, row["username"], string(hashedPassword)).Scan(&userID); err != nil {
+			return 0, err
+		}
+		participantName := strings.TrimSpace(row["display_name"])
+		if participantName == "" {
+			participantName = row["username"]
+		}
+		_, err = h.mailSvc.EnqueueTx(ctx, tx, row["email"], "account_credentials", map[string]string{
+			"participant_name":   participantName,
+			"event_name":         eventName,
+			"login_url":          publicURL + "/login",
+			"username":           row["username"],
+			"temporary_password": temporaryPassword,
 		}, &createdBy)
 		if err != nil {
 			return 0, err
