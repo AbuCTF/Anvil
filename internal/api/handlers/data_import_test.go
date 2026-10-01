@@ -128,3 +128,54 @@ func TestInspectWorkbookRecommendsMatchingSheet(t *testing.T) {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 }
+
+func TestInspectAndMapCSVAndJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewDataHandler(nil, zap.NewNop())
+	for _, test := range []struct {
+		format  string
+		content string
+	}{
+		{format: "csv", content: "Employee Number,Work Email,Full Name,Department\nKPMG-17,avery@example.test,Avery Rao,Risk\n"},
+		{format: "json", content: `[{"Employee Number":"KPMG-17","Work Email":"avery@example.test","Full Name":"Avery Rao","Department":"Risk"}]`},
+	} {
+		payload, _ := json.Marshal(map[string]string{"entity": "users", "format": test.format, "content": test.content})
+		response := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(response)
+		context.Request = httptest.NewRequest(http.MethodPost, "/imports/inspect", bytes.NewReader(payload))
+		context.Request.Header.Set("Content-Type", "application/json")
+		handler.InspectImport(context)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"source":"Employee Number"`) {
+			t.Fatalf("%s inspection status=%d body=%s", test.format, response.Code, response.Body.String())
+		}
+		mapping := map[string]string{"employee_number": "username", "work_email": "email", "full_name": "display_name", "department": ""}
+		rows, issues := parseImportContent("users", test.format, []byte(test.content), "", mapping)
+		if len(issues) != 0 || len(rows) != 1 {
+			t.Fatalf("%s rows=%v issues=%v", test.format, rows, issues)
+		}
+		if rows[0]["username"] != "KPMG-17" || rows[0]["email"] != "avery@example.test" || rows[0]["display_name"] != "Avery Rao" {
+			t.Fatalf("%s mapping failed: %v", test.format, rows[0])
+		}
+		if _, exists := rows[0]["department"]; exists {
+			t.Fatalf("%s ignored column was imported: %v", test.format, rows[0])
+		}
+	}
+}
+
+func TestImportTemplatesSupportCSVJSONAndExcel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	handler := NewDataHandler(nil, zap.NewNop())
+	for _, format := range []string{"csv", "json", "xlsx"} {
+		response := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(response)
+		context.Params = gin.Params{{Key: "entity", Value: "users"}}
+		context.Request = httptest.NewRequest(http.MethodGet, "/templates/users?format="+format, nil)
+		handler.Template(context)
+		if response.Code != http.StatusOK || len(response.Body.Bytes()) == 0 {
+			t.Fatalf("%s template status=%d size=%d body=%s", format, response.Code, response.Body.Len(), response.Body.String())
+		}
+		if !strings.Contains(response.Header().Get("Content-Disposition"), "."+format) {
+			t.Fatalf("%s template disposition=%q", format, response.Header().Get("Content-Disposition"))
+		}
+	}
+}

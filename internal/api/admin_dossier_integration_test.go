@@ -43,7 +43,7 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	adminID, userID, teamID, challengeID, flagID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	adminID, userID, teamID, challengeID, flagID, categoryID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	instanceID, submissionID := uuid.New(), uuid.New()
 	exec := func(query string, args ...any) {
 		if _, err := db.Pool.Exec(ctx, query, args...); err != nil {
@@ -51,6 +51,7 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 		}
 	}
 	exec(`INSERT INTO users (id, username, email, role, status) VALUES ($1, $2, $3, 'admin', 'active')`, adminID, "admin-"+adminID.String(), adminID.String()+"@example.test")
+	exec(`INSERT INTO categories (id, name, slug) VALUES ($1, 'Integration category', $2)`, categoryID, "category-"+categoryID.String())
 	exec(`INSERT INTO teams (id, name, join_code, total_score, created_by) VALUES ($1, $2, $3, 0, $4)`, teamID, "team-"+teamID.String(), "join-"+teamID.String(), adminID)
 	exec(`INSERT INTO users (id, username, email, role, status, team_id, last_login_at, last_login_ip) VALUES ($1, $2, $3, 'user', 'active', $4, NOW(), '203.0.113.10')`, userID, "user-"+userID.String(), userID.String()+"@example.test", teamID)
 	exec(`INSERT INTO challenges (id, name, slug, description, difficulty, status, container_image, base_points, total_flags) VALUES ($1, 'Dossier target', $2, 'test', 'medium', 'published', '', 100, 1)`, challengeID, "challenge-"+challengeID.String())
@@ -161,6 +162,7 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	challengeName := "multi-" + uuid.NewString()
 	createdResponse := request(http.MethodPost, "/api/v1/admin/challenges", map[string]any{
 		"name": challengeName, "description": "integration", "difficulty": "hard", "base_points": 200,
+		"category_id":    categoryID.String(),
 		"challenge_type": "docker", "scoring_mode": "graded", "arena_mode": "per_team",
 		"services": []any{
 			map[string]any{"name": "app", "image": "ghcr.io/example/app", "public": true, "ports": []any{map[string]any{"port": 8080, "protocol": "tcp", "service": "http"}}},
@@ -184,6 +186,21 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	}
 	if delivery != "multi" {
 		t.Fatalf("delivery=%q, want multi", delivery)
+	}
+	metadata := request(http.MethodPatch, "/api/v1/admin/challenges/"+createdID+"/metadata", map[string]any{
+		"description": "metadata-only edit", "difficulty": "medium", "base_points": 225,
+	})
+	if metadata.Code != http.StatusOK {
+		t.Fatalf("metadata patch status=%d body=%s", metadata.Code, metadata.Body.String())
+	}
+	challengeList = decode(request(http.MethodGet, "/api/v1/admin/challenges", nil))
+	for _, item := range challengeList["challenges"].([]any) {
+		challenge := item.(map[string]any)
+		if challenge["id"] == createdID {
+			if challenge["category_id"] != categoryID.String() || challenge["delivery_type"] != "multi" || len(challenge["services"].([]any)) != 2 || challenge["base_points"].(float64) != 225 {
+				t.Fatalf("metadata patch changed structural fields: %#v", challenge)
+			}
+		}
 	}
 	if response := requestAs(http.MethodGet, "/api/v1/admin/challenges", userToken, nil); response.Code != http.StatusForbidden {
 		t.Fatalf("participant admin challenge list status=%d, want 403", response.Code)

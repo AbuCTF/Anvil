@@ -424,7 +424,7 @@ func (p *WebVersePoller) captureOne(ctx context.Context, teamID, userID uuid.UUI
 	}
 	// a WebVerse solve credits regardless of the team's LOCAL state: never-opened,
 	// abandoned, expired, or an open whose act-timer lapsed all still count. ensure the
-	// row is open+live (no launch charge — it lives on WebVerse, there is no H7 instance
+	// row is open+live (no launch charge; it lives on WebVerse without a local instance
 	// to pay for) so applyEconomySolve below can score it. it then flips to 'solved' in
 	// this same tx, so a re-opened challenge never lingers as an extra open slot.
 	live := !noRow && status == "open" && expiresAt != nil && expiresAt.After(time.Now())
@@ -750,7 +750,7 @@ func windowOK(solvedAt, openedAt *time.Time, eventEnd time.Time) bool {
 		return false
 	}
 	// WebVerse solves live on WebVerse's own timeline: a team that has opened the
-	// challenge on H7 gets credit whether they solved before or after opening here.
+	// challenge gets credit whether they solved before or after opening here.
 	// (external + authoritative from WebVerse's leaderboard, so no ordering cheese.)
 	if !eventEnd.IsZero() && solvedAt.After(eventEnd) {
 		return false

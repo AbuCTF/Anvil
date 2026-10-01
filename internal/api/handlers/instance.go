@@ -934,7 +934,7 @@ func (h *InstanceHandler) provisionInstance(
 		if len(res.Endpoints) > 0 {
 			// ip_address holds the bare host; the ports map is keyed "<port>/<svc>"
 			// so the UI reconstructs the exact connect string the operator chose
-			// (e.g. `nc web3.h7tex.com 30000`). Source of truth is the CR status.
+			// Source of truth is the CR status.
 			instanceIP = res.Endpoints[0].Host
 			for _, ep := range res.Endpoints {
 				portMappings[fmt.Sprintf("%d/%s", ep.Port, endpointService(ep.Kind))] = ep.Port
@@ -2118,7 +2118,7 @@ func (h *InstanceHandler) generateAndStoreDynamicFlags(
 	type dynFlag struct {
 		ID     string
 		Name   string
-		Prefix string // resolved prefix, e.g. "H7CTF"
+		Prefix string
 	}
 	var dynamicFlags []dynFlag
 	for rows.Next() {

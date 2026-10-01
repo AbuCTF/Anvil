@@ -48,6 +48,7 @@ type platformInfoResponse struct {
 	TeamJoin           string                         `json:"team_join_policy"`
 	VPNEnabled         bool                           `json:"vpn_enabled"`
 	SSOEnabled         bool                           `json:"sso_enabled"`
+	SSOLoginURL        string                         `json:"sso_login_url,omitempty"`
 	DiscordWalkin      bool                           `json:"discord_walkin"`
 	RegisterURL        string                         `json:"register_url,omitempty"`
 	ServerTime         time.Time                      `json:"server_time"`
@@ -133,7 +134,8 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		TeamCreation:       teamCreation,
 		TeamJoin:           teamJoin,
 		VPNEnabled:         h.config.VPN.Enabled,
-		SSOEnabled:         h.config.SSO.Enabled && strings.TrimSpace(h.config.SSO.SharedSecret) != "",
+		SSOEnabled:         h.config.SSO.Enabled && strings.TrimSpace(h.config.SSO.SharedSecret) != "" && strings.TrimSpace(h.config.SSO.LoginURL) != "",
+		SSOLoginURL:        strings.TrimSpace(h.config.SSO.LoginURL),
 		DiscordWalkin:      h.config.Discord.Enabled && h.config.Discord.ClientID != "",
 		RegisterURL:        h.config.Platform.RegisterURL,
 		ServerTime:         now,

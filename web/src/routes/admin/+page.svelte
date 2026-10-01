@@ -28,6 +28,7 @@
 	let error = '';
 	let categoriesError = '';
 	let showCreateModal = false;
+	let showParticipantModal = false;
 	let showRegistryImportModal = false;
 	let showEditModal = false;
 	let editingChallenge: any = null;
@@ -46,6 +47,12 @@
 	let selectedChallengeSeed: any = null;
 	let challengeDetailLoading = false;
 	let challengeDetailError = '';
+	let participantBusy = false;
+	let participantError = '';
+	let dataImportEntity = 'categories';
+	let participantForm = {
+		username: '', email: '', display_name: '', role: 'user', provisioning: 'activation_email'
+	};
 
 	let infraStats: any = null;
 	let nodes: any[] = [];
@@ -185,10 +192,41 @@
 		if (selectedUserSeed) { selectedUserSeed = null; selectedUserDetail = null; }
 		else if (selectedTeamSeed) { selectedTeamSeed = null; selectedTeamDetail = null; }
 		else if (selectedChallengeSeed) { selectedChallengeSeed = null; selectedChallengeDetail = null; }
+		else if (showParticipantModal) showParticipantModal = false;
 		else if (showCreateModal) showCreateModal = false;
 		else if (showEditModal) { showEditModal = false; editingChallenge = null; }
 		else if (showNodeModal) showNodeModal = false;
 		else if (showTemplateUploadModal) showTemplateUploadModal = false;
+	}
+
+	function openParticipantModal() {
+		participantForm = { username: '', email: '', display_name: '', role: 'user', provisioning: 'activation_email' };
+		participantError = '';
+		showParticipantModal = true;
+	}
+
+	async function createParticipant() {
+		if (participantBusy) return;
+		participantBusy = true;
+		participantError = '';
+		try {
+			const created = await api.createAdminUser(participantForm);
+			showParticipantModal = false;
+			await loadDashboard();
+			await alertDialog({
+				title: 'Participant created',
+				message: created.emails_queued ? `${created.username} was created and their access email was queued.` : `${created.username} was created for SSO access.`
+			});
+		} catch (e) {
+			participantError = e instanceof Error ? e.message : 'Could not create the participant.';
+		} finally {
+			participantBusy = false;
+		}
+	}
+
+	function openPeopleImport() {
+		dataImportEntity = 'users';
+		setTab('data');
 	}
 
 	function addPendingAttachment(event: Event) {
@@ -1516,6 +1554,8 @@
 			<div slot="actions">
 				{#if activeTab === 'challenges'}
 					<div class="flex flex-wrap gap-2"><button on:click={() => showRegistryImportModal = true} class={btnGhost}><Icon icon="mdi:package-variant-closed-plus" class="w-3.5 h-3.5 shrink-0" />Import registry</button><button on:click={openCreateChallenge} class={btnPrimary}><Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />New Challenge</button></div>
+				{:else if activeTab === 'users'}
+					<div class="flex flex-wrap gap-2"><button type="button" on:click={openPeopleImport} class={btnGhost}><Icon icon="mdi:file-import-outline" class="h-3.5 w-3.5" />Import people</button><button type="button" on:click={openParticipantModal} class={btnPrimary}><Icon icon="mdi:account-plus-outline" class="h-3.5 w-3.5" />Add participant</button></div>
 				{:else if activeTab === 'infrastructure'}
 					<div class="flex flex-wrap gap-2">
 						<button on:click={() => showTemplateUploadModal = true} class={btnGhost}>
@@ -1627,7 +1667,7 @@
 					save={savePlatformSettings}
 				/>
 			{:else if activeTab === 'data'}
-				<DataWorkspace />
+				<DataWorkspace initialEntity={dataImportEntity} />
 			{:else if activeTab === 'launch'}
 				<LaunchWorkspace />
 			{:else if activeTab === 'challenges'}
@@ -3115,6 +3155,32 @@
 		on:close={() => { selectedChallengeSeed = null; selectedChallengeDetail = null; }}
 		on:edit={() => { const challenge = selectedChallengeSeed; selectedChallengeSeed = null; selectedChallengeDetail = null; openEditModal(challenge); }}
 	/>
+{/if}
+
+{#if showParticipantModal}
+	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<button type="button" aria-label="Close participant form" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showParticipantModal = false}></button>
+		<div class="relative z-10 w-full max-w-xl overflow-hidden rounded-lg border border-stone-800 bg-stone-950 shadow-2xl" role="dialog" aria-modal="true" aria-label="Add participant">
+			<div class="flex items-start justify-between gap-4 border-b border-stone-800 px-5 py-4">
+				<div><h2 class="text-base font-semibold text-stone-100">Add participant</h2><p class="mt-1 text-xs text-stone-500">Create one account and deliver its sign-in securely.</p></div>
+				<button type="button" on:click={() => showParticipantModal = false} class="p-1 text-stone-500 hover:text-stone-200"><Icon icon="mdi:close" class="h-5 w-5" /></button>
+			</div>
+			<form class="space-y-4 p-5" on:submit|preventDefault={createParticipant}>
+				{#if participantError}<div class="rounded-md border border-down/20 bg-down/5 px-3 py-2.5 text-sm text-down">{participantError}</div>{/if}
+				<div class="grid gap-4 sm:grid-cols-2">
+					<label class="sm:col-span-2"><span class={labelCls}>Email</span><input type="email" bind:value={participantForm.email} required autocomplete="off" placeholder="participant@example.com" class="w-full {fieldCls}" /></label>
+					<label><span class={labelCls}>Display name</span><input bind:value={participantForm.display_name} maxlength="100" autocomplete="off" placeholder="Avery Rao" class="w-full {fieldCls}" /></label>
+					<label><span class={labelCls}>Username <span class="normal-case tracking-normal text-stone-600">(optional)</span></span><input bind:value={participantForm.username} maxlength="50" autocomplete="off" placeholder="Generated from email" class="w-full {fieldCls}" /></label>
+					<label><span class={labelCls}>Role</span><select bind:value={participantForm.role} class="w-full {fieldCls}"><option value="user">Participant</option><option value="author">Challenge author</option></select></label>
+					<label><span class={labelCls}>Account access</span><select bind:value={participantForm.provisioning} class="w-full {fieldCls}"><option value="activation_email">Activation link</option><option value="generated_credentials">Temporary credentials</option><option value="sso_only">SSO only</option></select></label>
+				</div>
+				<div class="rounded-md border border-stone-800 bg-stone-900/30 p-3 text-xs leading-relaxed text-stone-500">
+					{participantForm.provisioning === 'activation_email' ? 'A single-use link lets the participant set their password. It expires after 48 hours.' : participantForm.provisioning === 'generated_credentials' ? 'Anvil generates a unique temporary password. The participant must replace it at first sign-in.' : 'No local password is created. The account is matched to the configured identity provider.'}
+				</div>
+				<div class="flex items-center justify-between gap-3 border-t border-stone-800 pt-4"><button type="button" on:click={() => showParticipantModal = false} class={btnGhost}>Cancel</button><button type="submit" disabled={participantBusy || !participantForm.email.trim()} class={btnPrimary}>{participantBusy ? 'Creating…' : 'Create participant'}</button></div>
+			</form>
+		</div>
+	</div>
 {/if}
 
 {#if showRegistryImportModal}

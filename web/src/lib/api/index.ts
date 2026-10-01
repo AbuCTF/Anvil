@@ -50,6 +50,7 @@ export interface PlatformInfoResponse {
 	team_join_policy: 'code' | 'disabled';
 	vpn_enabled: boolean;
 	sso_enabled: boolean;
+	sso_login_url?: string;
 	discord_walkin: boolean;
 	register_url?: string;
 	server_time: string;
@@ -1128,6 +1129,13 @@ class ApiClient {
 		});
 	}
 
+	async updateAdminChallengeMetadata(challengeId: string, data: { name?: string; description?: string; difficulty?: string; base_points?: number }) {
+		return this.request<any>(`/admin/challenges/${challengeId}/metadata`, {
+			method: 'PATCH',
+			body: JSON.stringify(data)
+		});
+	}
+
 	async deleteAdminChallenge(challengeId: string) {
 		return this.request<any>(`/admin/challenges/${challengeId}`, {
 			method: 'DELETE'
@@ -1435,6 +1443,15 @@ class ApiClient {
 			fields: string[];
 			required_fields: string[];
 		}>('/admin/data/imports/workbook/inspect', { method: 'POST', body: JSON.stringify(data) });
+	}
+
+	async inspectDataImport(data: { entity: string; format: 'csv' | 'json'; content: string }) {
+		return this.request<{
+			sheets: Array<{ name: string; rows: number; recognized_headers: number; missing_required_headers: string[]; headers: Array<{ source: string; normalized: string; suggested_field: string }> }>;
+			recommended_sheet: string;
+			fields: string[];
+			required_fields: string[];
+		}>('/admin/data/imports/inspect', { method: 'POST', body: JSON.stringify(data) });
 	}
 
 	async previewDataImport(data: { entity: string; format: 'csv' | 'json' | 'xlsx'; mode: 'create' | 'merge'; source_name: string; content: string; sheet?: string; column_map?: Record<string, string>; provisioning?: 'sso_only' | 'activation_email' | 'generated_credentials' }) {

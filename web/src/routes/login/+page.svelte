@@ -11,10 +11,6 @@
 	} from '$lib/stores/platform';
 	import BrandLogo from '$lib/components/BrandLogo.svelte';
 
-	// SSO login goes through the H7 portal (magic-link there → "Enter competition" → SSO back to Anvil).
-	// NOT the registration landing (2026.h7tex.com), which dead-ends a returning user.
-	const PORTAL_SSO_URL = 'https://app.h7tex.com/portal';
-
 	let username = '';
 	let password = '';
 	let loading = false;
@@ -23,6 +19,7 @@
 
 	$: discordWalkin = $platformInfo?.discord_walkin ?? false;
 	$: ssoEnabled = $platformInfo?.sso_enabled ?? false;
+	$: ssoLoginURL = $platformInfo?.sso_login_url ?? '';
 
 	onMount(() => loadPlatformInfo());
 
@@ -128,7 +125,7 @@
 				</button>
 			</form>
 
-			{#if discordWalkin || ssoEnabled}
+			{#if discordWalkin || (ssoEnabled && ssoLoginURL)}
 				<div class="flex items-center gap-3 my-4" aria-hidden="true">
 					<div class="h-px flex-1 bg-stone-800"></div>
 					<span class="text-xs uppercase tracking-wider text-stone-600">or</span>
@@ -148,9 +145,9 @@
 				</button>
 			{/if}
 
-			{#if ssoEnabled}
+			{#if ssoEnabled && ssoLoginURL}
 				<a
-					href={PORTAL_SSO_URL}
+					href={ssoLoginURL}
 					class="mt-3 w-full flex items-center justify-center gap-2 rounded-md bg-stone-800 text-stone-100 font-medium py-2.5 text-sm hover:bg-stone-700 transition-colors"
 				>
 					<Icon icon="mdi:shield-account-outline" class="w-4 h-4 shrink-0" />

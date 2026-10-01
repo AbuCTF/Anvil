@@ -64,8 +64,8 @@
 		}
 	}
 
-	$: phaseLabel = phase === 'scheduled' ? 'Starts' : phase === 'live' ? 'Live' : 'Event';
-	$: clockText = phase === 'ended' ? 'Complete' : formatDuration(remainingSeconds);
+	$: phaseLabel = phase === 'scheduled' ? 'Starts' : phase === 'live' ? 'Live' : '';
+	$: clockText = phase === 'ended' ? 'Event complete' : formatDuration(remainingSeconds);
 	$: statusText = phase === 'scheduled' ? 'Scheduled' : phase === 'live' ? 'In progress' : 'Finished';
 	$: title = eventWindow
 		? phase === 'scheduled'
@@ -143,7 +143,7 @@
 				class="block h-1.5 w-1.5 flex-none rounded-full {phase === 'live' ? 'live-dot bg-amber-500' : phase === 'scheduled' ? 'bg-info' : 'bg-emerald-500'}"
 				aria-hidden="true"
 			></span>
-			<span class="metadata-label optical-label hidden text-stone-500 2xl:inline">{phaseLabel}</span>
+			{#if phaseLabel}<span class="metadata-label optical-label hidden text-stone-500 2xl:inline">{phaseLabel}</span>{/if}
 			<span class="clock-value whitespace-nowrap text-[0.68rem] font-medium leading-none tabular-nums {phase === 'ended' ? 'text-emerald-400' : 'text-stone-200'}">{clockText}</span>
 		</button>
 
@@ -179,11 +179,6 @@
 {/if}
 
 <style>
-	.clock-value {
-		position: relative;
-		top: 1px;
-	}
-
 	.live-dot {
 		animation: live-blink 1.8s ease-in-out infinite;
 	}

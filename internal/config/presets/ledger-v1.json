@@ -1,5 +1,5 @@
 {
-  "id": "h7-ledger",
+  "id": "ledger",
   "version": "1.7",
   "name": "Ledger",
   "difficulty_order": ["easy", "medium", "hard", "insane"],

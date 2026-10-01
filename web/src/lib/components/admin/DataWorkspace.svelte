@@ -4,6 +4,8 @@
 	import { api, type DataImportHistory, type DataImportPreview } from '$api';
 	import HelpTip from '$lib/components/HelpTip.svelte';
 
+	export let initialEntity = 'categories';
+
 	const entities = [
 		{ id: 'settings', label: 'Event settings', importable: false, selected: true },
 		{ id: 'categories', label: 'Categories', importable: true, selected: true },
@@ -15,7 +17,7 @@
 		{ id: 'solves', label: 'Solve log', importable: false, selected: true },
 		{ id: 'submissions', label: 'Submission audit', importable: false, selected: false },
 		{ id: 'ledger_balances', label: 'Ledger balances', importable: false, selected: true },
-		{ id: 'ledger_history', label: 'Ledger history (large)', importable: false, selected: false }
+		{ id: 'ledger_history', label: 'Ledger history', importable: false, selected: false }
 	];
 
 	let summary: Awaited<ReturnType<typeof api.getDataSummary>> | null = null;
@@ -24,9 +26,10 @@
 	let exportFormat: 'bundle' | 'json' | 'csv' = 'bundle';
 	let anonymize = false;
 	let exportBusy = false;
-	let importEntity = 'categories';
+	let importEntity = initialEntity;
 	let importMode: 'create' | 'merge' = 'create';
 	let userProvisioning: 'activation_email' | 'generated_credentials' | 'sso_only' = 'activation_email';
+	let templateFormat: 'csv' | 'xlsx' | 'json' = 'xlsx';
 	let importFile: File | null = null;
 	let workbookContent = '';
 	let workbookSheets: Array<{ name: string; rows: number; recognized_headers: number; missing_required_headers: string[]; headers: Array<{ source: string; normalized: string; suggested_field: string }> }> = [];
@@ -44,7 +47,7 @@
 	const input = 'w-full rounded-md border border-stone-800 bg-stone-950 px-3 py-2.5 text-sm text-stone-200 outline-none focus:border-stone-500';
 	const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-stone-600';
 	$: mappedWorkbookFields = new Set(Object.values(workbookColumnMap).filter(Boolean));
-	$: missingWorkbookFields = workbookRequiredFields.filter((field) => !mappedWorkbookFields.has(field) && !(importEntity === 'users' && userProvisioning === 'generated_credentials' && field === 'username' && mappedWorkbookFields.has('email')));
+	$: missingWorkbookFields = workbookRequiredFields.filter((field) => !mappedWorkbookFields.has(field) && !(importEntity === 'users' && userProvisioning !== 'sso_only' && field === 'username' && mappedWorkbookFields.has('email')));
 
 	async function load() {
 		try {
@@ -103,7 +106,7 @@
 
 	async function downloadTemplate() {
 		try {
-			await saveDownload(`/admin/data/templates/${importEntity}`);
+			await saveDownload(`/admin/data/templates/${importEntity}?format=${templateFormat}`);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Template download failed';
 		}
@@ -118,7 +121,7 @@
 		try {
 			const filename = importFile.name.toLowerCase();
 			const format = filename.endsWith('.xlsx') ? 'xlsx' : filename.endsWith('.json') ? 'json' : 'csv';
-			preview = await api.previewDataImport({ entity: importEntity, format, mode: importMode, source_name: importFile.name, content: format === 'xlsx' ? workbookContent : await importFile.text(), sheet: format === 'xlsx' ? workbookSheet : undefined, column_map: format === 'xlsx' ? workbookColumnMap : undefined, provisioning: importEntity === 'users' ? userProvisioning : undefined });
+			preview = await api.previewDataImport({ entity: importEntity, format, mode: importMode, source_name: importFile.name, content: format === 'xlsx' ? workbookContent : await importFile.text(), sheet: format === 'xlsx' ? workbookSheet : undefined, column_map: workbookColumnMap, provisioning: importEntity === 'users' ? userProvisioning : undefined });
 			await load();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Import preview failed';
@@ -165,18 +168,25 @@
 			importFile = null;
 			return;
 		}
-		if (!filename.endsWith('.xlsx')) return;
 		workbookBusy = true;
 		try {
-			workbookContent = await fileAsBase64(importFile);
-			const inspection = await api.inspectDataWorkbook({ entity: importEntity, content: workbookContent });
+			let inspection;
+			if (filename.endsWith('.xlsx')) {
+				workbookContent = await fileAsBase64(importFile);
+				inspection = await api.inspectDataWorkbook({ entity: importEntity, content: workbookContent });
+			} else if (filename.endsWith('.csv') || filename.endsWith('.json')) {
+				const format = filename.endsWith('.json') ? 'json' : 'csv';
+				inspection = await api.inspectDataImport({ entity: importEntity, format, content: await importFile.text() });
+			} else {
+				throw new Error('Use an .xlsx, .csv or .json file.');
+			}
 			workbookSheets = inspection.sheets;
 			workbookFields = inspection.fields;
 			workbookRequiredFields = inspection.required_fields;
 			workbookSheet = inspection.recommended_sheet || inspection.sheets[0]?.name || '';
 			selectWorkbookSheet();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'The workbook could not be inspected';
+			error = e instanceof Error ? e.message : 'The file could not be inspected';
 			importFile = null;
 			workbookContent = '';
 		} finally {
@@ -257,17 +267,17 @@
 				{#if importEntity === 'users'}
 					<label><span class={label}>Account access</span><select class={input} bind:value={userProvisioning}><option value="activation_email">Email secure activation links</option><option value="generated_credentials">Email temporary credentials</option><option value="sso_only">Provision for SSO only</option></select><span class="mt-1.5 block text-[11px] leading-relaxed text-stone-600">{userProvisioning === 'activation_email' ? 'Each recipient sets their own password from a single-use, 48-hour link.' : userProvisioning === 'generated_credentials' ? 'Missing usernames are generated. Each new participant receives a unique temporary password and must replace it at first sign-in.' : 'Accounts have no local password and enter through the configured identity provider.'}</span></label>
 				{/if}
-				<div class="flex items-center justify-between gap-3"><label class="min-w-0 flex-1"><span class={label}>Excel, CSV or JSON file</span><input type="file" accept=".xlsx,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,application/json" on:change={selectImportFile} class="block w-full text-xs text-stone-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-2 file:text-xs file:text-stone-300" /></label><button type="button" on:click={downloadTemplate} class="mt-5 shrink-0 text-xs text-stone-400 hover:text-stone-200">CSV template</button></div>
-				{#if workbookBusy}<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-950/50 px-3 py-2.5 text-xs text-stone-500"><Icon icon="mdi:loading" class="h-4 w-4 animate-spin" />Reading workbook sheets…</div>{/if}
+				<div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"><label class="min-w-0"><span class={label}>Excel, CSV or JSON file</span><input type="file" accept=".xlsx,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,application/json" on:change={selectImportFile} class="block w-full text-xs text-stone-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-2 file:text-xs file:text-stone-300" /></label><div><span class={label}>Blank template</span><div class="flex"><select class="rounded-l-md border border-r-0 border-stone-800 bg-stone-950 px-2.5 py-2 text-xs text-stone-300 outline-none" bind:value={templateFormat}><option value="xlsx">Excel</option><option value="csv">CSV</option><option value="json">JSON</option></select><button type="button" on:click={downloadTemplate} class="inline-flex items-center gap-1 rounded-r-md border border-stone-800 px-2.5 py-2 text-xs text-stone-300 hover:bg-stone-800/40"><Icon icon="mdi:download" class="h-3.5 w-3.5" />Download</button></div></div></div>
+				{#if workbookBusy}<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-950/50 px-3 py-2.5 text-xs text-stone-500"><Icon icon="mdi:loading" class="h-4 w-4 animate-spin" />Inspecting columns…</div>{/if}
 				{#if workbookSheets.length}
-					<label><span class={label}>Workbook sheet</span><select class={input} bind:value={workbookSheet} on:change={selectWorkbookSheet}>{#each workbookSheets as sheet}<option value={sheet.name}>{sheet.name} · {sheet.rows > 5000 ? '5,000+ rows' : `${sheet.rows} rows`} · {sheet.recognized_headers} matched</option>{/each}</select><span class="mt-1.5 block text-[11px] text-stone-600">The closest matching sheet was selected automatically. Choose another if needed.</span></label>
-					<details class="rounded-md border border-stone-800 bg-stone-950/40" open={missingWorkbookFields.length > 0}><summary class="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-xs font-medium text-stone-300"><span>Match spreadsheet columns</span><span class="text-[10px] {missingWorkbookFields.length ? 'text-warn' : 'text-up'}">{missingWorkbookFields.length ? `${missingWorkbookFields.length} required field${missingWorkbookFields.length === 1 ? '' : 's'} missing` : 'Ready'}</span></summary><div class="grid gap-2 border-t border-stone-800 p-3 sm:grid-cols-2">{#each workbookSheets.find((sheet) => sheet.name === workbookSheet)?.headers ?? [] as header}<label class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-2"><span class="truncate text-xs text-stone-500" title={header.source}>{header.source || '(empty column)'}</span><select class="rounded-md border border-stone-800 bg-stone-950 px-2 py-2 text-xs text-stone-300 outline-none focus:border-stone-600" bind:value={workbookColumnMap[header.normalized]} on:change={() => preview = null}><option value="">Ignore</option>{#each workbookFields as field}<option value={field}>{field.replaceAll('_', ' ')}</option>{/each}</select></label>{/each}</div>{#if missingWorkbookFields.length}<p class="border-t border-stone-800 px-3 py-2 text-[11px] text-warn">Map: {missingWorkbookFields.join(', ').replaceAll('_', ' ')}</p>{:else}<p class="border-t border-stone-800 px-3 py-2 text-[11px] text-stone-600">Extra columns may be left on Ignore. The source workbook is never modified.</p>{/if}</details>
+					{#if importFile?.name.toLowerCase().endsWith('.xlsx')}<label><span class={label}>Workbook sheet</span><select class={input} bind:value={workbookSheet} on:change={selectWorkbookSheet}>{#each workbookSheets as sheet}<option value={sheet.name}>{sheet.name} · {sheet.rows > 5000 ? '5,000+ rows' : `${sheet.rows} rows`} · {sheet.recognized_headers} matched</option>{/each}</select><span class="mt-1.5 block text-[11px] text-stone-600">The closest matching sheet was selected automatically. Choose another if needed.</span></label>{/if}
+					<details class="rounded-md border border-stone-800 bg-stone-950/40" open={missingWorkbookFields.length > 0}><summary class="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-xs font-medium text-stone-300"><span>Match source columns</span><span class="text-[10px] {missingWorkbookFields.length ? 'text-warn' : 'text-up'}">{missingWorkbookFields.length ? `${missingWorkbookFields.length} required field${missingWorkbookFields.length === 1 ? '' : 's'} missing` : 'Ready'}</span></summary><div class="grid gap-2 border-t border-stone-800 p-3 sm:grid-cols-2">{#each workbookSheets.find((sheet) => sheet.name === workbookSheet)?.headers ?? [] as header}<label class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-2"><span class="truncate text-xs text-stone-500" title={header.source}>{header.source || '(empty column)'}</span><select class="rounded-md border border-stone-800 bg-stone-950 px-2 py-2 text-xs text-stone-300 outline-none focus:border-stone-600" bind:value={workbookColumnMap[header.normalized]} on:change={() => preview = null}><option value="">Ignore</option>{#each workbookFields as field}<option value={field}>{field.replaceAll('_', ' ')}</option>{/each}</select></label>{/each}</div>{#if missingWorkbookFields.length}<p class="border-t border-stone-800 px-3 py-2 text-[11px] text-warn">Map: {missingWorkbookFields.join(', ').replaceAll('_', ' ')}</p>{:else}<p class="border-t border-stone-800 px-3 py-2 text-[11px] text-stone-600">Extra columns may be ignored. The uploaded file is never modified.</p>{/if}</details>
 				{/if}
 				<div class="flex flex-wrap gap-2 text-[10px] text-stone-500"><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5 MB</span><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5,000 rows</span><span class="rounded-full border border-stone-800 px-2 py-1">Excel .xlsx · CSV · JSON · Anvil export</span></div>
 				{#if importEntity === 'challenges'}
 					<details class="rounded-md border border-stone-800 bg-stone-950/40 px-3 py-2.5 text-xs text-stone-500"><summary class="cursor-pointer font-medium text-stone-300">Bulk challenge / repository workflow</summary><div class="mt-2 space-y-1.5 leading-relaxed"><p>Import categories first, then one challenge row per slug. Registry image references, points, delivery type, scoring model, author, and release state travel in the sheet.</p><p>Binary handouts, flags, hints, grader secrets, and VM images stay out of portable metadata. Add them from each imported challenge’s Files, Flags, Hints, or Grading tab so secrets and large artifacts do not land in an import job.</p><p>A challenge repository can generate this CSV in CI; keep Docker images in a registry and handouts in a release or object store.</p></div></details>
 				{/if}
-				<button type="button" on:click={previewImport} disabled={!importFile || importBusy || workbookBusy || (importFile.name.toLowerCase().endsWith('.xlsx') && (!workbookSheet || missingWorkbookFields.length > 0))} class="inline-flex w-full items-center justify-center gap-2 rounded-md border border-stone-700 px-4 py-2.5 text-sm font-medium text-stone-200 disabled:opacity-40"><Icon icon={importBusy ? 'mdi:loading' : 'mdi:magnify-scan'} class="h-4 w-4 {importBusy ? 'animate-spin' : ''}" />Dry-run import</button>
+				<button type="button" on:click={previewImport} disabled={!importFile || importBusy || workbookBusy || !workbookSheet || missingWorkbookFields.length > 0} class="inline-flex w-full items-center justify-center gap-2 rounded-md border border-stone-700 px-4 py-2.5 text-sm font-medium text-stone-200 disabled:opacity-40"><Icon icon={importBusy ? 'mdi:loading' : 'mdi:magnify-scan'} class="h-4 w-4 {importBusy ? 'animate-spin' : ''}" />Dry-run import</button>
 			</div>
 		</section>
 	</div>

@@ -294,6 +294,15 @@ func (h *MailHandler) TestProvider(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "provider credentials cannot be decrypted"})
 		return
 	}
+	deliveryID := uuid.New()
+	if _, err := h.db.Pool.Exec(c.Request.Context(), `
+		INSERT INTO mail_deliveries (id, recipient, status, attempts, max_attempts, provider_id, provider_name, created_by)
+		VALUES ($1, $2, 'sending', 1, 1, $3, $4, $5)
+	`, deliveryID, strings.ToLower(strings.TrimSpace(request.Recipient)), id, provider.Name, uid); err != nil {
+		h.logger.Error("record mail provider test", zap.String("provider_id", id.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "test delivery could not be recorded"})
+		return
+	}
 	messageID, sendErr := mailer.Send(c.Request.Context(), provider.mailerProvider(password), mailer.Message{
 		To: request.Recipient, Subject: "Anvil mail delivery test",
 		HTML: "<p>Anvil successfully delivered this message through <strong>" + html.EscapeString(provider.Name) + "</strong>.</p>",
@@ -304,10 +313,15 @@ func (h *MailHandler) TestProvider(c *gin.Context) {
 		status, errorCode = "failed", mailErrorCode(sendErr)
 		h.logger.Warn("mail provider test failed", zap.String("provider_id", id.String()), zap.String("error_code", errorCode), zap.Error(sendErr))
 	}
-	_, _ = h.db.Pool.Exec(c.Request.Context(), `
-		INSERT INTO mail_deliveries (recipient, status, attempts, max_attempts, provider_id, provider_name, error_code, message_id, sent_at, created_by)
-		VALUES ($1, $2, 1, 1, $3, $4, NULLIF($5, ''), NULLIF($6, ''), CASE WHEN $2 = 'sent' THEN NOW() ELSE NULL END, $7)
-	`, strings.ToLower(strings.TrimSpace(request.Recipient)), status, id, provider.Name, errorCode, messageID, uid)
+	if _, err := h.db.Pool.Exec(c.Request.Context(), `
+		UPDATE mail_deliveries SET status = $2, error_code = NULLIF($3, ''), message_id = NULLIF($4, ''),
+			sent_at = CASE WHEN $2 = 'sent' THEN NOW() ELSE NULL END, updated_at = NOW()
+		WHERE id = $1
+	`, deliveryID, status, errorCode, messageID); err != nil {
+		h.logger.Error("finalize mail provider test", zap.String("delivery_id", deliveryID.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "test delivery result could not be recorded"})
+		return
+	}
 	if sendErr != nil {
 		_, _ = h.db.Pool.Exec(c.Request.Context(), `UPDATE mail_providers SET is_healthy = FALSE, failure_count = failure_count + 1, last_error_code = $2, last_error_at = NOW(), updated_at = NOW() WHERE id = $1`, id, errorCode)
 		c.JSON(http.StatusBadGateway, gin.H{"error": "test delivery failed", "error_code": errorCode})

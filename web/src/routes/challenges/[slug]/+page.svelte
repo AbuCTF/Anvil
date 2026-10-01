@@ -585,13 +585,11 @@
 		if (!challenge || !editForm) return;
 		saving = true;
 		try {
-			await api.updateAdminChallenge(challenge.id, {
+			await api.updateAdminChallengeMetadata(challenge.id, {
 				name: editForm.name,
 				description: editForm.description,
 				difficulty: editForm.difficulty,
-				base_points: parseInt(String(editForm.base_points)),
-				// backend requires resource_type on update; carry the challenge's own.
-				resource_type: challenge.resource_type
+				base_points: parseInt(String(editForm.base_points))
 			});
 			await loadChallenge();
 			isEditing = false;
@@ -1095,7 +1093,7 @@
 										<p class="text-sm text-stone-400 leading-relaxed">{challenge.description ? 'Opening unlocks the files and instance controls and starts your solve timer, then you submit here. A clean solve refunds half the cost.' : 'Opening unlocks the full brief, files, and instance controls, and starts your solve timer.'}</p>
 									{/if}
 									<button on:click={launchChallenge} disabled={ecoBusy || challenge.economy.credits < challenge.economy.launch_cost} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-										{ecoBusy ? 'Opening…' : isExternal ? 'Open on H7 (optional)' : 'Open challenge'}
+										{ecoBusy ? 'Opening…' : isExternal ? 'Open external challenge' : 'Open challenge'}
 									</button>
 									<p class="text-xs text-stone-500">Costs <span class="font-medium text-amber-500 tabular-nums">{challenge.economy.launch_cost}</span> credits · uses 1 of your 3 open slots · balance <span class="tabular-nums">{Math.floor(challenge.economy.credits)}</span></p>
 									{#if $auth.isAuthenticated && challenge.economy.credits < challenge.economy.launch_cost}
