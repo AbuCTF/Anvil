@@ -72,6 +72,10 @@ func (h *AdminChallengeHandler) DiscoverRegistryRepositories(c *gin.Context) {
 			return
 		}
 	}
+	if request.Registry == "ghcr.io" && credential == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "save a read-only GHCR credential before discovering GitHub container packages"})
+		return
+	}
 	client := &http.Client{Timeout: 20 * time.Second}
 	var repositories []discoveredRepository
 	if request.Registry == "docker.io" {
@@ -201,7 +205,7 @@ func registryAPIRequest(ctx context.Context, client *http.Client, method, endpoi
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
 	if strings.HasPrefix(endpoint, "https://api.github.com/") {
-		request.Header.Set("X-GitHub-Api-Version", "2026-03-10")
+		request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	}
 	response, err := client.Do(request)
 	if err != nil {
