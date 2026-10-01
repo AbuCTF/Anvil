@@ -144,7 +144,7 @@
 						{/each}
 					</div>
 					{#if truncated}<p class="text-[11px] text-warn">The first 500 repositories are shown. Narrow the namespace collection before importing more.</p>{/if}
-					<p class="text-[11px] text-stone-600">{credentialUsed ? 'The saved encrypted credential was used, so accessible private repositories are included.' : 'Anonymous discovery shows public repositories only.'}</p>
+					<p class="text-[11px] text-stone-600">{credentialUsed ? 'The saved encrypted credential was used, so accessible private repositories are included.' : registry === 'docker.io' ? 'Anonymous Docker Hub discovery shows public repositories only.' : 'Save a read-only GHCR credential to list GitHub container packages.'}</p>
 				{:else if !discovering}<div class="rounded-lg border border-dashed border-stone-800 px-5 py-12 text-center"><Icon icon="mdi:package-variant-closed" class="mx-auto h-8 w-8 text-stone-700" /><p class="mt-3 text-sm text-stone-500">Enter the owner of the registry collection.</p></div>{/if}
 			</div>
 			<aside class="space-y-5 border-t border-stone-800 bg-stone-900/20 p-5 sm:p-6 lg:overflow-y-auto lg:border-l lg:border-t-0">
