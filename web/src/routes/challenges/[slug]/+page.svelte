@@ -11,7 +11,7 @@
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
 	import { formatLocalDateTime, instantTitle } from '$lib/time';
 	import { confirmDialog, alertDialog } from '$lib/stores/dialog';
-	import { eventClock, kickoffDelay } from '$lib/stores/platform';
+	import { eventClock, kickoffDelay, platformInfo } from '$lib/stores/platform';
 	import KickoffCountdown from '$lib/components/KickoffCountdown.svelte';
 
 	let challenge: any = null;
@@ -1619,7 +1619,7 @@
 								<input
 									type="text"
 									bind:value={flagInput}
-									placeholder="H7CTF&#123;...&#125;"
+									placeholder={$platformInfo?.flag_format ?? 'flag{...}'}
 									autocapitalize="off"
 									autocorrect="off"
 									autocomplete="off"
@@ -1830,7 +1830,7 @@
 						id="new-flag-value"
 						type="text"
 						bind:value={newFlag.flag}
-						placeholder="H7CTF&#123;...&#125;"
+						placeholder={$platformInfo?.flag_format ?? 'flag{...}'}
 						required
 						class="w-full px-3 py-2 bg-stone-950 border border-stone-700 rounded-md text-sm text-stone-200 font-mono focus:outline-none focus:border-stone-600"
 					/>

@@ -56,21 +56,22 @@ type queueProvider struct {
 }
 
 var QueueVariables = map[string]bool{
-	"participant_name": true,
-	"event_name":       true,
-	"activation_url":   true,
-	"reset_url":        true,
-	"login_url":        true,
-	"username":         true,
-	"expires_at":       true,
-	"event_start":      true,
-	"event_end":        true,
-	"support_email":    true,
-	"team_name":        true,
-	"update_title":     true,
-	"update_body":      true,
-	"rank":             true,
-	"score":            true,
+	"participant_name":   true,
+	"event_name":         true,
+	"activation_url":     true,
+	"reset_url":          true,
+	"login_url":          true,
+	"username":           true,
+	"temporary_password": true,
+	"expires_at":         true,
+	"event_start":        true,
+	"event_end":          true,
+	"support_email":      true,
+	"team_name":          true,
+	"update_title":       true,
+	"update_body":        true,
+	"rank":               true,
+	"score":              true,
 }
 
 func NewService(secret string, db *database.DB, logger *zap.Logger) (*Service, error) {

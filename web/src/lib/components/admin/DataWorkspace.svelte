@@ -26,8 +26,15 @@
 	let exportBusy = false;
 	let importEntity = 'categories';
 	let importMode: 'create' | 'merge' = 'create';
-	let userProvisioning: 'activation_email' | 'sso_only' = 'activation_email';
+	let userProvisioning: 'activation_email' | 'generated_credentials' | 'sso_only' = 'activation_email';
 	let importFile: File | null = null;
+	let workbookContent = '';
+	let workbookSheets: Array<{ name: string; rows: number; recognized_headers: number; missing_required_headers: string[]; headers: Array<{ source: string; normalized: string; suggested_field: string }> }> = [];
+	let workbookSheet = '';
+	let workbookFields: string[] = [];
+	let workbookRequiredFields: string[] = [];
+	let workbookColumnMap: Record<string, string> = {};
+	let workbookBusy = false;
 	let preview: DataImportPreview | null = null;
 	let importBusy = false;
 	let confirmation = '';
@@ -36,6 +43,8 @@
 
 	const input = 'w-full rounded-md border border-stone-800 bg-stone-950 px-3 py-2.5 text-sm text-stone-200 outline-none focus:border-stone-500';
 	const label = 'mb-1.5 block text-[10px] font-medium uppercase tracking-wider text-stone-600';
+	$: mappedWorkbookFields = new Set(Object.values(workbookColumnMap).filter(Boolean));
+	$: missingWorkbookFields = workbookRequiredFields.filter((field) => !mappedWorkbookFields.has(field) && !(importEntity === 'users' && userProvisioning === 'generated_credentials' && field === 'username' && mappedWorkbookFields.has('email')));
 
 	async function load() {
 		try {
@@ -107,13 +116,71 @@
 		result = '';
 		confirmation = '';
 		try {
-			const extension = importFile.name.toLowerCase().endsWith('.json') ? 'json' : 'csv';
-			preview = await api.previewDataImport({ entity: importEntity, format: extension, mode: importMode, source_name: importFile.name, content: await importFile.text(), provisioning: importEntity === 'users' ? userProvisioning : undefined });
+			const filename = importFile.name.toLowerCase();
+			const format = filename.endsWith('.xlsx') ? 'xlsx' : filename.endsWith('.json') ? 'json' : 'csv';
+			preview = await api.previewDataImport({ entity: importEntity, format, mode: importMode, source_name: importFile.name, content: format === 'xlsx' ? workbookContent : await importFile.text(), sheet: format === 'xlsx' ? workbookSheet : undefined, column_map: format === 'xlsx' ? workbookColumnMap : undefined, provisioning: importEntity === 'users' ? userProvisioning : undefined });
 			await load();
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Import preview failed';
 		} finally {
 			importBusy = false;
+		}
+	}
+
+	function fileAsBase64(file: File) {
+		return new Promise<string>((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onerror = () => reject(new Error('The workbook could not be read'));
+			reader.onload = () => resolve(String(reader.result).split(',', 2)[1] ?? '');
+			reader.readAsDataURL(file);
+		});
+	}
+
+	function selectWorkbookSheet() {
+		const sheet = workbookSheets.find((candidate) => candidate.name === workbookSheet);
+		workbookColumnMap = Object.fromEntries((sheet?.headers ?? []).filter((header) => header.normalized).map((header) => [header.normalized, header.suggested_field]));
+		preview = null;
+	}
+
+	async function selectImportFile(event: Event) {
+		importFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null;
+		preview = null;
+		error = '';
+		result = '';
+		workbookContent = '';
+		workbookSheets = [];
+		workbookSheet = '';
+		workbookFields = [];
+		workbookRequiredFields = [];
+		workbookColumnMap = {};
+		if (!importFile) return;
+		if (importFile.size > 5 * 1024 * 1024) {
+			error = 'Import files must be 5 MB or smaller.';
+			importFile = null;
+			return;
+		}
+		const filename = importFile.name.toLowerCase();
+		if (filename.endsWith('.xls')) {
+			error = 'Legacy .xls files are not supported. Save the workbook as .xlsx and upload it again.';
+			importFile = null;
+			return;
+		}
+		if (!filename.endsWith('.xlsx')) return;
+		workbookBusy = true;
+		try {
+			workbookContent = await fileAsBase64(importFile);
+			const inspection = await api.inspectDataWorkbook({ entity: importEntity, content: workbookContent });
+			workbookSheets = inspection.sheets;
+			workbookFields = inspection.fields;
+			workbookRequiredFields = inspection.required_fields;
+			workbookSheet = inspection.recommended_sheet || inspection.sheets[0]?.name || '';
+			selectWorkbookSheet();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'The workbook could not be inspected';
+			importFile = null;
+			workbookContent = '';
+		} finally {
+			workbookBusy = false;
 		}
 	}
 
@@ -123,7 +190,7 @@
 		error = '';
 		try {
 			const applied = await api.applyDataImport(preview.job_id, preview.checksum);
-			result = `Applied ${applied.created} create, ${applied.updated} update and ${applied.skipped} skip operations.${applied.activation_emails_queued ? ` ${applied.activation_emails_queued} activation emails queued.` : ''}`;
+			result = `Applied ${applied.created} create, ${applied.updated} update and ${applied.skipped} skip operations.${applied.activation_emails_queued ? ` ${applied.activation_emails_queued} activation emails queued.` : ''}${applied.credential_emails_queued ? ` ${applied.credential_emails_queued} credential emails queued.` : ''}`;
 			preview = null;
 			importFile = null;
 			confirmation = '';
@@ -184,18 +251,23 @@
 			<div class="border-b border-stone-800 px-5 py-4"><h2 class="flex items-center gap-1.5 text-sm font-semibold text-stone-100">Import <HelpTip align="right" text="Every import is parsed and validated first. Apply runs once in a database transaction: any row failure rolls back the whole import. If data changes after preview, Anvil asks for a fresh preview." /></h2><p class="mt-1 text-xs text-stone-500">Dry-run first, then apply one atomic plan.</p></div>
 			<div class="space-y-4 p-5">
 				<div class="grid gap-4 sm:grid-cols-2">
-					<label><span class={label}>Entity</span><select class={input} bind:value={importEntity} on:change={() => { preview = null; importFile = null; }}>{#each entities.filter((entity) => entity.importable) as entity}<option value={entity.id}>{entity.label}</option>{/each}</select></label>
+					<label><span class={label}>Entity</span><select class={input} bind:value={importEntity} on:change={() => { preview = null; importFile = null; workbookContent = ''; workbookSheets = []; workbookSheet = ''; workbookFields = []; workbookRequiredFields = []; workbookColumnMap = {}; }}>{#each entities.filter((entity) => entity.importable) as entity}<option value={entity.id}>{entity.label}</option>{/each}</select></label>
 					<label><span class={label}>Mode</span><select class={input} bind:value={importMode}><option value="create">Create only</option><option value="merge">Create and update</option></select></label>
 				</div>
 				{#if importEntity === 'users'}
-					<label><span class={label}>Account access</span><select class={input} bind:value={userProvisioning}><option value="activation_email">Email secure activation links</option><option value="sso_only">Provision for SSO only</option></select><span class="mt-1.5 block text-[11px] leading-relaxed text-stone-600">Activation creates no shared passwords. Each recipient sets their own password from a single-use, 48-hour link.</span></label>
+					<label><span class={label}>Account access</span><select class={input} bind:value={userProvisioning}><option value="activation_email">Email secure activation links</option><option value="generated_credentials">Email temporary credentials</option><option value="sso_only">Provision for SSO only</option></select><span class="mt-1.5 block text-[11px] leading-relaxed text-stone-600">{userProvisioning === 'activation_email' ? 'Each recipient sets their own password from a single-use, 48-hour link.' : userProvisioning === 'generated_credentials' ? 'Missing usernames are generated. Each new participant receives a unique temporary password and must replace it at first sign-in.' : 'Accounts have no local password and enter through the configured identity provider.'}</span></label>
 				{/if}
-				<div class="flex items-center justify-between gap-3"><label class="min-w-0 flex-1"><span class={label}>CSV or JSON file</span><input type="file" accept=".csv,.json,text/csv,application/json" on:change={(event) => { importFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null; preview = null; error = ''; result = ''; }} class="block w-full text-xs text-stone-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-2 file:text-xs file:text-stone-300" /></label><button type="button" on:click={downloadTemplate} class="mt-5 shrink-0 text-xs text-stone-400 hover:text-stone-200">CSV template</button></div>
-				<div class="flex flex-wrap gap-2 text-[10px] text-stone-500"><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5 MB</span><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5,000 rows</span><span class="rounded-full border border-stone-800 px-2 py-1">CSV · JSON array · Anvil JSON export</span></div>
+				<div class="flex items-center justify-between gap-3"><label class="min-w-0 flex-1"><span class={label}>Excel, CSV or JSON file</span><input type="file" accept=".xlsx,.csv,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,application/json" on:change={selectImportFile} class="block w-full text-xs text-stone-500 file:mr-3 file:rounded-md file:border-0 file:bg-stone-800 file:px-3 file:py-2 file:text-xs file:text-stone-300" /></label><button type="button" on:click={downloadTemplate} class="mt-5 shrink-0 text-xs text-stone-400 hover:text-stone-200">CSV template</button></div>
+				{#if workbookBusy}<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-950/50 px-3 py-2.5 text-xs text-stone-500"><Icon icon="mdi:loading" class="h-4 w-4 animate-spin" />Reading workbook sheets…</div>{/if}
+				{#if workbookSheets.length}
+					<label><span class={label}>Workbook sheet</span><select class={input} bind:value={workbookSheet} on:change={selectWorkbookSheet}>{#each workbookSheets as sheet}<option value={sheet.name}>{sheet.name} · {sheet.rows > 5000 ? '5,000+ rows' : `${sheet.rows} rows`} · {sheet.recognized_headers} matched</option>{/each}</select><span class="mt-1.5 block text-[11px] text-stone-600">The closest matching sheet was selected automatically. Choose another if needed.</span></label>
+					<details class="rounded-md border border-stone-800 bg-stone-950/40" open={missingWorkbookFields.length > 0}><summary class="flex cursor-pointer items-center justify-between gap-3 px-3 py-2.5 text-xs font-medium text-stone-300"><span>Match spreadsheet columns</span><span class="text-[10px] {missingWorkbookFields.length ? 'text-warn' : 'text-up'}">{missingWorkbookFields.length ? `${missingWorkbookFields.length} required field${missingWorkbookFields.length === 1 ? '' : 's'} missing` : 'Ready'}</span></summary><div class="grid gap-2 border-t border-stone-800 p-3 sm:grid-cols-2">{#each workbookSheets.find((sheet) => sheet.name === workbookSheet)?.headers ?? [] as header}<label class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-center gap-2"><span class="truncate text-xs text-stone-500" title={header.source}>{header.source || '(empty column)'}</span><select class="rounded-md border border-stone-800 bg-stone-950 px-2 py-2 text-xs text-stone-300 outline-none focus:border-stone-600" bind:value={workbookColumnMap[header.normalized]} on:change={() => preview = null}><option value="">Ignore</option>{#each workbookFields as field}<option value={field}>{field.replaceAll('_', ' ')}</option>{/each}</select></label>{/each}</div>{#if missingWorkbookFields.length}<p class="border-t border-stone-800 px-3 py-2 text-[11px] text-warn">Map: {missingWorkbookFields.join(', ').replaceAll('_', ' ')}</p>{:else}<p class="border-t border-stone-800 px-3 py-2 text-[11px] text-stone-600">Extra columns may be left on Ignore. The source workbook is never modified.</p>{/if}</details>
+				{/if}
+				<div class="flex flex-wrap gap-2 text-[10px] text-stone-500"><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5 MB</span><span class="rounded-full border border-stone-800 px-2 py-1">Up to 5,000 rows</span><span class="rounded-full border border-stone-800 px-2 py-1">Excel .xlsx · CSV · JSON · Anvil export</span></div>
 				{#if importEntity === 'challenges'}
 					<details class="rounded-md border border-stone-800 bg-stone-950/40 px-3 py-2.5 text-xs text-stone-500"><summary class="cursor-pointer font-medium text-stone-300">Bulk challenge / repository workflow</summary><div class="mt-2 space-y-1.5 leading-relaxed"><p>Import categories first, then one challenge row per slug. Registry image references, points, delivery type, scoring model, author, and release state travel in the sheet.</p><p>Binary handouts, flags, hints, grader secrets, and VM images stay out of portable metadata. Add them from each imported challenge’s Files, Flags, Hints, or Grading tab so secrets and large artifacts do not land in an import job.</p><p>A challenge repository can generate this CSV in CI; keep Docker images in a registry and handouts in a release or object store.</p></div></details>
 				{/if}
-				<button type="button" on:click={previewImport} disabled={!importFile || importBusy} class="inline-flex w-full items-center justify-center gap-2 rounded-md border border-stone-700 px-4 py-2.5 text-sm font-medium text-stone-200 disabled:opacity-40"><Icon icon={importBusy ? 'mdi:loading' : 'mdi:magnify-scan'} class="h-4 w-4 {importBusy ? 'animate-spin' : ''}" />Dry-run import</button>
+				<button type="button" on:click={previewImport} disabled={!importFile || importBusy || workbookBusy || (importFile.name.toLowerCase().endsWith('.xlsx') && (!workbookSheet || missingWorkbookFields.length > 0))} class="inline-flex w-full items-center justify-center gap-2 rounded-md border border-stone-700 px-4 py-2.5 text-sm font-medium text-stone-200 disabled:opacity-40"><Icon icon={importBusy ? 'mdi:loading' : 'mdi:magnify-scan'} class="h-4 w-4 {importBusy ? 'animate-spin' : ''}" />Dry-run import</button>
 			</div>
 		</section>
 	</div>
@@ -209,6 +281,9 @@
 					<div class="mt-4 flex items-center justify-between gap-3"><p class="text-xs text-stone-500">Fix the listed rows in the source file, then run the preview again. Nothing has been written.</p><button type="button" on:click={downloadIssueReport} class="shrink-0 text-xs text-stone-300 hover:text-stone-100">Download issues</button></div>
 					<div class="mt-3 max-h-64 overflow-auto rounded-md border border-down/20"><table class="w-full text-left text-xs"><thead class="sticky top-0 bg-stone-950 text-stone-500"><tr><th class="px-3 py-2">Row</th><th class="px-3 py-2">Field</th><th class="px-3 py-2">Problem</th></tr></thead><tbody class="divide-y divide-stone-800">{#each preview.plan.errors as issue}<tr><td class="px-3 py-2 tabular-nums text-stone-500">{issue.row || '—'}</td><td class="px-3 py-2 text-stone-400">{issue.field || '—'}</td><td class="px-3 py-2 text-down">{issue.message}</td></tr>{/each}</tbody></table></div>
 				{:else}
+					{#if preview.entity === 'users' && preview.provisioning === 'generated_credentials' && preview.plan.create > 0}
+						<div class="mt-4 rounded-md border border-stone-800 bg-stone-950/50 p-3"><p class="text-xs font-medium text-stone-300">{preview.plan.create} credential {preview.plan.create === 1 ? 'email' : 'emails'} will be queued</p><p class="mt-1 text-[11px] leading-relaxed text-stone-600">Temporary passwords are encrypted in the mail queue, never returned in this screen or stored as plaintext. New usernames include {preview.plan.rows.filter((row) => row.action === 'create').slice(0, 5).map((row) => row.key).join(', ')}{preview.plan.create > 5 ? '…' : ''}.</p></div>
+					{/if}
 					<div class="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]"><label><span class={label}>Type APPLY {preview.entity}</span><input class={input} bind:value={confirmation} autocomplete="off" /></label><button type="button" on:click={applyImport} disabled={importBusy || confirmation !== `APPLY ${preview.entity}`} class="self-end rounded-md bg-amber-500 px-5 py-2.5 text-sm font-medium text-stone-950 disabled:opacity-40">Apply once</button></div>
 				{/if}
 			</div>

@@ -64,8 +64,8 @@
 		}
 	}
 
-	$: phaseLabel = phase === 'scheduled' ? 'Starts' : phase === 'live' ? 'Live' : 'CTF';
-	$: clockText = phase === 'ended' ? 'Ended' : formatDuration(remainingSeconds);
+	$: phaseLabel = phase === 'scheduled' ? 'Starts' : phase === 'live' ? 'Live' : 'Event';
+	$: clockText = phase === 'ended' ? 'Complete' : formatDuration(remainingSeconds);
 	$: statusText = phase === 'scheduled' ? 'Scheduled' : phase === 'live' ? 'In progress' : 'Finished';
 	$: title = eventWindow
 		? phase === 'scheduled'
@@ -131,7 +131,7 @@
 	<div bind:this={root} class="relative inline-flex {className}">
 		<button
 			type="button"
-			class="relative inline-flex h-8 items-center gap-2 overflow-hidden rounded-full border border-stone-800 bg-stone-900/55 px-2.5 text-stone-300 transition-colors hover:border-stone-700 hover:bg-stone-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
+			class="relative inline-flex h-8 items-center gap-2 overflow-hidden rounded-full border {phase === 'ended' ? 'border-emerald-500/15 bg-emerald-500/[0.04]' : 'border-stone-800 bg-stone-900/55'} px-2.5 text-stone-300 transition-colors hover:border-stone-700 hover:bg-stone-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/50"
 			title={title}
 			aria-label={`${accessibleLabel}. Show event details`}
 			aria-haspopup="dialog"
@@ -140,11 +140,11 @@
 			on:click={() => (open = !open)}
 		>
 			<span
-				class="block h-1.5 w-1.5 flex-none rounded-full {phase === 'live' ? 'live-dot bg-amber-500' : phase === 'scheduled' ? 'bg-info' : 'bg-stone-600'}"
+				class="block h-1.5 w-1.5 flex-none rounded-full {phase === 'live' ? 'live-dot bg-amber-500' : phase === 'scheduled' ? 'bg-info' : 'bg-emerald-500'}"
 				aria-hidden="true"
 			></span>
 			<span class="metadata-label optical-label hidden text-stone-500 2xl:inline">{phaseLabel}</span>
-			<span class="clock-value whitespace-nowrap text-[0.68rem] font-medium leading-none tabular-nums text-stone-200">{clockText}</span>
+			<span class="clock-value whitespace-nowrap text-[0.68rem] font-medium leading-none tabular-nums {phase === 'ended' ? 'text-emerald-400' : 'text-stone-200'}">{clockText}</span>
 		</button>
 
 		{#if open}

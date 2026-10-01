@@ -48,7 +48,7 @@ func TestImportedAccountActivation(t *testing.T) {
 	ctx := context.Background()
 	adminID := uuid.New()
 	suffix := strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
-	adminName, importedName, activatedName := "activation-admin-"+suffix, "invited-"+suffix, "activate-"+suffix
+	adminName, importedName, activatedName, generatedName := "activation-admin-"+suffix, "invited-"+suffix, "activate-"+suffix, "credential_"+suffix
 	if _, err := db.Pool.Exec(ctx, `INSERT INTO users (id, username, email, role, status) VALUES ($1, $2, $3, 'admin', 'active')`, adminID, adminName, adminName+"@example.test"); err != nil {
 		t.Fatalf("seed admin: %v", err)
 	}
@@ -56,8 +56,8 @@ func TestImportedAccountActivation(t *testing.T) {
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM data_import_jobs WHERE created_by = $1`, adminID)
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM mail_deliveries WHERE created_by = $1`, adminID)
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM mail_providers WHERE created_by = $1`, adminID)
-		_, _ = db.Pool.Exec(ctx, `DELETE FROM audit_log WHERE user_id IN (SELECT id FROM users WHERE username IN ($1, $2, $3))`, adminName, importedName, activatedName)
-		_, _ = db.Pool.Exec(ctx, `DELETE FROM users WHERE username IN ($1, $2, $3)`, adminName, importedName, activatedName)
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM audit_log WHERE user_id IN (SELECT id FROM users WHERE username IN ($1, $2, $3, $4))`, adminName, importedName, activatedName, generatedName)
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM users WHERE username IN ($1, $2, $3, $4)`, adminName, importedName, activatedName, generatedName)
 	}()
 
 	cfg, err := config.Load()
@@ -218,5 +218,86 @@ func TestImportedAccountActivation(t *testing.T) {
 	replayed := request(http.MethodPost, "/api/v1/auth/activation/complete", "", map[string]string{"token": knownToken, "password": "another-password"})
 	if replayed.Code != http.StatusBadRequest {
 		t.Fatalf("replay status=%d body=%s", replayed.Code, replayed.Body.String())
+	}
+
+	generatedEmail := generatedName + "@example.test"
+	generatedCSV := "username,email,display_name,role,status,email_verified\n," + generatedEmail + ",Generated Player,user,active,false\n"
+	generatedPreview := request(http.MethodPost, "/api/v1/admin/data/imports/preview", signed, map[string]any{
+		"entity": "users", "format": "csv", "mode": "create", "source_name": "issued-credentials.csv", "content": generatedCSV, "provisioning": "generated_credentials",
+	})
+	if generatedPreview.Code != http.StatusCreated || !strings.Contains(generatedPreview.Body.String(), `"key":"`+generatedName+`"`) {
+		t.Fatalf("generated preview status=%d body=%s", generatedPreview.Code, generatedPreview.Body.String())
+	}
+	var generatedPreviewResult struct {
+		JobID    string `json:"job_id"`
+		Checksum string `json:"checksum"`
+	}
+	_ = json.Unmarshal(generatedPreview.Body.Bytes(), &generatedPreviewResult)
+	generatedApplied := request(http.MethodPost, "/api/v1/admin/data/imports/"+generatedPreviewResult.JobID+"/apply", signed, map[string]string{"checksum": generatedPreviewResult.Checksum})
+	if generatedApplied.Code != http.StatusOK || !strings.Contains(generatedApplied.Body.String(), `"credential_emails_queued":1`) {
+		t.Fatalf("generated apply status=%d body=%s", generatedApplied.Code, generatedApplied.Body.String())
+	}
+	generatedReplay := request(http.MethodPost, "/api/v1/admin/data/imports/"+generatedPreviewResult.JobID+"/apply", signed, map[string]string{"checksum": generatedPreviewResult.Checksum})
+	if generatedReplay.Code != http.StatusOK || generatedReplay.Header().Get("Idempotent-Replay") != "true" {
+		t.Fatalf("generated replay status=%d body=%s", generatedReplay.Code, generatedReplay.Body.String())
+	}
+	var generatedID uuid.UUID
+	var generatedHash string
+	var generatedMustChange, generatedVerified bool
+	if err := db.Pool.QueryRow(ctx, `SELECT id, password_hash, must_change_password, email_verified FROM users WHERE username = $1`, generatedName).Scan(&generatedID, &generatedHash, &generatedMustChange, &generatedVerified); err != nil || !generatedMustChange || generatedVerified {
+		t.Fatalf("generated user id=%s must_change=%t verified=%t error=%v", generatedID, generatedMustChange, generatedVerified, err)
+	}
+	var credentialPayload []byte
+	var credentialDeliveries int
+	if err := db.Pool.QueryRow(ctx, `SELECT COUNT(*)::int, (ARRAY_AGG(payload_ciphertext))[1] FROM mail_deliveries WHERE created_by = $1 AND recipient = $2 AND template_slug = 'account_credentials'`, adminID, generatedEmail).Scan(&credentialDeliveries, &credentialPayload); err != nil || credentialDeliveries != 1 {
+		t.Fatalf("credential deliveries=%d error=%v", credentialDeliveries, err)
+	}
+	mailCipher, err := mailer.NewCipher(cfg.Secrets.EncryptionKey)
+	if err != nil {
+		t.Fatalf("mail cipher: %v", err)
+	}
+	credentialJSON, err := mailCipher.Decrypt(credentialPayload)
+	if err != nil {
+		t.Fatalf("decrypt credential payload: %v", err)
+	}
+	credentialValues := map[string]string{}
+	if json.Unmarshal([]byte(credentialJSON), &credentialValues) != nil || credentialValues["username"] != generatedName || credentialValues["temporary_password"] == "" {
+		t.Fatalf("credential payload metadata invalid")
+	}
+	temporaryPassword := credentialValues["temporary_password"]
+	if bcrypt.CompareHashAndPassword([]byte(generatedHash), []byte(temporaryPassword)) != nil {
+		t.Fatal("temporary password does not match stored hash")
+	}
+	generatedLogin := request(http.MethodPost, "/api/v1/auth/login", "", map[string]string{"username": generatedName, "password": temporaryPassword})
+	if generatedLogin.Code != http.StatusOK || strings.Contains(generatedLogin.Body.String(), `"access_token"`) || !strings.Contains(generatedLogin.Body.String(), `"password_change_required":true`) {
+		t.Fatalf("generated login status=%d body=%s", generatedLogin.Code, generatedLogin.Body.String())
+	}
+	var passwordChangeResponse struct {
+		Token string `json:"password_change_token"`
+	}
+	_ = json.Unmarshal(generatedLogin.Body.Bytes(), &passwordChangeResponse)
+	if passwordChangeResponse.Token == "" {
+		t.Fatal("password change token missing")
+	}
+	blockedAccess := request(http.MethodGet, "/api/v1/user/me", passwordChangeResponse.Token, nil)
+	if blockedAccess.Code != http.StatusUnauthorized {
+		t.Fatalf("password change token accessed protected API: status=%d body=%s", blockedAccess.Code, blockedAccess.Body.String())
+	}
+	changedPassword := "participant-owned-password"
+	passwordChanged := request(http.MethodPost, "/api/v1/auth/password-change/complete", "", map[string]string{"token": passwordChangeResponse.Token, "password": changedPassword})
+	if passwordChanged.Code != http.StatusOK || !strings.Contains(passwordChanged.Body.String(), `"access_token"`) {
+		t.Fatalf("password change status=%d body=%s", passwordChanged.Code, passwordChanged.Body.String())
+	}
+	passwordChangeReplay := request(http.MethodPost, "/api/v1/auth/password-change/complete", "", map[string]string{"token": passwordChangeResponse.Token, "password": "participant-second-password"})
+	if passwordChangeReplay.Code != http.StatusBadRequest {
+		t.Fatalf("password change replay status=%d body=%s", passwordChangeReplay.Code, passwordChangeReplay.Body.String())
+	}
+	temporaryLogin := request(http.MethodPost, "/api/v1/auth/login", "", map[string]string{"username": generatedName, "password": temporaryPassword})
+	permanentLogin := request(http.MethodPost, "/api/v1/auth/login", "", map[string]string{"username": generatedName, "password": changedPassword})
+	if temporaryLogin.Code != http.StatusUnauthorized || permanentLogin.Code != http.StatusOK {
+		t.Fatalf("post-change temporary=%d permanent=%d", temporaryLogin.Code, permanentLogin.Code)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT must_change_password, email_verified FROM users WHERE id = $1`, generatedID).Scan(&generatedMustChange, &generatedVerified); err != nil || generatedMustChange || !generatedVerified {
+		t.Fatalf("post-change must_change=%t verified=%t error=%v", generatedMustChange, generatedVerified, err)
 	}
 }

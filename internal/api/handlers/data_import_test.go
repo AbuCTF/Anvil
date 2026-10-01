@@ -1,0 +1,130 @@
+package handlers
+
+import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
+	"go.uber.org/zap"
+)
+
+func TestGeneratedUsernameBase(t *testing.T) {
+	tests := map[string]string{
+		"Avery.Rao+event@example.test": "avery_rao_event",
+		"x@example.test":               "participant_x",
+		"@example.test":                "ignored_name",
+		"":                             "team_alpha",
+	}
+	for email, expected := range tests {
+		displayName := "Team Alpha"
+		if email != "" {
+			displayName = "Ignored Name"
+		}
+		if actual := generatedUsernameBase(email, displayName); actual != expected {
+			t.Fatalf("generatedUsernameBase(%q) = %q, want %q", email, actual, expected)
+		}
+	}
+}
+
+func TestParseImportWorkbook(t *testing.T) {
+	workbook := excelize.NewFile()
+	if err := workbook.SetSheetName("Sheet1", "Participants"); err != nil {
+		t.Fatalf("rename sheet: %v", err)
+	}
+	rows := [][]any{
+		{"username", "email", "display_name", "role", "status", "email_verified"},
+		{"player_one", "one@example.test", "Player One", "user", "active", false},
+		{"player_two", "two@example.test"},
+	}
+	for rowIndex, row := range rows {
+		for columnIndex, value := range row {
+			cell, _ := excelize.CoordinatesToCellName(columnIndex+1, rowIndex+1)
+			if err := workbook.SetCellValue("Participants", cell, value); err != nil {
+				t.Fatalf("set %s: %v", cell, err)
+			}
+		}
+	}
+	buffer, err := workbook.WriteToBuffer()
+	if err != nil {
+		t.Fatalf("write workbook: %v", err)
+	}
+	_ = workbook.Close()
+	parsed, issues := parseImportWorkbook(buffer.Bytes(), "Participants")
+	if len(issues) != 0 || len(parsed) != 2 {
+		t.Fatalf("rows=%v issues=%v", parsed, issues)
+	}
+	if parsed[1]["username"] != "player_two" || parsed[1]["display_name"] != "" || parsed[1]["email_verified"] != "" {
+		t.Fatalf("short row was not padded correctly: %v", parsed[1])
+	}
+	if _, issues := parseImportWorkbook(buffer.Bytes(), "Missing"); len(issues) != 1 || issues[0].Field != "sheet" {
+		t.Fatalf("missing sheet issues=%v", issues)
+	}
+}
+
+func TestParseImportWorkbookColumnMapping(t *testing.T) {
+	workbook := excelize.NewFile()
+	rows := [][]any{
+		{"Employee ID", "Full Name", "Email Address", "Department"},
+		{"ORG-1042", "Avery Rao", "avery@example.test", "Risk"},
+	}
+	for rowIndex, row := range rows {
+		for columnIndex, value := range row {
+			cell, _ := excelize.CoordinatesToCellName(columnIndex+1, rowIndex+1)
+			if err := workbook.SetCellValue("Sheet1", cell, value); err != nil {
+				t.Fatalf("set %s: %v", cell, err)
+			}
+		}
+	}
+	buffer, err := workbook.WriteToBuffer()
+	if err != nil {
+		t.Fatalf("write workbook: %v", err)
+	}
+	_ = workbook.Close()
+	parsed, issues := parseImportWorkbookForEntity("users", buffer.Bytes(), "Sheet1", map[string]string{
+		"employee_id": "username", "full_name": "display_name", "email_address": "email", "department": "",
+	})
+	if len(issues) != 0 || len(parsed) != 1 {
+		t.Fatalf("rows=%v issues=%v", parsed, issues)
+	}
+	if parsed[0]["username"] != "ORG-1042" || parsed[0]["display_name"] != "Avery Rao" || parsed[0]["email"] != "avery@example.test" {
+		t.Fatalf("column mapping failed: %v", parsed[0])
+	}
+	if _, exists := parsed[0]["department"]; exists {
+		t.Fatalf("ignored column was imported: %v", parsed[0])
+	}
+}
+
+func TestInspectWorkbookRecommendsMatchingSheet(t *testing.T) {
+	workbook := excelize.NewFile()
+	if err := workbook.SetSheetName("Sheet1", "Notes"); err != nil {
+		t.Fatalf("rename sheet: %v", err)
+	}
+	if _, err := workbook.NewSheet("Participants"); err != nil {
+		t.Fatalf("new sheet: %v", err)
+	}
+	for column, value := range []string{"username", "email", "display_name", "role", "status", "email_verified"} {
+		cell, _ := excelize.CoordinatesToCellName(column+1, 1)
+		_ = workbook.SetCellValue("Participants", cell, value)
+	}
+	buffer, err := workbook.WriteToBuffer()
+	if err != nil {
+		t.Fatalf("write workbook: %v", err)
+	}
+	_ = workbook.Close()
+	payload, _ := json.Marshal(map[string]string{"entity": "users", "content": base64.StdEncoding.EncodeToString(buffer.Bytes())})
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	context.Request = httptest.NewRequest(http.MethodPost, "/imports/workbook/inspect", bytes.NewReader(payload))
+	context.Request.Header.Set("Content-Type", "application/json")
+	NewDataHandler(nil, zap.NewNop()).InspectWorkbook(context)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"recommended_sheet":"Participants"`) {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}

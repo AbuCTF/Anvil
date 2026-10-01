@@ -146,12 +146,14 @@ func (s *Server) setupRouter() {
 					auth.POST("/password-reset/request", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.StartPasswordReset)
 					auth.POST("/password-reset/inspect", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.InspectPasswordReset)
 					auth.POST("/password-reset/complete", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.CompletePasswordReset)
+					auth.POST("/password-change/complete", middleware.RateLimitEndpoint(s.config.RateLimit.Login), authHandler.CompleteInitialPasswordChange)
 				} else {
 					auth.POST("/activation/inspect", authHandler.InspectActivation)
 					auth.POST("/activation/complete", authHandler.ActivateAccount)
 					auth.POST("/password-reset/request", authHandler.StartPasswordReset)
 					auth.POST("/password-reset/inspect", authHandler.InspectPasswordReset)
 					auth.POST("/password-reset/complete", authHandler.CompletePasswordReset)
+					auth.POST("/password-change/complete", authHandler.CompleteInitialPasswordChange)
 				}
 			}
 
@@ -349,6 +351,7 @@ func (s *Server) setupRouter() {
 				data.GET("/export", dataHandler.Export)
 				data.GET("/templates/:entity", dataHandler.Template)
 				data.GET("/imports", dataHandler.ListImports)
+				data.POST("/imports/workbook/inspect", dataHandler.InspectWorkbook)
 				data.POST("/imports/preview", dataHandler.PreviewImport)
 				data.POST("/imports/:id/apply", dataHandler.ApplyImport)
 			}
@@ -428,6 +431,7 @@ func (s *Server) setupRouter() {
 				challenges.GET("", adminChallengeHandler.List)
 				challenges.POST("", adminChallengeHandler.Create)
 				challenges.POST("/registry/inspect", adminChallengeHandler.InspectRegistryImage)
+				challenges.POST("/registry/discover", adminChallengeHandler.DiscoverRegistryRepositories)
 				challenges.GET("/registry/credentials", adminChallengeHandler.ListRegistryCredentials)
 				challenges.PUT("/registry/credentials/:registry", adminChallengeHandler.SaveRegistryCredential)
 				challenges.DELETE("/registry/credentials/:registry", adminChallengeHandler.DeleteRegistryCredential)
