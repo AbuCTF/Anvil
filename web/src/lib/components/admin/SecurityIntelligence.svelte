@@ -225,7 +225,21 @@
 			</Card>
 		{:else}
 			<Card hasHeader={false} bodyClass="">
-				<div class="overflow-x-auto">
+				<div class="divide-y divide-stone-800/60 sm:hidden">
+					{#each events as event}
+						<button type="button" class="block w-full px-4 py-4 text-left transition-colors hover:bg-stone-800/30 focus:bg-stone-800/30 focus:outline-none" on:click={() => openEvent(event)}>
+							<div class="flex items-start justify-between gap-3">
+								<div class="min-w-0"><div class="font-medium text-stone-200">{event.challenge_name || event.challenge_id}</div><div class="mt-0.5 truncate font-mono text-[10px] text-stone-600">{event.flag_name} · {event.flag_fingerprint}</div></div>
+								<span class="inline-flex shrink-0 rounded-full border px-2 py-1 text-[10px] font-medium {statusClass(event.review_status)}">{statusLabel(event.review_status)}</span>
+							</div>
+							<div class="mt-3 grid grid-cols-2 gap-4 text-xs">
+								<div><div class="text-amber-400/90">{event.owner_username}</div><div class="mt-1 flex items-center gap-1 text-down"><Icon icon="mdi:arrow-right" class="h-3 w-3 shrink-0" />{event.submitter_username}</div></div>
+								<div class="text-right"><div class="font-mono text-stone-300">{event.submitter_ip || 'Not retained'}</div><div class="mt-1 tabular-nums text-stone-600" title={instantTitle(event.created_at, 'seconds')}>{formatLocalDateTimeWithZone(event.created_at, 'seconds')}</div></div>
+							</div>
+						</button>
+					{/each}
+				</div>
+				<div class="hidden overflow-x-auto sm:block">
 					<table class="w-full min-w-[820px] table-fixed text-sm">
 						<colgroup><col class="w-[22%]" /><col class="w-[22%]" /><col class="w-[18%]" /><col class="w-[14%]" /><col class="w-[24%]" /></colgroup>
 						<thead>
