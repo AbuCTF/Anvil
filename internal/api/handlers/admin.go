@@ -3053,7 +3053,8 @@ func (h *AdminChallengeHandler) ListInstanceFlags(c *gin.Context) {
 		JOIN challenges ch ON ch.id = inf.challenge_id
 		JOIN flags      f  ON f.id  = inf.flag_id
 		JOIN instances  i  ON i.id  = inf.instance_id
-		WHERE ($1::uuid IS NULL OR inf.challenge_id = $1)
+		WHERE i.status IN ('creating', 'running')
+		  AND ($1::uuid IS NULL OR inf.challenge_id = $1)
 		  AND ($2::uuid IS NULL OR inf.user_id      = $2)
 		ORDER BY inf.created_at DESC
 		LIMIT $3

@@ -4,7 +4,6 @@
 	import { api } from '$api';
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
-	import SecurityGeoMap from '$lib/components/SecurityGeoMap.svelte';
 	import { formatLocalDateTimeWithZone, instantTitle } from '$lib/time';
 	import { alertDialog, confirmDialog, promptDialog } from '$lib/stores/dialog';
 
@@ -26,7 +25,6 @@
 	$: observedIPs = new Set(events.map((event) => event.submitter_ip).filter(Boolean)).size;
 	$: involvedAccounts = new Set(events.flatMap((event) => [event.owner_user_id, event.submitter_user_id]).filter(Boolean)).size;
 	$: openCases = events.filter((event) => event.review_status === 'open' || event.review_status === 'reviewing').length;
-	$: mappedEvents = events.filter((event) => Number.isFinite(event.latitude) && Number.isFinite(event.longitude));
 
 	onMount(load);
 
@@ -142,15 +140,13 @@
 	}
 
 	function sourceLabel(source: string) {
-		if (source === 'demo_simulated') return 'Demo data';
-		if (source === 'redacted') return 'Redacted history';
-		return 'Live evidence';
+		return source === 'live' ? 'Live evidence' : 'Redacted history';
 	}
 
 	function sourceClass(source: string) {
-		if (source === 'demo_simulated') return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
-		if (source === 'redacted') return 'border-stone-700 bg-stone-800/60 text-stone-400';
-		return 'border-up/30 bg-up/10 text-up';
+		return source === 'live'
+			? 'border-up/30 bg-up/10 text-up'
+			: 'border-stone-700 bg-stone-800/60 text-stone-400';
 	}
 
 	function locationLabel(event: any) {
@@ -186,13 +182,10 @@
 
 <div class="space-y-6">
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-		<div>
-			<h2 class="text-lg font-semibold text-stone-100">Integrity review</h2>
-			<p class="mt-1 max-w-2xl text-sm text-stone-500">Correlate accounts, teams and request evidence. IP or device similarity is a lead for review, not proof of misconduct.</p>
-		</div>
+		<h2 class="text-lg font-semibold text-stone-100">Integrity review</h2>
 		<div class="flex flex-wrap items-end gap-2">
 			<label class="block">
-				<span class="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-stone-600">Status</span>
+				<span class="mb-1 block text-xs text-stone-500">Status</span>
 				<select bind:value={statusFilter} on:change={load} class="h-9 rounded-md border border-stone-800 bg-stone-950 px-3 text-xs text-stone-300 outline-none focus:border-stone-600">
 					<option value="">All statuses</option>
 					<option value="open">Open</option>
@@ -202,12 +195,11 @@
 				</select>
 			</label>
 			<label class="block">
-				<span class="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-stone-600">Evidence</span>
+				<span class="mb-1 block text-xs text-stone-500">Evidence</span>
 				<select bind:value={sourceFilter} on:change={load} class="h-9 rounded-md border border-stone-800 bg-stone-950 px-3 text-xs text-stone-300 outline-none focus:border-stone-600">
 					<option value="">All evidence</option>
 					<option value="live">Live</option>
 					<option value="redacted">Redacted</option>
-					<option value="demo_simulated">Demo data</option>
 				</select>
 			</label>
 			<button type="button" on:click={load} disabled={loading} class="flex h-9 items-center gap-1.5 rounded-md border border-stone-800 px-3 text-xs text-stone-400 transition-colors hover:border-stone-700 hover:text-stone-200 disabled:opacity-50">
@@ -241,35 +233,8 @@
 		{/each}
 	</div>
 
-	<div class="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_minmax(280px,0.55fr)]">
-		<div>
-			<div class="mb-3 flex items-center justify-between">
-				<h3 class="text-sm font-semibold text-stone-200">Activity origins</h3>
-				<span class="text-xs text-stone-600">{mappedEvents.length} mapped</span>
-			</div>
-			<SecurityGeoMap {events} />
-		</div>
-		<div class="rounded-lg border border-stone-800 bg-stone-900/35 p-4">
-			<div class="flex items-center gap-2 text-sm font-semibold text-stone-200">
-				<Icon icon="mdi:shield-search-outline" class="h-4 w-4 text-amber-400" />
-				How to read this
-			</div>
-			<div class="mt-4 space-y-4 text-xs leading-relaxed text-stone-500">
-				<p>A shared flag connects the original recipient to the account that later submitted the same value.</p>
-				<p>Location is approximate. Corporate NAT, VPNs and mobile networks can place legitimate users behind the same address.</p>
-				<p>Confirm a case only after checking timing, team membership, request IDs and account history together.</p>
-			</div>
-			<div class="mt-5 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2.5 text-xs text-amber-200/80">
-				Demo locations use non-routable documentation addresses and are always labelled.
-			</div>
-		</div>
-	</div>
-
 	<div>
-		<div class="mb-3 flex items-center justify-between">
-			<h3 class="text-sm font-semibold text-stone-200">Flag-sharing cases</h3>
-			<span class="text-xs text-stone-600">Select a row for the full evidence record</span>
-		</div>
+		<h3 class="mb-3 text-sm font-semibold text-stone-200">Flag-sharing cases</h3>
 		{#if loading}
 			<div class="flex justify-center rounded-lg border border-stone-800 bg-stone-900/40 p-10">
 				<Icon icon="mdi:loading" class="h-5 w-5 animate-spin text-stone-600" />
@@ -283,7 +248,7 @@
 				<div class="overflow-x-auto">
 					<table class="w-full min-w-[940px] text-sm">
 						<thead>
-							<tr class="metadata-label border-b border-stone-800 text-stone-500">
+							<tr class="border-b border-stone-800 text-xs font-medium text-stone-500">
 								<th class="px-4 py-2.5 text-left">Challenge</th>
 								<th class="px-4 py-2.5 text-left">Accounts</th>
 								<th class="px-4 py-2.5 text-left">Observed IP</th>
@@ -328,15 +293,15 @@
 	<div class="rounded-lg border border-stone-800 bg-stone-900/25">
 		<button type="button" on:click={() => showInstanceFlags = !showInstanceFlags} class="flex w-full items-center justify-between gap-4 px-4 py-3 text-left">
 			<div>
-				<div class="text-sm font-semibold text-stone-300">Generated instance flags</div>
-				<div class="mt-0.5 text-xs text-stone-600">Restricted operational data · {instanceFlags.length} records</div>
+				<div class="text-sm font-semibold text-stone-300">Active instance flags</div>
+				<div class="mt-0.5 text-xs text-stone-600">{instanceFlags.length} active</div>
 			</div>
 			<Icon icon={showInstanceFlags ? 'mdi:chevron-up' : 'mdi:chevron-down'} class="h-4 w-4 text-stone-600" />
 		</button>
 		{#if showInstanceFlags}
 			<div class="overflow-x-auto border-t border-stone-800">
 				<table class="w-full min-w-[680px] text-sm">
-					<thead><tr class="metadata-label border-b border-stone-800 text-stone-500"><th class="px-4 py-2.5 text-left">User</th><th class="px-4 py-2.5 text-left">Challenge</th><th class="px-4 py-2.5 text-left">Fingerprint</th><th class="px-4 py-2.5 text-left">Instance</th></tr></thead>
+					<thead><tr class="border-b border-stone-800 text-xs font-medium text-stone-500"><th class="px-4 py-2.5 text-left">User</th><th class="px-4 py-2.5 text-left">Challenge</th><th class="px-4 py-2.5 text-left">Fingerprint</th><th class="px-4 py-2.5 text-left">Instance</th></tr></thead>
 					<tbody>
 						{#each instanceFlags as flag}
 							<tr class="border-b border-stone-800/60"><td class="px-4 py-2.5 text-stone-200">{flag.username || flag.user_id}</td><td class="px-4 py-2.5 text-stone-300">{flag.challenge_name || flag.challenge_id}</td><td class="max-w-xs truncate px-4 py-2.5 font-mono text-xs text-stone-400">sha256:{flag.flag_fingerprint} · {flag.flag_length} chars</td><td class="px-4 py-2.5 font-mono text-xs text-stone-500">{flag.instance_id}</td></tr>
@@ -367,7 +332,7 @@
 			<div class="overflow-y-auto px-5 py-5 sm:px-6">
 				<div class="grid gap-4 md:grid-cols-2">
 					<div class="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
-						<div class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-300"><Icon icon="mdi:flag-outline" class="h-4 w-4" />Original recipient</div>
+						<div class="mb-3 flex items-center gap-2 text-sm font-medium text-amber-200"><Icon icon="mdi:flag-outline" class="h-4 w-4" />Original recipient</div>
 						<dl class="space-y-3 text-sm">
 							<div><dt class="text-xs text-stone-600">Account</dt><dd class="mt-0.5 text-stone-200">{selected.owner_username}</dd><dd class="text-xs text-stone-500">{selected.owner_email || 'No email'}</dd></div>
 							<div><dt class="text-xs text-stone-600">Team</dt><dd class="mt-0.5 text-stone-300">{selected.owner_team_name || 'No team'}</dd></div>
@@ -376,7 +341,7 @@
 						</dl>
 					</div>
 					<div class="rounded-lg border border-down/20 bg-down/5 p-4">
-						<div class="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-down"><Icon icon="mdi:account-arrow-right-outline" class="h-4 w-4" />Submitting account</div>
+						<div class="mb-3 flex items-center gap-2 text-sm font-medium text-down"><Icon icon="mdi:account-arrow-right-outline" class="h-4 w-4" />Submitting account</div>
 						<dl class="space-y-3 text-sm">
 							<div><dt class="text-xs text-stone-600">Account</dt><dd class="mt-0.5 text-stone-200">{selected.submitter_username}</dd><dd class="text-xs text-stone-500">{selected.submitter_email || 'No email'}</dd></div>
 							<div><dt class="text-xs text-stone-600">Team</dt><dd class="mt-0.5 text-stone-300">{selected.submitter_team_name || 'No team'}</dd></div>
