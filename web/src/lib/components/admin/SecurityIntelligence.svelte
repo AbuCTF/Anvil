@@ -12,7 +12,6 @@
 	let events: any[] = [];
 	let instanceFlags: any[] = [];
 	let statusFilter = '';
-	let sourceFilter = '';
 	let selected: any = null;
 	let reviewStatus: 'open' | 'reviewing' | 'confirmed' | 'dismissed' = 'open';
 	let reviewNote = '';
@@ -34,7 +33,6 @@
 		try {
 			const params: Record<string, string> = {};
 			if (statusFilter) params.status = statusFilter;
-			if (sourceFilter) params.evidence_source = sourceFilter;
 			const [sharesRes, flagsRes] = await Promise.all([
 				api.getFlagShares(params),
 				api.getInstanceFlags()
@@ -139,18 +137,8 @@
 		return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
 	}
 
-	function sourceLabel(source: string) {
-		return source === 'live' ? 'Live evidence' : 'Redacted history';
-	}
-
-	function sourceClass(source: string) {
-		return source === 'live'
-			? 'border-up/30 bg-up/10 text-up'
-			: 'border-stone-700 bg-stone-800/60 text-stone-400';
-	}
-
 	function locationLabel(event: any) {
-		return [event.city, event.region, event.country_code].filter(Boolean).join(', ') || 'Not available';
+		return [event.city, event.region, event.country_code].filter(Boolean).join(', ');
 	}
 
 	function deviceLabel(value: string | null | undefined) {
@@ -183,7 +171,7 @@
 <div class="space-y-6">
 	<div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
 		<h2 class="text-lg font-semibold text-stone-100">Integrity review</h2>
-		<div class="flex flex-wrap items-end gap-2">
+		<div class="flex flex-wrap items-end gap-2 sm:justify-end">
 			<label class="block">
 				<span class="mb-1 block text-xs text-stone-500">Status</span>
 				<select bind:value={statusFilter} on:change={load} class="h-9 rounded-md border border-stone-800 bg-stone-950 px-3 text-xs text-stone-300 outline-none focus:border-stone-600">
@@ -192,14 +180,6 @@
 					<option value="reviewing">In review</option>
 					<option value="confirmed">Confirmed</option>
 					<option value="dismissed">Dismissed</option>
-				</select>
-			</label>
-			<label class="block">
-				<span class="mb-1 block text-xs text-stone-500">Evidence</span>
-				<select bind:value={sourceFilter} on:change={load} class="h-9 rounded-md border border-stone-800 bg-stone-950 px-3 text-xs text-stone-300 outline-none focus:border-stone-600">
-					<option value="">All evidence</option>
-					<option value="live">Live</option>
-					<option value="redacted">Redacted</option>
 				</select>
 			</label>
 			<button type="button" on:click={load} disabled={loading} class="flex h-9 items-center gap-1.5 rounded-md border border-stone-800 px-3 text-xs text-stone-400 transition-colors hover:border-stone-700 hover:text-stone-200 disabled:opacity-50">
@@ -246,13 +226,13 @@
 		{:else}
 			<Card hasHeader={false} bodyClass="">
 				<div class="overflow-x-auto">
-					<table class="w-full min-w-[940px] text-sm">
+					<table class="w-full min-w-[820px] table-fixed text-sm">
+						<colgroup><col class="w-[22%]" /><col class="w-[22%]" /><col class="w-[18%]" /><col class="w-[14%]" /><col class="w-[24%]" /></colgroup>
 						<thead>
 							<tr class="border-b border-stone-800 text-xs font-medium text-stone-500">
 								<th class="px-4 py-2.5 text-left">Challenge</th>
 								<th class="px-4 py-2.5 text-left">Accounts</th>
 								<th class="px-4 py-2.5 text-left">Observed IP</th>
-								<th class="px-4 py-2.5 text-left">Evidence</th>
 								<th class="px-4 py-2.5 text-left">Review</th>
 								<th class="px-4 py-2.5 text-right">Time</th>
 							</tr>
@@ -266,21 +246,20 @@
 									on:click={() => openEvent(event)}
 									on:keydown={(keyEvent) => handleRowKey(keyEvent, event)}
 								>
-									<td class="px-4 py-3">
+									<td class="align-middle px-4 py-3">
 										<div class="font-medium text-stone-200">{event.challenge_name || event.challenge_id}</div>
 										<div class="mt-0.5 font-mono text-[10px] text-stone-600">{event.flag_name} · {event.flag_fingerprint}</div>
 									</td>
-									<td class="px-4 py-3">
+									<td class="align-middle px-4 py-3">
 										<div class="text-xs text-amber-400/90">{event.owner_username}</div>
 										<div class="mt-0.5 flex items-center gap-1 text-xs text-down"><Icon icon="mdi:arrow-right" class="h-3 w-3" />{event.submitter_username}</div>
 									</td>
-									<td class="px-4 py-3">
+									<td class="align-middle px-4 py-3">
 										<div class="font-mono text-xs text-stone-300">{event.submitter_ip || 'Not retained'}</div>
-										<div class="mt-0.5 text-[10px] text-stone-600">{locationLabel(event)}</div>
+										{#if locationLabel(event)}<div class="mt-0.5 text-[10px] text-stone-600">{locationLabel(event)}</div>{/if}
 									</td>
-									<td class="px-4 py-3"><span class="inline-flex rounded-full border px-2 py-1 text-[10px] font-medium {sourceClass(event.evidence_source)}">{sourceLabel(event.evidence_source)}</span></td>
-									<td class="px-4 py-3"><span class="inline-flex rounded-full border px-2 py-1 text-[10px] font-medium {statusClass(event.review_status)}">{statusLabel(event.review_status)}</span></td>
-									<td class="px-4 py-3 text-right text-xs tabular-nums text-stone-500" title={instantTitle(event.created_at, 'seconds')}>{formatLocalDateTimeWithZone(event.created_at, 'seconds')}</td>
+									<td class="align-middle px-4 py-3"><span class="inline-flex rounded-full border px-2 py-1 text-[10px] font-medium {statusClass(event.review_status)}">{statusLabel(event.review_status)}</span></td>
+									<td class="whitespace-nowrap px-4 py-3 text-right align-middle text-xs tabular-nums text-stone-500" title={instantTitle(event.created_at, 'seconds')}>{formatLocalDateTimeWithZone(event.created_at, 'seconds')}</td>
 								</tr>
 							{/each}
 						</tbody>
@@ -321,7 +300,6 @@
 				<div>
 					<div class="flex flex-wrap items-center gap-2">
 						<h2 id="evidence-title" class="text-lg font-semibold text-stone-100">{selected.challenge_name}</h2>
-						<span class="inline-flex rounded-full border px-2 py-1 text-[10px] font-medium {sourceClass(selected.evidence_source)}">{sourceLabel(selected.evidence_source)}</span>
 						<span class="inline-flex rounded-full border px-2 py-1 text-[10px] font-medium {statusClass(selected.review_status)}">{statusLabel(selected.review_status)}</span>
 					</div>
 					<p class="mt-1 font-mono text-xs text-stone-600">Case {selected.id}</p>
@@ -332,27 +310,27 @@
 			<div class="overflow-y-auto px-5 py-5 sm:px-6">
 				<div class="grid gap-4 md:grid-cols-2">
 					<div class="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
-						<div class="mb-3 flex items-center gap-2 text-sm font-medium text-amber-200"><Icon icon="mdi:flag-outline" class="h-4 w-4" />Original recipient</div>
+						<div class="mb-3 flex items-center gap-2 font-sans text-sm font-semibold text-amber-200"><Icon icon="mdi:flag-outline" class="h-4 w-4" />Original recipient</div>
 						<dl class="space-y-3 text-sm">
-							<div><dt class="text-xs text-stone-600">Account</dt><dd class="mt-0.5 text-stone-200">{selected.owner_username}</dd><dd class="text-xs text-stone-500">{selected.owner_email || 'No email'}</dd></div>
+							<div><dt class="text-xs text-stone-600">Account</dt><dd class="mt-0.5 text-stone-200">{selected.owner_username}</dd><dd class="break-all text-xs text-stone-500">{selected.owner_email || 'No email'}</dd></div>
 							<div><dt class="text-xs text-stone-600">Team</dt><dd class="mt-0.5 text-stone-300">{selected.owner_team_name || 'No team'}</dd></div>
 							<div><dt class="text-xs text-stone-600">Matching submission IP</dt><dd class="mt-0.5 font-mono text-xs text-stone-300">{selected.owner_ip || 'Not available'}</dd></div>
 							<div><dt class="text-xs text-stone-600">Client</dt><dd class="mt-0.5 text-stone-300">{deviceLabel(selected.owner_user_agent)}</dd></div>
 						</dl>
 					</div>
 					<div class="rounded-lg border border-down/20 bg-down/5 p-4">
-						<div class="mb-3 flex items-center gap-2 text-sm font-medium text-down"><Icon icon="mdi:account-arrow-right-outline" class="h-4 w-4" />Submitting account</div>
+						<div class="mb-3 flex items-center gap-2 font-sans text-sm font-semibold text-down"><Icon icon="mdi:account-arrow-right-outline" class="h-4 w-4" />Submitting account</div>
 						<dl class="space-y-3 text-sm">
-							<div><dt class="text-xs text-stone-600">Account</dt><dd class="mt-0.5 text-stone-200">{selected.submitter_username}</dd><dd class="text-xs text-stone-500">{selected.submitter_email || 'No email'}</dd></div>
+							<div><dt class="text-xs text-stone-600">Account</dt><dd class="mt-0.5 text-stone-200">{selected.submitter_username}</dd><dd class="break-all text-xs text-stone-500">{selected.submitter_email || 'No email'}</dd></div>
 							<div><dt class="text-xs text-stone-600">Team</dt><dd class="mt-0.5 text-stone-300">{selected.submitter_team_name || 'No team'}</dd></div>
-							<div><dt class="text-xs text-stone-600">Observed IP</dt><dd class="mt-0.5 font-mono text-xs text-stone-300">{selected.submitter_ip || 'Not retained'}</dd><dd class="text-[10px] text-stone-600">{locationLabel(selected)}</dd></div>
+							<div><dt class="text-xs text-stone-600">Observed IP</dt><dd class="mt-0.5 font-mono text-xs text-stone-300">{selected.submitter_ip || 'Not retained'}</dd>{#if locationLabel(selected)}<dd class="text-[10px] text-stone-600">{locationLabel(selected)}</dd>{/if}</div>
 							<div><dt class="text-xs text-stone-600">Client</dt><dd class="mt-0.5 text-stone-300">{deviceLabel(selected.submitter_user_agent)}</dd></div>
 						</dl>
 					</div>
 				</div>
 
 				<div class="mt-4 grid gap-3 rounded-lg border border-stone-800 bg-stone-900/30 p-4 text-xs sm:grid-cols-2 lg:grid-cols-4">
-					<div><div class="text-stone-600">Flag fingerprint</div><div class="mt-1 font-mono text-stone-300">{selected.flag_fingerprint}</div></div>
+					<div><div class="text-stone-600">Flag fingerprint</div><div class="mt-1 break-all font-mono text-stone-300">{selected.flag_fingerprint}</div></div>
 					<div><div class="text-stone-600">Flag</div><div class="mt-1 text-stone-300">{selected.flag_name}</div></div>
 					<div><div class="text-stone-600">Request ID</div><div class="mt-1 break-all font-mono text-stone-300">{selected.request_id || 'Not retained'}</div></div>
 					<div><div class="text-stone-600">Detected</div><div class="mt-1 text-stone-300" title={instantTitle(selected.created_at, 'seconds')}>{formatLocalDateTimeWithZone(selected.created_at, 'seconds')}</div></div>
