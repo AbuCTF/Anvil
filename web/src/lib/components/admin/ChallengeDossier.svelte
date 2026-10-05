@@ -88,8 +88,7 @@
 						<Card title="Configuration" bodyClass="p-4">
 							<dl class="grid grid-cols-2 gap-x-5 gap-y-3 text-xs sm:grid-cols-3">
 								<div><dt class="metadata-label text-stone-600">Delivery</dt><dd class="mt-1 capitalize text-stone-300">{seed.delivery_type?.replace('_', ' ') || seed.resource_type}</dd></div>
-								<div><dt class="metadata-label text-stone-600">Judging</dt><dd class="mt-1 capitalize text-stone-300">{seed.scoring_mode === 'graded' ? 'Grader' : 'Flags'}</dd></div>
-								<div><dt class="metadata-label text-stone-600">Scoring</dt><dd class="mt-1 capitalize text-stone-300">{economyEnabled ? 'Ledger' : seed.score_type || 'static'}</dd></div>
+								<div><dt class="metadata-label text-stone-600">Scoring</dt><dd class="mt-1 capitalize text-stone-300">{economyEnabled ? 'Ledger' : seed.scoring_mode === 'graded' ? 'Graded' : seed.score_type || 'static'}</dd></div>
 								{#if !economyEnabled && seed.score_type === 'dynamic'}<div><dt class="metadata-label text-stone-600">Range</dt><dd class="mt-1 text-stone-300">{seed.base_points}–{seed.score_minimum}</dd></div><div><dt class="metadata-label text-stone-600">Decay</dt><dd class="mt-1 text-stone-300">{seed.score_decay} solves</dd></div>{/if}
 								<div><dt class="metadata-label text-stone-600">Topology</dt><dd class="mt-1 text-stone-300">{seed.arena_mode === 'shared' ? 'Shared arena' : 'Per team'}</dd></div>
 								<div><dt class="metadata-label text-stone-600">Category</dt><dd class="mt-1 text-stone-300">{seed.category_name || 'Uncategorised'}</dd></div>

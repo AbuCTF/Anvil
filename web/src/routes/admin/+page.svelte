@@ -299,6 +299,28 @@
 		return resourceLabel(challenge.resource_type);
 	}
 
+	function scoringModel(challenge: any) {
+		if (challenge?.scoring_mode === 'graded') return 'graded';
+		return challenge?.score_type === 'dynamic' ? 'dynamic' : 'static';
+	}
+
+	function setNewScoringModel(value: string) {
+		newChallenge = {
+			...newChallenge,
+			scoring_mode: value === 'graded' ? 'graded' : 'flag',
+			score_type: value === 'dynamic' ? 'dynamic' : 'static'
+		};
+	}
+
+	function setEditScoringModel(value: string) {
+		if (!editingChallenge) return;
+		editingChallenge = {
+			...editingChallenge,
+			scoring_mode: value === 'graded' ? 'graded' : 'flag',
+			score_type: value === 'dynamic' ? 'dynamic' : 'static'
+		};
+	}
+
 	function deliveryIcon(challenge: any) {
 		if (challenge.delivery_type === 'multi') return 'mdi:server-network';
 		if (challenge.delivery_type === 'static') return 'mdi:file-download-outline';
@@ -3139,23 +3161,16 @@
 							<input type="text" bind:value={newChallenge.author_name} class="w-full {fieldCls}" placeholder="Author" />
 						</label>
 
-						<label class="block">
-							<span class={labelCls}>Judging</span>
-							<select bind:value={newChallenge.scoring_mode} on:change={() => { if (newChallenge.scoring_mode === 'graded') newChallenge.score_type = 'static'; }} class="w-full {fieldCls}">
-								<option value="flag">Flags</option>
-								<option value="graded">Grader</option>
-							</select>
-						</label>
-
-						{#if newChallenge.scoring_mode === 'flag' && !($platformInfo?.economy_enabled ?? false)}
+						{#if !($platformInfo?.economy_enabled ?? false)}
 							<label class="block">
 								<span class={labelCls}>Scoring</span>
-								<select bind:value={newChallenge.score_type} class="w-full {fieldCls}">
+								<select value={scoringModel(newChallenge)} on:change={(event) => setNewScoringModel(event.currentTarget.value)} class="w-full {fieldCls}">
 									<option value="static">Static</option>
 									<option value="dynamic">Dynamic</option>
+									<option value="graded">Graded</option>
 								</select>
 							</label>
-							{#if newChallenge.score_type === 'dynamic'}
+							{#if scoringModel(newChallenge) === 'dynamic'}
 								<label><span class={labelCls}>Minimum points</span><input type="number" bind:value={newChallenge.score_minimum} min="0" max={newChallenge.base_points} class="w-full {fieldCls} tabular-nums" /></label>
 								<label><span class={labelCls}>Decay (solves)</span><input type="number" bind:value={newChallenge.score_decay} min="1" class="w-full {fieldCls} tabular-nums" /></label>
 							{/if}
@@ -3611,16 +3626,9 @@
 						<span class={labelCls}>Author</span>
 						<input type="text" bind:value={editingChallenge.author_name} placeholder="Author" class="w-full {fieldCls}" />
 					</label>
-					<label class="block">
-						<span class={labelCls}>Judging</span>
-						<select bind:value={editingChallenge.scoring_mode} on:change={() => { if (editingChallenge.scoring_mode === 'graded') editingChallenge.score_type = 'static'; }} class="w-full {fieldCls}">
-							<option value="flag">Flags</option>
-							<option value="graded">Grader</option>
-						</select>
-					</label>
-					{#if editingChallenge.scoring_mode === 'flag' && !($platformInfo?.economy_enabled ?? false)}
-						<label class="block"><span class={labelCls}>Scoring</span><select bind:value={editingChallenge.score_type} class="w-full {fieldCls}"><option value="static">Static</option><option value="dynamic">Dynamic</option></select></label>
-						{#if editingChallenge.score_type === 'dynamic'}
+					{#if !($platformInfo?.economy_enabled ?? false)}
+						<label class="block"><span class={labelCls}>Scoring</span><select value={scoringModel(editingChallenge)} on:change={(event) => setEditScoringModel(event.currentTarget.value)} class="w-full {fieldCls}"><option value="static">Static</option><option value="dynamic">Dynamic</option><option value="graded">Graded</option></select></label>
+						{#if scoringModel(editingChallenge) === 'dynamic'}
 							<label class="block"><span class={labelCls}>Minimum points</span><input type="number" bind:value={editingChallenge.score_minimum} min="0" max={editingChallenge.base_points} class="w-full {fieldCls} tabular-nums" /></label>
 							<label class="block"><span class={labelCls}>Decay (solves)</span><input type="number" bind:value={editingChallenge.score_decay} min="1" class="w-full {fieldCls} tabular-nums" /></label>
 						{/if}
