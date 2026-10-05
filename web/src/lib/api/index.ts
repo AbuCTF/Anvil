@@ -44,7 +44,7 @@ export interface PlatformInfoResponse {
 	economy_enabled: boolean;
 	market_pulse_enabled: boolean;
 	notification_sound_allowed: boolean;
-	economy_policy: EconomyPolicyDescriptor;
+	economy_policy?: EconomyPolicyDescriptor;
 	teams_mode: boolean;
 	team_creation_policy: 'open' | 'admin' | 'disabled';
 	team_join_policy: 'code' | 'disabled';

@@ -24,35 +24,35 @@ type publicEventInfo struct {
 const eventClockGracePeriod = 48 * time.Hour
 
 type platformInfoResponse struct {
-	Name               string                         `json:"name"`
-	Description        string                         `json:"description"`
-	Slug               string                         `json:"slug"`
-	Timezone           string                         `json:"timezone"`
-	ContactEmail       string                         `json:"contact_email,omitempty"`
-	LogoURL            string                         `json:"logo_url,omitempty"`
-	RulesURL           string                         `json:"rules_url,omitempty"`
-	PrivacyURL         string                         `json:"privacy_url,omitempty"`
-	TermsURL           string                         `json:"terms_url,omitempty"`
-	Accent             string                         `json:"accent"`
-	FlagFormat         string                         `json:"flag_format"`
-	RegistrationMode   string                         `json:"registration_mode"`
-	ScoringEnabled     bool                           `json:"scoring_enabled"`
-	ScoreboardEnabled  bool                           `json:"scoreboard_enabled"`
-	ArenaEnabled       bool                           `json:"arena_enabled"`
-	EconomyEnabled     bool                           `json:"economy_enabled"`
-	MarketPulseEnabled bool                           `json:"market_pulse_enabled"`
-	NotificationSound  bool                           `json:"notification_sound_allowed"`
-	EconomyPolicy      config.EconomyPolicyDescriptor `json:"economy_policy"`
-	TeamsMode          bool                           `json:"teams_mode"`
-	TeamCreation       string                         `json:"team_creation_policy"`
-	TeamJoin           string                         `json:"team_join_policy"`
-	VPNEnabled         bool                           `json:"vpn_enabled"`
-	SSOEnabled         bool                           `json:"sso_enabled"`
-	SSOLoginURL        string                         `json:"sso_login_url,omitempty"`
-	DiscordWalkin      bool                           `json:"discord_walkin"`
-	RegisterURL        string                         `json:"register_url,omitempty"`
-	ServerTime         time.Time                      `json:"server_time"`
-	Event              *publicEventInfo               `json:"event,omitempty"`
+	Name               string                          `json:"name"`
+	Description        string                          `json:"description"`
+	Slug               string                          `json:"slug"`
+	Timezone           string                          `json:"timezone"`
+	ContactEmail       string                          `json:"contact_email,omitempty"`
+	LogoURL            string                          `json:"logo_url,omitempty"`
+	RulesURL           string                          `json:"rules_url,omitempty"`
+	PrivacyURL         string                          `json:"privacy_url,omitempty"`
+	TermsURL           string                          `json:"terms_url,omitempty"`
+	Accent             string                          `json:"accent"`
+	FlagFormat         string                          `json:"flag_format"`
+	RegistrationMode   string                          `json:"registration_mode"`
+	ScoringEnabled     bool                            `json:"scoring_enabled"`
+	ScoreboardEnabled  bool                            `json:"scoreboard_enabled"`
+	ArenaEnabled       bool                            `json:"arena_enabled"`
+	EconomyEnabled     bool                            `json:"economy_enabled"`
+	MarketPulseEnabled bool                            `json:"market_pulse_enabled"`
+	NotificationSound  bool                            `json:"notification_sound_allowed"`
+	EconomyPolicy      *config.EconomyPolicyDescriptor `json:"economy_policy,omitempty"`
+	TeamsMode          bool                            `json:"teams_mode"`
+	TeamCreation       string                          `json:"team_creation_policy"`
+	TeamJoin           string                          `json:"team_join_policy"`
+	VPNEnabled         bool                            `json:"vpn_enabled"`
+	SSOEnabled         bool                            `json:"sso_enabled"`
+	SSOLoginURL        string                          `json:"sso_login_url,omitempty"`
+	DiscordWalkin      bool                            `json:"discord_walkin"`
+	RegisterURL        string                          `json:"register_url,omitempty"`
+	ServerTime         time.Time                       `json:"server_time"`
+	Event              *publicEventInfo                `json:"event,omitempty"`
 }
 
 func (h *PlatformHandler) GetInfo(c *gin.Context) {
@@ -129,7 +129,6 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		EconomyEnabled:     economy,
 		MarketPulseEnabled: pulse,
 		NotificationSound:  notificationSound,
-		EconomyPolicy:      h.config.EconomyPolicyDescriptor(),
 		TeamsMode:          teams,
 		TeamCreation:       teamCreation,
 		TeamJoin:           teamJoin,
@@ -139,6 +138,10 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		DiscordWalkin:      h.config.Discord.Enabled && h.config.Discord.ClientID != "",
 		RegisterURL:        h.config.Platform.RegisterURL,
 		ServerTime:         now,
+	}
+	if economy {
+		policy := h.config.EconomyPolicyDescriptor()
+		response.EconomyPolicy = &policy
 	}
 
 	startAt, endAt, err := h.eventWindow(c.Request.Context())
