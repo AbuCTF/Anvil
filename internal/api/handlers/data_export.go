@@ -65,6 +65,7 @@ var exportSettingAllowlist = map[string]bool{
 	"event.rules_url":  true, "event.privacy_url": true, "event.terms_url": true,
 	"event.start_at": true, "event.end_at": true, "event.profile_managed": true,
 	"event.setup_completed": true, "scoreboard.history_end_at": true,
+	"scoreboard.score_source":    true,
 	"participants.team_creation": true, "participants.team_join": true,
 	"participants.default_team_size": true, "participants.max_teams": true,
 	"participants.allowed_email_domains": true, "notifications.sound_allowed": true,

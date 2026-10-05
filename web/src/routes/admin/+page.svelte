@@ -2799,6 +2799,18 @@
 								</select>
 							</label>
 							<label class="block">
+								<span class={labelCls}>Score source</span>
+								<select
+									value={String(platformSettings['scoreboard.score_source'] ?? 'auto')}
+									on:change={(e) => handleTextInput(e, 'scoreboard.score_source')}
+									class="w-full {fieldCls}"
+								>
+									<option value="auto">Auto</option>
+									<option value="standard">Standard</option>
+									<option value="ledger">Ledger</option>
+								</select>
+							</label>
+							<label class="block">
 								<span class={labelCls}>Arena (A/D · KotH)</span>
 								<select
 									value={String(platformSettings.arena_enabled ?? false)}

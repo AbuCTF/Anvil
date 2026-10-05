@@ -488,17 +488,27 @@ func boardParams(c *gin.Context, defaultLimit, maxLimit int) (page, limit int, q
 
 // boardMode reads the settings that decide what the board ranks; read before the
 // snapshot tx so a fill never holds two pooled connections.
-func (h *ScoreboardHandler) boardMode(ctx context.Context) (teamRanked, economy, frozen bool, err error) {
+func (h *ScoreboardHandler) boardMode(ctx context.Context) (teamRanked, ledgerScore, frozen bool, err error) {
 	teamsMode, err := isTeamsMode(ctx, h.db)
 	if err != nil {
 		return false, false, false, fmt.Errorf("read teams_mode: %w", err)
 	}
-	economy, err = isEconomyMode(ctx, h.db)
+	economyMode, err := isEconomyMode(ctx, h.db)
 	if err != nil {
 		return false, false, false, fmt.Errorf("read economy_mode: %w", err)
 	}
+	scoreSource, err := textSettingOrDefault(ctx, h.db, "scoreboard.score_source", "auto")
+	if err != nil {
+		return false, false, false, fmt.Errorf("read scoreboard source: %w", err)
+	}
+	ledgerScore = economyMode
+	if scoreSource == "ledger" {
+		ledgerScore = true
+	} else if scoreSource == "standard" {
+		ledgerScore = false
+	}
 	frozen, _ = boolSettingOrDefault(ctx, h.db, "scoreboard_frozen", false)
-	return teamsMode || economy, economy, frozen, nil
+	return teamsMode || economyMode || ledgerScore, ledgerScore, frozen, nil
 }
 
 // standingsPage is one page of the public board plus its (total, matching) counts;

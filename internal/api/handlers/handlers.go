@@ -1277,6 +1277,14 @@ func validatePlatformSetting(key string, value interface{}) error {
 		if !ok || !isRegistrationMode(strings.ToLower(strings.TrimSpace(mode))) {
 			return errors.New("Invalid value for registration_mode")
 		}
+	case "scoreboard.score_source":
+		text, err := stringValue(1, 20)
+		if err != nil {
+			return err
+		}
+		if text != "auto" && text != "standard" && text != "ledger" {
+			return errors.New("Invalid value for scoreboard.score_source")
+		}
 	case "event.start_at", "event.end_at", "scoreboard.history_end_at":
 		text, ok := value.(string)
 		if !ok {

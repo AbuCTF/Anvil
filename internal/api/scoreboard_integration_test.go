@@ -68,13 +68,13 @@ func TestScoreboardListsOnlyScoringTeams(t *testing.T) {
 		($5, 'd1', 'd1@x', 'user', 'active', $10), ($6, 'ad', 'ad@x', 'admin', 'active', $11)`,
 		a1, a2, b1, c1, d1, admin, alpha, bravo, charlie, delta, testTeam)
 	exec(`INSERT INTO categories (id, name, slug, sort_order) VALUES ($1, 'web', 'web', 1), ($2, 'pwn', 'pwn', 2)`, web, pwn)
-	exec(`INSERT INTO challenges (id, name, slug, difficulty, category_id, status, container_image, base_points, release_date, arena_mode) VALUES
-		($1, 'Web Hard', 'web-hard', 'hard', $7, 'published', '', 300, NULL, 'per_team'),
-		($2, 'Web Easy', 'web-easy', 'easy', $7, 'published', '', 100, NULL, 'per_team'),
-		($3, 'Pwn Med', 'pwn-med', 'medium', $8, 'published', '', 200, NULL, 'per_team'),
-		($4, 'Draft', 'draft', 'easy', $7, 'draft', '', 100, NULL, 'per_team'),
-		($5, 'Future', 'future', 'easy', $8, 'published', '', 100, NOW() + INTERVAL '1 day', 'per_team'),
-		($6, 'Hill', 'hill', 'hard', $8, 'published', '', 0, NULL, 'shared')`,
+	exec(`INSERT INTO challenges (id, name, slug, difficulty, category_id, status, container_image, base_points, score_minimum, release_date, arena_mode) VALUES
+		($1, 'Web Hard', 'web-hard', 'hard', $7, 'published', '', 300, 300, NULL, 'per_team'),
+		($2, 'Web Easy', 'web-easy', 'easy', $7, 'published', '', 100, 100, NULL, 'per_team'),
+		($3, 'Pwn Med', 'pwn-med', 'medium', $8, 'published', '', 200, 200, NULL, 'per_team'),
+		($4, 'Draft', 'draft', 'easy', $7, 'draft', '', 100, 100, NULL, 'per_team'),
+		($5, 'Future', 'future', 'easy', $8, 'published', '', 100, 100, NOW() + INTERVAL '1 day', 'per_team'),
+		($6, 'Hill', 'hill', 'hard', $8, 'published', '', 0, 0, NULL, 'shared')`,
 		webHard, webEasy, pwnMed, draft, future, hill, web, pwn)
 	exec(`INSERT INTO flags (id, challenge_id, name, flag_hash, points, sort_order) VALUES
 		($1, $5, 'one', 'x1', 50, 0), ($2, $5, 'two', 'x2', 50, 1), ($3, $6, 'root', 'x3', 300, 0),
@@ -332,6 +332,21 @@ func TestScoreboardListsOnlyScoringTeams(t *testing.T) {
 	if got := strings.Join(series, ","); got != "alpha=100/180/150,bravo=60" {
 		t.Errorf("economy history = %s", got)
 	}
+	exec(`UPDATE platform_settings SET value = 'false' WHERE key = 'economy_mode'`)
+	exec(`INSERT INTO platform_settings (key, value) VALUES ('scoreboard.score_source', to_jsonb('ledger'::text))
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
+	fresh()
+	sb = get("/api/v1/scoreboard", nil)
+	if got := list(sb, "leaderboard", "username", "total_score", "rank"); got != "alpha:151:1,delta:30:2,bravo:0:3" || sb["economy"] != true {
+		t.Errorf("ledger score source board = %s economy=%v", got, sb["economy"])
+	}
+	h = get("/api/v1/scoreboard/history", nil)
+	if len(h["series"].([]any)) != 2 {
+		t.Errorf("ledger score source history = %v", h["series"])
+	}
+	exec(`UPDATE platform_settings SET value = 'true' WHERE key = 'economy_mode'`)
+	exec(`UPDATE platform_settings SET value = to_jsonb('auto'::text) WHERE key = 'scoreboard.score_source'`)
+	fresh()
 	if r := rank(c1); r != 0 {
 		t.Errorf("idle economy team rank = %v, want 0", r)
 	}
