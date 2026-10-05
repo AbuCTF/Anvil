@@ -462,6 +462,41 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	code, body, _ = call("GET", dl, nil, "")
 	expect("economy off anonymous download", code, 302, body)
 
+	exec(`INSERT INTO platform_settings (key, value) VALUES
+		('competition.events_shadow_enabled', 'true'), ('event.slug', '"integration-event"')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
+	code, body, _ = call("POST", "/api/v1/challenges/static-one/submit", &p1, `{"flag":"flag{one}"}`)
+	if code != http.StatusOK || body["correct"] != true {
+		t.Fatalf("shadowed standard submit = %d %v", code, body)
+	}
+	var solveID uuid.UUID
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT id FROM solves WHERE user_id = $1 AND challenge_id = $2`, p1, c1).Scan(&solveID); err != nil {
+		t.Fatalf("read shadowed solve: %v", err)
+	}
+	var mirroredEvents int
+	var userDelta, teamDelta float64
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*),
+		       COALESCE(SUM(delta) FILTER (WHERE stream = 'standard-user-score'), 0),
+		       COALESCE(SUM(delta) FILTER (WHERE stream = 'standard-team-score'), 0)
+		FROM competition_events WHERE correlation_id = $1
+	`, solveID).Scan(&mirroredEvents, &userDelta, &teamDelta); err != nil {
+		t.Fatalf("read shadow events: %v", err)
+	}
+	if mirroredEvents != 3 || userDelta != 100 || teamDelta != 100 {
+		t.Fatalf("shadow events count=%d user=%v team=%v", mirroredEvents, userDelta, teamDelta)
+	}
+	code, body, _ = call("POST", "/api/v1/challenges/static-one/submit", &p1, `{"flag":"flag{one}"}`)
+	if code != http.StatusOK || body["already_solved"] != true {
+		t.Fatalf("duplicate shadowed submit = %d %v", code, body)
+	}
+	var replayedEvents int
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM competition_events WHERE correlation_id = $1`, solveID).Scan(&replayedEvents); err != nil || replayedEvents != 3 {
+		t.Fatalf("duplicate submit events=%d err=%v", replayedEvents, err)
+	}
+
 	// Logout revokes the exact bearer immediately, rather than only clearing
 	// browser storage. A separately minted token for the same user stays valid.
 	code, body, _ = callBearer("POST", "/api/v1/auth/logout", "not-a-valid-jwt", `{}`)

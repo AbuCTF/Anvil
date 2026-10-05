@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/competition"
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/models"
@@ -28,6 +29,23 @@ import (
 func hashFlagForComparison(flag string) string {
 	hash := sha256.Sum256([]byte(flag))
 	return hex.EncodeToString(hash[:])
+}
+
+type solveProjectionSettings struct {
+	TeamsMode    bool
+	ShadowEvents bool
+	EventSlug    string
+}
+
+func loadSolveProjectionSettings(ctx context.Context, db *database.DB) (solveProjectionSettings, error) {
+	var settings solveProjectionSettings
+	err := db.Pool.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT value = 'true'::jsonb FROM platform_settings WHERE key = 'teams_mode'), false),
+			COALESCE((SELECT value = 'true'::jsonb FROM platform_settings WHERE key = 'competition.events_shadow_enabled'), false),
+			COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.slug'), 'anvil-event')
+	`).Scan(&settings.TeamsMode, &settings.ShadowEvents, &settings.EventSlug)
+	return settings, err
 }
 
 func evidenceUserAgent(c *gin.Context) string {
@@ -1749,7 +1767,8 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// read before the tx: the tx below holds the challenge row lock, and a second
 	// pooled connection taken under it deadlocks the pool when a popular
 	// challenge gets a burst of solves.
-	teamsMode, teamsErr := isTeamsMode(ctx, h.db)
+	projectionSettings, teamsErr := loadSolveProjectionSettings(ctx, h.db)
+	teamsMode := projectionSettings.TeamsMode
 	tx, err := h.db.Pool.Begin(ctx)
 	if err != nil {
 		h.logger.Error("failed to begin solve transaction", zap.Error(err))
@@ -1788,11 +1807,12 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	}
 
 	solveID := uuid.New()
+	solveAt := time.Now().UTC()
 	result, err := tx.Exec(ctx,
 		`INSERT INTO solves (id, user_id, challenge_id, flag_id, points_awarded, solved_at)
-		 VALUES ($1, $2, $3, $4, $5, NOW())
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (user_id, flag_id) DO NOTHING`,
-		solveID, uid, challengeID, matchedFlag.ID, matchedFlag.Points)
+		solveID, uid, challengeID, matchedFlag.ID, matchedFlag.Points, solveAt)
 
 	if err != nil {
 		h.logger.Error("failed to record solve", zap.Error(err))
@@ -1856,6 +1876,8 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// scoring below. idempotent per team+challenge.
 	// the toast reports what the capture earned the team, not the flag's raw weight
 	var ecoEarned *float64
+	var standardTeamID *uuid.UUID
+	var standardTeamAwarded bool
 	if economyMode && ecoTeamID != nil {
 		chalUUID, pErr := uuid.Parse(challengeID)
 		if pErr != nil {
@@ -1889,6 +1911,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		if err := tx.QueryRow(ctx, `SELECT team_id FROM users WHERE id = $1`, uid).Scan(&teamID); err != nil {
 			h.logger.Warn("team lookup failed during solve; skipping team score", zap.Error(err))
 		} else if teamID != nil {
+			standardTeamID = teamID
 			var teammateHasFlag bool
 			if err := tx.QueryRow(ctx,
 				`SELECT EXISTS(
@@ -1898,10 +1921,12 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 				*teamID, matchedFlag.ID, uid).Scan(&teammateHasFlag); err != nil {
 				h.logger.Warn("team dedup check failed during solve; skipping team score", zap.Error(err))
 			} else if !teammateHasFlag {
-				if _, err := tx.Exec(ctx,
+				if teamResult, err := tx.Exec(ctx,
 					`UPDATE teams SET total_score = total_score + $1, updated_at = NOW() WHERE id = $2`,
 					matchedFlag.Points, *teamID); err != nil {
 					h.logger.Warn("team score update failed during solve", zap.Error(err))
+				} else {
+					standardTeamAwarded = teamResult.RowsAffected() == 1
 				}
 			}
 		}
@@ -1956,6 +1981,34 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		h.logger.Error("failed to count solved flags", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 		return
+	}
+
+	if projectionSettings.ShadowEvents && !economyMode {
+		challengeUUID, challengeErr := uuid.Parse(challengeID)
+		flagUUID, flagErr := uuid.Parse(matchedFlag.ID)
+		if challengeErr != nil || flagErr != nil {
+			h.logger.Error("failed to parse standard score event identity", zap.Error(errors.Join(challengeErr, flagErr)))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+			return
+		}
+		events, buildErr := competition.StandardFlagEvents(competition.StandardFlagCapture{
+			EventSlug: projectionSettings.EventSlug, SolveID: solveID, AttemptID: attemptID,
+			UserID: uid, TeamID: standardTeamID, ChallengeID: challengeUUID, FlagID: flagUUID,
+			Points: matchedFlag.Points, TeamsMode: teamsMode, TeamAwarded: standardTeamAwarded,
+			RequestID: evidenceRequestID(c), OccurredAt: solveAt,
+		})
+		if buildErr != nil {
+			h.logger.Error("failed to build standard score events", zap.Error(buildErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+			return
+		}
+		for _, event := range events {
+			if _, appendErr := competition.Append(ctx, tx, event); appendErr != nil {
+				h.logger.Error("failed to append standard score event", zap.Error(appendErr))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+				return
+			}
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
