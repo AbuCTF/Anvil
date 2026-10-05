@@ -10,6 +10,7 @@
 	export let detail: any = null;
 	export let loading = false;
 	export let error = '';
+	export let economyEnabled = false;
 
 	const dispatch = createEventDispatcher();
 	let tab = 'overview';
@@ -19,7 +20,7 @@
 		{ id: 'submissions', label: 'Submissions', count: stats.submissions ?? 0 },
 		{ id: 'solves', label: 'Solves', count: detail?.solves?.length ?? 0 },
 		{ id: 'instances', label: 'Instances', count: stats.instances ?? 0 },
-		{ id: 'economy', label: 'Ledger state', count: detail?.economy?.length ?? 0 },
+		...(economyEnabled ? [{ id: 'economy', label: 'Ledger state', count: detail?.economy?.length ?? 0 }] : []),
 		{ id: 'audit', label: 'Admin history', count: detail?.audit?.length ?? 0 }
 	];
 

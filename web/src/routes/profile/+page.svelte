@@ -10,6 +10,7 @@
   import CategoryBars from "$lib/components/CategoryBars.svelte";
   import DifficultyBars from "$lib/components/DifficultyBars.svelte";
   import OpticalIcon from "$lib/components/OpticalIcon.svelte";
+  import { platformInfo } from "$lib/stores/platform";
   import {
     formatLocalDateLong,
     formatLocalTime,
@@ -570,9 +571,13 @@
             <div
               class="rounded-md border border-stone-800 bg-stone-900/20 px-4 py-3 text-sm leading-relaxed text-stone-500"
             >
-              Ranking points belong to your team and include Ledger pricing,
-              penalties, conversions, and KotH. Capture history is shown without
-              legacy per-user base-point totals.
+              {#if $platformInfo?.economy_enabled}
+                Ranking points belong to your team and include Ledger pricing,
+                penalties, conversions, and KotH.
+              {:else}
+                Ranking points belong to your team and reflect completed challenges.
+              {/if}
+              Capture history is shown without legacy per-user totals.
             </div>
           {:else}
             <Card title="Solve points over time">

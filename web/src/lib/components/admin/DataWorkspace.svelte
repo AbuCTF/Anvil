@@ -5,6 +5,7 @@
 	import HelpTip from '$lib/components/HelpTip.svelte';
 
 	export let initialEntity = 'categories';
+	export let economyEnabled = false;
 
 	const entities = [
 		{ id: 'settings', label: 'Event settings', importable: false, selected: true },
@@ -22,7 +23,8 @@
 
 	let summary: Awaited<ReturnType<typeof api.getDataSummary>> | null = null;
 	let history: DataImportHistory[] = [];
-	let selected = new Set(entities.filter((entity) => entity.selected).map((entity) => entity.id));
+	$: availableEntities = entities.filter((entity) => economyEnabled || !entity.id.startsWith('ledger_'));
+	let selected = new Set(entities.filter((entity) => entity.selected && (economyEnabled || !entity.id.startsWith('ledger_'))).map((entity) => entity.id));
 	let exportFormat: 'bundle' | 'json' | 'csv' = 'bundle';
 	let anonymize = false;
 	let exportBusy = false;
@@ -66,12 +68,12 @@
 	}
 
 	function selectDefaults() {
-		selected = new Set(entities.filter((entity) => entity.selected).map((entity) => entity.id));
+		selected = new Set(availableEntities.filter((entity) => entity.selected).map((entity) => entity.id));
 		if (exportFormat === 'csv') exportFormat = 'bundle';
 	}
 
 	function selectAll() {
-		selected = new Set(entities.map((entity) => entity.id));
+		selected = new Set(availableEntities.map((entity) => entity.id));
 		if (exportFormat === 'csv') exportFormat = 'bundle';
 	}
 
@@ -244,7 +246,7 @@
 			<div class="flex items-start justify-between gap-3 border-b border-stone-800 px-5 py-4"><div><h2 class="flex items-center gap-1.5 text-sm font-semibold text-stone-100">Export <HelpTip text="The Anvil bundle contains JSON and CSV plus checksums. Full Ledger history and submission audit are optional because mature events can make them large; choose one item and CSV for a focused spreadsheet." /></h2><p class="mt-1 text-xs text-stone-500">Portable configuration, results, and audit data.</p></div><div class="flex items-center gap-2 text-[10px]"><button type="button" on:click={selectDefaults} class="text-stone-500 hover:text-stone-200">Recommended</button><button type="button" on:click={selectAll} class="text-stone-500 hover:text-stone-200">All</button><button type="button" on:click={clearSelection} class="text-stone-500 hover:text-stone-200">Clear</button></div></div>
 			<div class="space-y-5 p-5">
 				<div class="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
-					{#each entities as entity}
+					{#each availableEntities as entity}
 						<label class="flex cursor-pointer items-center gap-2 rounded-md border border-stone-800 px-3 py-2 text-xs text-stone-400"><input type="checkbox" checked={selected.has(entity.id)} on:change={() => toggleEntity(entity.id)} class="accent-amber-500" />{entity.label}</label>
 					{/each}
 				</div>
@@ -261,7 +263,7 @@
 			<div class="border-b border-stone-800 px-5 py-4"><h2 class="flex items-center gap-1.5 text-sm font-semibold text-stone-100">Import <HelpTip align="right" text="Every import is parsed and validated first. Apply runs once in a database transaction: any row failure rolls back the whole import. If data changes after preview, Anvil asks for a fresh preview." /></h2><p class="mt-1 text-xs text-stone-500">Dry-run first, then apply one atomic plan.</p></div>
 			<div class="space-y-4 p-5">
 				<div class="grid gap-4 sm:grid-cols-2">
-					<label><span class={label}>Entity</span><select class={input} bind:value={importEntity} on:change={() => { preview = null; importFile = null; workbookContent = ''; workbookSheets = []; workbookSheet = ''; workbookFields = []; workbookRequiredFields = []; workbookColumnMap = {}; }}>{#each entities.filter((entity) => entity.importable) as entity}<option value={entity.id}>{entity.label}</option>{/each}</select></label>
+					<label><span class={label}>Entity</span><select class={input} bind:value={importEntity} on:change={() => { preview = null; importFile = null; workbookContent = ''; workbookSheets = []; workbookSheet = ''; workbookFields = []; workbookRequiredFields = []; workbookColumnMap = {}; }}>{#each availableEntities.filter((entity) => entity.importable) as entity}<option value={entity.id}>{entity.label}</option>{/each}</select></label>
 					<label><span class={label}>Mode</span><select class={input} bind:value={importMode}><option value="create">Create only</option><option value="merge">Create and update</option></select></label>
 				</div>
 				{#if importEntity === 'users'}

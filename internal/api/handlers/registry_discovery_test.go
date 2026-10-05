@@ -3,12 +3,49 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/anvil-lab/anvil/internal/services/registryauth"
 )
+
+func TestValidateRegistryCredential(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/auth/token":
+			var login map[string]string
+			_ = json.NewDecoder(r.Body).Decode(&login)
+			if login["identifier"] != "docker-user" || login["secret"] != "docker-token" {
+				http.Error(w, "rejected", http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"access_token":"docker-session"}`))
+		case "/user":
+			if r.Header.Get("Authorization") != "Bearer github-token" {
+				http.Error(w, "rejected", http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"login":"github-user"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := validateRegistryCredentialAt(context.Background(), server.Client(), "docker.io", "docker-user", "docker-token", server.URL, server.URL); err != nil {
+		t.Fatalf("validate Docker Hub credential: %v", err)
+	}
+	if err := validateRegistryCredentialAt(context.Background(), server.Client(), "ghcr.io", "github-user", "github-token", server.URL, server.URL); err != nil {
+		t.Fatalf("validate GHCR credential: %v", err)
+	}
+	err := validateRegistryCredentialAt(context.Background(), server.Client(), "ghcr.io", "github-user", "wrong", server.URL, server.URL)
+	var apiErr *registryAPIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
+		t.Fatalf("expected rejected credential, got %v", err)
+	}
+}
 
 func TestDiscoverDockerHubRepositories(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

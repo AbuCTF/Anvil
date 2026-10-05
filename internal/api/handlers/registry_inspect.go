@@ -121,9 +121,33 @@ func (h *AdminChallengeHandler) SaveRegistryCredential(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "username and access token are required"})
 		return
 	}
+	request.Username = strings.TrimSpace(request.Username)
+	request.Token = strings.TrimSpace(request.Token)
+	if request.Username == "" || request.Token == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "username and access token are required"})
+		return
+	}
 	uid, ok := contextUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		return
+	}
+	client := &http.Client{Timeout: 12 * time.Second}
+	if err := validateRegistryCredential(c.Request.Context(), client, registry, request.Username, request.Token); err != nil {
+		var apiErr *registryAPIError
+		if errors.As(err, &apiErr) {
+			switch apiErr.Status {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				c.JSON(http.StatusBadRequest, gin.H{"error": "the registry rejected this username or access token"})
+			case http.StatusTooManyRequests:
+				c.JSON(http.StatusTooManyRequests, gin.H{"error": "the registry rate limit was reached; retry later"})
+			default:
+				c.JSON(http.StatusBadGateway, gin.H{"error": "the registry could not validate this credential"})
+			}
+			return
+		}
+		h.logger.Warn("validate registry credential", zap.String("registry", registry), zap.Error(err))
+		c.JSON(http.StatusBadGateway, gin.H{"error": "the registry could not validate this credential; retry later"})
 		return
 	}
 	if err := h.registrySvc.Save(c.Request.Context(), registry, request.Username, request.Token, uid); err != nil {
@@ -132,6 +156,41 @@ func (h *AdminChallengeHandler) SaveRegistryCredential(c *gin.Context) {
 	}
 	_ = logAdminAction(h.db, c, uid.String(), "registry_credential_saved", "registry_credential", "", map[string]any{"registry": registry, "username": strings.TrimSpace(request.Username)})
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func validateRegistryCredential(ctx context.Context, client *http.Client, registry, username, token string) error {
+	return validateRegistryCredentialAt(ctx, client, registry, username, token, dockerHubAPIURL, githubAPIURL)
+}
+
+func validateRegistryCredentialAt(ctx context.Context, client *http.Client, registry, username, token, dockerAPI, githubAPI string) error {
+	switch registry {
+	case "docker.io":
+		payload, _ := json.Marshal(map[string]string{"identifier": username, "secret": token})
+		var result struct {
+			AccessToken string `json:"access_token"`
+			Token       string `json:"token"`
+		}
+		if err := registryAPIRequest(ctx, client, http.MethodPost, strings.TrimRight(dockerAPI, "/")+"/v2/auth/token", payload, "", &result); err != nil {
+			return err
+		}
+		if result.AccessToken == "" && result.Token == "" {
+			return errors.New("Docker Hub returned an empty access token")
+		}
+		return nil
+	case "ghcr.io":
+		var result struct {
+			Login string `json:"login"`
+		}
+		if err := registryAPIRequest(ctx, client, http.MethodGet, strings.TrimRight(githubAPI, "/")+"/user", nil, token, &result); err != nil {
+			return err
+		}
+		if result.Login == "" {
+			return errors.New("GitHub returned an empty account")
+		}
+		return nil
+	default:
+		return errors.New("unsupported registry")
+	}
 }
 
 func (h *AdminChallengeHandler) DeleteRegistryCredential(c *gin.Context) {

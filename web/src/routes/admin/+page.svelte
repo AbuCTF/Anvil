@@ -1507,7 +1507,7 @@
 		{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard-outline' },
 		{ id: 'event', label: 'Event', icon: 'mdi:calendar-star' },
 		{ id: 'data', label: 'Data', icon: 'mdi:database-export-outline' },
-		{ id: 'launch', label: 'Release', icon: 'mdi:shield-check-outline' },
+		{ id: 'launch', label: 'Readiness', icon: 'mdi:shield-check-outline' },
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
 		{ id: 'users', label: 'Users', icon: 'mdi:account-group-outline' },
 		{ id: 'teams', label: 'Teams', icon: 'mdi:account-multiple-outline' },
@@ -1575,7 +1575,7 @@
 			{#if activeTab === 'overview'}
 				<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
 					<div><h2 class="text-xl font-semibold text-stone-100">Overview</h2><p class="mt-1 text-sm text-stone-500">Current event, content, and runtime status.</p></div>
-					<div class="flex flex-wrap gap-2"><button type="button" on:click={() => setTab('event')} class={btnGhost}>Configure event</button><button type="button" on:click={() => setTab('launch')} class={btnPrimary}>Release checks</button></div>
+					<div class="flex flex-wrap gap-2"><button type="button" on:click={() => setTab('event')} class={btnGhost}>Configure event</button><button type="button" on:click={() => setTab('launch')} class={btnPrimary}>Readiness checks</button></div>
 				</div>
 
 				<div class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
@@ -1643,7 +1643,7 @@
 					save={savePlatformSettings}
 				/>
 			{:else if activeTab === 'data'}
-				<DataWorkspace initialEntity={dataImportEntity} />
+				<DataWorkspace initialEntity={dataImportEntity} economyEnabled={$platformInfo?.economy_enabled ?? false} />
 			{:else if activeTab === 'launch'}
 				<LaunchWorkspace />
 			{:else if activeTab === 'challenges'}
@@ -2054,7 +2054,7 @@
 								</div>
 								<div class="mt-4 grid grid-cols-3 gap-3 border-y border-stone-800 py-3 text-xs">
 									<div><p class="metadata-label text-stone-600">Solved</p><p class="mt-1 text-stone-300">{team.challenge_solves ?? 0}</p></div>
-									<div><p class="metadata-label text-stone-600">Ledger</p><p class="mt-1 text-amber-500">{Math.round(team.ledger_points ?? team.total_score ?? 0).toLocaleString()}</p></div>
+									<div><p class="metadata-label text-stone-600">{$platformInfo?.economy_enabled ? 'Ledger' : 'Score'}</p><p class="mt-1 text-amber-500">{Math.round($platformInfo?.economy_enabled ? (team.ledger_points ?? team.total_score ?? 0) : (team.total_score ?? team.legacy_score ?? 0)).toLocaleString()}</p></div>
 									<div><p class="metadata-label text-stone-600">Capacity</p><p class="mt-1 text-stone-300">{team.member_count}/{team.max_members ?? '∞'}</p></div>
 								</div>
 								<div class="mt-3 flex items-center justify-between gap-3">
@@ -2079,7 +2079,7 @@
 											<th class="px-4 py-2.5 text-left">Team</th>
 											<th class="px-4 py-2.5 text-right">Members</th>
 											<th class="px-4 py-2.5 text-right">Solved</th>
-											<th class="px-4 py-2.5 text-right">Ledger</th>
+											<th class="px-4 py-2.5 text-right">{$platformInfo?.economy_enabled ? 'Ledger' : 'Score'}</th>
 											<th class="hidden px-4 py-2.5 text-right md:table-cell">Max</th>
 											<th class="hidden px-4 py-2.5 text-left md:table-cell">Join code</th>
 											<th class="hidden px-4 py-2.5 text-right xl:table-cell">Created</th>
@@ -2098,7 +2098,7 @@
 												<td class="px-4 py-3"><div class="flex items-center gap-2"><span class="font-medium text-stone-200">{team.name}</span><Icon icon="mdi:chevron-right" class="h-4 w-4 text-stone-700" /></div></td>
 												<td class="px-4 py-3 text-right text-stone-300 tabular-nums">{team.member_count}</td>
 												<td class="px-4 py-3 text-right text-stone-200 tabular-nums">{team.challenge_solves ?? 0}</td>
-												<td class="px-4 py-3 text-right text-amber-500 tabular-nums" title={`Legacy score: ${team.legacy_score ?? 0}`}>{Math.round(team.ledger_points ?? team.total_score ?? 0).toLocaleString()}</td>
+												<td class="px-4 py-3 text-right text-amber-500 tabular-nums">{Math.round($platformInfo?.economy_enabled ? (team.ledger_points ?? team.total_score ?? 0) : (team.total_score ?? team.legacy_score ?? 0)).toLocaleString()}</td>
 												<td class="hidden px-4 py-3 text-right text-stone-400 tabular-nums md:table-cell" on:click|stopPropagation on:keydown|stopPropagation><button type="button" class="hover:underline" on:click={() => editTeamMax(team)}>{team.max_members == null ? '∞' : team.max_members}</button></td>
 												<td class="hidden px-4 py-3 md:table-cell" on:click|stopPropagation on:keydown|stopPropagation><span class="font-mono text-xs text-stone-400">{team.join_code}</span><button type="button" class="ml-2 text-xs text-stone-600 hover:text-stone-300 disabled:opacity-50" on:click={() => rotateTeamCode(team)} disabled={actionLoading === team.id}>rotate</button></td>
 												<td class="hidden px-4 py-3 text-right text-stone-500 tabular-nums xl:table-cell" title={team.created_at ? instantTitle(team.created_at, 'seconds') : ''}>{team.created_at ? formatDate(team.created_at) : '—'}</td>
@@ -2498,7 +2498,7 @@
 					<div class="mb-2 flex items-center justify-between gap-3 px-2 pt-1"><div><p class="metadata-label text-stone-600">Settings map</p><p class="mt-0.5 text-xs text-stone-500">Choose an area instead of hunting through one long form.</p></div>{#if settingsChanged}<span class="shrink-0 rounded-full bg-warn/10 px-2 py-1 text-[11px] text-warn">Unsaved changes</span>{/if}</div>
 					<div class="grid grid-cols-2 gap-1 md:grid-cols-4">
 						{#each [
-							{ href: '#settings-ledger', label: 'Economy rules', detail: 'Active Ledger policy', icon: 'mdi:scale-balance' },
+							...($platformInfo?.economy_enabled ? [{ href: '#settings-ledger', label: 'Economy rules', detail: 'Active Ledger policy', icon: 'mdi:scale-balance' }] : []),
 							{ href: '#settings-instances', label: 'Runtime', detail: 'Timeouts and limits', icon: 'mdi:timer-outline' },
 							{ href: '#settings-access', label: 'Access', detail: 'VPN requirements', icon: 'mdi:shield-key-outline' },
 							{ href: '#settings-platform', label: 'Competition', detail: 'Modes and event clock', icon: 'mdi:tune-variant' }
@@ -2521,7 +2521,7 @@
 						</div>
 					{/if}
 
-					{#if $platformInfo?.economy_policy}
+					{#if $platformInfo?.economy_enabled && $platformInfo?.economy_policy}
 						<Card elementId="settings-ledger" bodyClass="p-4 scroll-mt-32">
 							<div slot="header">
 								<h2 class="text-sm leading-none font-semibold text-stone-200 flex items-center gap-2">
@@ -2904,7 +2904,7 @@
 								<div><p class="metadata-label text-stone-600">Last IP</p><p class="mt-1 font-mono text-stone-300">{detail.user.last_login?.ip_address ?? '-'}</p></div>
 								<div><p class="metadata-label text-stone-600">Joined</p><p class="mt-1 text-stone-300">{formatLocalDateTimeWithZone(detail.user.created_at, 'seconds')}</p></div>
 								<div><p class="metadata-label text-stone-600">Email</p><p class="mt-1 text-stone-300">{detail.user.email_verified ? 'Verified' : 'Unverified'}</p></div>
-								<div class="col-span-2"><p class="metadata-label text-stone-600">Team</p><p class="mt-1 text-stone-300">{detail.team?.name ?? 'No team'}{detail.team ? ` · ${Math.floor(detail.team.credits ?? 0)} credits · ${Math.round(detail.team.points ?? 0)} Ledger points` : ''}</p></div>
+								<div class="col-span-2"><p class="metadata-label text-stone-600">Team</p><p class="mt-1 text-stone-300">{detail.team?.name ?? 'No team'}{detail.team && $platformInfo?.economy_enabled ? ` · ${Math.floor(detail.team.credits ?? 0)} credits · ${Math.round(detail.team.points ?? 0)} Ledger points` : ''}</p></div>
 								{#if detail.user.bio}<div class="col-span-2"><p class="metadata-label text-stone-600">Bio</p><p class="mt-1 whitespace-pre-wrap text-stone-400">{detail.user.bio}</p></div>{/if}
 							</div>
 						</Card>
@@ -2999,6 +2999,7 @@
 		error={teamDetailError}
 		adjusting={teamCreditAdjusting}
 		action={teamDossierAction}
+		economyEnabled={$platformInfo?.economy_enabled ?? false}
 		on:close={() => { selectedTeamSeed = null; selectedTeamDetail = null; }}
 		on:user={(event) => { const member = event.detail; selectedTeamSeed = null; selectedTeamDetail = null; void openUserDetail(member); }}
 		on:credit={adjustTeamCredit}
@@ -3014,6 +3015,7 @@
 		detail={selectedChallengeDetail}
 		loading={challengeDetailLoading}
 		error={challengeDetailError}
+		economyEnabled={$platformInfo?.economy_enabled ?? false}
 		on:close={() => { selectedChallengeSeed = null; selectedChallengeDetail = null; }}
 		on:edit={() => { const challenge = selectedChallengeSeed; selectedChallengeSeed = null; selectedChallengeDetail = null; openEditModal(challenge); }}
 	/>

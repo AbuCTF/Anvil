@@ -260,7 +260,7 @@
 
 				<div class="grid gap-4 sm:grid-cols-2">
 					<div>
-						<p class="metadata-label text-stone-500 mb-1">Ledger score</p>
+						<p class="metadata-label text-stone-500 mb-1">{$platformInfo?.economy_enabled ? 'Ledger score' : 'Score'}</p>
 						<p class="text-2xl font-semibold text-stone-100 tabular-nums">{team.total_score ?? 0}</p>
 					</div>
 					<div>

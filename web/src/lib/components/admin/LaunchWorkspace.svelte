@@ -24,7 +24,7 @@
 			releases = history.release_candidates;
 			waived = new Set([...waived].filter((id) => warningIDs.includes(id)));
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Release readiness is unavailable';
+			error = e instanceof Error ? e.message : 'Event readiness is unavailable';
 		} finally {
 			loading = false;
 		}
@@ -44,11 +44,11 @@
 		message = '';
 		try {
 			const created = await api.createReleaseCandidate([...waived]);
-			message = `Release candidate RC-${created.sequence} sealed with immutable configuration fingerprints.`;
+			message = `Readiness snapshot ${created.sequence} sealed with immutable configuration fingerprints.`;
 			waived = new Set();
 			await load();
 		} catch (e) {
-			error = e instanceof Error ? e.message : 'Could not seal release candidate';
+			error = e instanceof Error ? e.message : 'Could not seal readiness snapshot';
 		} finally {
 			sealing = false;
 		}
@@ -74,7 +74,7 @@
 </script>
 
 <div class="space-y-6">
-	<div><h2 class="text-base font-semibold text-stone-100">Release checks</h2><p class="mt-1 max-w-3xl text-xs leading-relaxed text-stone-500">Verify the event, content, runtime, access, and Ledger configuration before recording an approved release.</p></div>
+	<div><h2 class="text-base font-semibold text-stone-100">Event readiness</h2><p class="mt-1 max-w-3xl text-xs leading-relaxed text-stone-500">Verify event settings, challenge content, runtime capacity, access, and scoring before approval.</p></div>
 	{#if loading}
 		<div class="flex min-h-[18rem] items-center justify-center"><Icon icon="mdi:loading" class="h-6 w-6 animate-spin text-stone-600" /></div>
 	{:else}
@@ -86,7 +86,7 @@
 				<div class="flex flex-col gap-5 p-5 sm:flex-row sm:items-center sm:justify-between">
 					<div class="flex items-center gap-4">
 						<div class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full {report.ready ? 'bg-emerald-500/10 text-emerald-400' : 'bg-down/10 text-down'}"><Icon icon={report.ready ? 'mdi:shield-check-outline' : 'mdi:shield-alert-outline'} class="h-6 w-6" /></div>
-						<div><p class="text-base font-semibold text-stone-100">{report.ready ? 'Ready for release review' : `${report.blockers} item${report.blockers === 1 ? '' : 's'} to resolve`}</p><p class="mt-1 text-xs text-stone-500">Live checks generated {new Date(report.generated_at).toLocaleString()}</p></div>
+						<div><p class="text-base font-semibold text-stone-100">{report.ready ? 'Ready for approval' : `${report.blockers} item${report.blockers === 1 ? '' : 's'} to resolve`}</p><p class="mt-1 text-xs text-stone-500">Live checks generated {new Date(report.generated_at).toLocaleString()}</p></div>
 					</div>
 					<button type="button" on:click={load} class="inline-flex items-center justify-center gap-2 rounded-md border border-stone-700 px-3 py-2 text-xs text-stone-300 hover:border-stone-600"><Icon icon="mdi:refresh" class="h-4 w-4" />Run checks again</button>
 				</div>
@@ -94,7 +94,7 @@
 					<div class="border-r border-stone-800 p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Checks</p><p class="mt-1 text-xl font-semibold text-stone-200">{report.checks.length}</p></div>
 					<div class="border-r border-stone-800 p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Needs action</p><p class="mt-1 text-xl font-semibold {report.blockers ? 'text-down' : 'text-emerald-400'}">{report.blockers}</p></div>
 					<div class="border-r border-stone-800 p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Warnings</p><p class="mt-1 text-xl font-semibold {report.warnings ? 'text-amber-400' : 'text-emerald-400'}">{report.warnings}</p></div>
-					<div class="p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Latest RC</p><p class="mt-1 text-xl font-semibold text-stone-200">{releases.length ? `#${releases[0].sequence}` : 'None'}</p></div>
+					<div class="p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">Latest snapshot</p><p class="mt-1 text-xl font-semibold text-stone-200">{releases.length ? `#${releases[0].sequence}` : 'None'}</p></div>
 				</div>
 			</section>
 
@@ -118,18 +118,18 @@
 
 				<div class="space-y-4">
 					<section class="rounded-lg border border-stone-800 bg-stone-900/25 p-5 xl:sticky xl:top-5">
-						<h2 class="text-sm font-semibold text-stone-100">Seal release candidate</h2>
-						<p class="mt-2 text-xs leading-relaxed text-stone-500">Capture immutable fingerprints for event settings, challenge content and the Ledger policy. This records approval; it does not deploy or publish the event.</p>
-						<div class="mt-4 space-y-2 rounded-md border border-stone-800 bg-stone-950/50 p-3 font-mono text-[10px] text-stone-500"><p>event&nbsp;&nbsp;&nbsp; {short(report.event_checksum)}</p><p>content&nbsp; {short(report.content_checksum)}</p><p>economy&nbsp; {short(report.economy_checksum)}</p></div>
-						{#if report.warnings}<p class="mt-4 text-xs leading-relaxed text-amber-400">Review and waive each warning individually. Waivers are stored in the release record.</p>{/if}
-						<button type="button" on:click={seal} disabled={!report.ready || !everyWarningWaived || sealing} class="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-stone-100 px-4 py-2.5 text-sm font-medium text-stone-950 disabled:cursor-not-allowed disabled:opacity-35"><Icon icon={sealing ? 'mdi:loading' : 'mdi:seal-variant'} class="h-4 w-4 {sealing ? 'animate-spin' : ''}" />Seal candidate</button>
+						<h2 class="text-sm font-semibold text-stone-100">Seal readiness snapshot</h2>
+						<p class="mt-2 text-xs leading-relaxed text-stone-500">Capture immutable fingerprints for event settings, challenge content, and scoring. This records approval; it does not deploy or publish the event.</p>
+						<div class="mt-4 space-y-2 rounded-md border border-stone-800 bg-stone-950/50 p-3 font-mono text-[10px] text-stone-500"><p>event&nbsp;&nbsp;&nbsp; {short(report.event_checksum)}</p><p>content&nbsp; {short(report.content_checksum)}</p><p>scoring&nbsp; {short(report.economy_checksum)}</p></div>
+						{#if report.warnings}<p class="mt-4 text-xs leading-relaxed text-amber-400">Review and waive each warning individually. Waivers are stored in the snapshot.</p>{/if}
+						<button type="button" on:click={seal} disabled={!report.ready || !everyWarningWaived || sealing} class="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-stone-100 px-4 py-2.5 text-sm font-medium text-stone-950 disabled:cursor-not-allowed disabled:opacity-35"><Icon icon={sealing ? 'mdi:loading' : 'mdi:seal-variant'} class="h-4 w-4 {sealing ? 'animate-spin' : ''}" />Seal snapshot</button>
 					</section>
 				</div>
 			</div>
 
 			<section class="overflow-hidden rounded-lg border border-stone-800 bg-stone-900/25">
-				<div class="border-b border-stone-800 px-5 py-4"><h2 class="text-sm font-semibold text-stone-100">Release history</h2><p class="mt-1 text-xs text-stone-500">Each record binds the exact configuration, content and economy contract reviewed at that moment.</p></div>
-				{#if releases.length}<div class="divide-y divide-stone-800/70">{#each releases as release}<div class="grid gap-2 px-5 py-4 text-xs sm:grid-cols-[5rem_minmax(0,1fr)_auto] sm:items-center"><span class="font-semibold text-stone-200">RC-{release.sequence}</span><span class="font-mono text-[10px] text-stone-600">{short(release.event_checksum)} / {short(release.content_checksum)} / {short(release.economy_checksum)}</span><span class="text-stone-500">{release.created_by} · {new Date(release.created_at).toLocaleString()}</span></div>{/each}</div>{:else}<div class="px-5 py-10 text-center text-sm text-stone-600">No release candidate has been sealed.</div>{/if}
+				<div class="border-b border-stone-800 px-5 py-4"><h2 class="text-sm font-semibold text-stone-100">Readiness history</h2><p class="mt-1 text-xs text-stone-500">Each snapshot binds the exact configuration, content, and scoring contract reviewed at that moment.</p></div>
+				{#if releases.length}<div class="divide-y divide-stone-800/70">{#each releases as release}<div class="grid gap-2 px-5 py-4 text-xs sm:grid-cols-[5rem_minmax(0,1fr)_auto] sm:items-center"><span class="font-semibold text-stone-200">#{release.sequence}</span><span class="font-mono text-[10px] text-stone-600">{short(release.event_checksum)} / {short(release.content_checksum)} / {short(release.economy_checksum)}</span><span class="text-stone-500">{release.created_by} · {new Date(release.created_at).toLocaleString()}</span></div>{/each}</div>{:else}<div class="px-5 py-10 text-center text-sm text-stone-600">No readiness snapshot has been sealed.</div>{/if}
 			</section>
 		{/if}
 	{/if}

@@ -179,3 +179,19 @@ func TestImportTemplatesSupportCSVJSONAndExcel(t *testing.T) {
 		}
 	}
 }
+
+func TestChallengeImportTagPreservesDigestPins(t *testing.T) {
+	tests := []struct {
+		row  map[string]string
+		want string
+	}{
+		{row: map[string]string{"container_image": "ghcr.io/acme/challenge@sha256:abc"}, want: ""},
+		{row: map[string]string{"container_image": "acme/challenge"}, want: "latest"},
+		{row: map[string]string{"container_image": "acme/challenge", "container_tag": "stable"}, want: "stable"},
+	}
+	for _, test := range tests {
+		if got := challengeImportTag(test.row); got != test.want {
+			t.Fatalf("challengeImportTag(%v) = %q, want %q", test.row, got, test.want)
+		}
+	}
+}
