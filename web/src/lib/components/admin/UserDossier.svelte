@@ -125,7 +125,7 @@
 
 				{:else if tab === 'access'}
 					<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
-						<div><h3 class="text-sm font-medium text-stone-200">Account access</h3><p class="mt-1 text-xs text-stone-600">Sign-ins, devices and active credentials.</p></div>
+						<h3 class="text-sm font-medium text-stone-200">Account access</h3>
 						<button type="button" disabled={action !== ''} on:click={() => dispatch('revokeall')} class="rounded-md border border-down/30 px-3 py-2 text-xs text-down transition-colors hover:bg-down/10 disabled:cursor-not-allowed disabled:opacity-40">{action === 'all' ? 'Revoking…' : 'Sign out all'}</button>
 					</div>
 					<div class="grid grid-cols-2 gap-3 md:grid-cols-4">

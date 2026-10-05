@@ -144,11 +144,10 @@
 					{#if economyEnabled}<Card title="Ledger adjustment" bodyClass="p-4" className="mt-4">
 						<form class="grid items-end gap-3 sm:grid-cols-[10rem_10rem_1fr_auto]" on:submit|preventDefault={submitAdjustment}>
 							<label><span class="metadata-label mb-1.5 block text-stone-600">Reason</span><select bind:value={adjustmentKind} class="w-full rounded-md border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-300 focus:border-stone-600 focus:outline-none"><option value="admin_bonus">Bonus</option><option value="admin_refund">Refund</option><option value="admin_penalty">Penalty</option><option value="admin_correction">Correction</option></select></label>
-							<label><span class="metadata-label mb-1.5 block text-stone-600">Credits</span><input type="number" bind:value={adjustmentAmount} step="0.001" min="-20000" max="20000" required class="w-full rounded-md border border-stone-800 bg-stone-950 px-3 py-2 text-sm tabular-nums text-stone-300 focus:border-stone-600 focus:outline-none" /></label>
+							<label><span class="metadata-label mb-1.5 block text-stone-600">Credits <span class="normal-case tracking-normal text-stone-700">(+ grant · − deduct)</span></span><input type="number" bind:value={adjustmentAmount} step="0.001" min="-20000" max="20000" required class="w-full rounded-md border border-stone-800 bg-stone-950 px-3 py-2 text-sm tabular-nums text-stone-300 focus:border-stone-600 focus:outline-none" /></label>
 							<label><span class="metadata-label mb-1.5 block text-stone-600">Audit note</span><input type="text" bind:value={adjustmentNote} maxlength="240" required placeholder="Why this adjustment is required" class="w-full rounded-md border border-stone-800 bg-stone-950 px-3 py-2 text-sm text-stone-300 placeholder-stone-700 focus:border-stone-600 focus:outline-none" /></label>
 							<button type="submit" disabled={adjusting || !adjustmentNote.trim() || Number(adjustmentAmount) === 0} class="inline-flex h-10 items-center justify-center rounded-md bg-amber-500 px-4 text-sm font-medium text-stone-950 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40">{adjusting ? 'Applying…' : 'Apply'}</button>
 						</form>
-						<p class="mt-2 text-xs text-stone-600">Positive values grant credits; negative values deduct them. Every change is atomic and appears in the team Ledger.</p>
 					</Card>{/if}
 				{:else if tab === 'members'}
 					<form class="mb-4 flex flex-col gap-2 rounded-lg border border-stone-800 bg-stone-900/30 p-3 sm:flex-row sm:items-end" on:submit|preventDefault={addMember}>
@@ -167,7 +166,7 @@
 						{/each}
 					</div>
 				{:else if tab === 'submissions'}
-					<div class="mb-3 rounded-md border border-stone-800 bg-stone-900/30 px-3 py-2 text-xs text-stone-500">Raw flag material is never returned. The fingerprint, length, result, participant, IP, user agent, instance and timestamp preserve the useful audit trail.</div>
+					<div class="mb-3 w-fit rounded-full bg-stone-900 px-2.5 py-1 text-[10px] text-stone-500">Flag values withheld</div>
 					{#if detail.submissions?.length}
 						<div class="overflow-x-auto rounded-lg border border-stone-800">
 							<table class="w-full min-w-[960px] text-xs"><thead><tr class="metadata-label border-b border-stone-800 text-stone-500"><th class="px-3 py-2 text-left">Participant</th><th class="px-3 py-2 text-left">Challenge</th><th class="px-3 py-2 text-left">Result</th><th class="px-3 py-2 text-left">Fingerprint</th><th class="px-3 py-2 text-left">IP</th><th class="px-3 py-2 text-left">Client</th><th class="px-3 py-2 text-right">When</th></tr></thead><tbody>

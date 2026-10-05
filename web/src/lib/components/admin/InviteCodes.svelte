@@ -57,7 +57,7 @@
 
 <div class="rounded-md border border-stone-800 bg-stone-950/50 p-4 md:col-span-2">
 	<div class="flex items-start justify-between gap-4">
-		<div><h3 class="text-sm font-medium text-stone-200">Invite codes</h3><p class="mt-1 text-xs text-stone-500">Codes are shown in full only once. Existing codes display only their suffix.</p></div>
+		<div><h3 class="text-sm font-medium text-stone-200">Invite codes</h3><p class="mt-1 text-xs text-stone-500">Shown once · suffix retained</p></div>
 		<span class="rounded-full bg-stone-900 px-2 py-1 text-[10px] text-stone-500">{codes.length} active</span>
 	</div>
 	<div class="mt-4 grid gap-3 sm:grid-cols-[110px_minmax(0,1fr)_auto]">

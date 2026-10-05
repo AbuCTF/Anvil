@@ -2212,7 +2212,6 @@
 								<OpticalIcon icon="mdi:bullhorn-outline" size={14} box={14} className="text-stone-500" />
 								<span class="optical-label">New Announcement</span>
 							</h2>
-							<p class="mt-1 text-xs font-normal normal-case tracking-normal text-stone-500">Publish now or schedule a scoped message. Published records are cancelled, never deleted.</p>
 						</div>
 						<div class="space-y-4">
 							<label class="block">
@@ -2256,9 +2255,9 @@
 									<input type="datetime-local" bind:value={announcementForm.expires_at} class="w-full {fieldCls}" />
 								</label>
 							</div>
-							<label class="flex items-start gap-3 rounded-md border border-stone-800 bg-stone-950/35 p-3">
-								<input type="checkbox" bind:checked={announcementForm.pinned} class="mt-0.5" />
-								<span><span class="block text-sm text-stone-300">Pin to the top</span><span class="mt-1 block text-xs text-stone-600">Use sparingly for active operational information.</span></span>
+							<label class="flex items-center gap-3 rounded-md border border-stone-800 bg-stone-950/35 p-3">
+								<input type="checkbox" bind:checked={announcementForm.pinned} />
+								<span class="text-sm text-stone-300">Pin to top</span>
 							</label>
 							<button on:click={createAnnouncement} disabled={announcementSaving || !announcementForm.title.trim() || !announcementForm.body.trim()} class="w-full {btnPrimary}">
 								<Icon icon={announcementSaving ? 'mdi:loading' : 'mdi:send-outline'} class="h-4 w-4 {announcementSaving ? 'animate-spin' : ''}" />
@@ -2269,10 +2268,7 @@
 
 					<Card bodyClass="p-0">
 						<div slot="header" class="flex items-center justify-between gap-3">
-							<div>
-								<h2 class="text-sm font-semibold text-stone-200">Announcement history</h2>
-								<p class="mt-1 text-xs font-normal normal-case tracking-normal text-stone-500">Latest 100, including scheduled, expired, and cancelled records</p>
-							</div>
+							<h2 class="text-sm font-semibold text-stone-200">Announcement history</h2>
 							<button on:click={loadAnnouncements} disabled={announcementsLoading} class="text-xs text-stone-500 hover:text-stone-300"><Icon icon="mdi:refresh" class="inline h-4 w-4 {announcementsLoading ? 'animate-spin' : ''}" /></button>
 						</div>
 						{#if announcementsLoading && announcements.length === 0}
@@ -2308,7 +2304,7 @@
 
 			{#if activeTab === 'infrastructure'}
 				<div class="mb-4 flex items-center justify-between gap-3">
-					<div><h2 class="text-sm font-semibold text-stone-200">Live runtime capacity</h2><p class="mt-1 text-xs text-stone-500">Docker Swarm discovery and VM heartbeats refresh every 10 seconds. Resource figures are scheduler reservations, not host utilization.</p></div>
+					<div class="flex items-center gap-3"><h2 class="text-sm font-semibold text-stone-200">Runtime capacity</h2><span class="text-[10px] text-stone-600">10 s · reserved</span></div>
 					<div class="flex items-center gap-2 text-xs text-stone-500"><span class="h-1.5 w-1.5 rounded-full {infrastructureError ? 'bg-down' : 'bg-up'}"></span>{infrastructureRefreshing ? 'Refreshing…' : infrastructureUpdatedAt ? `Updated ${infrastructureUpdatedAt.toLocaleTimeString()}` : 'Connecting…'}<button type="button" on:click={loadInfrastructure} disabled={infrastructureRefreshing} class="ml-2 text-stone-300 hover:text-stone-100 disabled:opacity-50" aria-label="Refresh infrastructure"><Icon icon="mdi:refresh" class="h-4 w-4 {infrastructureRefreshing ? 'animate-spin' : ''}" /></button></div>
 				</div>
 				{#if infrastructureError}
@@ -2386,7 +2382,7 @@
 											<span class="mx-2 text-stone-700">•</span>
 										<span>{node.used_vcpu}/{node.total_vcpu} vCPU</span>
 									</div>
-									<p class="mt-1 text-[11px] text-stone-600">{node.runtime === 'docker' ? 'Discovered live from the Swarm manager' : node.last_heartbeat ? `Heartbeat ${formatLocalDateTimeWithZone(node.last_heartbeat, 'seconds')}` : 'No heartbeat received'}</p>
+									<p class="mt-1 text-[11px] text-stone-600">{node.runtime === 'docker' ? 'Swarm' : node.last_heartbeat ? `Heartbeat ${formatLocalDateTimeWithZone(node.last_heartbeat, 'seconds')}` : 'No heartbeat'}</p>
 										<div class="mt-2 space-y-1">
 											<div class="flex items-center gap-2">
 												<span class="metadata-label text-stone-600 w-10">CPU</span>
@@ -2570,12 +2566,12 @@
 					<div class="mb-2 flex items-center justify-between gap-3 px-2 pt-1"><p class="metadata-label text-stone-600">Settings</p>{#if settingsChanged}<span class="shrink-0 rounded-full bg-warn/10 px-2 py-1 text-[11px] text-warn">Unsaved changes</span>{/if}</div>
 					<div class="grid grid-cols-2 gap-1 md:grid-cols-4">
 						{#each [
-							...($platformInfo?.economy_enabled ? [{ href: '#settings-ledger', label: 'Economy rules', detail: 'Active Ledger policy', icon: 'mdi:scale-balance' }] : []),
-							{ href: '#settings-instances', label: 'Runtime', detail: 'Timeouts and limits', icon: 'mdi:timer-outline' },
-							{ href: '#settings-access', label: 'Access', detail: 'VPN requirements', icon: 'mdi:shield-key-outline' },
-							{ href: '#settings-platform', label: 'Competition', detail: 'Modes and event clock', icon: 'mdi:tune-variant' }
+							...($platformInfo?.economy_enabled ? [{ href: '#settings-ledger', label: 'Economy', icon: 'mdi:scale-balance' }] : []),
+							{ href: '#settings-instances', label: 'Runtime', icon: 'mdi:timer-outline' },
+							{ href: '#settings-access', label: 'Access', icon: 'mdi:shield-key-outline' },
+							{ href: '#settings-platform', label: 'Competition', icon: 'mdi:tune-variant' }
 						] as link}
-							<a href={link.href} class="flex min-w-0 items-center gap-2 rounded-md border border-transparent px-2.5 py-2 text-left transition-colors hover:border-stone-800 hover:bg-stone-900"><OpticalIcon icon={link.icon} size={15} box={16} className="shrink-0 text-stone-500" /><span class="min-w-0"><span class="block truncate text-xs font-medium text-stone-300">{link.label}</span><span class="hidden truncate text-[10px] text-stone-600 sm:block">{link.detail}</span></span></a>
+							<a href={link.href} class="flex min-w-0 items-center gap-2 rounded-md border border-transparent px-2.5 py-2 text-left transition-colors hover:border-stone-800 hover:bg-stone-900"><OpticalIcon icon={link.icon} size={15} box={16} className="shrink-0 text-stone-500" /><span class="truncate text-xs font-medium text-stone-300">{link.label}</span></a>
 						{/each}
 					</div>
 				</nav>
@@ -2788,7 +2784,6 @@
 									class="w-full {fieldCls}"
 								>
 									<option value="open">Open</option>
-									<!-- invite-only removed: no invite-code mint UI, and registration is at ZeroPool -->
 									<option value="disabled">Closed</option>
 								</select>
 							</label>
@@ -2832,28 +2827,24 @@
 									on:change={(e) => handleSelectChange(e, 'economy_mode')}
 									class="w-full {fieldCls}"
 								>
-									<option value="true">Enabled (credits + dynamic scoring)</option>
-									<option value="false">Off (standard scoring)</option>
+									<option value="true">Enabled</option>
+									<option value="false">Disabled</option>
 								</select>
 							</label>
 							<label class="block">
-								<span class={labelCls}>Market Pulse</span>
+								<span class={labelCls}>Market Pulse <span class="normal-case tracking-normal text-stone-700">(requires Economy)</span></span>
 								<select
 									value={String(platformSettings.market_pulse_enabled ?? false)}
 									on:change={(e) => handleSelectChange(e, 'market_pulse_enabled')}
 									class="w-full {fieldCls}"
 								>
-									<option value="true">Enabled (delayed, anonymous signals)</option>
+									<option value="true">Enabled</option>
 									<option value="false">Disabled</option>
 								</select>
-								<p class="mt-1.5 text-xs text-stone-500">Requires Economy. Exact team state stays private; field activity is delayed and bucketed.</p>
 							</label>
 							<div class="md:col-span-2 mt-1 border-t border-stone-800/70 pt-4">
 								<div class="mb-3 flex items-start justify-between gap-3">
-									<div>
-										<h3 class="text-sm font-medium text-stone-300">CTF window</h3>
-										<p class="mt-1 text-xs text-stone-500">Shown in {browserTimeZone}; saved as timezone-safe UTC instants.</p>
-									</div>
+									<h3 class="text-sm font-medium text-stone-300">CTF window <span class="ml-2 text-xs font-normal text-stone-600">{browserTimeZone}</span></h3>
 									{#if platformSettings['event.start_at'] || platformSettings['event.end_at']}
 										<button
 											type="button"
@@ -2892,10 +2883,7 @@
 								{/if}
 								<div class="mt-4 border-t border-stone-800/70 pt-4">
 									<div class="mb-2 flex items-start justify-between gap-3">
-										<div>
-											<span class={labelCls}>Score history cutoff</span>
-											<p class="mt-1 text-xs text-stone-500">Leave blank to follow the CTF end. Use this when presenting an imported event with a separate interactive demo window.</p>
-										</div>
+										<span class={labelCls}>Score history cutoff <span class="normal-case tracking-normal text-stone-700">(defaults to CTF end)</span></span>
 										{#if platformSettings['scoreboard.history_end_at']}
 											<button type="button" on:click={() => updateSetting('scoreboard.history_end_at', '')} class="shrink-0 text-xs text-stone-500 transition-colors hover:text-stone-300">Clear</button>
 										{/if}
@@ -2973,7 +2961,7 @@
 		<button type="button" aria-label="Close participant form" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => showParticipantModal = false}></button>
 		<div class="relative z-10 w-full max-w-xl overflow-hidden rounded-lg border border-stone-800 bg-stone-950 shadow-2xl" role="dialog" aria-modal="true" aria-label="Add participant">
 			<div class="flex items-start justify-between gap-4 border-b border-stone-800 px-5 py-4">
-				<div><h2 class="text-base font-semibold text-stone-100">Add participant</h2><p class="mt-1 text-xs text-stone-500">Create one account and deliver its sign-in securely.</p></div>
+				<h2 class="text-base font-semibold text-stone-100">Add participant</h2>
 				<button type="button" on:click={() => showParticipantModal = false} class="p-1 text-stone-500 hover:text-stone-200"><Icon icon="mdi:close" class="h-5 w-5" /></button>
 			</div>
 			<form class="space-y-4 p-5" on:submit|preventDefault={createParticipant}>
@@ -2984,9 +2972,6 @@
 					<label><span class={labelCls}>Username <span class="normal-case tracking-normal text-stone-600">(optional)</span></span><input bind:value={participantForm.username} maxlength="50" autocomplete="off" placeholder="Generated from email" class="w-full {fieldCls}" /></label>
 					<label><span class={labelCls}>Role</span><select bind:value={participantForm.role} class="w-full {fieldCls}"><option value="user">Participant</option><option value="author">Challenge author</option></select></label>
 					<label><span class={labelCls}>Account access</span><select bind:value={participantForm.provisioning} class="w-full {fieldCls}"><option value="activation_email">Activation link</option><option value="generated_credentials">Temporary credentials</option><option value="sso_only">SSO only</option></select></label>
-				</div>
-				<div class="rounded-md border border-stone-800 bg-stone-900/30 p-3 text-xs leading-relaxed text-stone-500">
-					{participantForm.provisioning === 'activation_email' ? 'A single-use link lets the participant set their password. It expires after 48 hours.' : participantForm.provisioning === 'generated_credentials' ? 'Anvil generates a unique temporary password. The participant must replace it at first sign-in.' : 'No local password is created. The account is matched to the configured identity provider.'}
 				</div>
 				<div class="flex items-center justify-between gap-3 border-t border-stone-800 pt-4"><button type="button" on:click={() => showParticipantModal = false} class={btnGhost}>Cancel</button><button type="submit" disabled={participantBusy || !participantForm.email.trim()} class={btnPrimary}>{participantBusy ? 'Creating…' : 'Create participant'}</button></div>
 			</form>
@@ -3310,9 +3295,9 @@
 											{#if fl.flag_type === 'static'}
 											<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="flag&#123;value&#125;" />
 										{:else if fl.flag_type === 'regex'}
-							<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="flag&#123;[a-f0-9-]+&#125; - container generates flag, regex validates" />
+							<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="flag&#123;[a-f0-9-]+&#125;" />
 											{:else}
-							<input type="text" bind:value={fl.dynamic_flag_prefix} required class="w-full font-mono {fieldCls}" placeholder="Prefix (e.g. CTF) - generates prefix&#123;uuid&#125; per user" />
+							<input type="text" bind:value={fl.dynamic_flag_prefix} required class="w-full font-mono {fieldCls}" placeholder="CTF" />
 											{/if}
 										</div>
 									{/each}
@@ -3822,7 +3807,7 @@
 					{:else}
 						{#each editHints as hnt, i (i)}
 							<div class="border border-stone-800 rounded-lg p-3 space-y-2">
-								<textarea bind:value={hnt.content} rows="2" placeholder="Hint text - shown to players who unlock it" class="w-full {fieldCls} resize-none"></textarea>
+								<textarea bind:value={hnt.content} rows="2" placeholder="Hint" class="w-full {fieldCls} resize-none"></textarea>
 								<div class="flex items-center gap-2">
 									<label class="text-xs text-stone-500 flex items-center gap-1.5">Cost <input type="number" bind:value={hnt.cost} min="0" title="Point cost to unlock" class="w-20 {fieldCls} tabular-nums" /></label>
 									<span class="flex-1"></span>

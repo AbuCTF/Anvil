@@ -63,7 +63,7 @@
 <details class="mt-3 rounded-md border border-stone-800 bg-stone-950/40">
 	<summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs text-stone-400"><span class="flex items-center gap-2"><Icon icon="mdi:key-chain-variant" class="h-4 w-4" />Private registry access</span><span class="text-[10px] text-stone-600">Docker Hub · GHCR</span></summary>
 	<div class="space-y-3 border-t border-stone-800 p-3">
-		<p class="text-[11px] leading-relaxed text-stone-600">Use a read-only token. It is encrypted at rest, never returned to the browser, and is used by both image inspection and the Docker runtime.</p>
+		<p class="text-[11px] text-stone-600">Read-only · encrypted at rest</p>
 		{#if loading}
 			<p class="text-xs text-stone-600">Loading…</p>
 		{:else}
