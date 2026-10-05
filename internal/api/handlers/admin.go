@@ -273,6 +273,67 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 			}
 		}
 	}
+	authSessions := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT id, created_at, expires_at, revoked
+		FROM refresh_tokens WHERE user_id = $1
+		ORDER BY created_at DESC LIMIT 200`, userID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			var sessionCreated, expiresAt time.Time
+			var revoked bool
+			if rows.Scan(&id, &sessionCreated, &expiresAt, &revoked) == nil {
+				authSessions = append(authSessions, gin.H{
+					"id": id, "created_at": sessionCreated.Unix(), "expires_at": expiresAt.Unix(),
+					"active": !revoked && expiresAt.After(time.Now()), "revoked": revoked,
+				})
+			}
+		}
+	}
+
+	loginHistory := []gin.H{}
+	if rows, err := h.db.Pool.Query(ctx, `
+		SELECT COALESCE(ip_address::text, ''), LEFT(COALESCE(user_agent, ''), 500), created_at
+		FROM audit_log
+		WHERE user_id = $1 AND action = 'user.login'
+		ORDER BY created_at DESC LIMIT 200`, userID); err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var ipAddress, userAgent string
+			var loggedInAt time.Time
+			if rows.Scan(&ipAddress, &userAgent, &loggedInAt) == nil {
+				loginHistory = append(loginHistory, gin.H{
+					"ip_address": ipAddress, "user_agent": userAgent, "logged_in_at": loggedInAt.Unix(),
+				})
+			}
+		}
+	}
+	loginCount := len(loginHistory)
+	var firstLoginAt, lastRecordedLoginAt *time.Time
+	_ = h.db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*)::int, MIN(created_at), MAX(created_at)
+		FROM audit_log WHERE user_id = $1 AND action = 'user.login'`, userID,
+	).Scan(&loginCount, &firstLoginAt, &lastRecordedLoginAt)
+	if loginCount == 0 && lastLoginAt != nil {
+		loginCount = 1
+		firstLoginAt = lastLoginAt
+		lastRecordedLoginAt = lastLoginAt
+	}
+	accessSummary := gin.H{"login_count": loginCount}
+	if firstLoginAt != nil {
+		accessSummary["first_login_at"] = firstLoginAt.Unix()
+	}
+	if lastRecordedLoginAt != nil {
+		accessSummary["last_login_at"] = lastRecordedLoginAt.Unix()
+	}
+	activeSessions := 0
+	for _, session := range authSessions {
+		if active, ok := session["active"].(bool); ok && active {
+			activeSessions++
+		}
+	}
+	accessSummary["active_sessions"] = activeSessions
 
 	accessIPs := []gin.H{}
 	if rows, err := h.db.Pool.Query(ctx, `
@@ -283,8 +344,15 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 			SELECT ip_address, created_at, 'session'::text
 			FROM sessions WHERE user_id = $1 AND ip_address IS NOT NULL
 			UNION ALL
-			SELECT last_login_ip, last_login_at, 'last_login'::text
-			FROM users WHERE id = $1 AND last_login_ip IS NOT NULL AND last_login_at IS NOT NULL
+			SELECT ip_address, created_at, 'login'::text
+			FROM audit_log WHERE user_id = $1 AND action = 'user.login' AND ip_address IS NOT NULL
+			UNION ALL
+			SELECT last_login_ip, last_login_at, 'login'::text
+			FROM users
+			WHERE id = $1 AND last_login_ip IS NOT NULL AND last_login_at IS NOT NULL
+			  AND NOT EXISTS (
+				SELECT 1 FROM audit_log WHERE user_id = $1 AND action = 'user.login' AND ip_address IS NOT NULL
+			  )
 		)
 		SELECT ip_address, COUNT(*)::int, MIN(seen_at), MAX(seen_at), ARRAY_AGG(DISTINCT source ORDER BY source)
 		FROM observations GROUP BY ip_address ORDER BY MAX(seen_at) DESC`, userID); err == nil {
@@ -344,14 +412,17 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 			"submission_count": submissionCount, "correct_submissions": correctSubmissions,
 			"wrong_submissions": submissionCount - correctSubmissions, "last_login": lastLogin,
 			"created_at": createdAt.Unix(), "updated_at": updatedAt.Unix()},
-		"team":        team,
-		"instances":   instances,
-		"solves":      solves,
-		"submissions": submissions,
-		"sessions":    sessions,
-		"access_ips":  accessIPs,
-		"warnings":    warnings,
-		"audit":       audit,
+		"team":           team,
+		"instances":      instances,
+		"solves":         solves,
+		"submissions":    submissions,
+		"sessions":       sessions,
+		"auth_sessions":  authSessions,
+		"login_history":  loginHistory,
+		"access_summary": accessSummary,
+		"access_ips":     accessIPs,
+		"warnings":       warnings,
+		"audit":          audit,
 	})
 }
 

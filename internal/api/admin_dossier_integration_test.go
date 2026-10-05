@@ -64,8 +64,10 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	exec(`INSERT INTO economy_team_score (team_id, points, credits, grant_issued) VALUES ($1, 321.500, 777.250, true)`, teamID)
 	exec(`INSERT INTO economy_challenge_state (team_id, challenge_id, status, holds_solve, current_value, frac, opened_at) VALUES ($1, $2, 'solved', true, 321.500, 1, NOW())`, teamID, challengeID)
 	exec(`INSERT INTO sessions (id, user_id, session_token, ip_address, user_agent, expires_at) VALUES ($1, $2, $3, '203.0.113.12', 'qa-browser', NOW() + INTERVAL '1 hour')`, uuid.New(), userID, uuid.NewString())
+	exec(`INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour')`, uuid.New(), userID, uuid.NewString())
 	exec(`INSERT INTO notification_items (kind, event_type, title, body, severity, audience, user_id, pinned, created_by) VALUES ('announcement', 'organizer.warning', 'Organizer warning', 'integration warning', 'warning', 'user', $1, true, $2)`, userID, adminID)
 	exec(`INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user_warned', 'user', $2, '{"reason":"integration"}', '203.0.113.1', 'qa-admin'), ($1, 'challenge_updated', 'challenge', $3, '{"status":"published"}', '203.0.113.1', 'qa-admin')`, adminID, userID, challengeID)
+	exec(`INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES ($1, 'user.login', 'user', $1, '203.0.113.14', 'qa-login')`, userID)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -139,7 +141,8 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	}
 
 	userDetail := decode(request(http.MethodGet, "/api/v1/admin/users/"+userID.String()+"/detail", nil))
-	if len(userDetail["sessions"].([]any)) != 1 || len(userDetail["submissions"].([]any)) != 2 || len(userDetail["warnings"].([]any)) != 1 || len(userDetail["audit"].([]any)) != 1 {
+	accessSummary := userDetail["access_summary"].(map[string]any)
+	if len(userDetail["sessions"].([]any)) != 1 || len(userDetail["auth_sessions"].([]any)) != 1 || len(userDetail["login_history"].([]any)) != 1 || len(userDetail["access_ips"].([]any)) != 4 || len(userDetail["submissions"].([]any)) != 2 || len(userDetail["warnings"].([]any)) != 1 || len(userDetail["audit"].([]any)) != 2 || accessSummary["login_count"].(float64) != 1 || accessSummary["active_sessions"].(float64) != 1 {
 		t.Fatalf("incomplete user dossier: %#v", userDetail)
 	}
 

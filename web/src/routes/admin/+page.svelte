@@ -14,6 +14,7 @@
 	import EventSetup from '$lib/components/admin/EventSetup.svelte';
 	import DataWorkspace from '$lib/components/admin/DataWorkspace.svelte';
 	import TeamDossier from '$lib/components/admin/TeamDossier.svelte';
+	import UserDossier from '$lib/components/admin/UserDossier.svelte';
 	import ChallengeDossier from '$lib/components/admin/ChallengeDossier.svelte';
 	import HelpTip from '$lib/components/HelpTip.svelte';
 	import MailWorkspace from '$lib/components/admin/MailWorkspace.svelte';
@@ -2856,135 +2857,16 @@
 </div>
 
 {#if selectedUserSeed}
-	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-		<button type="button" aria-label="Close participant details" class="fixed inset-0 bg-stone-950/80 backdrop-blur-sm" on:click={() => { selectedUserSeed = null; selectedUserDetail = null; }}></button>
-		<div class="relative z-10 flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg border border-stone-800 bg-stone-950" role="dialog" aria-modal="true" aria-label="Participant details">
-			<div class="flex items-start justify-between gap-4 border-b border-stone-800 p-5">
-				<div class="min-w-0">
-					<p class="metadata-label text-stone-500">Participant dossier</p>
-					<h2 class="mt-1 truncate text-xl font-semibold text-stone-100">{selectedUserDetail?.user?.username ?? selectedUserSeed.username}</h2>
-					{#if selectedUserDetail?.user?.email}<p class="mt-1 text-xs text-stone-500">{selectedUserDetail.user.email}</p>{/if}
-				</div>
-				<div class="flex shrink-0 items-center gap-3">
-					<button type="button" on:click={() => warnParticipant(selectedUserSeed.id, selectedUserDetail?.user?.username ?? selectedUserSeed.username)} class="text-xs text-warn hover:underline">Warn</button>
-					{#if selectedUserDetail?.user}
-						<button type="button" on:click={() => toggleBan({ id: selectedUserSeed.id, username: selectedUserDetail.user.username, is_banned: selectedUserDetail.user.status === 'banned' })} class="text-xs {selectedUserDetail.user.status === 'banned' ? 'text-up' : 'text-down'} hover:underline">{selectedUserDetail.user.status === 'banned' ? 'Unban' : 'Ban'}</button>
-					{/if}
-					<button type="button" on:click={() => { selectedUserSeed = null; selectedUserDetail = null; }} class="p-1 text-stone-500 transition-colors hover:text-stone-200"><Icon icon="mdi:close" class="h-5 w-5" /></button>
-				</div>
-			</div>
-			<div class="overflow-y-auto p-5">
-				{#if userDetailLoading}
-					<div class="flex min-h-64 items-center justify-center"><Icon icon="mdi:loading" class="h-6 w-6 animate-spin text-stone-600" /></div>
-				{:else if userDetailError}
-					<div class="rounded-md border border-down/20 bg-down/10 p-4 text-sm text-down">{userDetailError}</div>
-				{:else if selectedUserDetail}
-					{@const detail = selectedUserDetail}
-					<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
-						{#each [
-							{ label: 'Score', value: detail.user.total_score ?? 0 },
-							{ label: 'Solves', value: detail.user.solve_count ?? 0 },
-							{ label: 'Correct attempts', value: detail.user.correct_submissions ?? 0 },
-							{ label: 'Wrong attempts', value: detail.user.wrong_submissions ?? 0 }
-						] as item}
-							<div class="rounded-lg border border-stone-800 bg-stone-900/40 p-3"><p class="metadata-label text-stone-500">{item.label}</p><p class="mt-1 text-xl font-semibold tabular-nums text-stone-100">{item.value}</p></div>
-						{/each}
-					</div>
-
-					<div class="mt-5 grid gap-4 lg:grid-cols-2">
-						<Card title="Account and team" bodyClass="p-4">
-							<div class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-								<div><p class="metadata-label text-stone-600">Status</p><p class="mt-1 text-stone-300">{detail.user.status}</p></div>
-								<div><p class="metadata-label text-stone-600">Role</p><p class="mt-1 text-stone-300">{detail.user.role}</p></div>
-								<div><p class="metadata-label text-stone-600">Last login</p><p class="mt-1 text-stone-300">{detail.user.last_login?.at ? formatLocalDateTimeWithZone(detail.user.last_login.at, 'seconds') : 'Never'}</p></div>
-								<div><p class="metadata-label text-stone-600">Last IP</p><p class="mt-1 font-mono text-stone-300">{detail.user.last_login?.ip_address ?? '-'}</p></div>
-								<div><p class="metadata-label text-stone-600">Joined</p><p class="mt-1 text-stone-300">{formatLocalDateTimeWithZone(detail.user.created_at, 'seconds')}</p></div>
-								<div><p class="metadata-label text-stone-600">Email</p><p class="mt-1 text-stone-300">{detail.user.email_verified ? 'Verified' : 'Unverified'}</p></div>
-								<div class="col-span-2"><p class="metadata-label text-stone-600">Team</p><p class="mt-1 text-stone-300">{detail.team?.name ?? 'No team'}{detail.team && $platformInfo?.economy_enabled ? ` · ${Math.floor(detail.team.credits ?? 0)} credits · ${Math.round(detail.team.points ?? 0)} Ledger points` : ''}</p></div>
-								{#if detail.user.bio}<div class="col-span-2"><p class="metadata-label text-stone-600">Bio</p><p class="mt-1 whitespace-pre-wrap text-stone-400">{detail.user.bio}</p></div>{/if}
-							</div>
-						</Card>
-						<Card title={`Instance history (${detail.instances?.length ?? 0})`} bodyClass="p-0">
-							{#if detail.instances?.length}
-								<div class="max-h-52 divide-y divide-stone-800/60 overflow-y-auto">
-									{#each detail.instances as instance}
-										<div class="flex items-start justify-between gap-3 px-4 py-3 text-xs"><div><p class="text-stone-300">{instance.challenge_name}</p><p class="mt-1 font-mono text-stone-600">{instance.id}</p>{#if instance.error_message}<p class="mt-1 text-down">{instance.error_message}</p>{/if}</div><span class="shrink-0 {instance.status === 'running' ? 'text-up' : instance.status === 'failed' ? 'text-down' : 'text-stone-500'}">{instance.status}</span></div>
-									{/each}
-								</div>
-							{:else}<EmptyState icon="mdi:cube-off-outline" text="No instance history." />{/if}
-						</Card>
-					</div>
-
-					<div class="mt-4 grid gap-4 lg:grid-cols-2">
-						<Card title={`IP activity (${detail.access_ips?.length ?? 0})`} bodyClass="p-0">
-							{#if detail.access_ips?.length}
-								<div class="max-h-64 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.access_ips as row}<div class="flex items-start justify-between gap-3 px-4 py-3 text-xs"><div><p class="font-mono text-stone-300">{row.ip_address}</p><p class="mt-1 text-stone-600">{row.sources?.join(', ')} · {row.events} events</p></div><div class="text-right text-stone-600"><p>{formatLocalDateTimeWithZone(row.last_seen_at, 'seconds')}</p><p class="mt-1">first {formatLocalDateTimeWithZone(row.first_seen_at, 'seconds')}</p></div></div>{/each}</div>
-							{:else}<EmptyState icon="mdi:ip-network-outline" text="No IP activity." />{/if}
-						</Card>
-						<Card title={`Session history (${detail.sessions?.length ?? 0})`} bodyClass="p-0">
-							{#if detail.sessions?.length}
-								<div class="max-h-64 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.sessions as session}<div class="px-4 py-3 text-xs"><div class="flex items-center justify-between gap-3"><p class="font-mono text-stone-300">{session.ip_address || 'No IP'}</p><span class={session.active ? 'text-up' : 'text-stone-600'}>{session.active ? 'active' : 'expired'}</span></div><p class="mt-1 truncate text-stone-600" title={session.user_agent}>{session.user_agent || 'Unknown client'}</p><p class="mt-1 text-stone-600">{formatLocalDateTimeWithZone(session.created_at, 'seconds')}</p></div>{/each}</div>
-							{:else}<EmptyState icon="mdi:login-variant" text="No sessions." />{/if}
-						</Card>
-					</div>
-
-					<div class="mt-4 grid gap-4 lg:grid-cols-2">
-						<Card title={`Solve history (${detail.solves?.length ?? 0})`} bodyClass="p-0">
-							{#if detail.solves?.length}
-								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
-									{#each detail.solves as solve}
-										<div class="flex items-center justify-between gap-3 px-4 py-3 text-xs"><div><p class="text-stone-300">{solve.challenge_name}{solve.flag_name ? ` · ${solve.flag_name}` : ''}</p><p class="mt-1 text-stone-600" title={instantTitle(solve.solved_at, 'seconds')}>{formatLocalDateTimeWithZone(solve.solved_at, 'seconds')}</p></div><span class="shrink-0 tabular-nums text-up">+{solve.points}</span></div>
-									{/each}
-								</div>
-							{:else}<EmptyState icon="mdi:flag-outline" text="No solves." />{/if}
-						</Card>
-						<Card title={`Submission trail (${detail.user.submission_count ?? 0})`} bodyClass="p-0">
-							<div class="border-b border-stone-800 px-4 py-2 text-[11px] text-stone-600">Raw flags stay protected. Fingerprints correlate repeats without making live secrets transferable.</div>
-							{#if detail.submissions?.length}
-								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
-									{#each detail.submissions as submission}
-									<div class="flex items-start justify-between gap-3 px-4 py-3 text-xs"><div class="min-w-0"><p class="text-stone-300">{submission.challenge_name}{submission.flag_name ? ` · ${submission.flag_name}` : ''}</p><p class="mt-1 font-mono text-stone-600">sha256:{submission.flag_fingerprint} · {submission.flag_length} chars · {submission.ip_address ?? '-'}</p>{#if submission.instance_id}<p class="mt-1 break-all font-mono text-stone-700">instance {submission.instance_id}</p>{/if}<p class="mt-1 truncate text-stone-600" title={submission.user_agent}>{submission.user_agent || 'Unknown client'}</p><p class="mt-1 text-stone-600" title={instantTitle(submission.submitted_at, 'seconds')}>{formatLocalDateTimeWithZone(submission.submitted_at, 'seconds')}</p></div><span class="shrink-0 {submission.correct ? 'text-up' : 'text-down'}">{submission.correct ? 'correct' : 'wrong'}</span></div>
-									{/each}
-								</div>
-							{:else}<EmptyState icon="mdi:form-textbox-password" text="No submissions." />{/if}
-						</Card>
-					</div>
-
-					<div class="mt-4 grid items-start gap-4 lg:grid-cols-2">
-						<Card title={`Organizer warnings (${detail.warnings?.length ?? 0})`} bodyClass="p-0">
-							{#if detail.warnings?.length}
-								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
-									{#each detail.warnings as warning}
-										<div class="px-4 py-3 text-xs">
-											<div class="flex flex-wrap items-center justify-between gap-2">
-												<span class="font-medium text-warn">{warning.cancelled_at ? 'Cancelled warning' : warning.dismissed_at ? 'Dismissed warning' : warning.read_at ? 'Read warning' : 'Unread warning'}</span>
-												<span class="text-stone-600">{formatLocalDateTimeWithZone(warning.published_at, 'seconds')}</span>
-											</div>
-											<p class="mt-2 whitespace-pre-wrap break-words text-stone-300">{warning.body}</p>
-											<p class="mt-2 text-stone-600">Issued by {warning.actor || 'system'}{warning.pinned ? ' · pinned' : ''}</p>
-										</div>
-									{/each}
-								</div>
-							{:else}<EmptyState icon="mdi:message-alert-outline" text="No organizer warnings." />{/if}
-						</Card>
-						<Card title={`Administrative history (${detail.audit?.length ?? 0})`} bodyClass="p-0">
-							{#if detail.audit?.length}
-								<div class="max-h-72 divide-y divide-stone-800/60 overflow-y-auto">
-									{#each detail.audit as event}
-										<div class="px-4 py-3 text-xs">
-											<div class="flex flex-wrap items-center justify-between gap-2"><p class="font-medium text-stone-300">{event.action.replaceAll('_', ' ')}</p><span class="text-stone-600">{formatLocalDateTimeWithZone(event.created_at, 'seconds')}</span></div>
-											<p class="mt-1 text-stone-600">{event.actor || 'System'} · {event.ip_address || 'No IP'}</p>
-											{#if event.new_values}<pre class="mt-2 overflow-x-auto whitespace-pre-wrap break-words rounded bg-stone-950 p-2 font-mono text-[10px] text-stone-500">{JSON.stringify(event.new_values, null, 2)}</pre>{/if}
-										</div>
-									{/each}
-								</div>
-							{:else}<EmptyState icon="mdi:clipboard-text-clock-outline" text="No administrative changes." />{/if}
-						</Card>
-					</div>
-				{/if}
-			</div>
-		</div>
-	</div>
+	<UserDossier
+		seed={selectedUserSeed}
+		detail={selectedUserDetail}
+		loading={userDetailLoading}
+		error={userDetailError}
+		economyEnabled={$platformInfo?.economy_enabled ?? false}
+		on:close={() => { selectedUserSeed = null; selectedUserDetail = null; }}
+		on:warn={() => warnParticipant(selectedUserSeed.id, selectedUserDetail?.user?.username ?? selectedUserSeed.username)}
+		on:toggleban={() => selectedUserDetail?.user && toggleBan({ id: selectedUserSeed.id, username: selectedUserDetail.user.username, is_banned: selectedUserDetail.user.status === 'banned' })}
+	/>
 {/if}
 
 {#if selectedTeamSeed}
