@@ -335,17 +335,20 @@ func TestScoreboardListsOnlyScoringTeams(t *testing.T) {
 	exec(`UPDATE platform_settings SET value = 'false' WHERE key = 'economy_mode'`)
 	exec(`INSERT INTO platform_settings (key, value) VALUES ('scoreboard.score_source', to_jsonb('ledger'::text))
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
+	exec(`INSERT INTO platform_settings (key, value) VALUES ('scoreboard.history_end_at', to_jsonb($1::text))
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, at(20).UTC().Format(time.RFC3339))
 	fresh()
 	sb = get("/api/v1/scoreboard", nil)
 	if got := list(sb, "leaderboard", "username", "total_score", "rank"); got != "alpha:151:1,delta:30:2,bravo:0:3" || sb["economy"] != true {
 		t.Errorf("ledger score source board = %s economy=%v", got, sb["economy"])
 	}
 	h = get("/api/v1/scoreboard/history", nil)
-	if len(h["series"].([]any)) != 2 {
+	if len(h["series"].([]any)) != 2 || len(h["series"].([]any)[0].(map[string]any)["points"].([]any)) != 2 {
 		t.Errorf("ledger score source history = %v", h["series"])
 	}
 	exec(`UPDATE platform_settings SET value = 'true' WHERE key = 'economy_mode'`)
 	exec(`UPDATE platform_settings SET value = to_jsonb('auto'::text) WHERE key = 'scoreboard.score_source'`)
+	exec(`UPDATE platform_settings SET value = to_jsonb(''::text) WHERE key = 'scoreboard.history_end_at'`)
 	fresh()
 	if r := rank(c1); r != 0 {
 		t.Errorf("idle economy team rank = %v, want 0", r)

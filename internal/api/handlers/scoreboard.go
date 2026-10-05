@@ -780,11 +780,16 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 		h.respondQueryError(c, "failed to read scoreboard mode", err)
 		return
 	}
+	historyEnd, err := scoreboardHistoryEnd(ctx, h.db)
+	if err != nil {
+		h.respondQueryError(c, "failed to read scoreboard history cutoff", err)
+		return
+	}
 
 	var series []*sbSeries
 	switch {
 	case economyMode:
-		series, err = h.economyHistory(ctx)
+		series, err = h.economyHistory(ctx, historyEnd)
 	case teamRanked:
 		series, err = h.cumulativeHistory(ctx, teamHistoryQuery)
 	default:
@@ -792,11 +797,6 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 	}
 	if err != nil {
 		h.respondQueryError(c, "failed to fetch history", err)
-		return
-	}
-	historyEnd, err := scoreboardHistoryEnd(ctx, h.db)
-	if err != nil {
-		h.respondQueryError(c, "failed to read scoreboard history cutoff", err)
 		return
 	}
 	h.respondCacheableJSON(c, "history", 5*time.Second, gin.H{
@@ -931,7 +931,7 @@ func (h *ScoreboardHandler) cumulativeHistory(ctx context.Context, query string)
 // events carry the team's new value for that challenge (applied as a delta floored
 // at 0, like the live score); convert/freeze events carry the team total. only
 // captures and conversions are plotted, decay between them folds into the next point.
-func (h *ScoreboardHandler) economyHistory(ctx context.Context) ([]*sbSeries, error) {
+func (h *ScoreboardHandler) economyHistory(ctx context.Context, historyEnd *time.Time) ([]*sbSeries, error) {
 	rows, err := h.db.Pool.Query(ctx, `
 		WITH `+teamEconomyRankedCTE+`, leaders AS MATERIALIZED (
 			SELECT id, name, rank FROM ranked ORDER BY rank LIMIT 10
@@ -939,7 +939,8 @@ func (h *ScoreboardHandler) economyHistory(ctx context.Context) ([]*sbSeries, er
 		SELECT l.id, l.name, e.created_at, e.challenge_id, e.value_after::float8
 		FROM leaders l
 		JOIN economy_point_events e ON e.team_id = l.id
-		ORDER BY l.rank, e.id`)
+		WHERE $1::timestamptz IS NULL OR e.created_at <= $1
+		ORDER BY l.rank, e.id`, historyEnd)
 	if err != nil {
 		return nil, fmt.Errorf("economy history query: %w", err)
 	}
