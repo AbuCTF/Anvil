@@ -4,12 +4,14 @@
 	import Card from '$lib/components/Card.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { formatLocalDateTimeWithZone, instantTitle } from '$lib/time';
+	import { describeUserAgent } from '$lib/user-agent';
 
 	export let seed: any;
 	export let detail: any = null;
 	export let loading = false;
 	export let error = '';
 	export let economyEnabled = false;
+	export let action = '';
 
 	const dispatch = createEventDispatcher();
 	let tab = 'overview';
@@ -122,6 +124,10 @@
 					</Card></div>
 
 				{:else if tab === 'access'}
+					<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+						<div><h3 class="text-sm font-medium text-stone-200">Account access</h3><p class="mt-1 text-xs text-stone-600">Sign-ins, devices and active credentials.</p></div>
+						<button type="button" disabled={action !== ''} on:click={() => dispatch('revokeall')} class="rounded-md border border-down/30 px-3 py-2 text-xs text-down transition-colors hover:bg-down/10 disabled:cursor-not-allowed disabled:opacity-40">{action === 'all' ? 'Revoking…' : 'Sign out all'}</button>
+					</div>
 					<div class="grid grid-cols-2 gap-3 md:grid-cols-4">
 						{#each [
 							{ label: 'Sign-ins', value: detail.access_summary?.login_count ?? 0 },
@@ -134,13 +140,13 @@
 					</div>
 					<div class="mt-4 grid items-start gap-4 xl:grid-cols-3">
 						<Card title={`Sign-in history (${detail.login_history?.length ?? 0})`} bodyClass="p-0">
-							{#if detail.login_history?.length}<div class="max-h-96 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.login_history as login}<div class="px-4 py-3 text-xs"><div class="flex items-center justify-between gap-3"><p class="font-mono text-stone-300">{login.ip_address || 'IP not retained'}</p><span class="text-stone-600">{when(login.logged_in_at)}</span></div><p class="mt-1 truncate text-stone-600" title={login.user_agent}>{login.user_agent || 'Client not recorded'}</p></div>{/each}</div>{:else}<EmptyState icon="mdi:login-variant" text="This account has not signed in." />{/if}
+							{#if detail.login_history?.length}<div class="max-h-96 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.login_history as login}<div class="px-4 py-3 text-xs"><div class="flex items-center justify-between gap-3"><p class="font-mono text-stone-300">{login.ip_address || 'IP not retained'}</p><span class="text-stone-600">{when(login.logged_in_at)}</span></div><p class="mt-1 truncate text-stone-500" title={login.user_agent}>{describeUserAgent(login.user_agent).label}</p></div>{/each}</div>{:else}<EmptyState icon="mdi:login-variant" text="This account has not signed in." />{/if}
 						</Card>
 						<Card title={`IP activity (${detail.access_ips?.length ?? 0})`} bodyClass="p-0">
 							{#if detail.access_ips?.length}<div class="max-h-96 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.access_ips as row}<div class="px-4 py-3 text-xs"><div class="flex items-center justify-between gap-3"><p class="font-mono text-stone-300">{row.ip_address}</p><span class="tabular-nums text-stone-600">{row.events}</span></div><p class="mt-1 text-stone-600">{row.sources?.join(', ')}</p><p class="mt-1 text-stone-600">{when(row.first_seen_at)} → {when(row.last_seen_at)}</p></div>{/each}</div>{:else}<EmptyState icon="mdi:ip-network-outline" text="No IP activity recorded." />{/if}
 						</Card>
 						<Card title={`Access sessions (${detail.auth_sessions?.length ?? 0})`} bodyClass="p-0">
-							{#if detail.auth_sessions?.length}<div class="max-h-96 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.auth_sessions as session}<div class="px-4 py-3 text-xs"><div class="flex items-center justify-between gap-3"><p class="text-stone-300">Started {when(session.created_at)}</p><span class={session.active ? 'text-up' : 'text-stone-600'}>{session.active ? 'active' : session.revoked ? 'revoked' : 'expired'}</span></div><p class="mt-1 text-stone-600">Expires {when(session.expires_at)}</p></div>{/each}</div>{:else}<EmptyState icon="mdi:devices" text="No access sessions." />{/if}
+							{#if detail.auth_sessions?.length}<div class="max-h-96 divide-y divide-stone-800/60 overflow-y-auto">{#each detail.auth_sessions as session}<div class="px-4 py-3 text-xs"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="truncate text-stone-300" title={session.user_agent}>{describeUserAgent(session.user_agent).label}</p><p class="mt-1 font-mono text-stone-600">{session.ip_address || 'IP not retained'}</p></div><div class="flex shrink-0 items-center gap-2"><span class={session.active ? 'text-up' : 'text-stone-600'}>{session.active ? 'active' : session.revoked ? 'revoked' : 'expired'}</span>{#if session.active}<button type="button" disabled={action !== ''} on:click={() => dispatch('revokesession', { id: session.id })} class="text-down hover:underline disabled:opacity-40">{action === session.id ? 'Revoking…' : 'Revoke'}</button>{/if}</div></div><p class="mt-2 text-stone-600">Last authenticated {when(session.last_used_at)}</p><p class="mt-1 text-stone-700">Created {when(session.created_at)} · expires {when(session.expires_at)}</p></div>{/each}</div>{:else}<EmptyState icon="mdi:devices" text="No access sessions." />{/if}
 						</Card>
 					</div>
 

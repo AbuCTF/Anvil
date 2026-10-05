@@ -168,7 +168,7 @@ func (h *AuthHandler) ActivateAccount(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired activation link"})
 		return
 	}
-	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, auth_revoked_before = NOW(), updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to activate account"})
 		return
 	}
@@ -320,7 +320,7 @@ func (h *AuthHandler) CompletePasswordReset(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid or expired reset link"})
 		return
 	}
-	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, auth_revoked_before = NOW(), updated_at = NOW() WHERE id = $1`, userID, string(hashedPassword)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
 		return
 	}
@@ -328,7 +328,7 @@ func (h *AuthHandler) CompletePasswordReset(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
 		return
 	}
-	if _, err := tx.Exec(c.Request.Context(), `UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1 AND revoked = FALSE`, userID); err != nil {
+	if _, err := tx.Exec(c.Request.Context(), `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE user_id = $1 AND revoked = FALSE`, userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to reset password"})
 		return
 	}
@@ -520,12 +520,20 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		}
 	}
 
-	tokens, err := h.generateTokensWithStore(ctx, tx, userID, req.Username, "user", "user")
+	tokens, err := h.generateTokensWithStore(ctx, tx, userID, req.Username, "user", "user", uuid.New(), c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		h.logger.Error("Failed to generate tokens", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to complete registration",
 		})
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE users SET last_login_at = NOW(), last_login_ip = $2, updated_at = NOW() WHERE id = $1`, userID, c.ClientIP()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to complete registration"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES ($1, 'user.login', 'user', $1, $2, $3)`, userID, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to complete registration"})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -707,7 +715,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		h.logger.Warn("Failed to update last login", zap.Error(err))
 	}
 
-	tokens, err := h.generateTokens(c.Request.Context(), userID, username, role, "user")
+	tokens, err := h.generateTokens(c.Request.Context(), userID, username, role, "user", c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		h.logger.Error("Failed to generate tokens", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -784,11 +792,11 @@ func (h *AuthHandler) CompleteInitialPasswordChange(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Password change session is no longer active"})
 		return
 	}
-	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, last_login_at = NOW(), last_login_ip = $3, updated_at = NOW() WHERE id = $1`, claims.UserID, string(hashedPassword), c.ClientIP()); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2, email_verified = TRUE, must_change_password = FALSE, last_login_at = NOW(), last_login_ip = $3, auth_revoked_before = NOW(), updated_at = NOW() WHERE id = $1`, claims.UserID, string(hashedPassword), c.ClientIP()); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
 		return
 	}
-	if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE WHERE user_id = $1 AND revoked = FALSE`, claims.UserID); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE user_id = $1 AND revoked = FALSE`, claims.UserID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
 		return
 	}
@@ -796,7 +804,7 @@ func (h *AuthHandler) CompleteInitialPasswordChange(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
 		return
 	}
-	tokens, err := h.generateTokensWithStore(ctx, tx, claims.UserID, username, role, "user")
+	tokens, err := h.generateTokensWithStore(ctx, tx, claims.UserID, username, role, "user", uuid.New(), c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		h.logger.Error("Failed to issue tokens after initial password change", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
@@ -804,6 +812,10 @@ func (h *AuthHandler) CompleteInitialPasswordChange(c *gin.Context) {
 	}
 	metadata, _ := json.Marshal(map[string]string{"username": username})
 	if _, err := tx.Exec(ctx, `INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user.initial_password_changed', 'user', $1, $2::jsonb, $3, $4)`, claims.UserID, metadata, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES ($1, 'user.login', 'user', $1, $2, $3)`, claims.UserID, c.ClientIP(), c.Request.UserAgent()); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Unable to change password"})
 		return
 	}
@@ -1010,16 +1022,17 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	tokenHash := hashToken(req.RefreshToken)
 
 	var userID uuid.UUID
+	var sessionID uuid.UUID
 	var expiresAt time.Time
 	var revoked bool
 
 	err = tx.QueryRow(ctx,
-		`SELECT user_id, expires_at, revoked
+		`SELECT user_id, session_id, expires_at, revoked
 		 FROM refresh_tokens
 		 WHERE token_hash = $1
 		 FOR UPDATE`,
 		tokenHash,
-	).Scan(&userID, &expiresAt, &revoked)
+	).Scan(&userID, &sessionID, &expiresAt, &revoked)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusUnauthorized, gin.H{
@@ -1073,7 +1086,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 
 	// revoke old refresh token: the row lock from the lookup plus the conditional update prevents two concurrent refreshes from both rotating one token
 	result, err := tx.Exec(ctx,
-		"UPDATE refresh_tokens SET revoked = true WHERE token_hash = $1 AND revoked = false",
+		"UPDATE refresh_tokens SET revoked = true, revoked_at = NOW(), last_used_at = NOW() WHERE token_hash = $1 AND revoked = false",
 		tokenHash,
 	)
 	if err != nil {
@@ -1092,7 +1105,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		return
 	}
 
-	tokens, err := h.generateTokensWithStore(ctx, tx, userID, username, role, "user")
+	tokens, err := h.generateTokensWithStore(ctx, tx, userID, username, role, "user", sessionID, c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		h.logger.Error("Failed to generate new tokens", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -1157,7 +1170,7 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 		}
 	}
 	if req.RefreshToken != "" {
-		if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE WHERE token_hash = $1`,
+		if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = COALESCE(revoked_at, NOW()) WHERE token_hash = $1`,
 			hashToken(req.RefreshToken)); err != nil {
 			h.logger.Error("Failed to revoke refresh token", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to log out"})
@@ -1369,9 +1382,19 @@ func (h *AuthHandler) provisionAndRespond(c *gin.Context, ctx context.Context, t
 		return
 	}
 
-	tokens, err := h.generateTokensWithStore(ctx, tx, userID, username, role, "user")
+	tokens, err := h.generateTokensWithStore(ctx, tx, userID, username, role, "user", uuid.New(), c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		h.logger.Error("failed to issue session", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE users SET last_login_at = NOW(), last_login_ip = $2, updated_at = NOW() WHERE id = $1`, userID, c.ClientIP()); err != nil {
+		h.logger.Error("failed to update SSO login", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES ($1, 'user.login', 'user', $1, $2, $3)`, userID, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		h.logger.Error("failed to audit SSO login", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "sign-in failed"})
 		return
 	}
@@ -1393,8 +1416,8 @@ func (h *AuthHandler) provisionAndRespond(c *gin.Context, ctx context.Context, t
 	})
 }
 
-func (h *AuthHandler) generateTokens(ctx context.Context, userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
-	return h.generateTokensWithStore(ctx, h.db.Pool, userID, username, role, tokenType)
+func (h *AuthHandler) generateTokens(ctx context.Context, userID uuid.UUID, username, role, tokenType, ipAddress, userAgent string) (*tokenPair, error) {
+	return h.generateTokensWithStore(ctx, h.db.Pool, userID, username, role, tokenType, uuid.New(), ipAddress, userAgent)
 }
 
 func (h *AuthHandler) generatePasswordChangeToken(userID uuid.UUID, username, role string) (string, error) {
@@ -1433,9 +1456,10 @@ type tokenStore interface {
 	Exec(context.Context, string, ...interface{}) (pgconn.CommandTag, error)
 }
 
-func (h *AuthHandler) generateTokensWithStore(ctx context.Context, store tokenStore, userID uuid.UUID, username, role, tokenType string) (*tokenPair, error) {
+func (h *AuthHandler) generateTokensWithStore(ctx context.Context, store tokenStore, userID uuid.UUID, username, role, tokenType string, sessionID uuid.UUID, ipAddress, userAgent string) (*tokenPair, error) {
 	claims := middleware.Claims{
 		UserID:    userID,
+		SessionID: sessionID,
 		Username:  username,
 		Role:      role,
 		TokenType: tokenType,
@@ -1460,9 +1484,9 @@ func (h *AuthHandler) generateTokensWithStore(ctx context.Context, store tokenSt
 	refreshHash := hashToken(refreshToken)
 
 	_, err = store.Exec(ctx,
-		`INSERT INTO refresh_tokens (user_id, token_hash, expires_at)
-		 VALUES ($1, $2, $3)`,
-		userID, refreshHash, time.Now().Add(h.config.JWT.RefreshExpiry),
+		`INSERT INTO refresh_tokens (user_id, session_id, token_hash, expires_at, ip_address, user_agent, last_used_at)
+		 VALUES ($1, $2, $3, $4, NULLIF($5, '')::inet, NULLIF($6, ''), NOW())`,
+		userID, sessionID, refreshHash, time.Now().Add(h.config.JWT.RefreshExpiry), ipAddress, userAgent,
 	)
 	if err != nil {
 		return nil, err

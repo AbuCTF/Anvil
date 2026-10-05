@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/api/middleware"
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/services/container"
@@ -275,18 +276,22 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 	}
 	authSessions := []gin.H{}
 	if rows, err := h.db.Pool.Query(ctx, `
-		SELECT id, created_at, expires_at, revoked
+		SELECT session_id, MIN(created_at), MAX(COALESCE(last_used_at, created_at)), MAX(expires_at),
+		       BOOL_OR(revoked = FALSE AND expires_at > NOW()), BOOL_AND(revoked),
+		       (ARRAY_AGG(COALESCE(host(ip_address), '') ORDER BY created_at DESC))[1],
+		       (ARRAY_AGG(COALESCE(user_agent, '') ORDER BY created_at DESC))[1]
 		FROM refresh_tokens WHERE user_id = $1
-		ORDER BY created_at DESC LIMIT 200`, userID); err == nil {
+		GROUP BY session_id ORDER BY MAX(COALESCE(last_used_at, created_at)) DESC LIMIT 200`, userID); err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var id string
-			var sessionCreated, expiresAt time.Time
-			var revoked bool
-			if rows.Scan(&id, &sessionCreated, &expiresAt, &revoked) == nil {
+			var id, ipAddress, userAgent string
+			var sessionCreated, lastUsedAt, expiresAt time.Time
+			var active, revoked bool
+			if rows.Scan(&id, &sessionCreated, &lastUsedAt, &expiresAt, &active, &revoked, &ipAddress, &userAgent) == nil {
 				authSessions = append(authSessions, gin.H{
 					"id": id, "created_at": sessionCreated.Unix(), "expires_at": expiresAt.Unix(),
-					"active": !revoked && expiresAt.After(time.Now()), "revoked": revoked,
+					"last_used_at": lastUsedAt.Unix(), "active": active, "revoked": revoked,
+					"ip_address": ipAddress, "user_agent": userAgent,
 				})
 			}
 		}
@@ -343,6 +348,9 @@ func (h *AdminUserHandler) Detail(c *gin.Context) {
 			UNION ALL
 			SELECT ip_address, created_at, 'session'::text
 			FROM sessions WHERE user_id = $1 AND ip_address IS NOT NULL
+			UNION ALL
+			SELECT host(ip_address), COALESCE(last_used_at, created_at), 'access'::text
+			FROM refresh_tokens WHERE user_id = $1 AND ip_address IS NOT NULL
 			UNION ALL
 			SELECT ip_address, created_at, 'login'::text
 			FROM audit_log WHERE user_id = $1 AND action = 'user.login' AND ip_address IS NOT NULL
@@ -553,7 +561,11 @@ func (h *AdminUserHandler) Ban(c *gin.Context) {
 	}
 
 	if _, err := tx.Exec(ctx,
-		`UPDATE users SET status = 'banned', updated_at = NOW() WHERE id = $1`, userID); err != nil {
+		`UPDATE users SET status = 'banned', auth_revoked_before = NOW(), updated_at = NOW() WHERE id = $1`, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ban user"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = COALESCE(revoked_at, NOW()) WHERE user_id = $1 AND revoked = FALSE`, userID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ban user"})
 		return
 	}
@@ -581,6 +593,99 @@ func (h *AdminUserHandler) Unban(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "user unbanned"})
+}
+
+func (h *AdminUserHandler) RevokeSessions(c *gin.Context) {
+	userID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke sessions"})
+		return
+	}
+	defer tx.Rollback(ctx)
+	var username string
+	if err := tx.QueryRow(ctx, `SELECT username FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&username); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke sessions"})
+		}
+		return
+	}
+	result, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = COALESCE(revoked_at, NOW()) WHERE user_id = $1 AND revoked = FALSE`, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke sessions"})
+		return
+	}
+	if _, err := tx.Exec(ctx, `UPDATE users SET auth_revoked_before = NOW(), updated_at = NOW() WHERE id = $1`, userID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke sessions"})
+		return
+	}
+	metadata, _ := json.Marshal(map[string]any{"username": username, "sessions": result.RowsAffected()})
+	actorID := middleware.GetUserID(c)
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user.sessions_revoked', 'user', $2, $3::jsonb, $4, $5)`, actorID, userID, metadata, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke sessions"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke sessions"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "sessions revoked", "revoked": result.RowsAffected()})
+}
+
+func (h *AdminUserHandler) RevokeSession(c *gin.Context) {
+	userID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+	sessionID, err := uuid.Parse(c.Param("session_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid session id"})
+		return
+	}
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke session"})
+		return
+	}
+	defer tx.Rollback(ctx)
+	var username string
+	if err := tx.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, userID).Scan(&username); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke session"})
+		}
+		return
+	}
+	result, err := tx.Exec(ctx, `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = COALESCE(revoked_at, NOW()) WHERE user_id = $1 AND session_id = $2`, userID, sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke session"})
+		return
+	}
+	if result.RowsAffected() == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "session not found"})
+		return
+	}
+	metadata, _ := json.Marshal(map[string]any{"username": username, "session_id": sessionID, "tokens": result.RowsAffected()})
+	actorID := middleware.GetUserID(c)
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user.session_revoked', 'user', $2, $3::jsonb, $4, $5)`, actorID, userID, metadata, c.ClientIP(), c.Request.UserAgent()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke session"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke session"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "session revoked"})
 }
 
 func (h *AdminUserHandler) Warn(c *gin.Context) {

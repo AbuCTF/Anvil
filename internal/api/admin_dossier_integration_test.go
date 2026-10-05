@@ -64,7 +64,8 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	exec(`INSERT INTO economy_team_score (team_id, points, credits, grant_issued) VALUES ($1, 321.500, 777.250, true)`, teamID)
 	exec(`INSERT INTO economy_challenge_state (team_id, challenge_id, status, holds_solve, current_value, frac, opened_at) VALUES ($1, $2, 'solved', true, 321.500, 1, NOW())`, teamID, challengeID)
 	exec(`INSERT INTO sessions (id, user_id, session_token, ip_address, user_agent, expires_at) VALUES ($1, $2, $3, '203.0.113.12', 'qa-browser', NOW() + INTERVAL '1 hour')`, uuid.New(), userID, uuid.NewString())
-	exec(`INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES ($1, $2, $3, NOW() + INTERVAL '1 hour')`, uuid.New(), userID, uuid.NewString())
+	authSessionID := uuid.New()
+	exec(`INSERT INTO refresh_tokens (id, user_id, session_id, token_hash, expires_at, ip_address, user_agent, last_used_at) VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour', '203.0.113.15', 'qa-access', NOW())`, uuid.New(), userID, authSessionID, uuid.NewString())
 	exec(`INSERT INTO notification_items (kind, event_type, title, body, severity, audience, user_id, pinned, created_by) VALUES ('announcement', 'organizer.warning', 'Organizer warning', 'integration warning', 'warning', 'user', $1, true, $2)`, userID, adminID)
 	exec(`INSERT INTO audit_log (user_id, action, entity_type, entity_id, new_values, ip_address, user_agent) VALUES ($1, 'user_warned', 'user', $2, '{"reason":"integration"}', '203.0.113.1', 'qa-admin'), ($1, 'challenge_updated', 'challenge', $3, '{"status":"published"}', '203.0.113.1', 'qa-admin')`, adminID, userID, challengeID)
 	exec(`INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, user_agent) VALUES ($1, 'user.login', 'user', $1, '203.0.113.14', 'qa-login')`, userID)
@@ -83,6 +84,13 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 		token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
 			UserID: id, Username: username, Role: role, TokenType: "user",
 			RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
+		}).SignedString([]byte(cfg.JWT.Secret))
+		return token
+	}
+	tokenForSession := func(id, sessionID uuid.UUID, username, role string) string {
+		token, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
+			UserID: id, SessionID: sessionID, Username: username, Role: role, TokenType: "user",
+			RegisteredClaims: jwt.RegisteredClaims{IssuedAt: jwt.NewNumericDate(time.Now()), ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},
 		}).SignedString([]byte(cfg.JWT.Secret))
 		return token
 	}
@@ -142,7 +150,7 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 
 	userDetail := decode(request(http.MethodGet, "/api/v1/admin/users/"+userID.String()+"/detail", nil))
 	accessSummary := userDetail["access_summary"].(map[string]any)
-	if len(userDetail["sessions"].([]any)) != 1 || len(userDetail["auth_sessions"].([]any)) != 1 || len(userDetail["login_history"].([]any)) != 1 || len(userDetail["access_ips"].([]any)) != 4 || len(userDetail["submissions"].([]any)) != 2 || len(userDetail["warnings"].([]any)) != 1 || len(userDetail["audit"].([]any)) != 2 || accessSummary["login_count"].(float64) != 1 || accessSummary["active_sessions"].(float64) != 1 {
+	if len(userDetail["sessions"].([]any)) != 1 || len(userDetail["auth_sessions"].([]any)) != 1 || len(userDetail["login_history"].([]any)) != 1 || len(userDetail["access_ips"].([]any)) != 5 || len(userDetail["submissions"].([]any)) != 2 || len(userDetail["warnings"].([]any)) != 1 || len(userDetail["audit"].([]any)) != 2 || accessSummary["login_count"].(float64) != 1 || accessSummary["active_sessions"].(float64) != 1 {
 		t.Fatalf("incomplete user dossier: %#v", userDetail)
 	}
 
@@ -282,5 +290,31 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	teamDetail = decode(request(http.MethodGet, "/api/v1/admin/teams/"+teamID.String()+"/detail", nil))
 	if len(teamDetail["credit_events"].([]any)) != 1 || len(teamDetail["audit"].([]any)) != 1 {
 		t.Fatalf("team ledger or audit missing after adjustment: %#v", teamDetail)
+	}
+
+	sessionToken := tokenForSession(userID, authSessionID, "user", "user")
+	if response := requestAs(http.MethodGet, "/api/v1/user/me", sessionToken, nil); response.Code != http.StatusOK {
+		t.Fatalf("active account session status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := request(http.MethodDelete, "/api/v1/admin/users/"+userID.String()+"/sessions/"+authSessionID.String(), nil); response.Code != http.StatusOK {
+		t.Fatalf("revoke one session status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := requestAs(http.MethodGet, "/api/v1/user/me", sessionToken, nil); response.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked account session status=%d, want 401 body=%s", response.Code, response.Body.String())
+	}
+	secondSessionID := uuid.New()
+	exec(`INSERT INTO refresh_tokens (id, user_id, session_id, token_hash, expires_at, ip_address, user_agent, last_used_at) VALUES ($1, $2, $3, $4, NOW() + INTERVAL '1 hour', '203.0.113.16', 'qa-second-access', NOW())`, uuid.New(), userID, secondSessionID, uuid.NewString())
+	secondSessionToken := tokenForSession(userID, secondSessionID, "user", "user")
+	if response := requestAs(http.MethodGet, "/api/v1/user/me", secondSessionToken, nil); response.Code != http.StatusOK {
+		t.Fatalf("second account session status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := request(http.MethodPost, "/api/v1/admin/users/"+userID.String()+"/sessions/revoke", nil); response.Code != http.StatusOK {
+		t.Fatalf("revoke all sessions status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := requestAs(http.MethodGet, "/api/v1/user/me", secondSessionToken, nil); response.Code != http.StatusUnauthorized {
+		t.Fatalf("revoke all left session active status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := requestAs(http.MethodGet, "/api/v1/user/me", userToken, nil); response.Code != http.StatusUnauthorized {
+		t.Fatalf("revoke all left legacy token active status=%d body=%s", response.Code, response.Body.String())
 	}
 }

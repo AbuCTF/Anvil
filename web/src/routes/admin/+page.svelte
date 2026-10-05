@@ -38,6 +38,7 @@
 	let selectedUserSeed: any = null;
 	let userDetailLoading = false;
 	let userDetailError = '';
+	let userDossierAction = '';
 	let selectedTeamDetail: any = null;
 	let selectedTeamSeed: any = null;
 	let teamDetailLoading = false;
@@ -1132,6 +1133,42 @@
 			userDetailError = e instanceof Error ? e.message : 'Failed to load participant details';
 		} finally {
 			userDetailLoading = false;
+		}
+	}
+
+	async function revokeUserSessions() {
+		if (!selectedUserSeed || !(await confirmDialog({
+			title: 'Sign out all sessions',
+			message: `Sign out ${selectedUserDetail?.user?.username ?? selectedUserSeed.username} on every device?`,
+			confirmLabel: 'Sign out all',
+			danger: true
+		}))) return;
+		userDossierAction = 'all';
+		try {
+			await api.revokeUserSessions(selectedUserSeed.id);
+			selectedUserDetail = await api.getAdminUserDetail(selectedUserSeed.id);
+		} catch (e) {
+			alertDialog({ title: 'Unable to revoke sessions', message: e instanceof Error ? e.message : 'Failed to revoke sessions' });
+		} finally {
+			userDossierAction = '';
+		}
+	}
+
+	async function revokeUserSession(sessionId: string) {
+		if (!selectedUserSeed || !(await confirmDialog({
+			title: 'Revoke session',
+			message: 'Sign this device out immediately?',
+			confirmLabel: 'Revoke',
+			danger: true
+		}))) return;
+		userDossierAction = sessionId;
+		try {
+			await api.revokeUserSession(selectedUserSeed.id, sessionId);
+			selectedUserDetail = await api.getAdminUserDetail(selectedUserSeed.id);
+		} catch (e) {
+			alertDialog({ title: 'Unable to revoke session', message: e instanceof Error ? e.message : 'Failed to revoke session' });
+		} finally {
+			userDossierAction = '';
 		}
 	}
 
@@ -2863,9 +2900,12 @@
 		loading={userDetailLoading}
 		error={userDetailError}
 		economyEnabled={$platformInfo?.economy_enabled ?? false}
-		on:close={() => { selectedUserSeed = null; selectedUserDetail = null; }}
+		action={userDossierAction}
+		on:close={() => { selectedUserSeed = null; selectedUserDetail = null; userDossierAction = ''; }}
 		on:warn={() => warnParticipant(selectedUserSeed.id, selectedUserDetail?.user?.username ?? selectedUserSeed.username)}
 		on:toggleban={() => selectedUserDetail?.user && toggleBan({ id: selectedUserSeed.id, username: selectedUserDetail.user.username, is_banned: selectedUserDetail.user.status === 'banned' })}
+		on:revokeall={revokeUserSessions}
+		on:revokesession={(event) => revokeUserSession(event.detail.id)}
 	/>
 {/if}
 

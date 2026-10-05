@@ -181,13 +181,19 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 		}
 
 		if claims.TokenType == "user" {
-			// role and username come from the database so account changes take
-			// effect without waiting for token expiry.
 			var username, role, status string
+			var authRevokedBefore *time.Time
+			var sessionActive bool
 			err := db.Pool.QueryRow(c.Request.Context(),
-				"SELECT username, role, status FROM users WHERE id = $1",
-				claims.UserID,
-			).Scan(&username, &role, &status)
+				`SELECT u.username, u.role, u.status, u.auth_revoked_before,
+				        CASE WHEN $2::uuid = '00000000-0000-0000-0000-000000000000'::uuid THEN TRUE
+				             ELSE EXISTS (
+				                 SELECT 1 FROM refresh_tokens r
+				                 WHERE r.user_id = u.id AND r.session_id = $2 AND r.revoked = FALSE AND r.expires_at > NOW()
+				             ) END
+				 FROM users u WHERE u.id = $1`,
+				claims.UserID, claims.SessionID,
+			).Scan(&username, &role, &status, &authRevokedBefore, &sessionActive)
 
 			if err != nil {
 				APIError(c, http.StatusUnauthorized, "User not found")
@@ -196,6 +202,14 @@ func Auth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 
 			if status != "active" {
 				APIError(c, http.StatusForbidden, "Account is "+status)
+				return
+			}
+			if !sessionActive {
+				APIError(c, http.StatusUnauthorized, "Session has been revoked")
+				return
+			}
+			if claims.SessionID == uuid.Nil && authRevokedBefore != nil && (claims.IssuedAt == nil || !claims.IssuedAt.Time.After(*authRevokedBefore)) {
+				APIError(c, http.StatusUnauthorized, "Session has been revoked")
 				return
 			}
 
@@ -264,12 +278,24 @@ func OptionalAuth(cfg *config.Config, db *database.DB) gin.HandlerFunc {
 
 		if claims.TokenType == "user" {
 			var username, role, status string
+			var authRevokedBefore *time.Time
+			var sessionActive bool
 			err := db.Pool.QueryRow(c.Request.Context(),
-				"SELECT username, role, status FROM users WHERE id = $1",
-				claims.UserID,
-			).Scan(&username, &role, &status)
+				`SELECT u.username, u.role, u.status, u.auth_revoked_before,
+				        CASE WHEN $2::uuid = '00000000-0000-0000-0000-000000000000'::uuid THEN TRUE
+				             ELSE EXISTS (
+				                 SELECT 1 FROM refresh_tokens r
+				                 WHERE r.user_id = u.id AND r.session_id = $2 AND r.revoked = FALSE AND r.expires_at > NOW()
+				             ) END
+				 FROM users u WHERE u.id = $1`,
+				claims.UserID, claims.SessionID,
+			).Scan(&username, &role, &status, &authRevokedBefore, &sessionActive)
 
-			if err != nil || status != "active" {
+			if err != nil || status != "active" || !sessionActive {
+				c.Next()
+				return
+			}
+			if claims.SessionID == uuid.Nil && authRevokedBefore != nil && (claims.IssuedAt == nil || !claims.IssuedAt.Time.After(*authRevokedBefore)) {
 				c.Next()
 				return
 			}

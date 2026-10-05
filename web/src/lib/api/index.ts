@@ -998,6 +998,14 @@ class ApiClient {
 		});
 	}
 
+	async revokeUserSessions(userId: string) {
+		return this.request<{ message: string; revoked: number }>(`/admin/users/${userId}/sessions/revoke`, { method: 'POST' });
+	}
+
+	async revokeUserSession(userId: string, sessionId: string) {
+		return this.request<{ message: string }>(`/admin/users/${userId}/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+	}
+
 	async getAdminTeams(params?: { q?: string; sort?: string }) {
 		const qs = new URLSearchParams();
 		if (params?.q) qs.set('q', params.q);
