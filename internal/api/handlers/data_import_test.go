@@ -136,8 +136,8 @@ func TestInspectAndMapCSVAndJSON(t *testing.T) {
 		format  string
 		content string
 	}{
-		{format: "csv", content: "Employee Number,Work Email,Full Name,Department\nKPMG-17,avery@example.test,Avery Rao,Risk\n"},
-		{format: "json", content: `[{"Employee Number":"KPMG-17","Work Email":"avery@example.test","Full Name":"Avery Rao","Department":"Risk"}]`},
+		{format: "csv", content: "Employee Number,Work Email,Full Name,Department\nEMP-17,avery@example.test,Avery Rao,Risk\n"},
+		{format: "json", content: `[{"Employee Number":"EMP-17","Work Email":"avery@example.test","Full Name":"Avery Rao","Department":"Risk"}]`},
 	} {
 		payload, _ := json.Marshal(map[string]string{"entity": "users", "format": test.format, "content": test.content})
 		response := httptest.NewRecorder()
@@ -153,7 +153,7 @@ func TestInspectAndMapCSVAndJSON(t *testing.T) {
 		if len(issues) != 0 || len(rows) != 1 {
 			t.Fatalf("%s rows=%v issues=%v", test.format, rows, issues)
 		}
-		if rows[0]["username"] != "KPMG-17" || rows[0]["email"] != "avery@example.test" || rows[0]["display_name"] != "Avery Rao" {
+		if rows[0]["username"] != "EMP-17" || rows[0]["email"] != "avery@example.test" || rows[0]["display_name"] != "Avery Rao" {
 			t.Fatalf("%s mapping failed: %v", test.format, rows[0])
 		}
 		if _, exists := rows[0]["department"]; exists {

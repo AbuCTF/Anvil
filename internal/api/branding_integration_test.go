@@ -83,7 +83,7 @@ func TestEventProfileAndBrandingLifecycle(t *testing.T) {
 	}
 	adminToken, userToken := token(adminID), token(userID)
 
-	settingsBody := `{"settings":{"platform_name":"KPMG Cyber Challenge","platform_description":"Enterprise cyber range","event.slug":"kpmg-cyber-2026","event.timezone":"Asia/Kolkata","event.contact_email":"ctf@example.com","event.rules_url":"https://example.com/rules","event.start_at":"2026-10-01T04:30:00Z","event.end_at":"2026-10-02T04:30:00Z","event.profile_managed":true,"event.setup_completed":true}}`
+	settingsBody := `{"settings":{"platform_name":"Sample Cyber Challenge","platform_description":"Enterprise cyber range","event.slug":"sample-cyber-2026","event.timezone":"Asia/Kolkata","event.contact_email":"ctf@example.com","event.rules_url":"https://example.com/rules","event.start_at":"2026-10-01T04:30:00Z","event.end_at":"2026-10-02T04:30:00Z","event.profile_managed":true,"event.setup_completed":true}}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/admin/settings", strings.NewReader(settingsBody))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+adminToken)
@@ -100,7 +100,7 @@ func TestEventProfileAndBrandingLifecycle(t *testing.T) {
 	if err := json.Unmarshal(infoResponse.Body.Bytes(), &info); err != nil {
 		t.Fatalf("decode info: %v", err)
 	}
-	if info["name"] != "KPMG Cyber Challenge" || info["slug"] != "kpmg-cyber-2026" || info["timezone"] != "Asia/Kolkata" {
+	if info["name"] != "Sample Cyber Challenge" || info["slug"] != "sample-cyber-2026" || info["timezone"] != "Asia/Kolkata" {
 		t.Fatalf("event profile not public: %v", info)
 	}
 	if _, exists := info["logo_url"]; exists {

@@ -51,11 +51,11 @@ func TestEmailDomainAllowed(t *testing.T) {
 		want    bool
 	}{
 		{email: "person@example.com", want: true},
-		{email: "person@kpmg.com", allowed: []string{"kpmg.com"}, want: true},
-		{email: "person@lab.kpmg.com", allowed: []string{"*.kpmg.com"}, want: true},
-		{email: "person@kpmg.com", allowed: []string{"*.kpmg.com"}, want: false},
-		{email: "person@notkpmg.com", allowed: []string{"kpmg.com"}, want: false},
-		{email: "not-an-email", allowed: []string{"kpmg.com"}, want: false},
+		{email: "person@company.example", allowed: []string{"company.example"}, want: true},
+		{email: "person@lab.company.example", allowed: []string{"*.company.example"}, want: true},
+		{email: "person@company.example", allowed: []string{"*.company.example"}, want: false},
+		{email: "person@notcompany.example", allowed: []string{"company.example"}, want: false},
+		{email: "not-an-email", allowed: []string{"company.example"}, want: false},
 	}
 	for _, test := range tests {
 		if got := emailDomainAllowed(test.email, test.allowed); got != test.want {
