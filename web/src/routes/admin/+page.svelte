@@ -16,7 +16,6 @@
 	import TeamDossier from '$lib/components/admin/TeamDossier.svelte';
 	import UserDossier from '$lib/components/admin/UserDossier.svelte';
 	import ChallengeDossier from '$lib/components/admin/ChallengeDossier.svelte';
-	import HelpTip from '$lib/components/HelpTip.svelte';
 	import MailWorkspace from '$lib/components/admin/MailWorkspace.svelte';
 	import RegistryCredentials from '$lib/components/admin/RegistryCredentials.svelte';
 	import RegistryBulkImport from '$lib/components/admin/RegistryBulkImport.svelte';
@@ -140,6 +139,9 @@
 		newCategoryName: '',
 		difficulty: 'easy',
 		base_points: 100,
+		score_type: 'static',
+		score_minimum: 100,
+		score_decay: 50,
 		flag: '',
 		flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 		type: 'container',
@@ -292,7 +294,7 @@
 
 	function deliveryLabel(challenge: any) {
 		if (challenge.delivery_type === 'multi') return 'Multi-service';
-		if (challenge.delivery_type === 'static') return 'Static / files';
+		if (challenge.delivery_type === 'static') return 'Files';
 		if (challenge.delivery_type === 'external') return 'External target';
 		return resourceLabel(challenge.resource_type);
 	}
@@ -369,6 +371,9 @@
 			author_name: challenge.author_name || '',
 			category_id: challenge.category_id || '',
 			scoring_mode: challenge.scoring_mode || 'flag',
+			score_type: challenge.score_type || 'static',
+			score_minimum: challenge.score_minimum ?? challenge.base_points ?? 100,
+			score_decay: challenge.score_decay ?? 50,
 			delivery_type: challenge.delivery_type || (challenge.resource_type === 'vm' ? 'vm' : challenge.container_image ? 'container' : 'static'),
 			sub_description: challenge.sub_description || '',
 			arena_mode: challenge.arena_mode || 'per_team',
@@ -623,6 +628,9 @@
 				sub_description: editingChallenge.sub_description || '',
 				difficulty: editingChallenge.difficulty,
 				base_points: editingChallenge.base_points,
+				score_type: editingChallenge.scoring_mode === 'graded' ? 'static' : editingChallenge.score_type || 'static',
+				score_minimum: editingChallenge.scoring_mode === 'graded' || editingChallenge.score_type !== 'dynamic' ? editingChallenge.base_points : editingChallenge.score_minimum,
+				score_decay: editingChallenge.score_decay || 50,
 				resource_type: delivery === 'vm' ? 'vm' : 'docker',
 				delivery_type: delivery === 'vm' ? 'vm' : delivery === 'static' ? 'static' : delivery === 'external' ? 'external' : 'docker',
 				author_name: editingChallenge.author_name || '',
@@ -1407,6 +1415,9 @@
 				author_name: newChallenge.author_name,
 				difficulty: newChallenge.difficulty,
 				base_points: newChallenge.base_points,
+				score_type: newChallenge.scoring_mode === 'graded' ? 'static' : newChallenge.score_type,
+				score_minimum: newChallenge.scoring_mode === 'graded' || newChallenge.score_type !== 'dynamic' ? newChallenge.base_points : newChallenge.score_minimum,
+				score_decay: newChallenge.score_decay,
 				scoring_mode: newChallenge.scoring_mode,
 				arena_mode: newChallenge.type === 'download' || newChallenge.type === 'external' ? 'per_team' : newChallenge.arena_mode,
 				privesc: newChallenge.type === 'container' || newChallenge.type === 'multi' ? newChallenge.privesc : false,
@@ -1494,6 +1505,9 @@
 				newCategoryName: '',
 				difficulty: 'easy',
 				base_points: 100,
+				score_type: 'static',
+				score_minimum: 100,
+				score_decay: 50,
 				flag: '',
 				flags: [{ name: 'User Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }, { name: 'Root Flag', flag: '', points: 50, flag_type: 'static', dynamic_flag_prefix: '' }],
 				type: 'container',
@@ -1562,7 +1576,7 @@
 
 <div class="min-h-screen bg-stone-950">
 	<div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
-		<PageHeader title="Admin" subtitle="Platform management">
+		<PageHeader title="Admin">
 			<div slot="actions">
 				{#if activeTab === 'challenges'}
 					<div class="flex flex-wrap gap-2"><button on:click={() => showRegistryImportModal = true} class={btnGhost}><Icon icon="mdi:package-variant-closed-plus" class="w-3.5 h-3.5 shrink-0" />Import registry</button><button on:click={openCreateChallenge} class={btnPrimary}><Icon icon="mdi:plus" class="w-3.5 h-3.5 shrink-0" />New Challenge</button></div>
@@ -1610,7 +1624,7 @@
 
 			{#if activeTab === 'overview'}
 				<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-					<div><h2 class="text-xl font-semibold text-stone-100">Overview</h2><p class="mt-1 text-sm text-stone-500">Current event, content, and runtime status.</p></div>
+					<h2 class="text-xl font-semibold text-stone-100">Overview</h2>
 					<div class="flex flex-wrap gap-2"><button type="button" on:click={() => setTab('event')} class={btnGhost}>Configure event</button></div>
 				</div>
 
@@ -1721,7 +1735,7 @@
 									</span>
 								</div>
 								<div class="flex items-center justify-between text-xs text-stone-500 mb-3 tabular-nums">
-									<span>{challenge.base_points} pts</span>
+									<span>{challenge.score_type === 'dynamic' ? `${challenge.base_points}–${challenge.score_minimum}` : challenge.base_points} pts</span>
 									<span>{challenge.total_solves || 0} solves</span>
 								</div>
 								<div class="flex items-center gap-2 pt-3 border-t border-stone-800">
@@ -1803,6 +1817,8 @@
 														<span class="ml-1.5 inline-flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[0.65rem] leading-none text-amber-500 align-middle" title="Graded challenge">
 															<OpticalIcon icon="mdi:gauge" size={11} box={11} /><span class="badge-label">Graded</span>
 														</span>
+													{:else if challenge.score_type === 'dynamic'}
+														<span class="ml-1.5 text-[0.65rem] text-stone-500">Dynamic</span>
 													{/if}
 												</td>
 												<td class="px-4 py-2.5">
@@ -1813,7 +1829,7 @@
 												<OpticalIcon icon={deliveryIcon(challenge)} size={12} box={12} /><span class="badge-label">{deliveryLabel(challenge)}</span>
 													</span>
 												</td>
-												<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">{challenge.base_points}</td>
+												<td class="px-4 py-2.5 text-right text-stone-200 tabular-nums">{challenge.score_type === 'dynamic' ? `${challenge.base_points}–${challenge.score_minimum}` : challenge.base_points}</td>
 												<td class="px-4 py-2.5 text-right text-stone-400 tabular-nums">{challenge.total_solves || 0}</td>
 												<td class="px-4 py-2.5">
 													<span class="inline-flex items-center gap-1.5 text-xs leading-none {challenge.status === 'published' ? 'text-up' : 'text-warn'}">
@@ -2529,7 +2545,7 @@
 					</div>
 				{/if}
 				<nav class="sticky top-2 z-20 mb-6 rounded-lg border border-stone-800 bg-stone-950/95 p-2 shadow-xl shadow-black/20 backdrop-blur" aria-label="Settings sections">
-					<div class="mb-2 flex items-center justify-between gap-3 px-2 pt-1"><div><p class="metadata-label text-stone-600">Settings map</p><p class="mt-0.5 text-xs text-stone-500">Choose an area instead of hunting through one long form.</p></div>{#if settingsChanged}<span class="shrink-0 rounded-full bg-warn/10 px-2 py-1 text-[11px] text-warn">Unsaved changes</span>{/if}</div>
+					<div class="mb-2 flex items-center justify-between gap-3 px-2 pt-1"><p class="metadata-label text-stone-600">Settings</p>{#if settingsChanged}<span class="shrink-0 rounded-full bg-warn/10 px-2 py-1 text-[11px] text-warn">Unsaved changes</span>{/if}</div>
 					<div class="grid grid-cols-2 gap-1 md:grid-cols-4">
 						{#each [
 							...($platformInfo?.economy_enabled ? [{ href: '#settings-ledger', label: 'Economy rules', detail: 'Active Ledger policy', icon: 'mdi:scale-balance' }] : []),
@@ -2562,14 +2578,12 @@
 									<OpticalIcon icon="mdi:scale-balance" size={14} box={14} className="text-stone-500" />
 									<span class="optical-label">Ledger policy</span>
 								</h2>
-								<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">The active scoring and credit rules for this event</p>
 							</div>
 							<div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 								<div class="flex items-center gap-3">
 									<div class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-amber-500/10 text-amber-500"><Icon icon="mdi:bank-outline" class="h-5 w-5" /></div>
 									<div>
 										<div class="flex flex-wrap items-center gap-2"><p class="text-sm font-medium text-stone-200">{$platformInfo.economy_policy.name}</p><span class="rounded-full border border-stone-800 px-2 py-0.5 text-[10px] text-stone-500">v{$platformInfo.economy_policy.version}</span></div>
-										<p class="mt-1 text-xs text-stone-500">Versioned JSON rule profile · not a PDF</p>
 									</div>
 								</div>
 								<div class="flex flex-wrap items-center gap-2">
@@ -2578,7 +2592,6 @@
 									<button type="button" class={btnGhost} on:click={downloadEconomyPolicy} disabled={economyPolicyLoading}><Icon icon="mdi:download-outline" class="h-4 w-4" /> Download JSON</button>
 								</div>
 							</div>
-							<p class="mt-4 max-w-4xl text-xs leading-relaxed text-stone-500">Download the exact active policy for review or offline editing. Live rule changes stay deployment-controlled so an organizer cannot silently alter the economy during a running competition.</p>
 							{#if showEconomyPolicy && economyPolicyDocument}
 								<div class="mt-4 rounded-lg border border-stone-800 bg-stone-950/40 p-3">
 									<div class="mb-3 flex flex-wrap items-center justify-between gap-2"><p class="text-xs font-medium text-stone-300">Active rules</p><p class="text-[11px] text-stone-600">Difficulty order: {economyPolicyDocument.difficulty_order.join(' → ')}</p></div>
@@ -2599,7 +2612,6 @@
 								<OpticalIcon icon="mdi:timer-outline" size={14} box={14} className="text-stone-500" />
 								<span class="optical-label">Instance Timeouts</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Defaults applied when a new VM challenge is created</p>
 						</div>
 						<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
 							{#each [
@@ -2632,7 +2644,6 @@
 								<OpticalIcon icon="mdi:timer-sand" size={14} box={14} className="text-stone-500" />
 								<span class="optical-label">Cooldown Periods</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Defaults applied when a new challenge is created</p>
 						</div>
 						<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
 							{#each [
@@ -2665,7 +2676,6 @@
 								<OpticalIcon icon="mdi:clock-plus-outline" size={14} box={14} className="text-stone-500" />
 								<span class="optical-label">Extension Settings</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Default extension count for new challenges; duration applies to every extension</p>
 						</div>
 						<div class="grid grid-cols-2 gap-4">
 							<label class="block">
@@ -2702,7 +2712,6 @@
 								<OpticalIcon icon="mdi:account-multiple-outline" size={14} box={14} className="text-stone-500" />
 								<span class="optical-label">User Limits</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Resource limits per user</p>
 						</div>
 					<div class="max-w-sm">
 						<label class="block">
@@ -2725,7 +2734,6 @@
 								<OpticalIcon icon="mdi:vpn" size={14} box={14} className="text-stone-500" />
 								<span class="optical-label">VPN Settings</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Instance access policy; server keys and endpoint remain deployment configuration</p>
 						</div>
 						<div class="max-w-sm">
 							<label class="block">
@@ -2748,7 +2756,6 @@
 								<OpticalIcon icon="mdi:cog-outline" size={14} box={14} className="text-stone-500" />
 								<span class="optical-label">Platform Settings</span>
 							</h2>
-							<p class="text-xs text-stone-500 mt-1 normal-case font-normal tracking-normal">Access controls and the public event clock</p>
 						</div>
 						<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
 							<label class="block">
@@ -3007,7 +3014,7 @@
 						class="flex-1 flex items-center justify-center gap-2 py-2.5 rounded text-sm leading-none font-medium transition-colors {newChallenge.type === 'download' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 					>
 						<Icon icon="mdi:file-download-outline" class="w-3.5 h-3.5 shrink-0" />
-						Static / files
+						Files
 					</button>
 					<button
 						type="button"
@@ -3049,15 +3056,15 @@
 						</div>
 					{/if}
 
-					<section class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5"><div class="mb-5"><h3 class="text-sm font-semibold text-stone-200">Challenge basics</h3><p class="mt-1 text-xs text-stone-600">Identity, scoring, participant copy, and target model.</p></div><div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+					<section class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5"><h3 class="mb-5 text-sm font-semibold text-stone-200">Basics</h3><div class="grid grid-cols-1 gap-5 md:grid-cols-2">
 						<label class="block md:col-span-2">
-							<span class={labelCls}>Challenge Name *</span>
+							<span class={labelCls}>Name *</span>
 							<input
 								type="text"
 								bind:value={newChallenge.name}
 								required
 								class="w-full {fieldCls}"
-								placeholder="Enter challenge name"
+								placeholder="Challenge name"
 							/>
 						</label>
 
@@ -3069,7 +3076,7 @@
 									required={newChallenge.category_id !== '__new__'}
 									class="w-full {fieldCls}"
 								>
-									<option value="" disabled>Select a category...</option>
+									<option value="" disabled>Select category</option>
 									{#each categories as cat}
 										<option value={cat.id}>{cat.name}</option>
 									{/each}
@@ -3106,7 +3113,7 @@
 						</label>
 
 						<label class="block">
-							<span class={labelCls}>Base Points *</span>
+							<span class={labelCls}>{newChallenge.score_type === 'dynamic' ? 'Maximum points' : 'Points'} *</span>
 							<input
 								type="number"
 								bind:value={newChallenge.base_points}
@@ -3127,61 +3134,48 @@
 							></textarea>
 						</label>
 
-						<label class="block md:col-span-2">
-							<span class={labelCls}>Pre-launch summary</span>
-							<input type="text" bind:value={newChallenge.sub_description} maxlength="255" class="w-full {fieldCls}" placeholder="A short spoiler-free line shown before a team spends credits" />
-						</label>
-
 						<label class="block">
 							<span class={labelCls}>Author</span>
-							<input type="text" bind:value={newChallenge.author_name} class="w-full {fieldCls}" placeholder="Author or team name" />
+							<input type="text" bind:value={newChallenge.author_name} class="w-full {fieldCls}" placeholder="Author" />
 						</label>
 
 						<label class="block">
-							<span class="flex items-center gap-1 {labelCls}">Scoring model <HelpTip text="Flag scoring accepts one or more answers. Relative grading lets a trusted in-instance grader report a team's best score from 0 to 1, which Anvil converts proportionally to the challenge's base points." /></span>
-							<select bind:value={newChallenge.scoring_mode} class="w-full {fieldCls}">
-								<option value="flag">Flag scoring</option>
-								<option value="graded">Relative grading (best 0–100%)</option>
+							<span class={labelCls}>Judging</span>
+							<select bind:value={newChallenge.scoring_mode} on:change={() => { if (newChallenge.scoring_mode === 'graded') newChallenge.score_type = 'static'; }} class="w-full {fieldCls}">
+								<option value="flag">Flags</option>
+								<option value="graded">Grader</option>
 							</select>
 						</label>
 
-						{#if newChallenge.scoring_mode === 'graded'}
-							<div class="md:col-span-2 flex items-start gap-3 rounded-md border border-info/20 bg-info/[0.05] px-3 py-2.5 text-xs text-stone-400">
-								<Icon icon="mdi:chart-timeline-variant-shimmer" class="mt-0.5 h-4 w-4 shrink-0 text-info" />
-								<div><p class="font-medium text-stone-300">Continuous progress instead of a binary solve</p><p class="mt-1 leading-relaxed text-stone-500">No player flag is required. A trusted grader reports a monotonic score from 0 to 1; awarded points are best score × base points. Grader credentials and the report contract open immediately after creation.</p></div>
-							</div>
+						{#if newChallenge.scoring_mode === 'flag' && !($platformInfo?.economy_enabled ?? false)}
+							<label class="block">
+								<span class={labelCls}>Scoring</span>
+								<select bind:value={newChallenge.score_type} class="w-full {fieldCls}">
+									<option value="static">Static</option>
+									<option value="dynamic">Dynamic</option>
+								</select>
+							</label>
+							{#if newChallenge.score_type === 'dynamic'}
+								<label><span class={labelCls}>Minimum points</span><input type="number" bind:value={newChallenge.score_minimum} min="0" max={newChallenge.base_points} class="w-full {fieldCls} tabular-nums" /></label>
+								<label><span class={labelCls}>Decay (solves)</span><input type="number" bind:value={newChallenge.score_decay} min="1" class="w-full {fieldCls} tabular-nums" /></label>
+							{/if}
+						{:else if $platformInfo?.economy_enabled}
+							<div><span class={labelCls}>Scoring</span><div class="flex h-[38px] items-center rounded-md border border-stone-800 bg-stone-950 px-3 text-sm text-stone-300">Ledger</div></div>
 						{/if}
 
 						<label class="block md:col-span-2">
 							<span class={labelCls}>Target topology</span>
 							<select bind:value={newChallenge.arena_mode} class="w-full {fieldCls}" disabled={newChallenge.type === 'download' || newChallenge.type === 'external'}>
 								<option value="per_team">Isolated per team</option>
-								<option value="shared">Shared arena / KotH target</option>
+								<option value="shared">Shared</option>
 							</select>
-							<p class="mt-1.5 text-xs text-stone-600">Attack-defense services are configured in Arena; this chooses whether this challenge provisions per team or as one contested target.</p>
-						</label>
+							</label>
 					</div></section>
 
 					{#if newChallenge.type === 'container' || newChallenge.type === 'multi' || newChallenge.type === 'download' || newChallenge.type === 'external'}
-						<div class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5 space-y-5"><div><h3 class="text-sm font-semibold text-stone-200">Delivery and runtime</h3><p class="mt-1 text-xs text-stone-600">How participants receive, connect to, and solve this challenge.</p></div>
-							{#if newChallenge.type === 'download'}
-								<div class="flex items-start gap-2 py-2.5 px-3 bg-stone-900/40 border border-stone-800 rounded-md text-stone-400 text-xs">
-									<Icon icon="mdi:information-outline" class="w-4 h-4 shrink-0 mt-0.5" />
-									A download-only challenge has no container. Add handouts below{newChallenge.scoring_mode === 'flag' ? ' and configure its answer' : '; its trusted grader remains external'}.
-								</div>
-							{/if}
-							{#if newChallenge.type === 'external'}
-								<div class="flex items-start gap-2 rounded-md border border-teal-500/20 bg-teal-500/[0.05] px-3 py-2.5 text-xs text-stone-400">
-									<Icon icon="mdi:open-in-new" class="mt-0.5 h-4 w-4 shrink-0 text-teal-500" />
-									<div><p class="font-medium text-stone-300">External target or OSINT challenge</p><p class="mt-1 leading-relaxed text-stone-500">Anvil provisions no runtime. Put the player-facing target URL and instructions in the description. Choose Static / files instead when downloadable handouts are part of delivery.</p></div>
-								</div>
-							{/if}
-							{#if newChallenge.type === 'multi'}
-								<div class="flex items-start gap-2 rounded-md border border-info/20 bg-info/[0.06] px-3 py-2.5 text-xs text-stone-400">
-									<Icon icon="mdi:server-network" class="mt-0.5 h-4 w-4 shrink-0 text-info" />
-									<div><p class="font-medium text-stone-300">Compose-style challenge</p><p class="mt-1">Each role gets its own image, environment, network policy and ports. Public roles receive player routes; internal roles are reachable only by service name.</p></div>
-								</div>
-								<div class="space-y-3">
+							<div class="space-y-5 rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5"><h3 class="text-sm font-semibold text-stone-200">Delivery</h3>
+								{#if newChallenge.type === 'multi'}
+									<div class="space-y-3">
 									<div class="flex items-center justify-between"><span class="metadata-label text-stone-400">Service roles</span><button type="button" on:click={addService} class="text-xs text-stone-400 hover:text-stone-200">+ Add service</button></div>
 									{#each newChallenge.services as service, serviceIndex}
 										<div class="space-y-3 rounded-lg border border-stone-800 bg-stone-900/20 p-4">
@@ -3192,7 +3186,7 @@
 										<div class="grid gap-3 sm:grid-cols-2"><label><span class={labelCls}>Command arguments</span><textarea bind:value={service.command_text} rows="3" class="w-full font-mono {fieldCls}" placeholder="One argument per line&#10;--serve&#10;0.0.0.0"></textarea></label><label><span class={labelCls}>Environment</span><textarea bind:value={service.env_text} rows="3" class="w-full font-mono {fieldCls}" placeholder="KEY=value&#10;INTERNAL_URL=http://db:5432"></textarea></label></div>
 										</div>
 									{/each}
-									<label class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/20 px-3 py-2.5 text-xs text-stone-400"><input type="checkbox" bind:checked={newChallenge.privesc} class="accent-amber-500" /><span>Enable controlled SUID / privilege-escalation behavior for the service set.</span></label>
+										<label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={newChallenge.privesc} class="accent-amber-500" /><span>SUID</span></label>
 								</div>
 							{/if}
 							{#if newChallenge.type === 'container'}
@@ -3211,7 +3205,6 @@
 									class="w-full font-mono {fieldCls}"
 									placeholder="organization/challenge:release"
 								/>
-								<p class="mt-2 text-xs text-stone-500">Docker Hub and GHCR images can be checked and pinned to an immutable digest before the challenge is saved. Other configured registries remain supported by direct reference.</p>
 								{#if imageInspection}
 									<div class="mt-3 rounded-md border border-up/20 bg-up/[0.05] px-3 py-2.5 text-xs">
 										<div class="flex items-center gap-2 text-up"><Icon icon="mdi:check-circle-outline" class="h-4 w-4" /><span class="font-medium">Verified and pinned</span></div>
@@ -3231,8 +3224,7 @@
 									<option value="linux/amd64">linux/amd64</option>
 									<option value="linux/arm64">linux/arm64</option>
 								</select>
-								<p class="text-stone-500 text-xs mt-2">Set if the image architecture differs from the server (e.g. amd64 image on ARM host)</p>
-							</label>
+								</label>
 
 							<div>
 								<div class="flex items-center justify-between mb-2">
@@ -3256,8 +3248,8 @@
 												placeholder="1337"
 											/>
 											<select bind:value={ep.service} class="flex-1 {fieldCls}">
-												<option value="tcp">TCP - nc (netcat)</option>
-												<option value="http">HTTP - web browser</option>
+													<option value="tcp">TCP</option>
+													<option value="http">HTTP</option>
 											</select>
 											{#if newChallenge.exposed_ports.length > 1}
 												<button type="button" on:click={() => newChallenge.exposed_ports = newChallenge.exposed_ports.filter((_, idx) => idx !== i)} class="p-1.5 text-stone-500 hover:text-down transition-colors">
@@ -3267,12 +3259,9 @@
 										</div>
 									{/each}
 								</div>
-								<p class="text-stone-500 text-xs mt-1.5">
-									Enter the internal listening port. Anvil publishes a routed TCP endpoint or a wildcard HTTPS hostname without exposing the container network.
-								</p>
-							</div>
-							{#if newChallenge.type === 'container'}
-								<label class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/20 px-3 py-2.5 text-xs text-stone-400"><input type="checkbox" bind:checked={newChallenge.privesc} class="accent-amber-500" /><span>Enable controlled SUID / privilege-escalation behavior. Capabilities remain dropped; use only for boot-to-root challenges that require it.</span></label>
+								</div>
+								{#if newChallenge.type === 'container'}
+									<label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={newChallenge.privesc} class="accent-amber-500" /><span>SUID</span></label>
 							{/if}
 							{/if}
 
@@ -3293,9 +3282,9 @@
 											<input type="text" bind:value={fl.name} required class="min-w-40 flex-1 {fieldCls}" placeholder="Flag name" />
 												<input type="number" bind:value={fl.points} min="0" class="w-20 tabular-nums {fieldCls}" placeholder="pts" />
 											<select bind:value={fl.flag_type} class="min-w-28 flex-1 sm:flex-none {fieldCls}">
-													<option value="static">Static</option>
-													<option value="regex">Regex</option>
-													<option value="dynamic">Dynamic</option>
+														<option value="static">Exact</option>
+														<option value="regex">Pattern</option>
+														<option value="dynamic">Per-instance</option>
 												</select>
 												{#if newChallenge.flags.length > 1}
 													<button type="button" on:click={() => newChallenge.flags = newChallenge.flags.filter((_, idx) => idx !== i)} class="p-1 text-stone-500 hover:text-down transition-colors">
@@ -3307,14 +3296,13 @@
 											<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="flag&#123;value&#125;" />
 										{:else if fl.flag_type === 'regex'}
 							<input type="text" bind:value={fl.flag} required class="w-full font-mono {fieldCls}" placeholder="flag&#123;[a-f0-9-]+&#125; - container generates flag, regex validates" />
-												<p class="text-stone-600 text-xs mt-1">Duplicate submissions across users trigger flag-share alerts in Audit</p>
 											{:else}
 							<input type="text" bind:value={fl.dynamic_flag_prefix} required class="w-full font-mono {fieldCls}" placeholder="Prefix (e.g. CTF) - generates prefix&#123;uuid&#125; per user" />
 											{/if}
 										</div>
 									{/each}
 								</div>
-								<p class="mt-2 text-xs tabular-nums {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0) === Number(newChallenge.base_points) ? 'text-stone-600' : 'text-warn'}">Flag total: {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0)} / {newChallenge.base_points} base points</p>
+								<p class="mt-2 text-xs tabular-nums {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0) === Number(newChallenge.base_points) ? 'text-stone-600' : 'text-warn'}">Total: {newChallenge.flags.reduce((sum, flag) => sum + (Number(flag.points) || 0), 0)} / {newChallenge.base_points}</p>
 							</div>
 							{/if}
 
@@ -3335,12 +3323,11 @@
 										<input type="number" bind:value={newChallenge.cooldown_minutes} min="0" class="w-full {fieldCls} tabular-nums" />
 									</label>
 								</div>
-								<p class="text-stone-500 text-xs mt-1.5">How long the instance runs, how many extensions, and cooldown between resets</p>
 							</div>
 							{/if}
 						</div>
 					{:else if newChallenge.type === 'ova'}
-						<div class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5 space-y-5"><div><h3 class="text-sm font-semibold text-stone-200">Virtual machine</h3><p class="mt-1 text-xs text-stone-600">Choose a prepared image, define flags, and set lifecycle limits.</p></div>
+						<div class="rounded-lg border border-stone-800 bg-stone-900/20 p-4 sm:p-5 space-y-5"><h3 class="text-sm font-semibold text-stone-200">Virtual machine</h3>
 							<div>
 								<span class={labelCls}>VM Source</span>
 								<div class="flex gap-1 p-1 bg-stone-950 border border-stone-800 rounded-md">
@@ -3350,10 +3337,9 @@
 										class="flex-1 inline-flex items-center justify-center py-2 px-3 rounded text-sm leading-none font-medium transition-colors {newChallenge.vm_source === 'template' ? 'bg-stone-800 text-stone-100' : 'text-stone-400 hover:text-stone-200'}"
 									>
 										<Icon icon="mdi:harddisk" class="w-3.5 h-3.5 shrink-0 mr-1" />
-										Use Existing Template
+										Template
 									</button>
 								</div>
-								<p class="text-stone-500 text-xs mt-2">Upload OVA/qcow2/vmdk images under Infrastructure → Templates; they're converted there, then selected here.</p>
 							</div>
 
 							{#if newChallenge.vm_source === 'template'}
@@ -3363,7 +3349,7 @@
 										<div class="p-4 bg-stone-900/40 border border-stone-800 rounded-md text-center">
 											<Icon icon="mdi:alert-circle-outline" class="w-8 h-8 text-stone-500 mx-auto mb-2" />
 											<p class="text-stone-400 text-sm">No templates available</p>
-											<p class="text-stone-500 text-xs mt-1">Upload a template first or switch to OVA upload</p>
+											<p class="text-stone-500 text-xs mt-1">Add a template under System</p>
 										</div>
 									{:else}
 										<div class="space-y-2 max-h-48 overflow-y-auto">
@@ -3413,7 +3399,7 @@
 											</label>
 										{/if}
 									</div>
-									<p class="text-stone-500 text-xs mt-2">Supported: .ova, .qcow2, .vmdk (max 20GB)</p>
+									<p class="text-stone-500 text-xs mt-2">.ova · .qcow2 · .vmdk · 20 GB max</p>
 								</div>
 							{/if}
 
@@ -3510,7 +3496,7 @@
 								{/each}
 							</div>
 						{:else}
-							<p class="text-xs text-stone-600">No files selected. Files can also be added after creating the challenge.</p>
+							<p class="text-xs text-stone-600">No files selected.</p>
 						{/if}
 						{#if attachmentUploadStatus}
 								<p class="text-xs leading-none text-stone-400 flex items-center gap-1.5">
@@ -3560,7 +3546,7 @@
 				<div>
 					<h2 class="text-lg font-semibold text-stone-100">Edit Challenge</h2>
 					<p class="text-xs text-stone-500 mt-0.5">
-						{editingChallenge.delivery_type === 'vm' ? 'Virtual machine' : editingChallenge.delivery_type === 'multi' ? 'Multi-service' : editingChallenge.delivery_type === 'static' ? 'Static / files' : editingChallenge.delivery_type === 'external' ? 'External target' : 'Container'} ·
+						{editingChallenge.delivery_type === 'vm' ? 'Virtual machine' : editingChallenge.delivery_type === 'multi' ? 'Multi-service' : editingChallenge.delivery_type === 'static' ? 'Files' : editingChallenge.delivery_type === 'external' ? 'External' : 'Container'} ·
 						<span class="{editingChallenge.status === 'published' ? 'text-up' : 'text-warn'}">{editingChallenge.status}</span>
 						· {editingChallenge.slug}
 					</p>
@@ -3594,11 +3580,6 @@
 					<textarea bind:value={editingChallenge.description} rows="4" class="w-full {fieldCls} resize-none"></textarea>
 				</label>
 
-				<label class="block">
-					<span class={labelCls}>Pre-launch summary</span>
-					<input type="text" bind:value={editingChallenge.sub_description} maxlength="255" class="w-full {fieldCls}" placeholder="A spoiler-free summary shown before a team spends credits" />
-				</label>
-
 				<div class="grid gap-4 sm:grid-cols-2">
 					<label class="block">
 						<span class={labelCls}>Category</span>
@@ -3623,39 +3604,48 @@
 						</select>
 					</label>
 					<label class="block">
-						<span class={labelCls}>Points</span>
+						<span class={labelCls}>{editingChallenge.score_type === 'dynamic' ? 'Maximum points' : 'Points'}</span>
 						<input type="number" bind:value={editingChallenge.base_points} required min="1" class="w-full {fieldCls} tabular-nums" />
 					</label>
 					<label class="block">
-						<span class={labelCls}>Author Name</span>
-						<input type="text" bind:value={editingChallenge.author_name} placeholder="e.g. abu" class="w-full {fieldCls}" />
+						<span class={labelCls}>Author</span>
+						<input type="text" bind:value={editingChallenge.author_name} placeholder="Author" class="w-full {fieldCls}" />
 					</label>
-					<label class="block sm:col-span-2">
-						<span class="flex items-center gap-1 {labelCls}">Scoring <HelpTip text="Changing the scoring model is allowed only before any submission, evaluation, solve, or live instance. Once activity begins, create a new challenge instead so historical results remain coherent." /></span>
-						<select bind:value={editingChallenge.scoring_mode} class="w-full {fieldCls}">
-							<option value="flag">Flag — solves by flag submission</option>
-							<option value="graded">Relative grading: best 0–100% × base points</option>
+					<label class="block">
+						<span class={labelCls}>Judging</span>
+						<select bind:value={editingChallenge.scoring_mode} on:change={() => { if (editingChallenge.scoring_mode === 'graded') editingChallenge.score_type = 'static'; }} class="w-full {fieldCls}">
+							<option value="flag">Flags</option>
+							<option value="graded">Grader</option>
 						</select>
 					</label>
+					{#if editingChallenge.scoring_mode === 'flag' && !($platformInfo?.economy_enabled ?? false)}
+						<label class="block"><span class={labelCls}>Scoring</span><select bind:value={editingChallenge.score_type} class="w-full {fieldCls}"><option value="static">Static</option><option value="dynamic">Dynamic</option></select></label>
+						{#if editingChallenge.score_type === 'dynamic'}
+							<label class="block"><span class={labelCls}>Minimum points</span><input type="number" bind:value={editingChallenge.score_minimum} min="0" max={editingChallenge.base_points} class="w-full {fieldCls} tabular-nums" /></label>
+							<label class="block"><span class={labelCls}>Decay (solves)</span><input type="number" bind:value={editingChallenge.score_decay} min="1" class="w-full {fieldCls} tabular-nums" /></label>
+						{/if}
+					{:else if $platformInfo?.economy_enabled}
+						<div><span class={labelCls}>Scoring</span><div class="flex h-[38px] items-center rounded-md border border-stone-800 bg-stone-950 px-3 text-sm text-stone-300">Ledger</div></div>
+					{/if}
 					<label class="block">
 						<span class={labelCls}>Delivery</span>
 						<select bind:value={editingChallenge.delivery_type} on:change={() => editingChallenge.resource_type = editingChallenge.delivery_type === 'vm' ? 'vm' : 'docker'} class="w-full {fieldCls}">
 							<option value="container">Single container</option>
 							<option value="multi">Multi-service</option>
-							<option value="static">Static / files only</option>
-							<option value="external">External target / OSINT</option>
+							<option value="static">Files</option>
+							<option value="external">External</option>
 							<option value="vm">Virtual machine</option>
 						</select>
 					</label>
 					<label class="block">
 						<span class={labelCls}>Topology</span>
-						<select bind:value={editingChallenge.arena_mode} disabled={editingChallenge.delivery_type === 'static' || editingChallenge.delivery_type === 'external'} class="w-full {fieldCls}"><option value="per_team">Isolated per team</option><option value="shared">Shared arena / KotH</option></select>
+						<select bind:value={editingChallenge.arena_mode} disabled={editingChallenge.delivery_type === 'static' || editingChallenge.delivery_type === 'external'} class="w-full {fieldCls}"><option value="per_team">Isolated per team</option><option value="shared">Shared</option></select>
 					</label>
 				</div>
 
 				{#if editingChallenge.delivery_type === 'container'}
 					<div class="border border-stone-800 rounded-lg p-4 space-y-4">
-						<div class="flex items-center justify-between gap-3"><h3 class="metadata-label text-stone-400">Container runtime</h3><label class="flex items-center gap-2 text-xs text-stone-500"><input type="checkbox" bind:checked={editingChallenge.privesc} class="accent-amber-500" /> Controlled privesc</label></div>
+						<div class="flex items-center justify-between gap-3"><h3 class="metadata-label text-stone-400">Container</h3><label class="flex items-center gap-2 text-xs text-stone-500"><input type="checkbox" bind:checked={editingChallenge.privesc} class="accent-amber-500" /> SUID</label></div>
 
 						<div class="grid gap-3 sm:grid-cols-3">
 							<label class="block sm:col-span-2">
@@ -3698,8 +3688,8 @@
 								<div class="flex flex-wrap items-center gap-2 mb-2">
 									<input type="number" bind:value={ep.port} placeholder="Port" min="1" max="65535" class="w-20 font-mono tabular-nums {fieldCls}" />
 									<select bind:value={ep.service} class="flex-1 {fieldCls}">
-										<option value="tcp">TCP - nc (netcat)</option>
-										<option value="http">HTTP - web browser</option>
+										<option value="tcp">TCP</option>
+										<option value="http">HTTP</option>
 									</select>
 									<button
 										type="button"
@@ -3710,12 +3700,11 @@
 									</button>
 								</div>
 							{/each}
-							<p class="text-stone-600 text-xs mt-1">Port your container listens on internally. TCP shows <code class="text-stone-500">nc host port</code>; HTTP shows a clickable URL.</p>
 						</div>
 					</div>
 				{:else if editingChallenge.delivery_type === 'multi'}
 					<div class="space-y-4 rounded-lg border border-stone-800 p-4">
-						<div class="flex items-center justify-between gap-3"><div><h3 class="metadata-label text-stone-400">Service roles</h3><p class="mt-1 text-xs text-stone-600">Public roles receive player routes. Internal roles are reachable only through the isolated challenge network.</p></div><button type="button" on:click={addEditService} class="shrink-0 text-xs text-stone-400 hover:text-stone-200">+ Add service</button></div>
+						<div class="flex items-center justify-between gap-3"><h3 class="metadata-label text-stone-400">Services</h3><button type="button" on:click={addEditService} class="shrink-0 text-xs text-stone-400 hover:text-stone-200">+ Add service</button></div>
 						{#each editingChallenge.services || [] as service, serviceIndex}
 							<div class="space-y-3 rounded-lg border border-stone-800 bg-stone-900/20 p-3 sm:p-4">
 								<div class="grid gap-2 sm:grid-cols-[9rem_1fr_7rem_auto]"><input bind:value={service.name} required class="min-w-0 font-mono {fieldCls}" placeholder="app" /><input bind:value={service.image} required class="min-w-0 font-mono {fieldCls}" placeholder="ghcr.io/org/image" /><input bind:value={service.tag} class="min-w-0 font-mono {fieldCls}" placeholder="latest" /><button type="button" on:click={() => removeEditService(serviceIndex)} class="justify-self-start p-2 text-stone-600 hover:text-down sm:justify-self-auto"><Icon icon="mdi:trash-can-outline" class="h-4 w-4" /></button></div>
@@ -3726,12 +3715,8 @@
 							</div>
 						{/each}
 						{#if !(editingChallenge.services || []).length}<button type="button" on:click={addEditService} class="w-full rounded-md border border-dashed border-stone-700 p-5 text-sm text-stone-500 hover:border-stone-600 hover:text-stone-300">Add the first service role</button>{/if}
-						<label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={editingChallenge.privesc} class="accent-amber-500" /> Enable controlled SUID / privilege-escalation behavior for this service set</label>
+						<label class="flex items-center gap-2 text-xs text-stone-400"><input type="checkbox" bind:checked={editingChallenge.privesc} class="accent-amber-500" /> SUID</label>
 					</div>
-				{:else if editingChallenge.delivery_type === 'static'}
-					<div class="flex items-start gap-3 rounded-lg border border-info/20 bg-info/[0.05] p-4 text-sm text-stone-400"><Icon icon="mdi:file-download-outline" class="mt-0.5 h-5 w-5 shrink-0 text-info" /><div><p class="font-medium text-stone-300">Static / files-only delivery</p><p class="mt-1 text-xs leading-relaxed text-stone-500">No runtime will be provisioned. Add downloadable handouts in the Files tab and configure validation in Flags.</p></div></div>
-				{:else if editingChallenge.delivery_type === 'external'}
-					<div class="flex items-start gap-3 rounded-lg border border-teal-500/20 bg-teal-500/[0.05] p-4 text-sm text-stone-400"><Icon icon="mdi:open-in-new" class="mt-0.5 h-5 w-5 shrink-0 text-teal-500" /><div><p class="font-medium text-stone-300">External target / OSINT delivery</p><p class="mt-1 text-xs leading-relaxed text-stone-500">No runtime is provisioned. The description carries the player-facing target and instructions; optional external or managed handouts remain available in Files.</p></div></div>
 				{/if}
 
 				{#if editingChallenge.delivery_type === 'vm'}
@@ -3756,7 +3741,7 @@
 
 				{#if editingChallenge.delivery_type !== 'static' && editingChallenge.delivery_type !== 'external'}
 				<div class="border border-stone-800 rounded-lg p-4 space-y-3">
-					<div><h3 class="metadata-label text-stone-400">Instance lifecycle</h3><p class="mt-1 text-xs text-stone-600">Starting, stopping and restarting infrastructure does not charge teams. Opening, paid extensions and configured economy actions do.</p></div>
+					<h3 class="metadata-label text-stone-400">Instance lifecycle</h3>
 					<div class="grid gap-3 sm:grid-cols-3">
 						<label class="block">
 							<span class={labelCls}>{editingChallenge.delivery_type === 'vm' ? 'Compatibility timeout' : 'Timeout (min)'}</span>
@@ -3776,7 +3761,7 @@
 
 				<div class="flex gap-3 pt-2">
 					<button type="submit" disabled={actionLoading === editingChallenge.id} class="flex-1 {btnPrimary}">
-						{actionLoading === editingChallenge.id ? 'Saving...' : 'Save Changes'}
+							{actionLoading === editingChallenge.id ? 'Saving…' : 'Save'}
 					</button>
 					<button
 						type="button"
@@ -3804,9 +3789,9 @@
 								</div>
 								<div class="flex items-center gap-2">
 									<select bind:value={f.flag_type} class="w-32 {fieldCls}">
-										<option value="static">Static</option>
-										<option value="regex">Regex</option>
-										<option value="dynamic">Dynamic</option>
+							<option value="static">Exact</option>
+							<option value="regex">Pattern</option>
+							<option value="dynamic">Per-instance</option>
 									</select>
 									{#if f.flag_type === 'dynamic'}
 										<input type="text" bind:value={f.dynamic_flag_prefix} placeholder="Prefix e.g. CTF" class="flex-1 font-mono {fieldCls}" />
@@ -3861,12 +3846,11 @@
 								<button type="button" on:click={copySecret} class="{btnGhost} px-3">{secretCopied ? 'Copied' : 'Copy'}</button>
 								<button type="button" on:click={rotateSecret} class="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-md border border-down/30 bg-down/10 text-down text-sm leading-none font-medium hover:bg-down/20 transition-colors">Rotate</button>
 							</div>
-							<p class="text-stone-600 text-xs mt-1.5">Admin-only; never leaves Anvil. Each grader gets <code class="text-stone-500">{secretRef}</code> = HMAC-SHA256(this, its instance id), so a leaked key covers one instance. Only roles whose env names it receive it, and a public role asking for it is refused at launch.</p>
+							<p class="text-stone-600 text-xs mt-1.5">Per-instance HMAC · internal roles only</p>
 						</div>
 						<div>
 							<span class={labelCls}>Grader role env</span>
 							<pre class="px-3 py-2 bg-stone-950 border border-stone-800 rounded-md font-mono text-xs text-stone-300 whitespace-pre-wrap">{graderEnv}</pre>
-							<p class="text-stone-600 text-xs mt-1.5">Put these on the internal grader role (<code class="text-stone-500">public: false</code>, <code class="text-stone-500">egress: true</code> to reach <code class="text-stone-500 break-all">{grading.report_url}</code>). Contract: docs/GRADED.md.</p>
 						</div>
 						<div class="grid grid-cols-3 gap-3">
 							{#each [{ l: 'Teams scoring', v: grading.scored_teams }, { l: 'Evaluations', v: grading.evaluations }, { l: 'Credits charged', v: Math.round(grading.credits_charged) }] as st}
@@ -3924,7 +3908,7 @@
 						<p class="text-stone-500 text-sm">Loading…</p>
 					{:else}
 						<div>
-							<div class="mb-2 flex items-center justify-between gap-3"><div><p class="text-sm font-medium text-stone-300">Challenge handouts</p><p class="mt-1 text-xs text-stone-600">Managed uploads are checksummed while streaming. External links suit large artifacts hosted in your own bucket or CDN.</p></div><label class="shrink-0 inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-stone-700 px-3 py-2 text-xs text-stone-300 hover:bg-stone-800/40"><Icon icon="mdi:upload" class="h-4 w-4" /> {subUploading ? 'Uploading…' : 'Upload'}<input type="file" multiple on:change={uploadEditAttachment} disabled={subUploading} class="hidden" /></label></div>
+							<div class="mb-2 flex items-center justify-between gap-3"><p class="text-sm font-medium text-stone-300">Handouts</p><label class="shrink-0 inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-stone-700 px-3 py-2 text-xs text-stone-300 hover:bg-stone-800/40"><Icon icon="mdi:upload" class="h-4 w-4" /> {subUploading ? 'Uploading…' : 'Upload'}<input type="file" multiple on:change={uploadEditAttachment} disabled={subUploading} class="hidden" /></label></div>
 							<div class="space-y-2">
 								{#each editAttachments as a (a.id)}
 									<div class="flex items-start gap-3 rounded-lg border border-stone-800 p-3">
@@ -3938,7 +3922,7 @@
 						</div>
 
 						<form on:submit|preventDefault={addExternalHandout} class="space-y-3 rounded-lg border border-stone-800 bg-stone-900/20 p-4">
-							<div><p class="text-sm font-medium text-stone-300">Add external handout</p><p class="mt-1 text-xs text-stone-600">Anvil records metadata and redirects downloads; it never fetches the administrator-supplied URL.</p></div>
+							<p class="text-sm font-medium text-stone-300">External handout</p>
 							<div class="grid gap-3 sm:grid-cols-2"><label><span class={labelCls}>Filename</span><input bind:value={externalHandout.name} required maxlength="255" placeholder="challenge-files.zip" class="w-full {fieldCls}" /></label><label><span class={labelCls}>HTTPS URL</span><input type="url" bind:value={externalHandout.url} required placeholder="https://cdn.example.com/challenge-files.zip" class="w-full {fieldCls}" /></label></div>
 							<div class="grid gap-3 sm:grid-cols-[1fr_auto]"><label><span class={labelCls}>SHA-256 <span class="normal-case tracking-normal text-stone-700">(recommended)</span></span><input bind:value={externalHandout.sha256} pattern="[A-Fa-f0-9]{64}" maxlength="64" placeholder="64 hexadecimal characters" class="w-full font-mono {fieldCls}" /></label><button type="submit" disabled={subUploading || !externalHandout.name.trim() || !externalHandout.url.trim()} class="self-end {btnPrimary}">Add link</button></div>
 							<label><span class={labelCls}>Description</span><input bind:value={externalHandout.description} maxlength="1000" placeholder="Optional player-facing note" class="w-full {fieldCls}" /></label>

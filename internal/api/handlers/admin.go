@@ -894,7 +894,10 @@ type CreateChallengeRequest struct {
 
 	// scoring_mode: "flag" (default) or "graded" (an in-instance grader reports a
 	// score in [0,1]). Empty = leave unchanged (update) / default (create).
-	ScoringMode string `json:"scoring_mode"`
+	ScoringMode  string `json:"scoring_mode"`
+	ScoreType    string `json:"score_type"`
+	ScoreMinimum *int   `json:"score_minimum"`
+	ScoreDecay   *int   `json:"score_decay"`
 
 	Flags []FlagInput `json:"flags"`
 
@@ -939,6 +942,18 @@ func validateChallengeRequest(req *CreateChallengeRequest, creating bool) error 
 	}
 	if req.ScoringMode != "" && req.ScoringMode != "flag" && req.ScoringMode != "graded" {
 		return errors.New("scoring_mode must be flag or graded")
+	}
+	if req.ScoreType != "" && req.ScoreType != "static" && req.ScoreType != "dynamic" {
+		return errors.New("score_type must be static or dynamic")
+	}
+	if req.ScoreMinimum != nil && (*req.ScoreMinimum < 0 || *req.ScoreMinimum > req.BasePoints) {
+		return errors.New("score_minimum must be between 0 and base_points")
+	}
+	if req.ScoreDecay != nil && (*req.ScoreDecay < 1 || *req.ScoreDecay > 1_000_000) {
+		return errors.New("score_decay must be between 1 and 1000000")
+	}
+	if req.ScoringMode == "graded" && req.ScoreType == "dynamic" {
+		return errors.New("graded evaluation requires static scoring")
 	}
 	if req.ArenaMode != "" && req.ArenaMode != "per_team" && req.ArenaMode != "shared" {
 		return errors.New("arena_mode must be per_team or shared")
@@ -1054,7 +1069,8 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 		       c.container_image, c.container_tag, c.container_platform,
 		       c.cpu_limit, c.memory_limit, c.exposed_ports,
 		       c.instance_timeout, c.max_extensions, c.cooldown_minutes,
-		       c.author_name, c.scoring_mode, c.sub_description, c.container_spec,
+		       c.author_name, c.scoring_mode, c.score_type, c.score_minimum, c.score_decay,
+		       c.sub_description, c.container_spec,
 		       c.privesc, c.arena_mode, c.release_date, c.total_attempts,
 		       c.economy_solve_count, c.supports_docker, c.supports_vm,
 		       c.vm_timeout_minutes, c.vm_max_extensions, c.vm_extension_minutes,
@@ -1103,6 +1119,9 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			CooldownMinutes    *int
 			AuthorName         *string
 			ScoringMode        string
+			ScoreType          string
+			ScoreMinimum       int
+			ScoreDecay         int
 			SubDescription     *string
 			ContainerSpec      []byte
 			Privesc            bool
@@ -1127,7 +1146,8 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			&ch.ContainerImage, &ch.ContainerTag, &ch.ContainerPlatform,
 			&ch.CPULimit, &ch.MemoryLimit, &ch.ExposedPorts,
 			&ch.InstanceTimeout, &ch.MaxExtensions, &ch.CooldownMinutes,
-			&ch.AuthorName, &ch.ScoringMode, &ch.SubDescription, &ch.ContainerSpec,
+			&ch.AuthorName, &ch.ScoringMode, &ch.ScoreType, &ch.ScoreMinimum, &ch.ScoreDecay,
+			&ch.SubDescription, &ch.ContainerSpec,
 			&ch.Privesc, &ch.ArenaMode, &ch.ReleaseDate, &ch.TotalAttempts,
 			&ch.EconomySolves, &ch.SupportsDocker, &ch.SupportsVM,
 			&ch.VMTimeoutMinutes, &ch.VMMaxExtensions, &ch.VMExtensionMinutes, &ch.DeliveryType, &ch.HasAttachments, &ch.VMTemplateID,
@@ -1176,6 +1196,9 @@ func (h *AdminChallengeHandler) List(c *gin.Context) {
 			"cooldown_minutes":     ch.CooldownMinutes,
 			"author_name":          ch.AuthorName,
 			"scoring_mode":         ch.ScoringMode,
+			"score_type":           ch.ScoreType,
+			"score_minimum":        ch.ScoreMinimum,
+			"score_decay":          ch.ScoreDecay,
 			"sub_description":      ch.SubDescription,
 			"services":             services,
 			"privesc":              ch.Privesc,
@@ -1285,6 +1308,24 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	if req.BasePoints == 0 {
 		req.BasePoints = 100
 	}
+	if req.ScoringMode == "" {
+		req.ScoringMode = "flag"
+	}
+	if req.ScoreType == "" {
+		req.ScoreType = "static"
+	}
+	if req.ScoreMinimum == nil {
+		minimum := req.BasePoints
+		req.ScoreMinimum = &minimum
+	}
+	if req.ScoreType == "static" {
+		minimum := req.BasePoints
+		req.ScoreMinimum = &minimum
+	}
+	if req.ScoreDecay == nil {
+		decay := 50
+		req.ScoreDecay = &decay
+	}
 	if challengeType == "vm" && len(req.Services) > 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "VM challenges cannot define container services"})
 		return
@@ -1349,12 +1390,9 @@ func (h *AdminChallengeHandler) Create(c *gin.Context) {
 	}
 
 	if req.ScoringMode != "" {
-		if req.ScoringMode != "flag" && req.ScoringMode != "graded" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "scoring_mode must be flag or graded"})
-			return
-		}
 		if _, err = tx.Exec(c.Request.Context(),
-			`UPDATE challenges SET scoring_mode = $1 WHERE id = $2`, req.ScoringMode, challengeID); err != nil {
+			`UPDATE challenges SET scoring_mode = $1, score_type = $2, score_minimum = $3, score_decay = $4 WHERE id = $5`,
+			req.ScoringMode, req.ScoreType, req.ScoreMinimum, req.ScoreDecay, challengeID); err != nil {
 			h.logger.Error("failed to set scoring_mode", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create challenge"})
 			return
@@ -2072,16 +2110,18 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	if req.ScoringMode != "" {
-		var currentMode string
+	{
+		var currentMode, currentType string
+		var currentBase, currentMinimum, currentDecay int
 		var activity int
 		if err := tx.QueryRow(ctx, `
-			SELECT scoring_mode,
+			SELECT scoring_mode, score_type, base_points, score_minimum, score_decay,
 			       (SELECT COUNT(*) FROM submissions WHERE challenge_id = challenges.id) +
 			       (SELECT COUNT(*) FROM solves WHERE challenge_id = challenges.id) +
 			       (SELECT COUNT(*) FROM graded_evaluations WHERE challenge_id = challenges.id) +
-			       (SELECT COUNT(*) FROM instances WHERE challenge_id = challenges.id AND status IN ('creating', 'running', 'stopping'))
-			FROM challenges WHERE id = $1 FOR UPDATE`, challengeID).Scan(&currentMode, &activity); err != nil {
+			       (SELECT COUNT(*) FROM instances WHERE challenge_id = challenges.id AND status IN ('pending', 'creating', 'running', 'stopping')) +
+			       (SELECT COUNT(*) FROM vm_instances WHERE challenge_id = challenges.id AND status IN ('provisioning', 'starting', 'running', 'paused', 'stopping'))
+			FROM challenges WHERE id = $1 FOR UPDATE`, challengeID).Scan(&currentMode, &currentType, &currentBase, &currentMinimum, &currentDecay, &activity); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 				return
@@ -2089,8 +2129,52 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to inspect challenge scoring"})
 			return
 		}
-		if req.ScoringMode != currentMode && activity > 0 {
-			c.JSON(http.StatusConflict, gin.H{"error": "scoring model is locked after submissions, evaluations, solves, or a live instance; create a new challenge to use another scoring model"})
+		effectiveMode := currentMode
+		if req.ScoringMode != "" {
+			effectiveMode = req.ScoringMode
+		}
+		effectiveType := currentType
+		if req.ScoreType != "" {
+			effectiveType = req.ScoreType
+		}
+		effectiveMinimum := currentMinimum
+		if req.ScoreMinimum != nil {
+			effectiveMinimum = *req.ScoreMinimum
+		}
+		effectiveDecay := currentDecay
+		if req.ScoreDecay != nil {
+			effectiveDecay = *req.ScoreDecay
+		}
+		if effectiveType == "static" {
+			effectiveMinimum = req.BasePoints
+		}
+		if effectiveMode == "graded" && effectiveType == "dynamic" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "graded evaluation requires static scoring"})
+			return
+		}
+		if effectiveMinimum < 0 || effectiveMinimum > req.BasePoints {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "score_minimum must be between 0 and base_points"})
+			return
+		}
+		if effectiveDecay < 1 || effectiveDecay > 1_000_000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "score_decay must be between 1 and 1000000"})
+			return
+		}
+		modeChanged := req.ScoringMode != "" && req.ScoringMode != currentMode
+		typeChanged := req.ScoreType != "" && req.ScoreType != currentType
+		baseChanged := req.BasePoints != currentBase
+		minimumChanged := req.ScoreMinimum != nil && *req.ScoreMinimum != currentMinimum
+		decayChanged := req.ScoreDecay != nil && *req.ScoreDecay != currentDecay
+		if activity > 0 && (modeChanged || typeChanged || baseChanged || minimumChanged || decayChanged) {
+			c.JSON(http.StatusConflict, gin.H{"error": "scoring model is locked after challenge activity begins"})
+			return
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE challenges SET base_points = $2, scoring_mode = $3, score_type = $4,
+				score_minimum = $5, score_decay = $6
+			WHERE id = $1`, challengeID, req.BasePoints, effectiveMode, effectiveType, effectiveMinimum, effectiveDecay); err != nil {
+			h.logger.Error("failed to update challenge scoring", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
 			return
 		}
 	}
@@ -2196,17 +2280,6 @@ func (h *AdminChallengeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
 		return
 	}
-	if req.ScoringMode != "" {
-		if req.ScoringMode != "flag" && req.ScoringMode != "graded" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "scoring_mode must be flag or graded"})
-			return
-		}
-		if _, err = tx.Exec(ctx, `UPDATE challenges SET scoring_mode = $1 WHERE id = $2`, req.ScoringMode, challengeID); err != nil {
-			h.logger.Error("failed to update scoring_mode", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge"})
-			return
-		}
-	}
 	if req.ArenaMode != "" {
 		if req.ArenaMode != "shared" && req.ArenaMode != "per_team" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "arena_mode must be per_team or shared"})
@@ -2267,12 +2340,51 @@ func (h *AdminChallengeHandler) UpdateMetadata(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "base_points must be between 0 and 1000000"})
 		return
 	}
-	result, err := h.db.Pool.Exec(c.Request.Context(), `
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin challenge metadata update", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge metadata"})
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	if request.BasePoints != nil {
+		var scoreType string
+		var scoreMinimum, activity int
+		if err := tx.QueryRow(ctx, `
+			SELECT score_type, score_minimum,
+			       (SELECT COUNT(*) FROM submissions WHERE challenge_id = challenges.id) +
+			       (SELECT COUNT(*) FROM solves WHERE challenge_id = challenges.id) +
+			       (SELECT COUNT(*) FROM graded_evaluations WHERE challenge_id = challenges.id) +
+			       (SELECT COUNT(*) FROM instances WHERE challenge_id = challenges.id AND status IN ('pending', 'creating', 'running', 'stopping')) +
+			       (SELECT COUNT(*) FROM vm_instances WHERE challenge_id = challenges.id AND status IN ('provisioning', 'starting', 'running', 'paused', 'stopping'))
+			FROM challenges WHERE id = $1 FOR UPDATE`, challengeID).Scan(&scoreType, &scoreMinimum, &activity); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+				return
+			}
+			h.logger.Error("failed to inspect challenge scoring", zap.String("challenge_id", challengeID), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge metadata"})
+			return
+		}
+		if activity > 0 {
+			c.JSON(http.StatusConflict, gin.H{"error": "scoring model is locked after challenge activity begins"})
+			return
+		}
+		if scoreType == "dynamic" && *request.BasePoints < scoreMinimum {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "base_points must be at least score_minimum"})
+			return
+		}
+	}
+
+	result, err := tx.Exec(ctx, `
 		UPDATE challenges SET
 			name = COALESCE($2, name),
 			description = COALESCE($3, description),
 			difficulty = COALESCE($4, difficulty),
 			base_points = COALESCE($5, base_points),
+			score_minimum = CASE WHEN score_type = 'static' AND $5::integer IS NOT NULL THEN $5 ELSE score_minimum END,
 			updated_at = NOW()
 		WHERE id = $1
 	`, challengeID, request.Name, request.Description, request.Difficulty, request.BasePoints)
@@ -2283,6 +2395,11 @@ func (h *AdminChallengeHandler) UpdateMetadata(c *gin.Context) {
 	}
 	if result.RowsAffected() != 1 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit challenge metadata update", zap.String("challenge_id", challengeID), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update challenge metadata"})
 		return
 	}
 	if uid, ok := contextUserID(c); ok {

@@ -66,10 +66,6 @@
 		{/if}
 	</div>
 
-	{#if challenge.sub_description}
-		<p class="mt-1.5 text-sm text-stone-500 leading-relaxed line-clamp-2">{challenge.sub_description}</p>
-	{/if}
-
 	<div class="mt-3 flex flex-wrap items-center gap-2 leading-none">
 		<span class="inline-flex items-center rounded border px-2 py-0.5 text-[0.68rem] leading-none font-medium capitalize {difficultyClass(challenge.difficulty)}">
 			<span class="badge-label">{challenge.difficulty}</span>

@@ -224,6 +224,34 @@ func TestDataPortabilityPreviewExportAndApply(t *testing.T) {
 	if err := db.Pool.QueryRow(ctx, `SELECT COUNT(*)::int FROM categories WHERE slug = 'portable-beta'`).Scan(&betaCount); err != nil || betaCount != 1 {
 		t.Fatalf("beta count=%d error=%v", betaCount, err)
 	}
+	dynamicSlug := "portable-dynamic-" + uuid.NewString()
+	defer func() { _, _ = db.Pool.Exec(ctx, `DELETE FROM challenges WHERE slug = $1`, dynamicSlug) }()
+	challengeCSV := "slug,name,difficulty,category_slug,base_points,score_type,score_minimum,score_decay\n" + dynamicSlug + ",Portable Dynamic,medium,portable-beta,500,dynamic,100,20\n"
+	challengePreviewBody, _ := json.Marshal(map[string]any{"entity": "challenges", "format": "csv", "mode": "create", "source_name": "challenges.csv", "content": challengeCSV})
+	challengePreview := request(http.MethodPost, "/api/v1/admin/data/imports/preview", adminToken, bytes.NewReader(challengePreviewBody))
+	if challengePreview.Code != http.StatusCreated {
+		t.Fatalf("challenge preview status=%d body=%s", challengePreview.Code, challengePreview.Body.String())
+	}
+	var challengeJob struct {
+		JobID    string `json:"job_id"`
+		Checksum string `json:"checksum"`
+	}
+	if err := json.Unmarshal(challengePreview.Body.Bytes(), &challengeJob); err != nil || challengeJob.JobID == "" {
+		t.Fatalf("challenge preview response=%s error=%v", challengePreview.Body.String(), err)
+	}
+	challengeApply := request(http.MethodPost, "/api/v1/admin/data/imports/"+challengeJob.JobID+"/apply", adminToken, strings.NewReader(`{"checksum":"`+challengeJob.Checksum+`"}`))
+	if challengeApply.Code != http.StatusOK {
+		t.Fatalf("challenge apply status=%d body=%s", challengeApply.Code, challengeApply.Body.String())
+	}
+	var scoreType string
+	var scoreMinimum, scoreDecay int
+	if err := db.Pool.QueryRow(ctx, `SELECT score_type, score_minimum, score_decay FROM challenges WHERE slug = $1`, dynamicSlug).Scan(&scoreType, &scoreMinimum, &scoreDecay); err != nil || scoreType != "dynamic" || scoreMinimum != 100 || scoreDecay != 20 {
+		t.Fatalf("imported scoring=%q/%d/%d error=%v", scoreType, scoreMinimum, scoreDecay, err)
+	}
+	challengeExport := request(http.MethodGet, "/api/v1/admin/data/export?format=csv&entities=challenges", adminToken, nil)
+	if challengeExport.Code != http.StatusOK || !strings.Contains(challengeExport.Body.String(), "score_type,score_minimum,score_decay") || !strings.Contains(challengeExport.Body.String(), dynamicSlug) {
+		t.Fatalf("challenge export status=%d body=%s", challengeExport.Code, challengeExport.Body.String())
+	}
 
 	badBody, _ := json.Marshal(map[string]any{"entity": "users", "format": "csv", "mode": "merge", "source_name": "users.csv", "content": "username,email,role\n" + "data-admin-" + adminID.String() + ",admin@example.com,user\n"})
 	bad := request(http.MethodPost, "/api/v1/admin/data/imports/preview", adminToken, bytes.NewReader(badBody))

@@ -159,6 +159,14 @@ func TestAdminDossiersUseAuthoritativeCompetitionData(t *testing.T) {
 	if stats["submissions"].(float64) != 2 || stats["solved_teams"].(float64) != 1 || stats["running_instances"].(float64) != 1 || len(challengeDetail["audit"].([]any)) != 1 || len(challengeDetail["flags"].([]any)) != 1 {
 		t.Fatalf("incomplete challenge dossier: %#v", challengeDetail)
 	}
+	lockedMetadata := request(http.MethodPatch, "/api/v1/admin/challenges/"+challengeID.String()+"/metadata", map[string]any{"base_points": 200})
+	if lockedMetadata.Code != http.StatusConflict || !strings.Contains(lockedMetadata.Body.String(), "scoring model is locked") {
+		t.Fatalf("active challenge points were mutable: status=%d body=%s", lockedMetadata.Code, lockedMetadata.Body.String())
+	}
+	editableMetadata := request(http.MethodPatch, "/api/v1/admin/challenges/"+challengeID.String()+"/metadata", map[string]any{"description": "updated copy"})
+	if editableMetadata.Code != http.StatusOK {
+		t.Fatalf("non-scoring metadata update status=%d body=%s", editableMetadata.Code, editableMetadata.Body.String())
+	}
 	for _, path := range []string{"/api/v1/admin/instance-flags", "/api/v1/admin/flag-shares"} {
 		response := request(http.MethodGet, path, nil)
 		if response.Code != http.StatusOK {

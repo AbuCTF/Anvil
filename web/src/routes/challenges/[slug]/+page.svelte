@@ -261,7 +261,11 @@
 	$: locked = challenge?.economy?.enabled && !challenge.economy.launched;
 	// economy pays the live band value; flags weigh a share of it, not flat points
 	$: economyOn = !!challenge?.economy?.enabled;
-	$: shownPoints = typeof challenge?.economy?.value === 'number' ? Math.round(challenge.economy.value) : challenge?.base_points;
+	$: shownPoints = typeof challenge?.economy?.value === 'number'
+		? Math.round(challenge.economy.value)
+		: typeof challenge?.value === 'number'
+			? Math.round(challenge.value)
+			: challenge?.base_points;
 	$: flagWeightTotal = (challenge?.flags ?? []).reduce((sum: number, f: any) => sum + (f.points || 0), 0);
 	function flagPct(f: any): number {
 		const n = challenge?.flags?.length || 1;

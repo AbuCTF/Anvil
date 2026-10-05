@@ -71,7 +71,7 @@
 				{#if tab === 'overview'}
 					<div class="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
 						{#each [
-							{ label: 'Base points', value: seed.base_points ?? 0, accent: true },
+							{ label: seed.score_type === 'dynamic' ? 'Maximum points' : 'Points', value: seed.base_points ?? 0, accent: true },
 							{ label: 'Teams solved', value: stats.solved_teams ?? seed.economy_solve_count ?? 0 },
 							{ label: 'Open teams', value: stats.open_teams ?? 0 },
 							{ label: 'Attempts', value: stats.submissions ?? seed.total_attempts ?? 0 },
@@ -88,23 +88,24 @@
 						<Card title="Configuration" bodyClass="p-4">
 							<dl class="grid grid-cols-2 gap-x-5 gap-y-3 text-xs sm:grid-cols-3">
 								<div><dt class="metadata-label text-stone-600">Delivery</dt><dd class="mt-1 capitalize text-stone-300">{seed.delivery_type?.replace('_', ' ') || seed.resource_type}</dd></div>
-								<div><dt class="metadata-label text-stone-600">Scoring</dt><dd class="mt-1 capitalize text-stone-300">{seed.scoring_mode || 'flag'}</dd></div>
+								<div><dt class="metadata-label text-stone-600">Judging</dt><dd class="mt-1 capitalize text-stone-300">{seed.scoring_mode === 'graded' ? 'Grader' : 'Flags'}</dd></div>
+								<div><dt class="metadata-label text-stone-600">Scoring</dt><dd class="mt-1 capitalize text-stone-300">{economyEnabled ? 'Ledger' : seed.score_type || 'static'}</dd></div>
+								{#if !economyEnabled && seed.score_type === 'dynamic'}<div><dt class="metadata-label text-stone-600">Range</dt><dd class="mt-1 text-stone-300">{seed.base_points}–{seed.score_minimum}</dd></div><div><dt class="metadata-label text-stone-600">Decay</dt><dd class="mt-1 text-stone-300">{seed.score_decay} solves</dd></div>{/if}
 								<div><dt class="metadata-label text-stone-600">Topology</dt><dd class="mt-1 text-stone-300">{seed.arena_mode === 'shared' ? 'Shared arena' : 'Per team'}</dd></div>
 								<div><dt class="metadata-label text-stone-600">Category</dt><dd class="mt-1 text-stone-300">{seed.category_name || 'Uncategorised'}</dd></div>
 								<div><dt class="metadata-label text-stone-600">Author</dt><dd class="mt-1 text-stone-300">{seed.author_name || '—'}</dd></div>
-								<div><dt class="metadata-label text-stone-600">Privileged path</dt><dd class="mt-1 text-stone-300">{seed.privesc ? 'SUID / privesc enabled' : 'Hardened'}</dd></div>
+								<div><dt class="metadata-label text-stone-600">SUID</dt><dd class="mt-1 text-stone-300">{seed.privesc ? 'Enabled' : 'Disabled'}</dd></div>
 								<div><dt class="metadata-label text-stone-600">Timeout</dt><dd class="mt-1 text-stone-300">{seed.resource_type === 'vm' ? seed.vm_timeout_minutes : seed.instance_timeout} min</dd></div>
 								<div><dt class="metadata-label text-stone-600">Extensions</dt><dd class="mt-1 text-stone-300">{seed.resource_type === 'vm' ? seed.vm_max_extensions : seed.max_extensions}</dd></div>
 								<div><dt class="metadata-label text-stone-600">Created</dt><dd class="mt-1 text-stone-300">{when(seed.created_at)}</dd></div>
 							</dl>
-							{#if seed.sub_description}<div class="mt-4 border-t border-stone-800 pt-3"><p class="metadata-label text-stone-600">Pre-launch summary</p><p class="mt-1 text-sm leading-relaxed text-stone-400">{seed.sub_description}</p></div>{/if}
 						</Card>
 
 						<Card title="Runtime" bodyClass="p-4">
 							{#if seed.delivery_type === 'static'}
-								<p class="text-sm text-stone-400">Download or flag-only challenge. No runtime is provisioned.</p>
+								<p class="text-sm text-stone-400">None</p>
 							{:else if seed.delivery_type === 'external'}
-								<p class="text-sm text-stone-400">External target or OSINT challenge. Anvil serves the instructions and scoring flow without provisioning a runtime.</p>
+								<p class="text-sm text-stone-400">External</p>
 							{:else if seed.resource_type === 'vm'}
 								<p class="text-sm text-stone-300">VM template <span class="font-mono text-stone-500">{seed.vm_template_id || 'not selected'}</span></p>
 							{:else if seed.delivery_type === 'multi'}
@@ -116,12 +117,11 @@
 					</div>
 
 					<div class="mt-4 grid items-start gap-4 lg:grid-cols-3">
-						<Card title={`Flags (${detail.flags?.length ?? 0})`} bodyClass="p-0"><div class="divide-y divide-stone-800/60">{#each detail.flags ?? [] as flag}<div class="flex items-center justify-between gap-3 px-4 py-3 text-xs"><div><p class="text-stone-300">{flag.name}</p><p class="mt-1 text-stone-600">{flag.flag_type || 'static'}{flag.dynamic_flag_prefix ? ` · ${flag.dynamic_flag_prefix}{uuid}` : ''}</p></div><span class="tabular-nums text-stone-400">{flag.points}</span></div>{/each}{#if !detail.flags?.length}<EmptyState icon="mdi:flag-outline" text="No flags." />{/if}</div></Card>
+						<Card title={`Flags (${detail.flags?.length ?? 0})`} bodyClass="p-0"><div class="divide-y divide-stone-800/60">{#each detail.flags ?? [] as flag}<div class="flex items-center justify-between gap-3 px-4 py-3 text-xs"><div><p class="text-stone-300">{flag.name}</p><p class="mt-1 text-stone-600">{flag.flag_type === 'dynamic' ? 'Per-instance' : flag.flag_type === 'regex' ? 'Pattern' : 'Exact'}{flag.dynamic_flag_prefix ? ` · ${flag.dynamic_flag_prefix}{uuid}` : ''}</p></div><span class="tabular-nums text-stone-400">{flag.points}</span></div>{/each}{#if !detail.flags?.length}<EmptyState icon="mdi:flag-outline" text="No flags." />{/if}</div></Card>
 						<Card title={`Hints (${detail.hints?.length ?? 0})`} bodyClass="p-0"><div class="divide-y divide-stone-800/60">{#each detail.hints ?? [] as hint}<div class="px-4 py-3 text-xs"><p class="line-clamp-3 text-stone-400">{hint.content}</p><p class="mt-1 text-stone-600">{hint.cost || 0} credits</p></div>{/each}{#if !detail.hints?.length}<EmptyState icon="mdi:lightbulb-outline" text="No hints." />{/if}</div></Card>
 						<Card title={`Handouts (${detail.attachments?.length ?? 0})`} bodyClass="p-0"><div class="divide-y divide-stone-800/60">{#each detail.attachments ?? [] as file}<div class="px-4 py-3 text-xs"><div class="flex items-center justify-between gap-3"><p class="truncate text-stone-300">{file.filename}</p><span class="shrink-0 text-stone-600">{file.url ? 'External' : 'Managed'}</span></div><p class="mt-1 truncate font-mono text-stone-600" title={file.sha256}>{file.sha256 ? `sha256:${file.sha256}` : 'Checksum unavailable'} · {file.file_size || 0} bytes</p></div>{/each}{#if !detail.attachments?.length}<EmptyState icon="mdi:paperclip" text="No handouts." />{/if}</div></Card>
 					</div>
 				{:else if tab === 'submissions'}
-					<div class="mb-3 rounded-md border border-stone-800 bg-stone-900/30 px-3 py-2 text-xs text-stone-500">The audit view uses irreversible fingerprints rather than redistributing valid flag material.</div>
 					{#if detail.submissions?.length}
 						<div class="overflow-x-auto rounded-lg border border-stone-800"><table class="w-full min-w-[960px] text-xs"><thead><tr class="metadata-label border-b border-stone-800 text-stone-500"><th class="px-3 py-2 text-left">Participant</th><th class="px-3 py-2 text-left">Team</th><th class="px-3 py-2 text-left">Flag</th><th class="px-3 py-2 text-left">Result</th><th class="px-3 py-2 text-left">Fingerprint</th><th class="px-3 py-2 text-left">IP</th><th class="px-3 py-2 text-left">Client</th><th class="px-3 py-2 text-right">When</th></tr></thead><tbody>{#each detail.submissions as row}<tr class="border-b border-stone-800/60 last:border-0"><td class="px-3 py-2 text-stone-300">{row.username || 'Session'}</td><td class="px-3 py-2 text-stone-400">{row.team_name || '—'}</td><td class="px-3 py-2 text-stone-400">{row.flag_name || 'Unknown'}</td><td class="px-3 py-2 {row.correct ? 'text-up' : 'text-down'}">{row.correct ? 'Correct' : 'Wrong'}</td><td class="px-3 py-2 font-mono text-stone-500">{row.flag_fingerprint} · {row.flag_length}</td><td class="px-3 py-2 font-mono text-stone-400">{row.ip_address || '—'}</td><td class="max-w-64 truncate px-3 py-2 text-stone-600" title={row.user_agent}>{row.user_agent || '—'}</td><td class="px-3 py-2 text-right text-stone-600" title={instantTitle(row.submitted_at, 'seconds')}>{when(row.submitted_at)}</td></tr>{/each}</tbody></table></div>
 					{:else}<EmptyState icon="mdi:form-textbox-password" text="No submissions." />{/if}

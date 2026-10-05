@@ -118,7 +118,7 @@ var importSpecs = map[string]importSpec{
 		Required: []string{"slug", "name"}, Key: "slug",
 	},
 	"challenges": {
-		Headers:  []string{"slug", "name", "description", "sub_description", "difficulty", "category_slug", "status", "author_name", "resource_type", "delivery_type", "container_image", "container_tag", "cpu_limit", "memory_limit", "exposed_ports", "base_points", "release_date", "privesc", "scoring_mode"},
+		Headers:  []string{"slug", "name", "description", "sub_description", "difficulty", "category_slug", "status", "author_name", "resource_type", "delivery_type", "container_image", "container_tag", "cpu_limit", "memory_limit", "exposed_ports", "base_points", "score_type", "score_minimum", "score_decay", "release_date", "privesc", "scoring_mode"},
 		Required: []string{"slug", "name", "difficulty"}, Key: "slug",
 	},
 	"users": {
@@ -141,6 +141,7 @@ var importHeaderAliases = map[string]map[string]string{
 		"title": "name", "challenge_name": "name", "challenge_slug": "slug", "category": "category_slug", "author": "author_name",
 		"points": "base_points", "score": "base_points", "value": "base_points", "image": "container_image", "docker_image": "container_image",
 		"repository": "container_image", "tag": "container_tag", "ports": "exposed_ports", "release": "release_date", "type": "delivery_type",
+		"scoring": "score_type", "minimum": "score_minimum", "decay": "score_decay", "evaluation": "scoring_mode",
 	},
 	"users": {
 		"user_name": "username", "user_id": "username", "userid": "username", "login": "username", "login_id": "username",
@@ -1407,11 +1408,26 @@ func (h *DataHandler) validateImportRow(ctx context.Context, query importQuery, 
 		if (importDefault(row["resource_type"], "docker") == "vm") != (delivery == "vm") {
 			add("delivery_type", "must match the VM resource type")
 		}
-		if scoring := importDefault(row["scoring_mode"], "flag"); scoring != "flag" && scoring != "graded" {
+		evaluation := importDefault(row["scoring_mode"], "flag")
+		if evaluation != "flag" && evaluation != "graded" {
 			add("scoring_mode", "must be flag or graded")
 		}
-		if _, err := importInt(row["base_points"], 100, 0, 1000000); err != nil {
-			add("base_points", err.Error())
+		points, pointsErr := importInt(row["base_points"], 100, 0, 1000000)
+		if pointsErr != nil {
+			add("base_points", pointsErr.Error())
+		}
+		scoreType := importDefault(row["score_type"], "static")
+		if scoreType != "static" && scoreType != "dynamic" {
+			add("score_type", "must be static or dynamic")
+		}
+		if evaluation == "graded" && scoreType == "dynamic" {
+			add("score_type", "graded evaluation requires static scoring")
+		}
+		if _, err := importInt(row["score_minimum"], points, 0, points); err != nil {
+			add("score_minimum", err.Error())
+		}
+		if _, err := importInt(row["score_decay"], 50, 1, 1000000); err != nil {
+			add("score_decay", err.Error())
 		}
 		if _, err := importBool(row["privesc"], false); err != nil {
 			add("privesc", err.Error())
@@ -1662,6 +1678,12 @@ func assignImportedTeamMember(ctx context.Context, tx pgx.Tx, username, teamName
 
 func createChallengeImport(ctx context.Context, tx pgx.Tx, row map[string]string) error {
 	points, _ := importInt(row["base_points"], 100, 0, 1000000)
+	minimum, _ := importInt(row["score_minimum"], points, 0, points)
+	decay, _ := importInt(row["score_decay"], 50, 1, 1000000)
+	scoreType := importDefault(row["score_type"], "static")
+	if scoreType == "static" {
+		minimum = points
+	}
 	privesc, _ := importBool(row["privesc"], false)
 	release, err := importTime(row["release_date"])
 	if err != nil {
@@ -1670,16 +1692,22 @@ func createChallengeImport(ctx context.Context, tx pgx.Tx, row map[string]string
 	_, err = tx.Exec(ctx, `
 		INSERT INTO challenges
 		(slug, name, description, sub_description, difficulty, category_id, status, author_name, resource_type, delivery_type,
-		 container_image, container_tag, cpu_limit, memory_limit, exposed_ports, base_points, release_date, privesc, scoring_mode)
+		 container_image, container_tag, cpu_limit, memory_limit, exposed_ports, base_points, score_type, score_minimum, score_decay, release_date, privesc, scoring_mode)
 		VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, ''), $5::challenge_difficulty,
 		 (SELECT id FROM categories WHERE slug = NULLIF($6, '')), $7::challenge_status, NULLIF($8, ''), $9::resource_type,
-		 $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19)
-	`, row["slug"], row["name"], row["description"], row["sub_description"], row["difficulty"], row["category_slug"], importDefault(row["status"], "draft"), row["author_name"], importDefault(row["resource_type"], "docker"), challengeImportDelivery(row), row["container_image"], challengeImportTag(row), importDefault(row["cpu_limit"], "1"), importDefault(row["memory_limit"], "512m"), importDefault(row["exposed_ports"], "[]"), points, release, privesc, importDefault(row["scoring_mode"], "flag"))
+		 $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18, $19, $20, $21, $22)
+	`, row["slug"], row["name"], row["description"], row["sub_description"], row["difficulty"], row["category_slug"], importDefault(row["status"], "draft"), row["author_name"], importDefault(row["resource_type"], "docker"), challengeImportDelivery(row), row["container_image"], challengeImportTag(row), importDefault(row["cpu_limit"], "1"), importDefault(row["memory_limit"], "512m"), importDefault(row["exposed_ports"], "[]"), points, scoreType, minimum, decay, release, privesc, importDefault(row["scoring_mode"], "flag"))
 	return err
 }
 
 func updateChallengeImport(ctx context.Context, tx pgx.Tx, row map[string]string) error {
 	points, _ := importInt(row["base_points"], 100, 0, 1000000)
+	minimum, _ := importInt(row["score_minimum"], points, 0, points)
+	decay, _ := importInt(row["score_decay"], 50, 1, 1000000)
+	scoreType := importDefault(row["score_type"], "static")
+	if scoreType == "static" {
+		minimum = points
+	}
 	privesc, _ := importBool(row["privesc"], false)
 	release, err := importTime(row["release_date"])
 	if err != nil {
@@ -1691,9 +1719,10 @@ func updateChallengeImport(ctx context.Context, tx pgx.Tx, row map[string]string
 		 category_id = (SELECT id FROM categories WHERE slug = NULLIF($6, '')), status = $7::challenge_status,
 		 author_name = NULLIF($8, ''), resource_type = $9::resource_type, delivery_type = $10, container_image = $11, container_tag = $12,
 		 cpu_limit = $13, memory_limit = $14, exposed_ports = $15::jsonb, base_points = $16,
-		 release_date = $17, privesc = $18, scoring_mode = $19, updated_at = NOW()
+		 score_type = $17, score_minimum = $18, score_decay = $19,
+		 release_date = $20, privesc = $21, scoring_mode = $22, updated_at = NOW()
 		WHERE slug = $1
-	`, row["slug"], row["name"], row["description"], row["sub_description"], row["difficulty"], row["category_slug"], importDefault(row["status"], "draft"), row["author_name"], importDefault(row["resource_type"], "docker"), challengeImportDelivery(row), row["container_image"], challengeImportTag(row), importDefault(row["cpu_limit"], "1"), importDefault(row["memory_limit"], "512m"), importDefault(row["exposed_ports"], "[]"), points, release, privesc, importDefault(row["scoring_mode"], "flag"))
+	`, row["slug"], row["name"], row["description"], row["sub_description"], row["difficulty"], row["category_slug"], importDefault(row["status"], "draft"), row["author_name"], importDefault(row["resource_type"], "docker"), challengeImportDelivery(row), row["container_image"], challengeImportTag(row), importDefault(row["cpu_limit"], "1"), importDefault(row["memory_limit"], "512m"), importDefault(row["exposed_ports"], "[]"), points, scoreType, minimum, decay, release, privesc, importDefault(row["scoring_mode"], "flag"))
 	return err
 }
 

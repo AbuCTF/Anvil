@@ -74,7 +74,10 @@ type Challenge struct {
 	ResourceType string `json:"resource_type" db:"resource_type"` // docker or vm
 	DeliveryType string `json:"delivery_type" db:"delivery_type"`
 
-	BasePoints int `json:"base_points" db:"base_points"`
+	BasePoints   int    `json:"base_points" db:"base_points"`
+	ScoreType    string `json:"score_type" db:"score_type"`
+	ScoreMinimum int    `json:"score_minimum" db:"score_minimum"`
+	ScoreDecay   int    `json:"score_decay" db:"score_decay"`
 
 	TotalFlags    int `json:"total_flags" db:"total_flags"`
 	TotalSolves   int `json:"total_solves" db:"total_solves"`

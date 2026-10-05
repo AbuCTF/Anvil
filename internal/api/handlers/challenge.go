@@ -20,6 +20,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/models"
+	"github.com/anvil-lab/anvil/internal/scoring"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -46,6 +47,64 @@ func loadSolveProjectionSettings(ctx context.Context, db *database.DB) (solvePro
 			COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.slug'), 'anvil-event')
 	`).Scan(&settings.TeamsMode, &settings.ShadowEvents, &settings.EventSlug)
 	return settings, err
+}
+
+func dynamicFlagValue(ctx context.Context, tx pgx.Tx, challengeID, flagID string, current int) (int, error) {
+	var value int
+	err := tx.QueryRow(ctx, `
+		WITH weighted AS (
+			SELECT id, points,
+			       SUM(points) OVER (ORDER BY sort_order, id) AS cumulative,
+			       SUM(points) OVER () AS total
+			FROM flags WHERE challenge_id = $1
+		)
+		SELECT CASE WHEN total <= 0 OR $3 <= 0 THEN 0 ELSE
+			(ROUND(cumulative::numeric * $3 / total) - ROUND((cumulative - points)::numeric * $3 / total))::int
+		END
+		FROM weighted WHERE id = $2`, challengeID, flagID, current).Scan(&value)
+	return value, err
+}
+
+func repriceDynamicChallenge(ctx context.Context, tx pgx.Tx, challengeID string, current int, teamsMode bool) error {
+	_, err := tx.Exec(ctx, `
+		WITH flag_prices AS MATERIALIZED (
+			SELECT id,
+			       CASE WHEN total <= 0 OR $3 <= 0 THEN 0 ELSE
+				   (ROUND(cumulative::numeric * $3 / total) - ROUND((cumulative - points)::numeric * $3 / total))::int
+			       END AS new_points
+			FROM (
+				SELECT id, points,
+				       SUM(points) OVER (ORDER BY sort_order, id) AS cumulative,
+				       SUM(points) OVER () AS total
+				FROM flags WHERE challenge_id = $1
+			) weighted
+		), priced AS MATERIALIZED (
+			SELECT s.id, s.user_id, u.team_id, s.flag_id, s.points_awarded AS old_points,
+			       fp.new_points,
+			       ROW_NUMBER() OVER (PARTITION BY u.team_id, s.flag_id ORDER BY s.solved_at, s.id) AS team_order
+			FROM solves s
+			JOIN flag_prices fp ON fp.id = s.flag_id
+			JOIN users u ON u.id = s.user_id
+			WHERE s.challenge_id = $1
+		), user_deltas AS (
+			SELECT user_id, SUM(new_points - old_points)::int AS delta
+			FROM priced GROUP BY user_id
+		), updated_users AS (
+			UPDATE users u SET total_score = u.total_score + d.delta, updated_at = NOW()
+			FROM user_deltas d WHERE u.id = d.user_id AND d.delta <> 0
+		), team_deltas AS (
+			SELECT team_id, SUM(new_points - old_points)::int AS delta
+			FROM priced
+			WHERE $2 AND team_id IS NOT NULL AND team_order = 1
+			GROUP BY team_id
+		), updated_teams AS (
+			UPDATE teams t SET total_score = t.total_score + d.delta, updated_at = NOW()
+			FROM team_deltas d WHERE t.id = d.team_id AND d.delta <> 0
+		)
+		UPDATE solves s SET points_awarded = p.new_points
+		FROM priced p WHERE s.id = p.id AND s.points_awarded <> p.new_points`,
+		challengeID, teamsMode, current)
+	return err
 }
 
 func evidenceUserAgent(c *gin.Context) string {
@@ -202,6 +261,9 @@ type ChallengeListResponse struct {
 	Category       *string `json:"category,omitempty"`
 	CategoryID     *string `json:"category_id,omitempty"`
 	BasePoints     int     `json:"base_points"`
+	ScoreType      string  `json:"score_type"`
+	ScoreMinimum   int     `json:"score_minimum"`
+	ScoreDecay     int     `json:"score_decay"`
 	TotalSolves    int     `json:"total_solves"`
 	TotalFlags     int     `json:"total_flags"`
 	AuthorName     *string `json:"author_name,omitempty"`
@@ -298,7 +360,8 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 	query := `
 		SELECT
 			c.id, c.name, c.slug, c.description, c.difficulty,
-			c.base_points, c.total_solves, c.total_flags, c.author_name,
+			c.base_points, c.score_type, c.score_minimum, c.score_decay,
+			c.total_solves, c.total_flags, c.author_name,
 			c.resource_type, c.delivery_type, c.sub_description, c.arena_mode,
 			(
 				(c.resource_type = 'docker' AND (COALESCE(c.container_image, '') <> '' OR c.container_spec IS NOT NULL))
@@ -350,7 +413,8 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 
 		if err := rows.Scan(
 			&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
-			&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
+			&ch.BasePoints, &ch.ScoreType, &ch.ScoreMinimum, &ch.ScoreDecay,
+			&ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
 			&ch.ResourceType, &ch.DeliveryType, &ch.SubDescription, &ch.ArenaMode, &ch.HasInstance, &ch.HasAttachments, &categoryID, &categoryName, &ch.UserSolves,
 			&ch.ScoringMode, &ch.GradedBest, &ch.GradedTeams,
 		); err != nil {
@@ -364,6 +428,16 @@ func (h *ChallengeHandler) List(c *gin.Context) {
 		ch.IsSolved = ch.UserSolves >= ch.TotalFlags && ch.TotalFlags > 0
 		if ch.ScoringMode == "graded" {
 			ch.IsSolved = ch.GradedBest != nil && *ch.GradedBest >= 1
+		}
+		if ch.ScoreType == "dynamic" {
+			value, valueErr := scoring.ChallengeValue(ch.ScoreType, ch.BasePoints, ch.ScoreMinimum, ch.ScoreDecay, ch.TotalSolves)
+			if valueErr != nil {
+				h.logger.Error("failed to calculate challenge value", zap.String("challenge_id", ch.ID), zap.Error(valueErr))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenges"})
+				return
+			}
+			current := float64(value)
+			ch.Value = &current
 		}
 
 		challenges = append(challenges, ch)
@@ -442,7 +516,8 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 	query := `
 		SELECT 
 			c.id, c.name, c.slug, c.description, c.difficulty,
-			c.base_points, c.total_solves, c.total_flags, c.author_name,
+			c.base_points, c.score_type, c.score_minimum, c.score_decay,
+			c.total_solves, c.total_flags, c.author_name,
 			c.exposed_ports, c.instance_timeout, c.max_extensions, c.release_date,
 			c.resource_type, c.delivery_type, c.status, c.sub_description, c.arena_mode, c.scoring_mode,
 			(
@@ -463,7 +538,8 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 
 	err := h.db.Pool.QueryRow(c.Request.Context(), query, slug).Scan(
 		&ch.ID, &ch.Name, &ch.Slug, &ch.Description, &ch.Difficulty,
-		&ch.BasePoints, &ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
+		&ch.BasePoints, &ch.ScoreType, &ch.ScoreMinimum, &ch.ScoreDecay,
+		&ch.TotalSolves, &ch.TotalFlags, &ch.AuthorName,
 		&exposedPortsJSON, &ch.InstanceTimeout, &ch.MaxExtensions, &ch.ReleaseDate,
 		&ch.ResourceType, &ch.DeliveryType, &ch.Status, &ch.SubDescription, &ch.ArenaMode, &ch.ScoringMode,
 		&ch.HasInstance, &ch.HasAttachments,
@@ -481,6 +557,16 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 
 	ch.CategoryID = categoryID
 	ch.Category = categoryName
+	currentScore, scoreErr := scoring.ChallengeValue(ch.ScoreType, ch.BasePoints, ch.ScoreMinimum, ch.ScoreDecay, ch.TotalSolves)
+	if scoreErr != nil {
+		h.logger.Error("failed to calculate challenge value", zap.String("challenge_id", ch.ID), zap.Error(scoreErr))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+		return
+	}
+	if ch.ScoreType == "dynamic" {
+		value := float64(currentScore)
+		ch.Value = &value
+	}
 	ch.ExposedPorts = []models.ExposedPort{}
 	if len(exposedPortsJSON) > 0 {
 		if err := json.Unmarshal(exposedPortsJSON, &ch.ExposedPorts); err != nil {
@@ -540,6 +626,21 @@ func (h *ChallengeHandler) Get(c *gin.Context) {
 		h.logger.Error("failed while reading challenge flags", zap.String("challenge_id", ch.ID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
 		return
+	}
+	if ch.ScoreType == "dynamic" {
+		weights := make([]int, len(ch.Flags))
+		for index := range ch.Flags {
+			weights[index] = ch.Flags[index].Points
+		}
+		allocated, allocationErr := scoring.AllocatePoints(weights, currentScore)
+		if allocationErr != nil {
+			h.logger.Error("failed to allocate challenge points", zap.String("challenge_id", ch.ID), zap.Error(allocationErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch challenge"})
+			return
+		}
+		for index := range ch.Flags {
+			ch.Flags[index].Points = allocated[index]
+		}
 	}
 
 	hintsQuery := `
@@ -701,11 +802,14 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 		return
 	}
 
-	var challengeID string
+	var challengeID, scoreType string
+	var basePoints, scoreMinimum, scoreDecay, totalSolves int
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id FROM challenges
+		`SELECT id, score_type, base_points, score_minimum, score_decay, total_solves FROM challenges
 		 WHERE slug = $1 AND status = 'published'
-		   AND (release_date IS NULL OR release_date <= NOW())`, slug).Scan(&challengeID)
+		   AND (release_date IS NULL OR release_date <= NOW())`, slug).Scan(
+		&challengeID, &scoreType, &basePoints, &scoreMinimum, &scoreDecay, &totalSolves,
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "challenge not found"})
 		return
@@ -715,6 +819,12 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 		return
 	}
 	if rejectLocked(c, h.db, h.logger, challengeID, false) {
+		return
+	}
+	currentScore, scoreErr := scoring.ChallengeValue(scoreType, basePoints, scoreMinimum, scoreDecay, totalSolves)
+	if scoreErr != nil {
+		h.logger.Error("failed to calculate challenge value", zap.String("challenge_id", challengeID), zap.Error(scoreErr))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
 		return
 	}
 
@@ -756,6 +866,21 @@ func (h *ChallengeHandler) GetFlags(c *gin.Context) {
 		h.logger.Error("failed while reading challenge flags", zap.String("challenge_id", challengeID), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
 		return
+	}
+	if scoreType == "dynamic" {
+		weights := make([]int, len(flags))
+		for index := range flags {
+			weights[index] = flags[index].Points
+		}
+		allocated, allocationErr := scoring.AllocatePoints(weights, currentScore)
+		if allocationErr != nil {
+			h.logger.Error("failed to allocate flag points", zap.String("challenge_id", challengeID), zap.Error(allocationErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch flags"})
+			return
+		}
+		for index := range flags {
+			flags[index].Points = allocated[index]
+		}
 	}
 
 	if flags == nil {
@@ -1779,13 +1904,30 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 
 	// serialize solves for this challenge so its denormalized counts cannot lose
 	// concurrent updates.
-	var challengeLock int
+	var challengeScoreType string
+	var challengeBasePoints, challengeScoreMinimum, challengeScoreDecay, challengeTotalSolves int
 	if err := tx.QueryRow(ctx,
-		`SELECT 1 FROM challenges WHERE id = $1 FOR UPDATE`, challengeID,
-	).Scan(&challengeLock); err != nil {
+		`SELECT score_type, base_points, score_minimum, score_decay, total_solves
+		 FROM challenges WHERE id = $1 FOR UPDATE`, challengeID,
+	).Scan(&challengeScoreType, &challengeBasePoints, &challengeScoreMinimum, &challengeScoreDecay, &challengeTotalSolves); err != nil {
 		h.logger.Error("failed to lock challenge for solve", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 		return
+	}
+	currentScore, scoreErr := scoring.ChallengeValue(challengeScoreType, challengeBasePoints, challengeScoreMinimum, challengeScoreDecay, challengeTotalSolves)
+	if scoreErr != nil {
+		h.logger.Error("failed to calculate challenge score", zap.Error(scoreErr))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+		return
+	}
+	awardedPoints := matchedFlag.Points
+	if !economyMode && challengeScoreType == "dynamic" {
+		awardedPoints, err = dynamicFlagValue(ctx, tx, challengeID, matchedFlag.ID, currentScore)
+		if err != nil {
+			h.logger.Error("failed to price dynamic flag", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+			return
+		}
 	}
 	if _, err := tx.Exec(ctx,
 		`DELETE FROM flag_attempt_lockouts WHERE user_id = $1 AND challenge_id = $2`, uid, challengeID,
@@ -1812,7 +1954,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		`INSERT INTO solves (id, user_id, challenge_id, flag_id, points_awarded, solved_at)
 		 VALUES ($1, $2, $3, $4, $5, $6)
 		 ON CONFLICT (user_id, flag_id) DO NOTHING`,
-		solveID, uid, challengeID, matchedFlag.ID, matchedFlag.Points, solveAt)
+		solveID, uid, challengeID, matchedFlag.ID, awardedPoints, solveAt)
 
 	if err != nil {
 		h.logger.Error("failed to record solve", zap.Error(err))
@@ -1858,7 +2000,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 	// update user and denormalized solve counts only for a newly inserted solve.
 	userResult, err := tx.Exec(ctx,
 		`UPDATE users SET total_score = total_score + $1, updated_at = NOW() WHERE id = $2`,
-		matchedFlag.Points, uid)
+		awardedPoints, uid)
 	if err != nil {
 		h.logger.Error("failed to update user score", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
@@ -1923,7 +2065,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 			} else if !teammateHasFlag {
 				if teamResult, err := tx.Exec(ctx,
 					`UPDATE teams SET total_score = total_score + $1, updated_at = NOW() WHERE id = $2`,
-					matchedFlag.Points, *teamID); err != nil {
+					awardedPoints, *teamID); err != nil {
 					h.logger.Warn("team score update failed during solve", zap.Error(err))
 				} else {
 					standardTeamAwarded = teamResult.RowsAffected() == 1
@@ -1951,26 +2093,59 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	challengeResult, err := tx.Exec(ctx,
-		`UPDATE challenges SET total_solves = (
+	var updatedTotalSolves int
+	challengeSolveQuery := `
+		UPDATE challenges SET total_solves = (
 			SELECT COUNT(*) FROM (
 				SELECT s.user_id
 				FROM solves s
 				JOIN flags f ON s.flag_id = f.id
-				WHERE f.challenge_id = $1
+				JOIN users u ON u.id = s.user_id
+				WHERE f.challenge_id = $1 AND u.role NOT IN ('admin', 'author')
 				GROUP BY s.user_id
 				HAVING COUNT(DISTINCT s.flag_id) = $2
 			) fully_solved_users
-		) WHERE id = $1`, challengeID, totalFlags)
-	if err != nil {
+		) WHERE id = $1 RETURNING total_solves`
+	if teamsMode {
+		challengeSolveQuery = `
+			UPDATE challenges SET total_solves = (
+				SELECT COUNT(*) FROM (
+					SELECT u.team_id
+					FROM solves s
+					JOIN flags f ON s.flag_id = f.id
+					JOIN users u ON u.id = s.user_id
+					JOIN teams t ON t.id = u.team_id
+					WHERE f.challenge_id = $1 AND ` + publicTeamSQL("t") + `
+					GROUP BY u.team_id
+					HAVING COUNT(DISTINCT s.flag_id) = $2
+				) fully_solved_teams
+			) WHERE id = $1 RETURNING total_solves`
+	}
+	if err := tx.QueryRow(ctx, challengeSolveQuery, challengeID, totalFlags).Scan(&updatedTotalSolves); err != nil {
 		h.logger.Error("failed to update challenge solve count", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
 		return
 	}
-	if challengeResult.RowsAffected() != 1 {
-		h.logger.Error("failed to update challenge solve count", zap.Int64("rows_affected", challengeResult.RowsAffected()))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
-		return
+	if !economyMode && challengeScoreType == "dynamic" {
+		updatedScore, valueErr := scoring.ChallengeValue(challengeScoreType, challengeBasePoints, challengeScoreMinimum, challengeScoreDecay, updatedTotalSolves)
+		if valueErr != nil {
+			h.logger.Error("failed to calculate updated challenge score", zap.Error(valueErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+			return
+		}
+		if updatedScore != currentScore {
+			if err := repriceDynamicChallenge(ctx, tx, challengeID, updatedScore, teamsMode); err != nil {
+				h.logger.Error("failed to reprice dynamic challenge", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+				return
+			}
+		}
+		awardedPoints, err = dynamicFlagValue(ctx, tx, challengeID, matchedFlag.ID, updatedScore)
+		if err != nil {
+			h.logger.Error("failed to price updated dynamic flag", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record solve"})
+			return
+		}
 	}
 
 	var solvedFlags int
@@ -1994,7 +2169,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		events, buildErr := competition.StandardFlagEvents(competition.StandardFlagCapture{
 			EventSlug: projectionSettings.EventSlug, SolveID: solveID, AttemptID: attemptID,
 			UserID: uid, TeamID: standardTeamID, ChallengeID: challengeUUID, FlagID: flagUUID,
-			Points: matchedFlag.Points, TeamsMode: teamsMode, TeamAwarded: standardTeamAwarded,
+			Points: awardedPoints, TeamsMode: teamsMode, TeamAwarded: standardTeamAwarded,
 			RequestID: evidenceRequestID(c), OccurredAt: solveAt,
 		})
 		if buildErr != nil {
@@ -2017,7 +2192,7 @@ func (h *ChallengeHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
-	points := matchedFlag.Points
+	points := awardedPoints
 	if ecoEarned != nil {
 		points = int(math.Round(*ecoEarned))
 	}
