@@ -652,6 +652,11 @@ func (h *DataHandler) PreviewImport(c *gin.Context) {
 }
 
 func (h *DataHandler) ListImports(c *gin.Context) {
+	if _, err := h.db.Pool.Exec(c.Request.Context(), `UPDATE data_import_jobs SET status = 'expired', payload = '{"rows":[]}'::jsonb WHERE status = 'pending' AND expires_at <= NOW()`); err != nil {
+		h.logger.Error("expire import previews", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load imports"})
+		return
+	}
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
 		SELECT id, entity, source_format, import_mode, source_name, checksum, row_count, plan, options, status, result, error, applied_at, expires_at, created_at
 		FROM data_import_jobs ORDER BY created_at DESC LIMIT 50

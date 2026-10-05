@@ -232,7 +232,7 @@
 <div class="space-y-6">
 	{#if summary}
 		<div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-			{#each [{ label: 'Users', value: summary.users }, { label: 'Teams', value: summary.teams }, { label: 'Categories', value: summary.categories }, { label: 'Challenges', value: summary.challenges }, { label: 'Solves', value: summary.solves }, { label: 'Pending', value: summary.pending_imports }] as item}
+			{#each [{ label: 'Users', value: summary.users }, { label: 'Teams', value: summary.teams }, { label: 'Categories', value: summary.categories }, { label: 'Challenges', value: summary.challenges }, { label: 'Solves', value: summary.solves }, { label: 'Open previews', value: summary.pending_imports }] as item}
 				<div class="rounded-lg border border-stone-800 bg-stone-900/25 p-4"><p class="text-[10px] uppercase tracking-wider text-stone-600">{item.label}</p><p class="mt-2 text-xl font-semibold tabular-nums text-stone-200">{item.value}</p></div>
 			{/each}
 		</div>
@@ -303,9 +303,9 @@
 	{/if}
 
 	<section class="rounded-lg border border-stone-800 bg-stone-900/25">
-		<div class="border-b border-stone-800 px-5 py-4"><h2 class="text-sm font-semibold text-stone-100">Recent imports</h2><p class="mt-1 text-xs text-stone-500">Previews expire after 24 hours. Applied payloads are erased after the transaction commits.</p></div>
+		<div class="border-b border-stone-800 px-5 py-4"><h2 class="text-sm font-semibold text-stone-100">Import activity</h2><p class="mt-1 text-xs text-stone-500">A preview is only a reviewable plan. It expires after 24 hours unless applied.</p></div>
 		{#if history.length}
-			<div class="divide-y divide-stone-800/70">{#each history as item}<div class="flex flex-col gap-2 px-5 py-3 text-xs sm:flex-row sm:items-center sm:justify-between"><div class="min-w-0"><span class="font-medium text-stone-300">{item.source_name}</span><span class="ml-2 text-stone-600">{item.entity} · {item.mode} · {item.row_count} rows</span>{#if item.error}<p class="mt-1 truncate text-down" title={item.error}>{item.error}</p>{/if}</div><span class="w-fit rounded-full px-2 py-1 text-[10px] {item.status === 'applied' ? 'bg-emerald-500/10 text-emerald-400' : item.status === 'pending' ? 'bg-amber-500/10 text-amber-400' : item.status === 'failed' ? 'bg-down/10 text-down' : 'bg-stone-800 text-stone-500'}">{item.status}</span></div>{/each}</div>
+			<div class="divide-y divide-stone-800/70">{#each history as item}<div class="flex flex-col gap-2 px-5 py-3 text-xs sm:flex-row sm:items-center sm:justify-between"><div class="min-w-0"><span class="font-medium text-stone-300">{item.source_name}</span><span class="ml-2 text-stone-600">{item.entity} · {item.mode} · {item.row_count} rows</span>{#if item.error}<p class="mt-1 truncate text-down" title={item.error}>{item.error}</p>{/if}</div><span class="w-fit rounded-full px-2 py-1 text-[10px] {item.status === 'applied' ? 'bg-emerald-500/10 text-emerald-400' : item.status === 'pending' ? 'bg-amber-500/10 text-amber-400' : item.status === 'failed' ? 'bg-down/10 text-down' : 'bg-stone-800 text-stone-500'}">{item.status === 'pending' ? 'Preview ready' : item.status}</span></div>{/each}</div>
 		{:else}<div class="px-5 py-10 text-center text-sm text-stone-600">No import previews yet.</div>{/if}
 	</section>
 </div>

@@ -13,7 +13,6 @@
 	import { platformInfo, refreshPlatformInfo } from '$lib/stores/platform';
 	import EventSetup from '$lib/components/admin/EventSetup.svelte';
 	import DataWorkspace from '$lib/components/admin/DataWorkspace.svelte';
-	import LaunchWorkspace from '$lib/components/admin/LaunchWorkspace.svelte';
 	import TeamDossier from '$lib/components/admin/TeamDossier.svelte';
 	import ChallengeDossier from '$lib/components/admin/ChallengeDossier.svelte';
 	import HelpTip from '$lib/components/HelpTip.svelte';
@@ -1507,7 +1506,6 @@
 		{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard-outline' },
 		{ id: 'event', label: 'Event', icon: 'mdi:calendar-star' },
 		{ id: 'data', label: 'Data', icon: 'mdi:database-export-outline' },
-		{ id: 'launch', label: 'Readiness', icon: 'mdi:shield-check-outline' },
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
 		{ id: 'users', label: 'Users', icon: 'mdi:account-group-outline' },
 		{ id: 'teams', label: 'Teams', icon: 'mdi:account-multiple-outline' },
@@ -1575,7 +1573,7 @@
 			{#if activeTab === 'overview'}
 				<div class="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
 					<div><h2 class="text-xl font-semibold text-stone-100">Overview</h2><p class="mt-1 text-sm text-stone-500">Current event, content, and runtime status.</p></div>
-					<div class="flex flex-wrap gap-2"><button type="button" on:click={() => setTab('event')} class={btnGhost}>Configure event</button><button type="button" on:click={() => setTab('launch')} class={btnPrimary}>Readiness checks</button></div>
+					<div class="flex flex-wrap gap-2"><button type="button" on:click={() => setTab('event')} class={btnGhost}>Configure event</button></div>
 				</div>
 
 				<div class="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
@@ -1644,8 +1642,6 @@
 				/>
 			{:else if activeTab === 'data'}
 				<DataWorkspace initialEntity={dataImportEntity} economyEnabled={$platformInfo?.economy_enabled ?? false} />
-			{:else if activeTab === 'launch'}
-				<LaunchWorkspace />
 			{:else if activeTab === 'challenges'}
 				{#if categoriesError}
 					<div class="mb-6 flex items-center justify-between gap-3 rounded-lg border border-warn/20 bg-warn/5 px-4 py-3 text-sm text-warn" aria-live="polite">

@@ -230,4 +230,27 @@ func TestDataPortabilityPreviewExportAndApply(t *testing.T) {
 	if bad.Code != http.StatusCreated || !strings.Contains(bad.Body.String(), "administrator accounts cannot be changed") {
 		t.Fatalf("admin import guard status=%d body=%s", bad.Code, bad.Body.String())
 	}
+
+	expiring := request(http.MethodPost, "/api/v1/admin/data/imports/preview", adminToken, bytes.NewReader(previewBody))
+	if expiring.Code != http.StatusCreated {
+		t.Fatalf("expiring preview status=%d body=%s", expiring.Code, expiring.Body.String())
+	}
+	var expiringJob struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(expiring.Body.Bytes(), &expiringJob); err != nil || expiringJob.JobID == "" {
+		t.Fatalf("expiring preview response=%s error=%v", expiring.Body.String(), err)
+	}
+	if _, err := db.Pool.Exec(ctx, `UPDATE data_import_jobs SET expires_at = NOW() - INTERVAL '1 minute' WHERE id = $1`, expiringJob.JobID); err != nil {
+		t.Fatalf("age import preview: %v", err)
+	}
+	history := request(http.MethodGet, "/api/v1/admin/data/imports", adminToken, nil)
+	if history.Code != http.StatusOK {
+		t.Fatalf("import history status=%d body=%s", history.Code, history.Body.String())
+	}
+	var expiredStatus string
+	var expiredRows int
+	if err := db.Pool.QueryRow(ctx, `SELECT status, jsonb_array_length(payload->'rows') FROM data_import_jobs WHERE id = $1`, expiringJob.JobID).Scan(&expiredStatus, &expiredRows); err != nil || expiredStatus != "expired" || expiredRows != 0 {
+		t.Fatalf("expired import status=%q rows=%d error=%v", expiredStatus, expiredRows, err)
+	}
 }
