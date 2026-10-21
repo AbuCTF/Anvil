@@ -7,39 +7,39 @@
 	import { API_BASE } from '$lib/config';
 
 	// ---- types ---------------------------------------------------------------
-	// ENO raw names come from /arena/me/status; Finals-3 maps them to display names
-	// before they reach us, but we handle both just in case.
+	// ENO raw names; Finals-3 may map to display names but we handle both.
 	type SlaStatus = 'OK' | 'RECOVERING' | 'MUMBLE' | 'OFFLINE' | 'FLAG_NOT_FOUND' | 'ORG_FAULT'
-	               | 'DOWN' | 'FAULTY' | 'ERROR' | 'UNKNOWN'; // raw ENO fallbacks
+	               | 'DOWN' | 'FAULTY' | 'ERROR' | 'UNKNOWN';
 
-	// flag_fate from EffectiveSLA (pending) uses stolen:<bucket> string
-	type FlagFate = 'held' | 'safe' | 'stolen:1' | 'stolen:3' | 'stolen:7' | 'stolen:8' | 'tide' | 'unreadable' | null;
+	// flag_fate: held | safe | stolen:<bucket> | unreadable  (store-level only)
+	type FlagFate = 'held' | 'safe' | 'stolen:1' | 'stolen:3' | 'stolen:7' | 'stolen:8' | 'unreadable' | null;
 
-	interface StoreTickEntry {
+	// per-tick checker row; same verdict applies to all stores of that service
+	interface StoreTick {
+		tick: number;
+		status: SlaStatus;
+		effective_status?: SlaStatus;
+		credited_reason?: string | null;
+		message?: string | null;
+		latency_ms?: number;
+	}
+
+	// per-store: current flag fate + accumulated totals + tick timeline
+	interface StoreStatus {
 		store_index: number;
 		store_name: string;
-		flag_fate: FlagFate;
+		flag_fate: FlagFate;   // current fate (store-level, not per-tick)
 		steal_pts: number;
 		hold_pts: number;
 		up_pts: number;
+		ticks: StoreTick[];    // sorted oldest→newest, max 30
 	}
 
-	interface TickEntry {
+	// top-level response shape: services[]{stores[]{ticks[]}}
+	interface ServiceStatus {
 		service_id: string;
 		service_name: string;
-		tick: number;
-		status: SlaStatus;
-		message: string | null;
-		latency_ms?: number;
-		effective_status?: SlaStatus; // EffectiveSLA: LIVE as of v0.343.0
-		credited_reason?: string | null;
-		stores?: StoreTickEntry[];
-	}
-
-	interface ServiceTimeline {
-		service_id: string;
-		name: string;
-		ticks: TickEntry[]; // sorted oldest→newest, max 30
+		stores: StoreStatus[];
 	}
 
 	interface ArenaTickInfo {
@@ -87,29 +87,31 @@
 	];
 	const SVC_STATUS_POOL: SlaStatus[] = ['OK','OK','OK','OK','OK','OK','OK','RECOVERING','MUMBLE','OK','OK','OK','FLAG_NOT_FOUND','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK'];
 
-	const MOCK_TICKS: TickEntry[] = SERVICES_META.flatMap((svc, si) =>
-		Array.from({ length: 30 }, (_, i) => {
-			const si7 = (i + si * 7) % SVC_STATUS_POOL.length;
-			const rawStatus = SVC_STATUS_POOL[si7];
-			const credited = rawStatus === 'ORG_FAULT';
-			const fate = (i % 5 === 0 ? 'stolen:3' : i % 9 === 0 ? 'tide' : 'held') as FlagFate;
-			const hp = si7 === 8 ? 0 : 9.8;
-			return {
-				service_id: svc.id,
-				service_name: svc.name,
-				tick: 58 + i,
-				status: rawStatus,
-				effective_status: credited ? ('ORG_FAULT' as SlaStatus) : rawStatus,
-				credited_reason: credited ? 'outbreak-wave' : null,
-				message: si7 === 8 ? `${svc.name.toUpperCase().replace(' ', '-')}-HAVOC-04: search by tag returned no results` : null,
-				latency_ms: 200 + ((i * 37 + si * 13) % 300),
-				stores: [
-					{ store_index: 0, store_name: 'flag1', flag_fate: fate, steal_pts: fate === 'held' ? 0 : 1.5, hold_pts: hp, up_pts: 3.87 },
-					{ store_index: 1, store_name: 'flag2', flag_fate: (i % 3 === 0 ? 'safe' : 'held') as FlagFate, steal_pts: 0, hold_pts: hp, up_pts: 3.87 },
-				],
-			};
-		})
-	);
+	// mock matches locked shape: services[]{stores[]{ticks[]}}
+	const MOCK_SERVICES: ServiceStatus[] = SERVICES_META.map((svc, si) => {
+		const makeTicks = (): StoreTick[] =>
+			Array.from({ length: 30 }, (_, i) => {
+				const si7 = (i + si * 7) % SVC_STATUS_POOL.length;
+				const rawStatus = SVC_STATUS_POOL[si7];
+				const credited = rawStatus === 'ORG_FAULT';
+				return {
+					tick: 58 + i,
+					status: rawStatus,
+					effective_status: credited ? ('ORG_FAULT' as SlaStatus) : rawStatus,
+					credited_reason: credited ? 'outbreak-wave' : null,
+					message: si7 === 8 ? `${svc.name.toUpperCase().replace(' ', '-')}-HAVOC-04: search by tag returned no results` : null,
+					latency_ms: 200 + ((i * 37 + si * 13) % 300),
+				};
+			});
+		return {
+			service_id: svc.id,
+			service_name: svc.name,
+			stores: [
+				{ store_index: 0, store_name: 'flag1', flag_fate: (si % 3 === 0 ? 'stolen:3' : 'held') as FlagFate, steal_pts: si % 3 === 0 ? 1.5 : 0, hold_pts: 98.0, up_pts: 116.1, ticks: makeTicks() },
+				{ store_index: 1, store_name: 'flag2', flag_fate: 'held', steal_pts: 0, hold_pts: 98.0, up_pts: 116.1, ticks: makeTicks() },
+			],
+		};
+	});
 
 	const MOCK_ME: ArenaMe = {
 		team_id: 't1',
@@ -130,7 +132,7 @@
 
 	// ---- state ---------------------------------------------------------------
 	let tickInfo: ArenaTickInfo = MOCK_TICK;
-	let rawTicks: TickEntry[] = MOCK_TICKS;
+	let services: ServiceStatus[] = MOCK_SERVICES;
 	let me: ArenaMe = MOCK_ME;
 	let alerts: Alert[] = MOCK_ALERTS;
 	let latestTick = 87;
@@ -146,24 +148,8 @@
 	$: tickEndsIn = Math.max(0, Math.round((Date.parse(tickInfo.ends_at) - now) / 1000));
 	$: fmtCountdown = `${String(Math.floor(tickEndsIn / 60)).padStart(2, '0')}:${String(tickEndsIn % 60).padStart(2, '0')}`;
 
-	// group flat ticks into per-service timelines, sorted oldest→newest
-	$: timelines = (() => {
-		const map = new Map<string, ServiceTimeline>();
-		for (const t of rawTicks) {
-			if (!map.has(t.service_id)) {
-				map.set(t.service_id, { service_id: t.service_id, name: t.service_name, ticks: [] });
-			}
-			map.get(t.service_id)!.ticks.push(t);
-		}
-		for (const tl of map.values()) {
-			tl.ticks.sort((a, b) => a.tick - b.tick);
-			if (tl.ticks.length > 30) tl.ticks = tl.ticks.slice(-30);
-		}
-		return [...map.values()];
-	})();
-
 	// service name lookup for alerts
-	$: svcNames = new Map(timelines.map(tl => [tl.service_id, tl.name]));
+	$: svcNames = new Map(services.map(s => [s.service_id, s.service_name]));
 
 	function authHeaders(): Record<string, string> {
 		const token = typeof localStorage !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -191,24 +177,48 @@
 	async function loadStatus() {
 		if (!isFinalsMode) return;
 		try {
-			const url = `${API_BASE}/api/v1/arena/me/status${latestTick > 0 ? `?since=${latestTick - 30}` : ''}`;
+			const url = `${API_BASE}/api/v1/arena/me/status${latestTick > 0 ? `?since=${latestTick}` : ''}`;
 			const res = await fetch(url, { headers: authHeaders() });
 			if (!res.ok) return;
 			const d = await res.json();
-			const incoming: TickEntry[] = d.ticks ?? [];
-			if (incoming.length) {
-				// merge: keep existing ticks not covered by incoming
-				const incomingKeys = new Set(incoming.map(t => `${t.service_id}:${t.tick}`));
-				const merged = [...rawTicks.filter(t => !incomingKeys.has(`${t.service_id}:${t.tick}`)), ...incoming];
-				// keep last 60 ticks per service to allow partial display
-				const byService = new Map<string, TickEntry[]>();
-				for (const t of merged) {
-					if (!byService.has(t.service_id)) byService.set(t.service_id, []);
-					byService.get(t.service_id)!.push(t);
+			const incoming: ServiceStatus[] = d.services ?? [];
+			if (!incoming.length) return;
+
+			const svcMap = new Map<string, ServiceStatus>(services.map(s => [s.service_id, s]));
+			for (const svc of incoming) {
+				if (!svcMap.has(svc.service_id)) {
+					// new service: cap ticks
+					svcMap.set(svc.service_id, {
+						...svc,
+						stores: svc.stores.map(st => ({ ...st, ticks: st.ticks.slice(-30) })),
+					});
+					continue;
 				}
-				rawTicks = [...byService.values()].flatMap(ts => ts.sort((a, b) => a.tick - b.tick).slice(-30));
-				latestTick = Math.max(...incoming.map(t => t.tick), latestTick);
+				const existing = svcMap.get(svc.service_id)!;
+				const storeMap = new Map(existing.stores.map(s => [s.store_index, s]));
+				for (const store of svc.stores) {
+					const ex = storeMap.get(store.store_index);
+					if (!ex) {
+						storeMap.set(store.store_index, { ...store, ticks: store.ticks.slice(-30) });
+					} else {
+						const seen = new Set(ex.ticks.map(t => t.tick));
+						const merged = [...ex.ticks, ...store.ticks.filter(t => !seen.has(t.tick))];
+						merged.sort((a, b) => a.tick - b.tick);
+						storeMap.set(store.store_index, {
+							...store, // update fate + totals from fresh response
+							ticks: merged.slice(-30),
+						});
+					}
+				}
+				svcMap.set(svc.service_id, {
+					...existing,
+					stores: [...storeMap.values()].sort((a, b) => a.store_index - b.store_index),
+				});
 			}
+			services = [...svcMap.values()];
+
+			const allTickNums = services.flatMap(s => s.stores.flatMap(st => st.ticks.map(t => t.tick)));
+			if (allTickNums.length) latestTick = Math.max(...allTickNums, latestTick);
 		} catch { /* keep current */ }
 	}
 
@@ -244,8 +254,12 @@
 	}
 
 	// ---- display helpers -----------------------------------------------------
-	function effectiveStatus(t: TickEntry): SlaStatus {
+	function effectiveStatus(t: StoreTick): SlaStatus {
 		return t.effective_status ?? t.status;
+	}
+
+	function svcLatestTick(svc: ServiceStatus): StoreTick | null {
+		return svc.stores[0]?.ticks.at(-1) ?? null;
 	}
 
 	// map both ENO raw names and display names to a color key
@@ -305,13 +319,10 @@
 		return '8+ teams';
 	}
 
-	function svcUptime(tl: ServiceTimeline): number {
-		if (!tl.ticks.length) return 0;
-		return tl.ticks.filter(t => effectiveStatus(t) === 'OK').length / tl.ticks.length;
-	}
-
-	function latestTl(tl: ServiceTimeline): TickEntry | null {
-		return tl.ticks.at(-1) ?? null;
+	function svcUptime(svc: ServiceStatus): number {
+		const ticks = svc.stores[0]?.ticks ?? [];
+		if (!ticks.length) return 0;
+		return ticks.filter(t => effectiveStatus(t) === 'OK').length / ticks.length;
 	}
 
 	function alertAge(ts: string): string {
@@ -415,73 +426,48 @@
 		</div>
 	{/if}
 
-	<!-- service timelines -->
-	{#each timelines as tl (tl.service_id)}
-		{@const latest = latestTl(tl)}
-		{@const svcStatus = latest ? effectiveStatus(latest) : 'OK'}
-		{@const hasStores = tl.ticks.some(t => t.stores && t.stores.length > 0)}
-		{@const storeNames = hasStores ? (tl.ticks.findLast(t => t.stores?.length)?.stores?.map(s => s.store_name) ?? []) : []}
+	<!-- service timelines: services[]{stores[]{ticks[]}} -->
+	{#each services as svc (svc.service_id)}
+		{@const latestT = svcLatestTick(svc)}
+		{@const svcStatus = latestT ? effectiveStatus(latestT) : 'OK'}
 		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden">
 			<div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-stone-800">
-				<span class="text-[0.95rem] font-semibold text-stone-200">{tl.name}</span>
+				<span class="text-[0.95rem] font-semibold text-stone-200">{svc.service_name}</span>
 				<span class="rounded px-1.5 py-0.5 text-xs font-medium {statusChipKey(svcStatus)}">{statusLabel(svcStatus)}</span>
-				<span class="text-xs text-stone-600">{(svcUptime(tl) * 100).toFixed(1)}% up</span>
-				{#if latest?.message}
-					<span class="text-xs text-stone-500 truncate max-w-xs" title={latest.message}>{latest.message}</span>
+				<span class="text-xs text-stone-600">{(svcUptime(svc) * 100).toFixed(1)}% up</span>
+				{#if latestT?.message}
+					<span class="text-xs text-stone-500 truncate max-w-xs" title={latestT.message}>{latestT.message}</span>
 				{/if}
 			</div>
 			<div class="px-4 py-3">
-				{#if hasStores}
-					<!-- per-store rows (EffectiveSLA available) -->
-					{#each storeNames as storeName, si}
-						{@const latestStore = latest?.stores?.find(s => s.store_name === storeName)}
-						<div class="mb-2 flex items-center gap-2">
-							<span class="metadata-label text-stone-500 text-xs w-20 shrink-0 truncate" title={storeName}>{storeName}</span>
-							<div class="flex gap-px overflow-x-auto pb-0.5">
-								{#each tl.ticks as t}
-									{@const es = effectiveStatus(t)}
-									{@const store = t.stores?.find(s => s.store_name === storeName)}
-									{@const g = fateGlyph(store?.flag_fate ?? null)}
-									{@const credited = !!t.credited_reason}
-									<div
-										class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm {statusColorKey(es)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
-										title="{statusLabel(es)} t{t.tick} {storeName}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
-									>
-										{#if credited}
-											<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
-										{/if}
-										{#if g.text}
-											<span class="text-[0.45rem] leading-none font-bold {g.cls}">{g.text}</span>
-										{/if}
-									</div>
-								{/each}
-							</div>
-							{#if latestStore}
-								<span class="text-xs tabular-nums text-[#9bcea8] shrink-0">+{fmt1(latestStore.hold_pts)} HOLD</span>
+				{#each svc.stores as store (store.store_index)}
+					{@const g = fateGlyph(store.flag_fate)}
+					<div class="mb-2 flex items-center gap-2">
+						<span class="metadata-label text-stone-500 text-xs w-20 shrink-0 truncate" title={store.store_name}>{store.store_name}</span>
+						<div class="flex gap-px overflow-x-auto pb-0.5">
+							{#each store.ticks as t}
+								{@const es = effectiveStatus(t)}
+								{@const credited = !!t.credited_reason}
+								<div
+									class="relative h-5 w-5 shrink-0 rounded-sm {statusColorKey(es)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
+									title="{statusLabel(es)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
+								>
+									{#if credited}
+										<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
+									{/if}
+								</div>
+							{/each}
+							{#if store.ticks.length === 0}
+								<span class="text-xs text-stone-600 italic">no data yet</span>
 							{/if}
 						</div>
-					{/each}
-				{:else}
-					<!-- service-level strip (EffectiveSLA not yet on this endpoint) -->
-					<div class="flex gap-px overflow-x-auto pb-0.5">
-						{#each tl.ticks as t}
-							{@const es = effectiveStatus(t)}
-							{@const credited = !!t.credited_reason}
-							<div
-								class="relative h-5 w-5 shrink-0 rounded-sm {statusColorKey(es)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
-								title="{statusLabel(es)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
-							>
-								{#if credited}
-									<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
-								{/if}
-							</div>
-						{/each}
-						{#if tl.ticks.length === 0}
-							<span class="text-xs text-stone-600 italic">no data yet</span>
+						<!-- current flag fate + totals (store-level) -->
+						{#if g.text}
+							<span class="text-[0.8rem] {g.cls} shrink-0" title={store.flag_fate ?? ''}>{g.text}</span>
 						{/if}
+						<span class="text-xs tabular-nums text-[#9bcea8] shrink-0">+{fmt1(store.hold_pts)} HOLD</span>
 					</div>
-					<p class="mt-1 text-[0.65rem] text-stone-700">per-store breakdown not yet available for this tick</p>
-				{/if}
+				{/each}
 			</div>
 		</div>
 	{/each}
