@@ -15,6 +15,15 @@
 	// flag_fate from EffectiveSLA (pending) uses stolen:<bucket> string
 	type FlagFate = 'held' | 'safe' | 'stolen:1' | 'stolen:3' | 'stolen:7' | 'stolen:8' | 'tide' | 'unreadable' | null;
 
+	interface StoreTickEntry {
+		store_index: number;
+		store_name: string;
+		flag_fate: FlagFate;
+		steal_pts: number;
+		hold_pts: number;
+		up_pts: number;
+	}
+
 	interface TickEntry {
 		service_id: string;
 		service_name: string;
@@ -22,13 +31,10 @@
 		status: SlaStatus;
 		message: string | null;
 		latency_ms?: number;
-		// pending EffectiveSLA:
+		// present once Finals-3 exports EffectiveSLA into /arena/me/status:
 		effective_status?: SlaStatus;
 		credited_reason?: string | null;
-		flag_fate?: FlagFate;
-		steal_pts?: number;
-		hold_pts?: number;
-		up_pts?: number;
+		stores?: StoreTickEntry[]; // per-store flag fate + totals; service effective_status applies to all
 	}
 
 	interface ServiceTimeline {
@@ -403,6 +409,8 @@
 	{#each timelines as tl (tl.service_id)}
 		{@const latest = latestTl(tl)}
 		{@const svcStatus = latest ? effectiveStatus(latest) : 'OK'}
+		{@const hasStores = tl.ticks.some(t => t.stores && t.stores.length > 0)}
+		{@const storeNames = hasStores ? (tl.ticks.findLast(t => t.stores?.length)?.stores?.map(s => s.store_name) ?? []) : []}
 		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden">
 			<div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-stone-800">
 				<span class="text-[0.95rem] font-semibold text-stone-200">{tl.name}</span>
@@ -411,33 +419,59 @@
 				{#if latest?.message}
 					<span class="text-xs text-stone-500 truncate max-w-xs" title={latest.message}>{latest.message}</span>
 				{/if}
-				{#if latest?.hold_pts !== undefined}
-					<span class="ml-auto text-xs tabular-nums text-[#9bcea8]">+{fmt1(latest.hold_pts)} HOLD</span>
-				{/if}
 			</div>
 			<div class="px-4 py-3">
-				<div class="flex gap-px overflow-x-auto pb-0.5">
-					{#each tl.ticks as t}
-						{@const es = effectiveStatus(t)}
-						{@const g = fateGlyph(t.flag_fate)}
-						{@const credited = !!t.credited_reason}
-						<div
-							class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm {statusColorKey(es)} transition-opacity {credited ? 'ring-1 ring-amber-400/50' : ''}"
-							title="{statusLabel(es)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
-						>
-							{#if credited}
-								<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
-							{/if}
-							{#if g.text}
-								<span class="text-[0.45rem] leading-none font-bold {g.cls}">{g.text}</span>
+				{#if hasStores}
+					<!-- per-store rows (EffectiveSLA available) -->
+					{#each storeNames as storeName, si}
+						{@const latestStore = latest?.stores?.find(s => s.store_name === storeName)}
+						<div class="mb-2 flex items-center gap-2">
+							<span class="metadata-label text-stone-500 text-xs w-20 shrink-0 truncate" title={storeName}>{storeName}</span>
+							<div class="flex gap-px overflow-x-auto pb-0.5">
+								{#each tl.ticks as t}
+									{@const es = effectiveStatus(t)}
+									{@const store = t.stores?.find(s => s.store_name === storeName)}
+									{@const g = fateGlyph(store?.flag_fate ?? null)}
+									{@const credited = !!t.credited_reason}
+									<div
+										class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm {statusColorKey(es)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
+										title="{statusLabel(es)} t{t.tick} {storeName}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
+									>
+										{#if credited}
+											<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
+										{/if}
+										{#if g.text}
+											<span class="text-[0.45rem] leading-none font-bold {g.cls}">{g.text}</span>
+										{/if}
+									</div>
+								{/each}
+							</div>
+							{#if latestStore}
+								<span class="text-xs tabular-nums text-[#9bcea8] shrink-0">+{fmt1(latestStore.hold_pts)} HOLD</span>
 							{/if}
 						</div>
 					{/each}
-					{#if tl.ticks.length === 0}
-						<span class="text-xs text-stone-600 italic">no data yet</span>
-					{/if}
-				</div>
-				<p class="mt-1 text-[0.65rem] text-stone-700">per-store breakdown available once checker exports EffectiveSLA</p>
+				{:else}
+					<!-- service-level strip (EffectiveSLA not yet on this endpoint) -->
+					<div class="flex gap-px overflow-x-auto pb-0.5">
+						{#each tl.ticks as t}
+							{@const es = effectiveStatus(t)}
+							{@const credited = !!t.credited_reason}
+							<div
+								class="relative h-5 w-5 shrink-0 rounded-sm {statusColorKey(es)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
+								title="{statusLabel(es)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
+							>
+								{#if credited}
+									<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
+								{/if}
+							</div>
+						{/each}
+						{#if tl.ticks.length === 0}
+							<span class="text-xs text-stone-600 italic">no data yet</span>
+						{/if}
+					</div>
+					<p class="mt-1 text-[0.65rem] text-stone-700">per-store flag fate available once EffectiveSLA is wired</p>
+				{/if}
 			</div>
 		</div>
 	{/each}
@@ -467,7 +501,7 @@
 					rows="3"
 					placeholder="H7CTF&#123;...&#125; one per line"
 					class="w-full resize-none rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-sm font-mono text-stone-200 placeholder-stone-600 focus:border-stone-600 focus:outline-none transition-colors"
-					autocomplete="off" autocorrect="off" spellcheck="false"
+					autocomplete="off" spellcheck="false"
 				></textarea>
 				<button
 					type="submit"
