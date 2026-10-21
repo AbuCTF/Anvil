@@ -197,7 +197,7 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	// Q1: effective SLA per (service, tick) via the same mirror-credit logic
-	slaTicks, err := game.EffectiveSLA(ctx, h.db, teamID, since, 0)
+	slaTicks, err := game.EffectiveSLA(ctx, h.db, teamID, since, h.config.Game.Scoring.MassFaultTeams)
 	if err != nil {
 		h.logger.Error("arena/me/status: EffectiveSLA", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
