@@ -144,21 +144,22 @@ func (h *GameHandler) Me(c *gin.Context) {
 
 // meTickRow is one tick entry inside a store row in /arena/me/status.
 type meTickRow struct {
-	Tick     int      `json:"tick"`
-	Status   string   `json:"status"`  // player vocabulary
-	Step     *string  `json:"step"`
-	Code     *string  `json:"code"`
-	Message  *string  `json:"message"`
-	FlagFate *string  `json:"flag_fate"`
-	Steal    float64  `json:"steal"`
-	Hold     float64  `json:"hold"`
-	Up       float64  `json:"up"`
+	Tick           int     `json:"tick"`
+	Status         string  `json:"status"` // player vocabulary
+	CreditedReason *string `json:"credited_reason,omitempty"`
+	Step           *string `json:"step,omitempty"`
+	Code           *string `json:"code,omitempty"`
+	Message        *string `json:"message,omitempty"`
+	FlagFate       *string `json:"flag_fate,omitempty"`
 }
 
-// meStoreRow groups tick rows by flag store.
+// meStoreRow groups tick rows by flag store with per-store point totals.
 type meStoreRow struct {
 	StoreIndex int         `json:"store_index"`
 	StoreName  string      `json:"store_name"`
+	Steal      float64     `json:"steal"`
+	Hold       float64     `json:"hold"`
+	Up         float64     `json:"up"`
 	Ticks      []meTickRow `json:"ticks"`
 }
 
@@ -180,7 +181,7 @@ type meServiceRow struct {
 }
 
 // MeStatus serves GET /api/v1/arena/me/status?since=<tick>.
-// Returns a hierarchical services→stores→ticks view of checker results and
+// Returns a hierarchical services→stores→ticks view of effective SLA and
 // flag fates for the authenticated team.
 func (h *GameHandler) MeStatus(c *gin.Context) {
 	if h.off(c) {
@@ -195,103 +196,113 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	since := parseSince(c.Query("since"))
 	ctx := c.Request.Context()
 
-	// Q1: one row per (service, store_index, tick) = worst-status checker task
-	type checkerRow struct {
-		serviceID   string
-		serviceName string
-		serviceSlug string
-		servicePort *int
-		flagStores  int
-		storeIndex  int
-		tick        int
-		status      *string
-		method      string
-		code        *string
-		message     *string
-	}
-	cRows, err := h.db.Pool.Query(ctx, `
-		SELECT DISTINCT ON (ct.service_id, ct.variant, ct.tick_number)
-		    s.id::text, s.name, s.slug, s.port, s.flag_stores,
-		    ct.variant, ct.tick_number,
-		    ct.status, ct.method, ct.code, ct.message
-		FROM game_checker_tasks ct
-		JOIN game_services s ON s.id = ct.service_id
-		WHERE ct.team_id = $1 AND ct.tick_number > $2 AND s.enabled = true
-		ORDER BY ct.service_id, ct.variant, ct.tick_number DESC,
-		    CASE COALESCE(ct.status, '')
-		        WHEN 'DOWN'           THEN 0
-		        WHEN 'FAULTY'         THEN 1
-		        WHEN 'FLAG_NOT_FOUND' THEN 2
-		        WHEN 'RECOVERING'     THEN 3
-		        WHEN 'ERROR'          THEN 4
-		        ELSE 5
-		    END ASC`, teamID, since)
+	// Q1: effective SLA per (service, tick) via the same mirror-credit logic
+	slaTicks, err := game.EffectiveSLA(ctx, h.db, teamID, since, 0)
 	if err != nil {
-		h.logger.Error("arena/me/status: checker query", zap.Error(err))
+		h.logger.Error("arena/me/status: EffectiveSLA", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	defer cRows.Close()
 
-	// build service map: serviceID → service info
-	type svcKey struct{ svcID, slug string }
+	// index: (serviceID, tick) → SLATick; collect ordered service IDs
+	type slaKey struct {
+		svcID uuid.UUID
+		tick  int
+	}
+	slaByKey := map[slaKey]game.SLATick{}
+	svcIDSet := map[uuid.UUID]bool{}
+	var svcOrder []uuid.UUID
+	for _, t := range slaTicks {
+		slaByKey[slaKey{t.ServiceID, t.Tick}] = t
+		if !svcIDSet[t.ServiceID] {
+			svcIDSet[t.ServiceID] = true
+			svcOrder = append(svcOrder, t.ServiceID)
+		}
+	}
+
+	// load service metadata for the services that have sla records
 	type svcMeta struct {
+		id         uuid.UUID
 		slug, name string
 		port       *int
 		flagStores int
-		// storeIndex → []meTickRow
-		stores map[int][]meTickRow
 	}
-	svcMap := map[string]*svcMeta{}
-	svcOrder := []string{}
-
-	for cRows.Next() {
-		var r checkerRow
-		if err := cRows.Scan(
-			&r.serviceID, &r.serviceName, &r.serviceSlug, &r.servicePort, &r.flagStores,
-			&r.storeIndex, &r.tick, &r.status, &r.method, &r.code, &r.message,
-		); err != nil {
-			h.logger.Error("arena/me/status: checker scan", zap.Error(err))
+	svcMetas := map[uuid.UUID]svcMeta{}
+	if len(svcOrder) > 0 {
+		mRows, err := h.db.Pool.Query(ctx,
+			`SELECT id, name, slug, port, flag_stores
+			 FROM game_services WHERE id = ANY($1) AND enabled = true`, svcOrder)
+		if err != nil {
+			h.logger.Error("arena/me/status: service meta", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
-		if _, exists := svcMap[r.serviceID]; !exists {
-			svcMap[r.serviceID] = &svcMeta{
-				slug: r.serviceSlug, name: r.serviceName,
-				port: r.servicePort, flagStores: r.flagStores,
-				stores: map[int][]meTickRow{},
+		defer mRows.Close()
+		for mRows.Next() {
+			var m svcMeta
+			if err := mRows.Scan(&m.id, &m.name, &m.slug, &m.port, &m.flagStores); err != nil {
+				h.logger.Error("arena/me/status: service meta scan", zap.Error(err))
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+				return
 			}
-			svcOrder = append(svcOrder, r.serviceID)
+			svcMetas[m.id] = m
 		}
-		rawStatus := ""
-		if r.status != nil {
-			rawStatus = *r.status
+		if err := mRows.Err(); err != nil {
+			h.logger.Error("arena/me/status: service meta rows", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
 		}
-		mapped := mapSLAStatus(rawStatus)
-		var step *string
-		if mapped != "OK" && mapped != "RECOVERING" && mapped != "ORG_FAULT" {
-			step = &r.method
-		}
-		t := meTickRow{
-			Tick:    r.tick,
-			Status:  mapped,
-			Step:    step,
-			Code:    r.code,
-			Message: r.message,
-		}
-		svcMap[r.serviceID].stores[r.storeIndex] = append(
-			svcMap[r.serviceID].stores[r.storeIndex], t,
-		)
 	}
-	if err := cRows.Err(); err != nil {
-		h.logger.Error("arena/me/status: checker rows", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-		return
+
+	// build per-service tick lists from sla records
+	// storesByService: serviceID → storeIndex → []meTickRow (status only, fate added later)
+	type storeKey struct {
+		svcID      uuid.UUID
+		storeIndex int
+	}
+	storeTicks := map[storeKey][]meTickRow{}
+	for _, t := range slaTicks {
+		meta, ok := svcMetas[t.ServiceID]
+		if !ok {
+			continue // service disabled or not found
+		}
+		mapped := mapSLAStatus(string(t.Effective))
+		var credited *string
+		if t.Credited != "" {
+			s := t.Credited
+			credited = &s
+		}
+		var step, code, message *string
+		if t.Step != "" {
+			s := t.Step
+			step = &s
+		}
+		if t.Code != "" {
+			s := t.Code
+			code = &s
+		}
+		if t.Message != "" {
+			s := t.Message
+			message = &s
+		}
+		tr := meTickRow{
+			Tick:           t.Tick,
+			Status:         mapped,
+			CreditedReason: credited,
+			Step:           step,
+			Code:           code,
+			Message:        message,
+		}
+		// duplicate tick row across all stores for this service
+		for si := 0; si < meta.flagStores; si++ {
+			k := storeKey{t.ServiceID, si}
+			storeTicks[k] = append(storeTicks[k], tr)
+		}
 	}
 
 	// Q2: flag capture counts per (service, store, tick) for this team as victim
 	type captureKey struct {
-		serviceID  string
+		svcID      uuid.UUID
 		storeIndex int
 		tick       int
 	}
@@ -299,7 +310,7 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	captures := map[captureKey]captureVal{}
 
 	capRows, err := h.db.Pool.Query(ctx, `
-		SELECT gf.service_id::text, gf.store_index, gf.tick_number,
+		SELECT gf.service_id, gf.store_index, gf.tick_number,
 		    COUNT(DISTINCT gc.attacker_team_id) AS attackers,
 		    COUNT(DISTINCT CASE WHEN gt.is_nop THEN gc.attacker_team_id END) AS nop_count
 		FROM game_flags gf
@@ -316,7 +327,7 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	for capRows.Next() {
 		var key captureKey
 		var val captureVal
-		if err := capRows.Scan(&key.serviceID, &key.storeIndex, &key.tick,
+		if err := capRows.Scan(&key.svcID, &key.storeIndex, &key.tick,
 			&val.attackers, &val.nop); err != nil {
 			h.logger.Error("arena/me/status: capture scan", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -330,16 +341,14 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 		return
 	}
 
-	// Q3: per-service aggregate steal/hold/up from game_score_breakdown
-	type brkKey string
+	// Q3: per-store totals from game_score_breakdown
+	type brkKey = storeKey
 	type brkVal struct{ steal, hold, up float64 }
-	breakdown := map[brkKey]brkVal{}
+	storeBreakdown := map[brkKey]brkVal{}
 
-	brkRows, err := h.db.Pool.Query(ctx, `
-		SELECT service_id::text, SUM(steal), SUM(hold), SUM(up)
-		FROM game_score_breakdown
-		WHERE team_id = $1
-		GROUP BY service_id`, teamID)
+	brkRows, err := h.db.Pool.Query(ctx,
+		`SELECT service_id, store_index, steal, hold, up
+		 FROM game_score_breakdown WHERE team_id = $1`, teamID)
 	if err != nil {
 		h.logger.Error("arena/me/status: breakdown query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -347,14 +356,14 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	}
 	defer brkRows.Close()
 	for brkRows.Next() {
-		var svcID string
+		var k brkKey
 		var v brkVal
-		if err := brkRows.Scan(&svcID, &v.steal, &v.hold, &v.up); err != nil {
+		if err := brkRows.Scan(&k.svcID, &k.storeIndex, &v.steal, &v.hold, &v.up); err != nil {
 			h.logger.Error("arena/me/status: breakdown scan", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
-		breakdown[brkKey(svcID)] = v
+		storeBreakdown[k] = v
 	}
 	if err := brkRows.Err(); err != nil {
 		h.logger.Error("arena/me/status: breakdown rows", zap.Error(err))
@@ -363,9 +372,9 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	}
 
 	// Q4: active attackers per service (distinct attackers in last 5 closed ticks)
-	activeAttackers := map[string]int{}
+	activeAttackers := map[uuid.UUID]int{}
 	atkRows, err := h.db.Pool.Query(ctx, `
-		SELECT gc.service_id::text, COUNT(DISTINCT gc.attacker_team_id)
+		SELECT gc.service_id, COUNT(DISTINCT gc.attacker_team_id)
 		FROM game_captures gc
 		WHERE gc.victim_team_id = $1
 		    AND gc.tick_number > (
@@ -379,7 +388,7 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	}
 	defer atkRows.Close()
 	for atkRows.Next() {
-		var svcID string
+		var svcID uuid.UUID
 		var cnt int
 		if err := atkRows.Scan(&svcID, &cnt); err != nil {
 			h.logger.Error("arena/me/status: attackers scan", zap.Error(err))
@@ -397,40 +406,47 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	// assemble response
 	services := make([]meServiceRow, 0, len(svcOrder))
 	for _, svcID := range svcOrder {
-		meta := svcMap[svcID]
-		brk := breakdown[brkKey(svcID)]
+		meta, ok := svcMetas[svcID]
+		if !ok {
+			continue
+		}
+		// service-level points = sum over stores
+		var totalSteal, totalHold, totalUp float64
+		for si := 0; si < meta.flagStores; si++ {
+			b := storeBreakdown[storeKey{svcID, si}]
+			totalSteal += b.steal
+			totalHold += b.hold
+			totalUp += b.up
+		}
 		row := meServiceRow{
 			Slug: meta.slug,
 			Name: meta.name,
 			Port: meta.port,
 			PointsThisHour: mePointsHour{
-				Steal: brk.steal,
-				Hold:  brk.hold,
-				Up:    brk.up,
+				Steal: totalSteal,
+				Hold:  totalHold,
+				Up:    totalUp,
 			},
 			ActiveAttackers: activeAttackers[svcID],
 		}
 
-		// build stores in store_index order
-		maxStore := meta.flagStores - 1
-		for si, ticks := range meta.stores {
-			if si > maxStore {
-				maxStore = si
-			}
-			_ = ticks
-		}
-		for si := 0; si <= maxStore; si++ {
-			ticks, _ := meta.stores[si]
+		for si := 0; si < meta.flagStores; si++ {
+			k := storeKey{svcID, si}
+			ticks := storeTicks[k]
 			// wire flag_fate into each tick row
 			for i, t := range ticks {
-				ck := captureKey{serviceID: svcID, storeIndex: si, tick: t.Tick}
+				ck := captureKey{svcID: svcID, storeIndex: si, tick: t.Tick}
 				cv := captures[ck]
 				realAtk := cv.attackers - cv.nop
 				ticks[i].FlagFate = flagFateFromCaptures(realAtk, cv.nop, t.Status)
 			}
+			brk := storeBreakdown[k]
 			store := meStoreRow{
 				StoreIndex: si,
 				StoreName:  storeName(si),
+				Steal:      brk.steal,
+				Hold:       brk.hold,
+				Up:         brk.up,
 				Ticks:      ticks,
 			}
 			if store.Ticks == nil {

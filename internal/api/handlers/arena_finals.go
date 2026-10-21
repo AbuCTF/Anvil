@@ -135,7 +135,8 @@ type kothScoreEntry struct {
 }
 
 // KothScores serves GET /api/v1/arena/koth/scores.
-// Returns per-hill current king info with held tick count and koth score.
+// Returns per-hill current king (from crown events) with round-result totals.
+// In finals, koth_hold=0 so all KotH points come from game_koth_results.
 func (h *GameHandler) KothScores(c *gin.Context) {
 	if h.off(c) {
 		return
@@ -144,21 +145,25 @@ func (h *GameHandler) KothScores(c *gin.Context) {
 
 	rows, err := h.db.Pool.Query(ctx,
 		`SELECT h.id::text, h.name,
-		        t_koth.controller_team_id::text,
-		        t_koth.held_ticks,
+		        crown.team_id::text,
 		        gt.name,
-		        COALESCE(gs.koth, 0)
+		        COALESCE(totals.held_ticks, 0),
+		        COALESCE(totals.score, 0)
 		 FROM game_koth_hills h
 		 LEFT JOIN LATERAL (
-		     SELECT controller_team_id, COUNT(*) AS held_ticks
-		     FROM game_koth_control
-		     WHERE hill_id = h.id AND controller_team_id IS NOT NULL
-		     GROUP BY controller_team_id
-		     ORDER BY held_ticks DESC
+		     SELECT team_id
+		     FROM game_events
+		     WHERE kind = 'crown' AND hill_id = h.id
+		     ORDER BY tick_number DESC, id DESC
 		     LIMIT 1
-		 ) t_koth ON true
-		 LEFT JOIN game_teams gt ON gt.id = t_koth.controller_team_id
-		 LEFT JOIN game_standings gs ON gs.team_id = t_koth.controller_team_id
+		 ) crown ON true
+		 LEFT JOIN game_teams gt ON gt.id = crown.team_id
+		 LEFT JOIN LATERAL (
+		     SELECT SUM(held_ticks) AS held_ticks,
+		            SUM(points + bounty) AS score
+		     FROM game_koth_results
+		     WHERE hill_id = h.id AND team_id = crown.team_id
+		 ) totals ON crown.team_id IS NOT NULL
 		 WHERE h.enabled = true
 		 ORDER BY h.sort_order, h.name`)
 	if err != nil {
@@ -171,19 +176,20 @@ func (h *GameHandler) KothScores(c *gin.Context) {
 	hills := []kothScoreEntry{}
 	for rows.Next() {
 		var e kothScoreEntry
-		var controllerID *uuid.UUID
+		var teamIDStr *string
 		var held *int
-		if err := rows.Scan(&e.HillID, &e.Hill, &controllerID, &held, &e.TeamName, &e.Score); err != nil {
+		var score *float64
+		if err := rows.Scan(&e.HillID, &e.Hill, &teamIDStr, &e.TeamName, &held, &score); err != nil {
 			h.logger.Error("koth scores: scan", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
-		if controllerID != nil {
-			s := controllerID.String()
-			e.TeamID = &s
-		}
+		e.TeamID = teamIDStr
 		if held != nil {
 			e.HeldTicks = *held
+		}
+		if score != nil {
+			e.Score = *score
 		}
 		hills = append(hills, e)
 	}
