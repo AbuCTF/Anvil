@@ -393,6 +393,15 @@ func main() {
 	gameCtx, gameCancel := context.WithCancel(context.Background())
 	go game.NewController(cfg.Game, db, logger).Run(gameCtx)
 
+	// tcp flag submission server — off by default, finals-only path.
+	if cfg.Game.TCPSubmitEnabled {
+		go game.NewTCPSubmitServer(db, logger, cfg.Game.TCPSubmitPort).Run(gameCtx)
+	}
+
+	// e8 alert generator: publishes bucketed exploitation alerts one tick late.
+	// no-op in legacy mode (game.state unset).
+	go game.RunAlertWorker(gameCtx, db, logger)
+
 	// webverse labs solve-sync poller — no-op unless webverse.enabled (master off switch).
 	webverseCtx, webverseCancel := context.WithCancel(context.Background())
 	go handlers.NewWebVersePoller(cfg, db, logger).Run(webverseCtx)

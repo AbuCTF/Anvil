@@ -341,6 +341,11 @@ type GameConfig struct {
 	FlagValidTicks int           `mapstructure:"flag_valid_ticks"`
 	FlagPrefix     string        `mapstructure:"flag_prefix"`
 
+	// TCPSubmitEnabled enables the raw-TCP flag submission server (default false).
+	// TCPSubmitPort is the port it binds on (default 4141).
+	TCPSubmitEnabled bool `mapstructure:"tcp_submit_enabled"`
+	TCPSubmitPort    int  `mapstructure:"tcp_submit_port"`
+
 	Koth    KothConfig    `mapstructure:"koth"`
 	Scoring ScoringConfig `mapstructure:"scoring"`
 	Webhook WebhookConfig `mapstructure:"webhook"`
@@ -617,4 +622,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.checker.checked_ticks", 0)
 	v.SetDefault("game.checker.spread", true)
 	v.SetDefault("game.checker.concurrency", 64)
+	v.SetDefault("game.tcp_submit_enabled", false)
+	v.SetDefault("game.tcp_submit_port", 4141)
 }

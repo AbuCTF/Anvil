@@ -199,6 +199,23 @@ func (s *Server) setupRouter() {
 			// arena write-gate verify: called server-to-server by a KotH target to check a
 			// team's (token, secret) pair for that arena. Unauth - the secret is the auth.
 			public.POST("/arena/koth/:id/verify", arenaRead.VerifyKoth)
+
+			// team API: /arena/tick is public; /arena/me/* accept X-Team-Token or JWT.
+			// OptionalAuth is applied so the JWT path works; X-Team-Token is resolved
+			// inside teamIdentity() which falls back to the JWT user automatically.
+			arenaTeam := public.Group("")
+			arenaTeam.Use(middleware.OptionalAuth(s.config, s.db))
+			{
+				teamAPIHandler := handlers.NewGameHandler(s.config, s.db, s.logger)
+				arenaTeam.GET("/arena/tick", teamAPIHandler.Tick)
+				arenaTeam.GET("/arena/me", teamAPIHandler.Me)
+				arenaTeam.GET("/arena/me/status", teamAPIHandler.MeStatus)
+				arenaTeam.GET("/arena/me/alerts", teamAPIHandler.MeAlerts)
+				arenaTeam.GET("/arena/me/pcaps", teamAPIHandler.MePcaps)
+				arenaTeam.POST("/arena/me/vulnbox/reboot", teamAPIHandler.MeVulnboxReboot)
+				arenaTeam.POST("/arena/me/vulnbox/reset", teamAPIHandler.MeVulnboxReset)
+				arenaTeam.GET("/arena/me/vulnbox/reset", teamAPIHandler.MeVulnboxResetStatus)
+			}
 		}
 
 		protected := v1.Group("")
@@ -256,6 +273,16 @@ func (s *Server) setupRouter() {
 				arenaRoutes.POST("/submit", middleware.RateLimitEndpoint(
 					s.config.RateLimit.FlagSubmission,
 				), arenaHandler.SubmitFlag)
+			}
+
+			// farm exploit bulk submission: X-Team-Token auth, not JWT.
+			// separate from the per-user /arena/submit to avoid sharing the
+			// jeopardy rate limiter.
+			arenaFarmRoutes := v1.Group("/arena")
+			arenaFarmRoutes.Use(middleware.TeamTokenAuth(s.db))
+			{
+				farmHandler := handlers.NewGameHandler(s.config, s.db, s.logger)
+				arenaFarmRoutes.PUT("/flags", farmHandler.BulkSubmitFlags)
 			}
 
 			// team-level; gated by economy_mode
@@ -429,6 +456,17 @@ func (s *Server) setupRouter() {
 				// challenge + register/refresh its hill (base_url + reset secret).
 				gameAdmin.POST("/challenges/:id/launch", gameAdminHandler.LaunchArena)
 				gameAdmin.POST("/challenges/:id/stop", gameAdminHandler.StopArena)
+
+				// p1-teamapi admin: token rotation, vulnbox IP, checker log, suspicious SLA,
+				// and pcap/reset/reboot stubs (501 until control plane is wired).
+				arenaAdminP1 := handlers.NewArenaAdminHandler(s.config, s.db, s.logger)
+				gameAdmin.POST("/teams/:id/token", arenaAdminP1.RotateTeamToken)
+				gameAdmin.PATCH("/teams/:id/vulnbox-ip", arenaAdminP1.UpdateVulnboxIP)
+				gameAdmin.GET("/checker-log", arenaAdminP1.CheckerLog)
+				gameAdmin.GET("/sla-suspicious", arenaAdminP1.SuspiciousSLA)
+				gameAdmin.POST("/teams/:id/pcap", arenaAdminP1.PcapCapture)
+				gameAdmin.POST("/teams/:id/vulnbox-reset", arenaAdminP1.VulnboxReset)
+				gameAdmin.POST("/teams/:id/vulnbox-reboot", arenaAdminP1.VulnboxReboot)
 			}
 
 			challenges := admin.Group("/challenges")
