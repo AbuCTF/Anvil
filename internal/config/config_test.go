@@ -157,6 +157,37 @@ func TestLoadWithoutConfigUsesValidDurations(t *testing.T) {
 	}
 }
 
+func TestLoadGameCheckerDefaultsAndEnv(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned an error: %v", err)
+	}
+	ck := cfg.Game.Checker
+	if ck.TaskTimeout != 30*time.Second || ck.TailMargin != 10*time.Second ||
+		ck.CheckedTicks != 0 || !ck.Spread || ck.Concurrency != 64 {
+		t.Fatalf("checker defaults = %+v", ck)
+	}
+
+	// every key must have a SetDefault or its env var is silently ignored
+	t.Setenv("ANVIL_GAME_TICK_INTERVAL", "90s")
+	t.Setenv("ANVIL_GAME_CHECKER_TASK_TIMEOUT", "20s")
+	t.Setenv("ANVIL_GAME_CHECKER_TAIL_MARGIN", "5s")
+	t.Setenv("ANVIL_GAME_CHECKER_CHECKED_TICKS", "4")
+	t.Setenv("ANVIL_GAME_CHECKER_SPREAD", "false")
+	t.Setenv("ANVIL_GAME_CHECKER_CONCURRENCY", "16")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() with env returned an error: %v", err)
+	}
+	ck = cfg.Game.Checker
+	if cfg.Game.TickInterval != 90*time.Second || ck.TaskTimeout != 20*time.Second ||
+		ck.TailMargin != 5*time.Second || ck.CheckedTicks != 4 || ck.Spread || ck.Concurrency != 16 {
+		t.Fatalf("checker env overrides not applied: tick=%s %+v", cfg.Game.TickInterval, ck)
+	}
+}
+
 func TestDefaultEconomyMatchesVersionedPreset(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cfg, err := Load()

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -290,6 +291,9 @@ type createTeamReq struct {
 	VulnboxIP string `json:"vulnbox_ip"`
 	Token     string `json:"token"`
 	IsNOP     bool   `json:"is_nop"`
+	// mirror a platform team: same id, so players resolve through users.team_id
+	TeamID     string `json:"team_id"`
+	TeamNumber *int   `json:"team_number"`
 }
 
 func (h *GameAdminHandler) CreateTeam(c *gin.Context) {
@@ -326,11 +330,21 @@ func (h *GameAdminHandler) CreateTeam(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "token contains invalid characters"})
 		return
 	}
-	var id uuid.UUID
+	id := uuid.New()
+	if ref := strings.TrimSpace(req.TeamID); ref != "" {
+		if id, err = uuid.Parse(ref); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "team_id must be a uuid"})
+			return
+		}
+	}
+	if req.TeamNumber != nil && (*req.TeamNumber < 1 || *req.TeamNumber > 250) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "team_number must be between 1 and 250"})
+		return
+	}
 	err = h.db.Pool.QueryRow(c.Request.Context(),
-		`INSERT INTO game_teams (name, slug, vulnbox_ip, token, is_nop)
-		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-		name, slug, nullIf(ip), nullIf(token), req.IsNOP).Scan(&id)
+		`INSERT INTO game_teams (id, name, slug, vulnbox_ip, token, is_nop, team_number)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		id, name, slug, nullIf(ip), nullIf(token), req.IsNOP, req.TeamNumber).Scan(&id)
 	if err != nil {
 		h.fail(c, "create team", err)
 		return
@@ -466,7 +480,13 @@ type createServiceReq struct {
 	Port       int    `json:"port" binding:"required"`
 	CheckerRef string `json:"checker_ref" binding:"required"`
 	FlagStores int    `json:"flag_stores"`
+	// enowars checkers only; exec checkers know nothing but place/check
+	NoiseVariants int    `json:"noise_variants"`
+	HavocVariants int    `json:"havoc_variants"`
+	ReleaseAt     string `json:"release_at"`
 }
+
+const maxCheckerVariants = 8
 
 func (h *GameAdminHandler) CreateService(c *gin.Context) {
 	var req createServiceReq
@@ -510,15 +530,33 @@ func (h *GameAdminHandler) CreateService(c *gin.Context) {
 	if stores == 0 {
 		stores = 1
 	}
-	if stores != 1 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "only one flag store is currently supported"})
+	eno := isCheckerURL(checkerRef)
+	if eno {
+		if u, err := url.Parse(checkerRef); err != nil || u.Host == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "checker_ref is not a valid url"})
+			return
+		}
+	} else if stores != 1 || req.NoiseVariants != 0 || req.HavocVariants != 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "exec checkers support one flag store and no noise or havoc"})
+		return
+	}
+	if stores < 1 || stores > maxCheckerVariants || req.NoiseVariants < 0 || req.NoiseVariants > maxCheckerVariants ||
+		req.HavocVariants < 0 || req.HavocVariants > maxCheckerVariants {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "flag_stores must be 1-8, noise and havoc variants 0-8"})
+		return
+	}
+	releaseAt, err := parseOptionalTime(req.ReleaseAt)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "release_at must be RFC3339"})
 		return
 	}
 	var id uuid.UUID
 	err = h.db.Pool.QueryRow(c.Request.Context(),
-		`INSERT INTO game_services (name, slug, category, tier, port, checker_ref, flag_stores)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-		name, slug, category, tier, req.Port, checkerRef, stores).Scan(&id)
+		`INSERT INTO game_services (name, slug, category, tier, port, checker_ref, flag_stores,
+		   noise_variants, havoc_variants, release_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+		name, slug, category, tier, req.Port, checkerRef, stores,
+		req.NoiseVariants, req.HavocVariants, releaseAt).Scan(&id)
 	if err != nil {
 		h.fail(c, "create service", err)
 		return
@@ -573,14 +611,27 @@ func (h *GameAdminHandler) UpdateService(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var req enabledReq
-	if err := bindArenaAdminJSON(c, &req); err != nil || req.Enabled == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "enabled required"})
+	var req updateServiceReq
+	if err := bindArenaAdminJSON(c, &req); err != nil || (req.Enabled == nil && req.ReleaseAt == nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "enabled or release_at required"})
 		return
 	}
+	// release_at "" clears the schedule (released now); a time schedules the drop
+	var releaseAt *time.Time
+	if req.ReleaseAt != nil {
+		var err error
+		if releaseAt, err = parseOptionalTime(*req.ReleaseAt); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "release_at must be RFC3339"})
+			return
+		}
+	}
 	result, err := h.db.Pool.Exec(c.Request.Context(),
-		`UPDATE game_services SET enabled = $1, updated_at = NOW() WHERE id = $2`,
-		*req.Enabled, id)
+		`UPDATE game_services SET
+		   enabled = COALESCE($1, enabled),
+		   release_at = CASE WHEN $2 THEN $3 ELSE release_at END,
+		   updated_at = NOW()
+		 WHERE id = $4`,
+		req.Enabled, req.ReleaseAt != nil, releaseAt, id)
 	if err != nil {
 		h.fail(c, "update service", err)
 		return
@@ -589,6 +640,27 @@ func (h *GameAdminHandler) UpdateService(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "updated"})
+}
+
+type updateServiceReq struct {
+	Enabled   *bool   `json:"enabled"`
+	ReleaseAt *string `json:"release_at"`
+}
+
+func isCheckerURL(ref string) bool {
+	return strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://")
+}
+
+func parseOptionalTime(s string) (*time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
 
 func (h *GameAdminHandler) DeleteService(c *gin.Context) {

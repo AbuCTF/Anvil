@@ -344,6 +344,17 @@ type GameConfig struct {
 	Koth    KothConfig    `mapstructure:"koth"`
 	Scoring ScoringConfig `mapstructure:"scoring"`
 	Webhook WebhookConfig `mapstructure:"webhook"`
+	Checker CheckerConfig `mapstructure:"checker"`
+}
+
+// paces attack-defense checker tasks inside a tick, enowars style: puts in the first
+// quarter, old-flag gets in the middle, current gets in the third, havoc throughout.
+type CheckerConfig struct {
+	TaskTimeout  time.Duration `mapstructure:"task_timeout"`  // capped at a quarter tick
+	TailMargin   time.Duration `mapstructure:"tail_margin"`   // no task runs in the last stretch of a tick
+	CheckedTicks int           `mapstructure:"checked_ticks"` // old ticks re-checked; 0 = flag_valid_ticks
+	Spread       bool          `mapstructure:"spread"`        // jitter task starts across the tick
+	Concurrency  int           `mapstructure:"concurrency"`   // checker calls in flight at once
 }
 
 type KothConfig struct {
@@ -582,4 +593,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.webhook.url", "")
 	v.SetDefault("game.webhook.secret", "")
 	v.SetDefault("game.webhook.id", "")
+	v.SetDefault("game.checker.task_timeout", "30s")
+	v.SetDefault("game.checker.tail_margin", "10s")
+	v.SetDefault("game.checker.checked_ticks", 0)
+	v.SetDefault("game.checker.spread", true)
+	v.SetDefault("game.checker.concurrency", 64)
 }

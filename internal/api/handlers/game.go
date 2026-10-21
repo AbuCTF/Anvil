@@ -32,6 +32,10 @@ type GameHandler struct {
 	flight     *gameStateFlight
 	stateLoad  func(context.Context, bool) ([]byte, string, error)
 	arenaOpen  func(context.Context) (bool, error)
+
+	attackMu      sync.Mutex
+	attackBody    []byte
+	attackExpires time.Time
 }
 
 type gameStateCacheEntry struct {
@@ -131,6 +135,15 @@ func (h *GameHandler) SubmitFlag(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
+	if phase, finals, err := game.FinalsPhase(ctx, h.db); err != nil {
+		h.logger.Error("submit: game phase", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	} else if finals && phase != game.PhaseLive {
+		c.JSON(http.StatusForbidden, gin.H{"status": "rejected", "message": phaseMessage(phase)})
+		return
+	}
+
 	teamID, ok, err := game.TeamForUser(ctx, h.db, *userID)
 	if err != nil {
 		h.logger.Error("submit: team lookup", zap.Error(err))
@@ -160,6 +173,17 @@ func (h *GameHandler) SubmitFlag(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "rejected", "message": "flag expired"})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"status": "rejected", "message": "invalid flag"})
+	}
+}
+
+func phaseMessage(p game.Phase) string {
+	switch p {
+	case game.PhaseNotStarted:
+		return "game has not started"
+	case game.PhasePaused:
+		return "game paused"
+	default:
+		return "game over"
 	}
 }
 

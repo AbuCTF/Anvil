@@ -19,14 +19,21 @@ const (
 	SubmitDuplicate SubmitOutcome = "duplicate"
 )
 
-// TeamForUser returns the game team a user belongs to, if any.
+// TeamForUser returns the game team a user belongs to, if any. A game team shares its
+// id with the platform team it mirrors, so users.team_id is the source of truth; the
+// game_team_members rows are the older hand-wired path and only a fallback.
 func TeamForUser(ctx context.Context, db *database.DB, userID uuid.UUID) (uuid.UUID, bool, error) {
 	var teamID uuid.UUID
 	err := db.Pool.QueryRow(ctx,
-		`SELECT tm.team_id FROM game_team_members tm
-		 JOIN game_teams t ON t.id = tm.team_id
-		 WHERE tm.user_id = $1 AND t.status = 'active' AND t.is_nop = FALSE
-		 ORDER BY tm.created_at, tm.team_id LIMIT 1`, userID).Scan(&teamID)
+		`SELECT id FROM (
+		   SELECT t.id, 0 AS pref, NULL::timestamptz AS joined FROM game_teams t
+		   WHERE t.status = 'active' AND t.is_nop = FALSE
+		     AND t.id = (SELECT team_id FROM users WHERE id = $1)
+		   UNION ALL
+		   SELECT tm.team_id, 1, tm.created_at FROM game_team_members tm
+		   JOIN game_teams t ON t.id = tm.team_id
+		   WHERE tm.user_id = $1 AND t.status = 'active' AND t.is_nop = FALSE
+		 ) c ORDER BY pref, joined, id LIMIT 1`, userID).Scan(&teamID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return uuid.UUID{}, false, nil
 	}

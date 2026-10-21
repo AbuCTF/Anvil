@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -25,6 +26,10 @@ type Controller struct {
 	emitClient *http.Client
 }
 
+// finishing a finals tick (koth fold, standings, close) gets its own budget, since
+// checker tasks may run right up to the tick's tail margin
+const finishTimeout = 30 * time.Second
+
 func NewController(cfg config.GameConfig, db *database.DB, logger *zap.Logger) *Controller {
 	return &Controller{
 		cfg:    cfg,
@@ -35,6 +40,14 @@ func NewController(cfg config.GameConfig, db *database.DB, logger *zap.Logger) *
 			logger:         logger,
 			flagPrefix:     cfg.FlagPrefix,
 			flagValidTicks: cfg.FlagValidTicks,
+			tickLength:     cfg.TickInterval,
+			checker:        cfg.Checker,
+			// no client timeout: every task carries its own deadline
+			client: &http.Client{Transport: &http.Transport{
+				MaxIdleConns:        512,
+				MaxIdleConnsPerHost: 128,
+				IdleConnTimeout:     90 * time.Second,
+			}},
 		},
 		emitClient: &http.Client{Timeout: 10 * time.Second},
 	}
@@ -105,7 +118,23 @@ func (c *Controller) Run(ctx context.Context) {
 // cannot simply turn game.enabled off to stop ticking without also hiding the arena view.
 // This decouples the two: game.enabled stays true (arena stays visible, frozen at its last
 // tick), while the loop advances nothing once the event is over.
+//
+// Finals mode (game.state set) ignores koth_native_enabled: it ticks only while the
+// state is running and the clock is inside the event window.
 func (c *Controller) tickingAllowed(ctx context.Context) bool {
+	state, err := ReadState(ctx, c.db)
+	if err != nil {
+		c.logger.Warn("game engine failed to read game.state", zap.Error(err))
+		return false
+	}
+	if state != StateLegacy {
+		start, end, err := eventWindow(ctx, c.db)
+		if err != nil {
+			c.logger.Warn("game engine failed to read event window", zap.Error(err))
+			return false
+		}
+		return phaseAt(state, time.Now(), start, end) == PhaseLive
+	}
 	if !c.kothNativeEnabled(ctx) {
 		return false
 	}
@@ -121,6 +150,19 @@ func (c *Controller) tickingAllowed(ctx context.Context) bool {
 }
 
 func (c *Controller) runTick(parent context.Context, tick int) error {
+	state, err := ReadState(parent, c.db)
+	if err != nil {
+		return fmt.Errorf("read game state: %w", err)
+	}
+	if state != StateLegacy {
+		return c.runFinalsTick(parent, tick)
+	}
+	return c.runLegacyTick(parent, tick)
+}
+
+// runLegacyTick is the quals tick: koth and standings only. Quals never ran
+// attack-defense, so checker dispatch exists only in finals mode.
+func (c *Controller) runLegacyTick(parent context.Context, tick int) error {
 	ctx, cancel := context.WithTimeout(parent, c.cfg.TickInterval)
 	defer cancel()
 
@@ -133,7 +175,7 @@ func (c *Controller) runTick(parent context.Context, tick int) error {
 	}
 	defer release()
 
-	runnable, err := c.openTick(ctx, tick)
+	_, runnable, err := c.openTick(ctx, tick)
 	if err != nil {
 		return fmt.Errorf("open tick: %w", err)
 	}
@@ -150,9 +192,6 @@ func (c *Controller) runTick(parent context.Context, tick int) error {
 		}
 	}
 
-	if err := c.dispatcher.dispatch(ctx, tick); err != nil {
-		return fmt.Errorf("dispatch: %w", err)
-	}
 	if err := c.runKoth(ctx, tick); err != nil {
 		return fmt.Errorf("run KotH: %w", err)
 	}
@@ -168,6 +207,72 @@ func (c *Controller) runTick(parent context.Context, tick int) error {
 		return fmt.Errorf("snapshot standings: %w", err)
 	}
 
+	if err := c.closeTick(ctx, tick); err != nil {
+		return fmt.Errorf("close tick: %w", err)
+	}
+	c.emitStandings(ctx, tick)
+	return nil
+}
+
+// runFinalsTick spreads checker tasks across the tick while hills are polled beside
+// them. Checker and koth failures are logged, never fatal: a tick that cannot close
+// would be retried forever and freeze the whole game.
+func (c *Controller) runFinalsTick(parent context.Context, tick int) error {
+	release, acquired, err := c.acquireTickLock(parent)
+	if err != nil {
+		return fmt.Errorf("acquire tick lock: %w", err)
+	}
+	if !acquired {
+		return nil
+	}
+	defer release()
+
+	started, runnable, err := c.openTick(parent, tick)
+	if err != nil {
+		return fmt.Errorf("open tick: %w", err)
+	}
+	if !runnable {
+		return nil
+	}
+
+	native := c.kothNativeEnabled(parent)
+	if native {
+		if err := c.syncNativeTeams(parent); err != nil {
+			c.logger.Error("sync native teams", zap.Int("tick", tick), zap.Error(err))
+		}
+	}
+
+	tickCtx, cancelTick := context.WithDeadline(parent, started.Add(c.cfg.TickInterval))
+	var koth sync.WaitGroup
+	koth.Add(1)
+	go func() {
+		defer koth.Done()
+		if err := c.runKoth(tickCtx, tick); err != nil && parent.Err() == nil {
+			c.logger.Error("tick koth", zap.Int("tick", tick), zap.Error(err))
+		}
+	}()
+	if err := c.dispatcher.dispatch(tickCtx, tick, started); err != nil && parent.Err() == nil {
+		c.logger.Error("tick dispatch", zap.Int("tick", tick), zap.Error(err))
+	}
+	koth.Wait()
+	cancelTick()
+	if err := parent.Err(); err != nil {
+		return err // shutting down: leave the tick running so a restart resumes it
+	}
+
+	ctx, cancel := context.WithTimeout(parent, finishTimeout)
+	defer cancel()
+	if err := c.recomputeStandings(ctx); err != nil {
+		return fmt.Errorf("recompute standings: %w", err)
+	}
+	if native {
+		if err := c.foldNativeScore(ctx); err != nil {
+			return fmt.Errorf("fold native koth score: %w", err)
+		}
+	}
+	if err := c.snapshotStandings(ctx, tick); err != nil {
+		return fmt.Errorf("snapshot standings: %w", err)
+	}
 	if err := c.closeTick(ctx, tick); err != nil {
 		return fmt.Errorf("close tick: %w", err)
 	}
@@ -244,34 +349,36 @@ func (c *Controller) runningTick(ctx context.Context) (int, bool, error) {
 	return tick, true, nil
 }
 
-func (c *Controller) openTick(ctx context.Context, tick int) (bool, error) {
+func (c *Controller) openTick(ctx context.Context, tick int) (time.Time, bool, error) {
 	// cadence gate: every api replica runs a controller, so without this a new tick
 	// opens as fast as any replica's ticker fires (N replicas => N x speed). Only open
 	// a new tick when none has STARTED within the interval; an existing tick (resume, or
 	// a peer that just opened it) falls through to the status check below.
-	tag, err := c.db.Pool.Exec(ctx,
+	var started time.Time
+	err := c.db.Pool.QueryRow(ctx,
 		`INSERT INTO game_ticks (tick_number, started_at, status)
 		 SELECT $1, NOW(), 'running'
 		 WHERE NOT EXISTS (
 		   SELECT 1 FROM game_ticks WHERE started_at > NOW() - make_interval(secs => $2))
-		 ON CONFLICT (tick_number) DO NOTHING`, tick, c.cfg.TickInterval.Seconds())
-	if err != nil {
-		return false, err
+		 ON CONFLICT (tick_number) DO NOTHING
+		 RETURNING started_at`, tick, c.cfg.TickInterval.Seconds()).Scan(&started)
+	if err == nil {
+		return started, true, nil
 	}
-	if tag.RowsAffected() == 1 {
-		return true, nil
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, err
 	}
 
 	var status string
 	if err := c.db.Pool.QueryRow(ctx,
-		`SELECT status FROM game_ticks WHERE tick_number = $1`, tick,
-	).Scan(&status); err != nil {
+		`SELECT status, started_at FROM game_ticks WHERE tick_number = $1`, tick,
+	).Scan(&status, &started); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil // gated: too soon for a new tick, skip this cycle
+			return time.Time{}, false, nil // gated: too soon for a new tick, skip this cycle
 		}
-		return false, err
+		return time.Time{}, false, err
 	}
-	return status == "running", nil
+	return started, status == "running", nil
 }
 
 func (c *Controller) closeTick(ctx context.Context, tick int) error {

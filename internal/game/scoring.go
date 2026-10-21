@@ -33,7 +33,7 @@ func slaTickPoints(points float64, numTeams int, status models.SLAStatus) float6
 	}
 	scale := points * math.Sqrt(float64(numTeams))
 	switch status {
-	case models.SLAOk:
+	case models.SLAOk, models.SLAError: // organizer faults are credited, never charged
 		return scale
 	case models.SLARecovering:
 		return scale * 0.5

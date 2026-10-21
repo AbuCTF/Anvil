@@ -4,11 +4,16 @@ package game
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,7 +72,14 @@ func testDB(t *testing.T) *database.DB {
 		t.Fatalf("migrate: %v", err)
 	}
 	_, err = db.Pool.Exec(context.Background(),
-		`TRUNCATE game_teams, game_services, game_ticks, game_koth_hills, game_koth_rounds, users CASCADE`)
+		`TRUNCATE game_teams, game_services, game_ticks, game_koth_hills, game_koth_rounds, users, teams CASCADE`)
+	if err == nil {
+		// back to the migration defaults rather than deleting rows other code expects
+		_, err = db.Pool.Exec(context.Background(),
+			`DELETE FROM platform_settings WHERE key = 'game.state';
+			 UPDATE platform_settings SET value = '""'::jsonb WHERE key IN ('event.start_at', 'event.end_at');
+			 UPDATE platform_settings SET value = 'false'::jsonb WHERE key = 'koth_native_enabled'`)
+	}
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -283,6 +295,7 @@ func testController(db *database.DB) *Controller {
 		FlagValidTicks: 10,
 		FlagPrefix:     "H7CTF",
 		Koth:           config.KothConfig{RoundInterval: 2 * time.Minute, ResetEnabled: true},
+		Checker:        config.CheckerConfig{TaskTimeout: 30 * time.Second, TailMargin: 10 * time.Second, Concurrency: 8},
 		Scoring: config.ScoringConfig{
 			AttackBase:    100,
 			DefenseFactor: 1,
@@ -295,9 +308,36 @@ func testController(db *database.DB) *Controller {
 
 func runTickOK(t *testing.T, ctrl *Controller, ctx context.Context, tick int) {
 	t.Helper()
+	ageEarlierTicks(t, ctrl.db, tick)
 	if err := ctrl.runTick(ctx, tick); err != nil {
 		t.Fatalf("run tick %d: %v", tick, err)
 	}
+}
+
+// ageEarlierTicks backdates earlier ticks past the cadence gate, which otherwise
+// refuses a new tick within one interval of the last and turns back-to-back test
+// ticks into silent no-ops.
+func ageEarlierTicks(t *testing.T, db *database.DB, tick int) {
+	t.Helper()
+	if _, err := db.Pool.Exec(context.Background(),
+		`UPDATE game_ticks SET started_at = started_at - interval '1 hour' WHERE tick_number < $1`, tick); err != nil {
+		t.Fatalf("age ticks: %v", err)
+	}
+}
+
+func setSetting(t *testing.T, db *database.DB, key, jsonValue string) {
+	t.Helper()
+	if _, err := db.Pool.Exec(context.Background(),
+		`INSERT INTO platform_settings (key, value) VALUES ($1, $2::jsonb)
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key, jsonValue); err != nil {
+		t.Fatalf("set %s: %v", key, err)
+	}
+}
+
+// setFinals switches the engine into finals mode, where attack-defense runs.
+func setFinals(t *testing.T, db *database.DB) {
+	t.Helper()
+	setSetting(t, db, "game.state", `"running"`)
 }
 
 func count(t *testing.T, db *database.DB, q string) int {
@@ -313,6 +353,7 @@ func TestIntegrationADLoop(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
 	defer db.Close()
+	setFinals(t, db)
 
 	a := seedTeam(t, db, "alpha")
 	b := seedTeam(t, db, "bravo")
@@ -372,47 +413,43 @@ func TestIntegrationADLoop(t *testing.T) {
 	}
 }
 
-func TestIntegrationDispatchChecksPreviousFlagAndDoesNotRepeatClosedTick(t *testing.T) {
+func TestIntegrationOldFlagLossRecoversAndClosedTickIsNotRepeated(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
 	defer db.Close()
+	setFinals(t, db)
 
 	seedTeam(t, db, "alpha")
 	seedTeam(t, db, "bravo")
-	checker, logPath := checkingChecker(t)
-	seedService(t, db, checker)
+	// the service keeps only the current tick's flag: old getflags come back MUMBLE
+	srv, calls := enoFake(t, func(m enoTaskMessage) enoResultMessage {
+		if m.Method == MethodGetFlag && m.RelatedRoundID < m.CurrentRoundID {
+			return enoResult("MUMBLE", "flag gone")
+		}
+		return enoResult("OK", "")
+	})
+	seedENOService(t, db, srv.URL, 1, 0, 0)
 
 	ctrl := testController(db)
-	if err := ctrl.runTick(ctx, 1); err != nil {
-		t.Fatalf("tick 1: %v", err)
-	}
-	if err := ctrl.runTick(ctx, 2); err != nil {
-		t.Fatalf("tick 2: %v", err)
-	}
+	runTickOK(t, ctrl, ctx, 1)
+	runTickOK(t, ctrl, ctx, 2)
 
-	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE tick_number = 2 AND status = 'FLAG_NOT_FOUND'`); n != 2 {
-		t.Fatalf("expected retrieval failures for both teams on tick 2, got %d", n)
+	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE tick_number = 1 AND status = 'OK'`); n != 2 {
+		t.Fatalf("tick 1 should be OK for both teams, got %d", n)
 	}
-	if n := count(t, db, `SELECT COUNT(*) FROM game_flags WHERE planted_at IS NOT NULL`); n != 4 {
-		t.Fatalf("expected two planted generations, got %d flags", n)
+	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE tick_number = 2 AND status = 'RECOVERING'`); n != 2 {
+		t.Fatalf("lost old flags should mark both teams RECOVERING on tick 2, got %d", n)
 	}
-
-	before, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("read checker log: %v", err)
-	}
-	if checks := strings.Count(string(before), `"action":"check"`); checks != 2 {
-		t.Fatalf("expected two retrieval checks, got %d", checks)
+	before := calls.Load()
+	// put+get per team on tick 1, then put+get+old get per team on tick 2
+	if before != 10 {
+		t.Fatalf("checker saw %d tasks over two ticks, want 10", before)
 	}
 	if err := ctrl.runTick(ctx, 2); err != nil {
 		t.Fatalf("repeat closed tick: %v", err)
 	}
-	after, err := os.ReadFile(logPath)
-	if err != nil {
-		t.Fatalf("read checker log after repeat: %v", err)
-	}
-	if len(after) != len(before) {
-		t.Fatalf("closed tick dispatched again: checker log grew from %d to %d bytes", len(before), len(after))
+	if after := calls.Load(); after != before {
+		t.Fatalf("closed tick dispatched again: %d -> %d tasks", before, after)
 	}
 }
 
@@ -420,6 +457,7 @@ func TestIntegrationReservedFlagIsNotSubmittable(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
 	defer db.Close()
+	setFinals(t, db)
 
 	attacker := seedTeam(t, db, "alpha")
 	victim := seedTeam(t, db, "bravo")
@@ -443,6 +481,7 @@ func TestIntegrationRunningTickReusesReservedFlag(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
 	defer db.Close()
+	setFinals(t, db)
 
 	team := seedTeam(t, db, "alpha")
 	checker, logPath := recordingChecker(t, 0)
@@ -478,6 +517,7 @@ func TestIntegrationRunningTickSkipsCompletedJobs(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
 	defer db.Close()
+	setFinals(t, db)
 
 	completedTeam := seedTeam(t, db, "alpha")
 	unfinishedTeam := seedTeam(t, db, "bravo")
@@ -523,6 +563,7 @@ func TestIntegrationConcurrentControllersDispatchTickOnce(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)
 	defer db.Close()
+	setFinals(t, db)
 
 	seedTeam(t, db, "alpha")
 	seedTeam(t, db, "bravo")
@@ -548,8 +589,9 @@ func TestIntegrationConcurrentControllersDispatchTickOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read checker log: %v", err)
 	}
-	if got := strings.Count(strings.TrimSpace(string(actions)), "\n") + 1; got != 2 {
-		t.Fatalf("two controllers dispatched %d checker jobs; want exactly 2", got)
+	// one job per team, each a putflag then its getflag
+	if got := strings.Count(strings.TrimSpace(string(actions)), "\n") + 1; got != 4 {
+		t.Fatalf("two controllers ran %d checker tasks; want exactly 4", got)
 	}
 	if n := count(t, db, `SELECT COUNT(*) FROM game_flags`); n != 2 {
 		t.Fatalf("two controllers persisted %d flags; want exactly 2", n)
@@ -597,5 +639,253 @@ func TestIntegrationTeamForUser(t *testing.T) {
 	}
 	if _, ok, err := TeamForUser(ctx, db, user); err != nil || ok {
 		t.Errorf("disabled team resolved for submission: ok=%v err=%v", ok, err)
+	}
+}
+
+func enoResult(result, message string) enoResultMessage {
+	m := enoResultMessage{Result: result}
+	if message != "" {
+		m.Message = &message
+	}
+	return m
+}
+
+// enoFake is an enowars v2 checker that answers through decide and counts tasks.
+func enoFake(t *testing.T, decide func(enoTaskMessage) enoResultMessage) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	var calls atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m enoTaskMessage
+		if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
+			t.Errorf("decode task: %v", err)
+		}
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(decide(m))
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &calls
+}
+
+func seedENOService(t *testing.T, db *database.DB, url string, flags, noise, havoc int) uuid.UUID {
+	t.Helper()
+	id := uuid.New()
+	_, err := db.Pool.Exec(context.Background(),
+		`INSERT INTO game_services (id, name, slug, category, tier, port, checker_ref, flag_stores,
+		   noise_variants, havoc_variants, enabled)
+		 VALUES ($1, 'Berth', 'berth', 'web', 'core', 8080, $2, $3, $4, $5, true)`, id, url, flags, noise, havoc)
+	if err != nil {
+		t.Fatalf("seed eno service: %v", err)
+	}
+	return id
+}
+
+func TestIntegrationLegacyTickNeverDispatchesAD(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	a := seedTeam(t, db, "alpha")
+	seedTeam(t, db, "bravo")
+	seedHill(t, db, kothChecker(t, "alpha"))
+	srv, calls := enoFake(t, func(enoTaskMessage) enoResultMessage { return enoResult("OK", "") })
+	seedENOService(t, db, srv.URL, 1, 0, 0)
+
+	// game.state unset: the quals path must behave exactly as it always did
+	ctrl := testController(db)
+	runTickOK(t, ctrl, ctx, 1)
+	runTickOK(t, ctrl, ctx, 2)
+
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("legacy tick ran %d checker tasks", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flags`) + count(t, db, `SELECT COUNT(*) FROM game_sla_checks`); n != 0 {
+		t.Fatalf("legacy tick wrote %d flag/sla rows", n)
+	}
+	if s := getStanding(t, db, a); s.koth != 10 {
+		t.Fatalf("legacy koth hold = %v, want 10 (5 x 2 ticks)", s.koth)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_ticks WHERE status = 'closed'`); n != 2 {
+		t.Fatalf("legacy ticks closed = %d, want 2", n)
+	}
+}
+
+func TestIntegrationTickingAllowedFollowsGameState(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+	ctrl := testController(db)
+
+	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339)
+	clear := func() {
+		if _, err := db.Pool.Exec(ctx,
+			`DELETE FROM platform_settings WHERE key = 'game.state';
+			 UPDATE platform_settings SET value = '""'::jsonb WHERE key IN ('event.start_at', 'event.end_at');
+			 UPDATE platform_settings SET value = 'false'::jsonb WHERE key = 'koth_native_enabled'`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		name     string
+		settings map[string]string
+		want     bool
+	}{
+		{"legacy, koth off", map[string]string{}, false},
+		{"legacy, koth on", map[string]string{"koth_native_enabled": "true"}, true},
+		{"legacy, koth on but ended", map[string]string{"koth_native_enabled": "true", "event.end_at": `"` + past + `"`}, false},
+		{"running", map[string]string{"game.state": `"running"`}, true},
+		{"running ignores koth flag", map[string]string{"game.state": `"running"`, "koth_native_enabled": "false"}, true},
+		{"running before start", map[string]string{"game.state": `"running"`, "event.start_at": `"` + future + `"`}, false},
+		{"running inside window", map[string]string{"game.state": `"running"`, "event.start_at": `"` + past + `"`, "event.end_at": `"` + future + `"`}, true},
+		{"running after end", map[string]string{"game.state": `"running"`, "event.end_at": `"` + past + `"`}, false},
+		{"paused", map[string]string{"game.state": `"paused"`, "koth_native_enabled": "true"}, false},
+		{"stopped", map[string]string{"game.state": `"stopped"`}, false},
+		{"typo pauses", map[string]string{"game.state": `"runing"`}, false},
+	} {
+		clear()
+		for k, v := range tt.settings {
+			setSetting(t, db, k, v)
+		}
+		if got := ctrl.tickingAllowed(ctx); got != tt.want {
+			t.Errorf("%s: tickingAllowed = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestIntegrationENOVariantsAttackInfoAndTaskLog(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+	setFinals(t, db)
+
+	alpha := seedTeam(t, db, "alpha")
+	seedTeam(t, db, "bravo")
+	nop := seedTeam(t, db, "nop")
+	if _, err := db.Pool.Exec(ctx, `UPDATE game_teams SET is_nop = TRUE WHERE id = $1`, nop); err != nil {
+		t.Fatal(err)
+	}
+	var chains sync.Map
+	srv, calls := enoFake(t, func(m enoTaskMessage) enoResultMessage {
+		switch m.Method {
+		case MethodPutFlag:
+			if m.Flag == nil {
+				t.Errorf("putflag without a flag")
+			}
+			chains.Store(m.TaskChainID, *m.Flag)
+			r := enoResult("OK", "")
+			info := fmt.Sprintf(`{"user":"u%d"}`, m.VariantID)
+			r.AttackInfo = &info
+			return r
+		case MethodGetFlag:
+			if want, ok := chains.Load(m.TaskChainID); !ok || m.Flag == nil || want != *m.Flag {
+				return enoResult("MUMBLE", "chain id does not match its putflag")
+			}
+			return enoResult("OK", "")
+		default:
+			return enoResult("OK", "")
+		}
+	})
+	seedENOService(t, db, srv.URL, 2, 1, 1)
+
+	runTickOK(t, testController(db), ctx, 1)
+
+	// 3 teams (the nop team included) x 2 flag variants
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flags WHERE planted_at IS NOT NULL`); n != 6 {
+		t.Fatalf("planted flags = %d, want 6", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flags WHERE attack_info = '{"user":"u1"}' AND store_index = 1`); n != 3 {
+		t.Fatalf("variant 1 flags with attack info = %d, want 3", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE status = 'OK'`); n != 3 {
+		t.Fatalf("OK sla rows = %d, want 3", n)
+	}
+	// per team: 2 putflag + 2 getflag + putnoise + getnoise + havoc = 7
+	if got := calls.Load(); got != 21 {
+		t.Fatalf("checker tasks = %d, want 21", got)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_checker_tasks WHERE status = 'OK' AND finished_at IS NOT NULL`); n != 21 {
+		t.Fatalf("logged tasks = %d, want 21", n)
+	}
+	if n := count(t, db, `SELECT COUNT(DISTINCT id) FROM game_checker_tasks`); n != 21 {
+		t.Fatalf("task ids are not unique: %d distinct", n)
+	}
+
+	// the nop team's flags are stealable so teams can test exploits on it
+	var nopFlag string
+	if err := db.Pool.QueryRow(ctx, `SELECT flag FROM game_flags WHERE team_id = $1 LIMIT 1`, nop).Scan(&nopFlag); err != nil {
+		t.Fatal(err)
+	}
+	assertOutcome(t, db, alpha, nopFlag, SubmitAccepted)
+}
+
+func TestIntegrationHungCheckerDoesNotStallTheTick(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+	setFinals(t, db)
+
+	a := seedTeam(t, db, "alpha")
+	seedTeam(t, db, "bravo")
+	seedHill(t, db, kothChecker(t, "alpha"))
+	release := make(chan struct{})
+	srv, _ := enoFake(t, func(m enoTaskMessage) enoResultMessage {
+		if m.Method == MethodHavoc {
+			<-release // hangs well past its timeout
+		}
+		return enoResult("OK", "")
+	})
+	// registered after the server so it runs first: Close waits on the hung handler
+	t.Cleanup(func() { close(release) })
+	seedENOService(t, db, srv.URL, 1, 0, 1)
+
+	ctrl := NewController(config.GameConfig{
+		Enabled:        true,
+		TickInterval:   8 * time.Second, // quarter = 2 s task timeout
+		FlagValidTicks: 5,
+		FlagPrefix:     "H7",
+		Koth:           config.KothConfig{RoundInterval: time.Minute},
+		Checker:        config.CheckerConfig{TaskTimeout: 30 * time.Second, TailMargin: time.Second, Concurrency: 8},
+		Scoring:        config.ScoringConfig{AttackBase: 100, DefenseFactor: 1, SLAPoints: 10, KothHold: 5, KothRank: []int{12, 7, 4, 2, 1}},
+	}, db, zap.NewNop())
+
+	started := time.Now()
+	runTickOK(t, ctrl, ctx, 1)
+	if took := time.Since(started); took > 6*time.Second {
+		t.Fatalf("tick took %s with one hung checker task", took)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_ticks WHERE tick_number = 1 AND status = 'closed'`); n != 1 {
+		t.Fatal("tick 1 did not close")
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE status = 'DOWN'`); n != 2 {
+		t.Fatalf("a timed-out havoc should mark both teams DOWN, got %d", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_koth_control WHERE controller_team_id = '`+a.String()+`'`); n != 1 {
+		t.Fatalf("koth did not score beside the hung checker")
+	}
+}
+
+func TestIntegrationTeamForUserViaPlatformTeam(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	team := uuid.New()
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO teams (id, name, join_code) VALUES ($1, 'Alpha', 'join-alpha')`, team); err != nil {
+		t.Fatalf("seed platform team: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_teams (id, name, slug, status, is_nop, vulnbox_ip) VALUES ($1, 'Alpha', 'alpha', 'active', false, '10.60.1.2')`,
+		team); err != nil {
+		t.Fatalf("seed game team: %v", err)
+	}
+	user := uuid.New()
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO users (id, username, email, password_hash, role, status, team_id)
+		 VALUES ($1, 'p2', 'p2@example.com', 'x', 'user', 'active', $2)`, user, team); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	got, ok, err := TeamForUser(ctx, db, user)
+	if err != nil || !ok || got != team {
+		t.Fatalf("TeamForUser via users.team_id: got %v ok=%v err=%v want %v", got, ok, err, team)
 	}
 }

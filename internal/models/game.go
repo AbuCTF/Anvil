@@ -46,6 +46,8 @@ const (
 	SLAFaulty       SLAStatus = "FAULTY"
 	SLAFlagNotFound SLAStatus = "FLAG_NOT_FOUND"
 	SLARecovering   SLAStatus = "RECOVERING"
+	// organizer fault (checker crash, our outage): credited, never charged
+	SLAError SLAStatus = "ERROR"
 )
 
 type ScoreStream string

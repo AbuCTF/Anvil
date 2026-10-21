@@ -22,7 +22,7 @@ func writeChecker(t *testing.T, body string) string {
 
 func TestExecCheckerOK(t *testing.T) {
 	script := writeChecker(t, "#!/bin/sh\ncat >/dev/null\nprintf '{\"status\":\"OK\",\"message\":\"up\"}'\n")
-	res := execChecker{command: script}.Place(context.Background(), Target{Host: "10.0.0.1", Port: 9001}, "H7CTF{x}")
+	res := execChecker{command: script}.Run(context.Background(), Target{Host: "10.0.0.1", Port: 9001}, Task{Method: MethodPutFlag, Flag: "H7CTF{x}"})
 	if res.Status != models.SLAOk {
 		t.Fatalf("expected OK, got %s (%s)", res.Status, res.Message)
 	}
@@ -30,7 +30,7 @@ func TestExecCheckerOK(t *testing.T) {
 
 func TestExecCheckerMalformed(t *testing.T) {
 	script := writeChecker(t, "#!/bin/sh\ncat >/dev/null\nprintf 'not json'\n")
-	res := execChecker{command: script}.Check(context.Background(), Target{}, "f")
+	res := execChecker{command: script}.Run(context.Background(), Target{}, Task{Method: MethodGetFlag, Flag: "f"})
 	if res.Status != models.SLAFaulty {
 		t.Fatalf("expected FAULTY, got %s", res.Status)
 	}
@@ -38,7 +38,7 @@ func TestExecCheckerMalformed(t *testing.T) {
 
 func TestExecCheckerNonZeroExit(t *testing.T) {
 	script := writeChecker(t, "#!/bin/sh\nexit 1\n")
-	res := execChecker{command: script}.Check(context.Background(), Target{}, "f")
+	res := execChecker{command: script}.Run(context.Background(), Target{}, Task{Method: MethodGetFlag, Flag: "f"})
 	if res.Status != models.SLADown {
 		t.Fatalf("expected DOWN, got %s", res.Status)
 	}
@@ -50,7 +50,7 @@ func TestExecCheckerTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	res := execChecker{command: script}.Check(ctx, Target{}, "f")
+	res := execChecker{command: script}.Run(ctx, Target{}, Task{Method: MethodGetFlag, Flag: "f"})
 	if res.Status != models.SLADown {
 		t.Fatalf("expected DOWN on timeout, got %s", res.Status)
 	}
