@@ -985,3 +985,83 @@ func TestIntegrationMirrorScoresThroughTicks(t *testing.T) {
 		t.Fatalf("effective sla = %+v err %v", ticks, err)
 	}
 }
+
+func TestIntegrationKothFinalsRoundsBountyAndCrowns(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+	setFinals(t, db)
+
+	alpha := seedTeam(t, db, "alpha")
+	bravo := seedTeam(t, db, "bravo")
+	charlie := seedTeam(t, db, "charlie")
+	h1 := seedHill(t, db, kothChecker(t, "alpha"))
+	h2 := uuid.New()
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_koth_hills (id, name, slug, host, port, checker_ref, reset_seconds, enabled)
+		 VALUES ($1, 'Hill2', 'hill2', '127.0.0.1', 1, $2, 900, true)`, h2, kothChecker(t, "bravo")); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := testController(db).cfg
+	cfg.Scoring.KothHold = 0 // finals score rounds, not ticks
+	cfg.Koth.ResetEnabled = false
+	cfg.Koth.BountyPerRound, cfg.Koth.BountyMinStreak = 2, 2
+	ctrl := NewController(cfg, db, zap.NewNop())
+	endRound := func() {
+		t.Helper()
+		if _, err := db.Pool.Exec(ctx,
+			`UPDATE game_koth_rounds SET planned_end = NOW() - interval '1 second' WHERE status = 'running'`); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	runTickOK(t, ctrl, ctx, 1) // round 1 opens; alpha holds h1, bravo h2
+	endRound()
+	runTickOK(t, ctrl, ctx, 2) // round 1 closes, round 2 opens
+	endRound()
+	if _, err := db.Pool.Exec(ctx, `UPDATE game_koth_hills SET checker_ref = $1 WHERE id = $2`,
+		kothChecker(t, "charlie"), h1); err != nil {
+		t.Fatal(err)
+	}
+	runTickOK(t, ctrl, ctx, 3) // round 2 closes (alpha has won h1 twice); charlie takes h1 in round 3
+	runTickOK(t, ctrl, ctx, 4)
+	endRound()
+	runTickOK(t, ctrl, ctx, 5) // round 3 closes: charlie ends alpha's two-round reign
+
+	pts := func(team uuid.UUID) float64 {
+		var p float64
+		if err := db.Pool.QueryRow(ctx,
+			`SELECT COALESCE(SUM(points), 0) FROM game_score_events WHERE team_id = $1 AND stream = 'KOTH'`, team).Scan(&p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// each hill ranks its own round: alpha 12 + 12 on h1, bravo 12 x 3 on h2
+	if got := pts(alpha); got != 24 {
+		t.Fatalf("alpha koth = %v, want 24 (two h1 rounds)", got)
+	}
+	if got := pts(bravo); got != 36 {
+		t.Fatalf("bravo koth = %v, want 36 (three h2 rounds)", got)
+	}
+	// charlie held h1 for both ticks of round 3 and won it, plus the bounty for
+	// ending a 2-round reign: 2 x 2
+	if got := pts(charlie); got != 12+4 {
+		t.Fatalf("charlie koth = %v, want 16 (round win + bounty)", got)
+	}
+	var bounty float64
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT bounty FROM game_koth_results WHERE team_id = $1 AND hill_id = $2 AND round_number = 3`, charlie, h1).Scan(&bounty); err != nil {
+		t.Fatalf("result row: %v", err)
+	}
+	if bounty != 4 {
+		t.Fatalf("recorded bounty = %v, want 4", bounty)
+	}
+	// crown events: alpha and bravo take their hills on tick 1, charlie takes h1 on tick 3
+	if n := count(t, db, `SELECT COUNT(*) FROM game_events WHERE kind = 'crown'`); n != 3 {
+		t.Fatalf("crown events = %d, want 3", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_events WHERE kind = 'crown' AND tick_number = 3 AND team_id = '`+charlie.String()+`'`); n != 1 {
+		t.Fatal("no crown event for charlie taking h1")
+	}
+}

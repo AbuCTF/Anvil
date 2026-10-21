@@ -268,7 +268,7 @@ func (c *Controller) runFinalsTick(parent context.Context, tick int) error {
 	beside.Add(1)
 	go func() {
 		defer beside.Done()
-		if err := c.runKoth(tickCtx, tick); err != nil && parent.Err() == nil {
+		if err := c.runKothFinals(tickCtx, tick, started); err != nil && parent.Err() == nil {
 			c.logger.Error("tick koth", zap.Int("tick", tick), zap.Error(err))
 		}
 	}()
@@ -330,8 +330,12 @@ func (c *Controller) finalize(ctx context.Context) error {
 	if err != nil || last == 0 || status != "closed" {
 		return err
 	}
-	if err := c.closeRound(ctx, c.roundForTick(last)); err != nil {
-		return fmt.Errorf("close final round: %w", err)
+	if round, _, err := c.runningRound(ctx); err != nil {
+		return err
+	} else if round > 0 {
+		if err := c.closeRoundFinals(ctx, round); err != nil {
+			return fmt.Errorf("close final round: %w", err)
+		}
 	}
 	if err := c.recomputeFinals(ctx, last, true); err != nil {
 		return fmt.Errorf("final recompute: %w", err)

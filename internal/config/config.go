@@ -373,6 +373,16 @@ type CheckerConfig struct {
 type KothConfig struct {
 	RoundInterval time.Duration `mapstructure:"round_interval"`
 	ResetEnabled  bool          `mapstructure:"reset_enabled"`
+
+	// finals rounds close on the clock; overnight rounds may run longer
+	NightRoundInterval time.Duration `mapstructure:"night_round_interval"` // 0 = same as day
+	NightStart         string        `mapstructure:"night_start"`          // HH:MM in Timezone
+	NightEnd           string        `mapstructure:"night_end"`
+	Timezone           string        `mapstructure:"timezone"`
+	// ending a reign of BountyMinStreak rounds pays streak x BountyPerRound (0 = off)
+	BountyPerRound  float64 `mapstructure:"bounty_per_round"`
+	BountyMinStreak int     `mapstructure:"bounty_min_streak"`
+	BountyCap       float64 `mapstructure:"bounty_cap"` // 0 = uncapped
 }
 
 type ScoringConfig struct {
@@ -608,6 +618,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.flag_prefix", "CTF")
 	v.SetDefault("game.koth.round_interval", "15m")
 	v.SetDefault("game.koth.reset_enabled", true)
+	v.SetDefault("game.koth.night_round_interval", "0s")
+	v.SetDefault("game.koth.night_start", "00:00")
+	v.SetDefault("game.koth.night_end", "07:00")
+	v.SetDefault("game.koth.timezone", "Asia/Kolkata")
+	v.SetDefault("game.koth.bounty_per_round", 0)
+	v.SetDefault("game.koth.bounty_min_streak", 3)
+	v.SetDefault("game.koth.bounty_cap", 0)
 	v.SetDefault("game.scoring.attack_base", 100)
 	v.SetDefault("game.scoring.defense_factor", 1.0)
 	v.SetDefault("game.scoring.sla_points", 10)

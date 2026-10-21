@@ -220,6 +220,35 @@ func TestLoadGameMirrorScoringDefaultsAndEnv(t *testing.T) {
 	}
 }
 
+func TestLoadGameKothFinalsDefaultsAndEnv(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned an error: %v", err)
+	}
+	k := cfg.Game.Koth
+	if k.NightRoundInterval != 0 || k.NightStart != "00:00" || k.NightEnd != "07:00" || k.Timezone != "Asia/Kolkata" ||
+		k.BountyPerRound != 0 || k.BountyMinStreak != 3 || k.BountyCap != 0 {
+		t.Fatalf("koth finals defaults = %+v", k)
+	}
+	t.Setenv("ANVIL_GAME_KOTH_NIGHT_ROUND_INTERVAL", "30m")
+	t.Setenv("ANVIL_GAME_KOTH_NIGHT_START", "00:30")
+	t.Setenv("ANVIL_GAME_KOTH_NIGHT_END", "06:00")
+	t.Setenv("ANVIL_GAME_KOTH_TIMEZONE", "UTC")
+	t.Setenv("ANVIL_GAME_KOTH_BOUNTY_PER_ROUND", "2")
+	t.Setenv("ANVIL_GAME_KOTH_BOUNTY_MIN_STREAK", "4")
+	t.Setenv("ANVIL_GAME_KOTH_BOUNTY_CAP", "20")
+	if cfg, err = Load(); err != nil {
+		t.Fatalf("Load() with env returned an error: %v", err)
+	}
+	k = cfg.Game.Koth
+	if k.NightRoundInterval != 30*time.Minute || k.NightStart != "00:30" || k.NightEnd != "06:00" || k.Timezone != "UTC" ||
+		k.BountyPerRound != 2 || k.BountyMinStreak != 4 || k.BountyCap != 20 {
+		t.Fatalf("koth finals env overrides not applied: %+v", k)
+	}
+}
+
 func TestDefaultEconomyMatchesVersionedPreset(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cfg, err := Load()
