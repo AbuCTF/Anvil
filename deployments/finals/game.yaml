@@ -1,0 +1,46 @@
+# h7ctf'26 finals game settings, merged over the baked config with
+#   ANVIL_CONFIG_OVERLAY=/etc/anvil/finals/game.yaml
+# secrets stay in env (ANVIL_GAME_INTERNAL_TOKEN). env beats this file.
+# per process: api replicas run ANVIL_GAME_CONTROLLER_ENABLED=false, the single
+# gameserver runs true with ANVIL_GAME_TCP_SUBMIT_ENABLED=true.
+# finals mode itself is platform_settings game.state ("running"), set at the start.
+
+game:
+  enabled: true
+  tick_interval: 2m
+  flag_valid_ticks: 4 # a flag lives 5 ticks: planted at t, submittable through t+4
+  flag_prefix: H7CTF
+
+  checker:
+    task_timeout: 30s # never above a quarter tick
+    tail_margin: 10s # no checks in the last 10 s: SAFE TO RESTART
+    checked_ticks: 0 # re-check every still-valid flag
+    spread: true
+    concurrency: 64 # per service
+
+  scoring:
+    formula: mirror
+    weight_ad: 0.7
+    weight_koth: 0.3
+    attacker_bonus: 0 # the pre-freeze dial; 1.5 if abu turns it
+    free_deploys: 3
+    n_teams: 15
+    mass_fault_teams: 3
+    koth_hold: 0 # finals score koth by round rank, not held ticks
+    koth_rank: [12, 7, 4, 2, 1]
+
+  koth:
+    round_interval: 15m
+    night_round_interval: 30m
+    night_start: "00:00"
+    night_end: "07:00"
+    timezone: Asia/Kolkata
+    reset_enabled: true
+    bounty_per_round: 2
+    bounty_min_streak: 3
+    bounty_cap: 12
+
+  outbreak:
+    enabled: true
+
+  tcp_submit_port: 4141

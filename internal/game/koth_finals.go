@@ -93,6 +93,9 @@ func crownBounty(k config.KothConfig, prevWinner *uuid.UUID, prevStreak int, win
 
 // runKothFinals rolls the round on the clock, then polls the hills.
 func (c *Controller) runKothFinals(ctx context.Context, tick int, started time.Time) error {
+	if err := c.applyHillWindows(ctx, tick, started); err != nil {
+		return err
+	}
 	hills, err := c.enabledHills(ctx)
 	if err != nil {
 		return fmt.Errorf("load hills: %w", err)

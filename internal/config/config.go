@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"os"
 	"strings"
 	"time"
 
@@ -437,6 +438,14 @@ func Load() (*Config, error) {
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, fmt.Errorf("error reading config file: %w", err)
+		}
+	}
+	// an event overlay (e.g. the finals game section) merged over the baked config,
+	// so one event's settings never mean copying the whole file. env still wins.
+	if overlay := os.Getenv("ANVIL_CONFIG_OVERLAY"); overlay != "" {
+		v.SetConfigFile(overlay)
+		if err := v.MergeInConfig(); err != nil {
+			return nil, fmt.Errorf("error reading config overlay %s: %w", overlay, err)
 		}
 	}
 

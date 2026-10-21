@@ -249,6 +249,66 @@ func TestLoadGameKothFinalsDefaultsAndEnv(t *testing.T) {
 	}
 }
 
+func TestLoadMergesEventOverlay(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	overlay := filepath.Join(dir, "finals.yaml")
+	if err := os.WriteFile(overlay, []byte(`
+game:
+  flag_valid_ticks: 4
+  scoring:
+    formula: mirror
+    koth_rank: [12, 7, 4, 2, 1]
+  koth:
+    night_round_interval: 30m
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANVIL_CONFIG_OVERLAY", overlay)
+	t.Setenv("ANVIL_GAME_FLAG_VALID_TICKS", "6") // env still beats the overlay
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with overlay returned an error: %v", err)
+	}
+	g := cfg.Game
+	if g.Scoring.Formula != "mirror" || len(g.Scoring.KothRank) != 5 || g.Scoring.KothRank[0] != 12 ||
+		g.Koth.NightRoundInterval != 30*time.Minute || g.FlagValidTicks != 6 {
+		t.Fatalf("overlay not merged: formula=%q rank=%v night=%s valid=%d",
+			g.Scoring.Formula, g.Scoring.KothRank, g.Koth.NightRoundInterval, g.FlagValidTicks)
+	}
+	if g.TickInterval != 2*time.Minute {
+		t.Fatalf("keys outside the overlay lost their defaults: tick=%s", g.TickInterval)
+	}
+
+	t.Setenv("ANVIL_CONFIG_OVERLAY", filepath.Join(dir, "missing.yaml"))
+	if _, err := Load(); err == nil {
+		t.Fatal("a missing overlay must fail loudly, not run with defaults")
+	}
+}
+
+// the finals overlay in the repo must load and pass validation as shipped
+func TestFinalsOverlayLoads(t *testing.T) {
+	overlay, err := filepath.Abs("../../deployments/finals/game.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+	t.Setenv("ANVIL_CONFIG_OVERLAY", overlay)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("finals overlay: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("finals overlay does not validate: %v", err)
+	}
+	g := cfg.Game
+	if g.Scoring.Formula != "mirror" || g.FlagValidTicks != 4 || g.Scoring.KothHold != 0 ||
+		len(g.Scoring.KothRank) != 5 || g.Koth.NightRoundInterval != 30*time.Minute || g.Koth.BountyCap != 12 ||
+		g.Checker.TaskTimeout > g.TickInterval/4 || g.FlagPrefix != "H7CTF" {
+		t.Fatalf("finals overlay values = %+v", g)
+	}
+}
+
 func TestDefaultEconomyMatchesVersionedPreset(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cfg, err := Load()

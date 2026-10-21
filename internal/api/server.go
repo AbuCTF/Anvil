@@ -463,6 +463,9 @@ func (s *Server) setupRouter() {
 				gameAdmin.GET("/hills", gameAdminHandler.ListHills)
 				gameAdmin.POST("/hills", gameAdminHandler.CreateHill)
 				gameAdmin.PATCH("/hills/:id", gameAdminHandler.UpdateHill)
+				gameAdmin.PUT("/hills/:id/windows", gameAdminHandler.SetHillWindows)
+				gameAdmin.PUT("/services/:id/outbreak", gameAdminHandler.SetServiceOutbreak)
+				gameAdmin.POST("/extend", gameAdminHandler.Extend)
 				gameAdmin.DELETE("/hills/:id", gameAdminHandler.DeleteHill)
 
 				// shared-target launcher: spawn the one contested instance for a KotH

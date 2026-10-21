@@ -1065,3 +1065,65 @@ func TestIntegrationKothFinalsRoundsBountyAndCrowns(t *testing.T) {
 		t.Fatal("no crown event for charlie taking h1")
 	}
 }
+
+func TestIntegrationHillWindowsAndExtend(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+	setFinals(t, db)
+	seedTeam(t, db, "alpha")
+	hill := seedHill(t, db, kothChecker(t, "alpha")) // starts enabled
+	now := time.Now()
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_koth_windows (hill_id, opens_at, closes_at) VALUES ($1, $2, $3)`,
+		hill, now.Add(20*time.Minute), now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := testController(db)
+	runTickOK(t, ctrl, ctx, 1)
+	var enabled bool
+	if err := db.Pool.QueryRow(ctx, `SELECT enabled FROM game_koth_hills WHERE id = $1`, hill).Scan(&enabled); err != nil || enabled {
+		t.Fatalf("a hill before its window must be closed (enabled=%v err=%v)", enabled, err)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_events WHERE kind = 'hill_close'`); n != 1 {
+		t.Fatalf("hill_close events = %d, want 1", n)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_koth_control WHERE tick_number = 1`); n != 0 {
+		t.Fatal("a closed hill was polled")
+	}
+
+	// extend: everything still ahead moves, everything past stays
+	past := now.Add(-time.Hour).UTC().Format(time.RFC3339)
+	end := now.Add(time.Hour).UTC().Truncate(time.Second)
+	setSetting(t, db, "event.end_at", `"`+end.Format(time.RFC3339)+`"`)
+	setSetting(t, db, "event.freeze_at", `"`+past+`"`)
+	svc := seedService(t, db, okChecker(t))
+	if _, err := db.Pool.Exec(ctx, `UPDATE game_services SET release_at = $2, advisory_at = $3 WHERE id = $1`,
+		svc, now.Add(30*time.Minute), now.Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExtendGame(ctx, db, 15*time.Minute); err != nil {
+		t.Fatalf("extend: %v", err)
+	}
+	var endRaw, freezeRaw string
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT (SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.end_at'),
+		        (SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.freeze_at')`).Scan(&endRaw, &freezeRaw); err != nil {
+		t.Fatal(err)
+	}
+	if endRaw != end.Add(15*time.Minute).Format(time.RFC3339) || freezeRaw != past {
+		t.Fatalf("end %s freeze %s: the future end must move 15m, the past freeze must not", endRaw, freezeRaw)
+	}
+	var shifted, unshifted bool
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT release_at > $2::timestamptz + interval '44 minutes', advisory_at < $2::timestamptz
+		 FROM game_services WHERE id = $1`, svc, now).Scan(&shifted, &unshifted); err != nil {
+		t.Fatal(err)
+	}
+	if !shifted || !unshifted {
+		t.Fatalf("release moved=%v, past advisory kept=%v", shifted, unshifted)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_koth_windows WHERE opens_at > NOW() + interval '34 minutes'`); n != 1 {
+		t.Fatal("the hill window did not move")
+	}
+}
