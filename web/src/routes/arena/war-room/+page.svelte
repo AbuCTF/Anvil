@@ -21,6 +21,15 @@
 		round_ends_in: number; // seconds
 		is_active: boolean;
 	}
+	// /api/v1/arena/koth/scores shape (P1-confirmed, v0.344.0)
+	interface KothEntry {
+		hill_id: string;
+		hill: string;
+		team_id: string | null;
+		team_name: string | null;
+		held_ticks: number;
+		score: number;
+	}
 	interface EventEntry {
 		kind: 'first_blood' | 'shield_up' | 'crown' | 'service_down' | 'koth_flip';
 		team_name: string;
@@ -91,6 +100,7 @@
 
 	// ---- state ---------------------------------------------------------------
 	let state: WarRoomState = MOCK_STATE;
+	let kothEntries: KothEntry[] = []; // wired: /arena/koth/scores
 	let now = Date.now();
 	let clockInterval: ReturnType<typeof setInterval>;
 	let pollInterval: ReturnType<typeof setInterval>;
@@ -99,6 +109,18 @@
 
 	// cell lookup
 	$: cellMap = new Map(state.grid.map(c => [`${c.team_id}:${c.service_slug}`, c]));
+
+	// prefer live KotH entries if loaded; fall back to mock hills
+	$: hills = kothEntries.length
+		? kothEntries.map(e => ({
+			slug: e.hill_id,
+			name: e.hill,
+			holder_name: e.team_name,
+			held_ticks: e.held_ticks,
+			round_ends_in: 0,
+			is_active: true,
+		}))
+		: state.hills;
 
 	function authHeaders(): Record<string, string> {
 		const token = typeof localStorage !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -111,6 +133,14 @@
 			const res = await fetch(`${API_BASE}/api/v1/arena/war-room`, { headers: authHeaders() });
 			if (res.ok) state = await res.json();
 		} catch { /* keep mock */ }
+	}
+
+	async function loadKothScores() {
+		if (!isFinalsMode) return;
+		try {
+			const res = await fetch(`${API_BASE}/api/v1/arena/koth/scores`, { headers: authHeaders() });
+			if (res.ok) { const d = await res.json(); kothEntries = d.hills ?? []; }
+		} catch { /* keep current */ }
 	}
 
 	function cellStatus(teamId: string, svcSlug: string): GridCell | undefined {
@@ -150,7 +180,8 @@
 
 	onMount(() => {
 		clockInterval = setInterval(() => { now = Date.now(); }, 1000);
-		pollInterval = setInterval(poll, 15000);
+		pollInterval = setInterval(() => { poll(); loadKothScores(); }, 15000);
+		loadKothScores();
 	});
 	onDestroy(() => {
 		clearInterval(clockInterval);
@@ -230,7 +261,7 @@
 					<span class="text-sm font-medium text-stone-300">Hills</span>
 				</div>
 				<div class="divide-y divide-stone-800/60">
-					{#each state.hills as hill}
+					{#each hills as hill}
 						<div class="px-4 py-3">
 							<div class="flex items-center gap-2 mb-1">
 								<span class="text-xs font-medium text-stone-200 truncate flex-1">{hill.name}</span>
