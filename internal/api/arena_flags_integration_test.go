@@ -62,15 +62,16 @@ func TestBulkFlagSubmit(t *testing.T) {
 			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, key, value)
 	}
 
-	sfx := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	sfx := strings.ReplaceAll(uuid.NewString(), "-", "")[:8]
+	makeTok := func() string {
+		return strings.ReplaceAll(uuid.NewString(), "-", "") + strings.ReplaceAll(uuid.NewString(), "-", "")
+	}
 	teamA, teamB, teamNOP := uuid.New(), uuid.New(), uuid.New()
 	platformTeamA, platformTeamB := uuid.New(), uuid.New()
 	adminUser := uuid.New()
 	svc := uuid.New()
-	tokA := "aaaa" + sfx + "aaaa" + sfx + "aaaa" + sfx + "aaaa" + sfx + "aaaa" + sfx
-	tokA = tokA[:64]
-	tokNOP := "cccc" + sfx + "cccc" + sfx + "cccc" + sfx + "cccc" + sfx + "cccc" + sfx
-	tokNOP = tokNOP[:64]
+	tokA := makeTok()
+	tokNOP := makeTok()
 
 	clearGame := func() {
 		exec(`DELETE FROM platform_settings WHERE key = 'game.state'`)

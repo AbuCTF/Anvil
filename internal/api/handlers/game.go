@@ -247,6 +247,11 @@ func (h *GameHandler) Scoreboard(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
+	// in finals mode serve the mirror-scoring board (steal/hold/up/ad/koth/total)
+	if _, finals, err := game.FinalsPhase(c.Request.Context(), h.db); err == nil && finals {
+		h.FinalsScoreboard(c)
+		return
+	}
 	standings, err := h.standingsData(c.Request.Context(), h.db.Pool, false)
 	if err != nil {
 		h.logger.Error("scoreboard query", zap.Error(err))
