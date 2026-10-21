@@ -60,6 +60,8 @@ export interface PlatformInfoResponse {
 		visible_until: string;
 		phase: EventPhase;
 	};
+	game_state?: 'running' | 'paused' | 'stopped';
+	game_frozen?: boolean;
 }
 
 export interface EconomyPolicyDescriptor {

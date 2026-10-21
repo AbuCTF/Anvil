@@ -55,7 +55,72 @@
     cells: { s: number; b: number; p?: number }[];
   }
 
-  type View = "standings" | "matrix";
+  type View = "standings" | "matrix" | "finals";
+
+  // finals mirror scoring types
+  interface FinalsServiceBreakdown {
+    slug: string;
+    name: string;
+    steal: number;
+    hold: number;
+    up: number;
+  }
+  interface FinalsRow {
+    rank: number;
+    team_id: string;
+    team_name: string;
+    steal: number;
+    hold: number;
+    up: number;
+    ad: number;
+    koth: number;
+    total: number;
+    services: FinalsServiceBreakdown[];
+  }
+  interface KothEntry {
+    hill: string;
+    team_name: string;
+    held_ticks: number;
+    score: number;
+  }
+
+  // mock finals data (replaced by real API in M2)
+  const MOCK_FINALS_ROWS: FinalsRow[] = (() => {
+    const teams = [
+      'ByteBrigade','CipherPunk','RedSignal','NullRoute','PacketStorm',
+      'SegFault','DeepProbe','VoidMatrix','IronSocket','GhostBit',
+      'LoopBreak','NetMancer','HexWarden','BinVector','DarkShell'
+    ];
+    const svcs = [
+      {slug:'harbor-id',name:'Harbor ID'},
+      {slug:'tidepay',name:'TidePay'},
+      {slug:'bollard',name:'Bollard'},
+      {slug:'berth-board',name:'Berth Board'},
+      {slug:'dockyard',name:'Dockyard'},
+      {slug:'tariff-studio',name:'Tariff Studio'},
+    ];
+    return teams.map((name, i) => {
+      const services = svcs.map((s, j) => ({
+        slug: s.slug, name: s.name,
+        steal: Math.max(0, Math.round((15 - i + j) * 3.2 * (1 - i * 0.04))),
+        hold: Math.round((180 - i * 11 + j * 4) * 0.9),
+        up: Math.round((6 - Math.min(5, i * 0.4 + j * 0.1)) * 3.87 * 4),
+      }));
+      const steal = services.reduce((s, r) => s + r.steal, 0);
+      const hold = services.reduce((s, r) => s + r.hold, 0);
+      const up = services.reduce((s, r) => s + r.up, 0);
+      const ad = steal + hold + up;
+      const koth = Math.round((15 - i) * 87.3 * 0.6);
+      const total = Math.round(1000 * (0.7 * (ad / (ad + 200)) + 0.3 * (koth / (koth + 200))));
+      return { rank: i + 1, team_id: `t${i+1}`, team_name: name, steal, hold, up, ad, koth, total, services };
+    }).sort((a, b) => b.total - a.total).map((r, i) => ({ ...r, rank: i + 1 }));
+  })();
+
+  const MOCK_KOTH: KothEntry[] = [
+    { hill: 'GridWatch II', team_name: 'ByteBrigade', held_ticks: 22, score: 847 },
+    { hill: 'Hostile Takeover II', team_name: 'CipherPunk', held_ticks: 17, score: 621 },
+    { hill: 'Harbor Master', team_name: 'ByteBrigade', held_ticks: 31, score: 1032 },
+  ];
 
   // only the open tab polls; the api caches each page for 2-5s per pod
   const SCORE_POLL_MS = 15000;
@@ -74,7 +139,11 @@
   let boardTeams: boolean | null = null;
   let economy = false;
   let frozen = false;
-  let loaded: Record<View, boolean> = { standings: false, matrix: false };
+  let loaded: Record<View, boolean> = { standings: false, matrix: false, finals: false };
+  let finalsRows: FinalsRow[] = MOCK_FINALS_ROWS;
+  let finalsKoth: KothEntry[] = MOCK_KOTH;
+  let finalsExpanded: string | null = null;
+  let finalsDefense = false;
   let loadError = 0; // http status of a failed first load (-1 = network)
   let boardStale = false;
   let historyStale = false;
@@ -86,8 +155,8 @@
   let historyTimer: ReturnType<typeof setTimeout>;
   let requestController: AbortController;
   let searchDebounce: ReturnType<typeof setTimeout>;
-  const lastETag: Record<View, string> = { standings: "", matrix: "" };
-  const lastURL: Record<View, string> = { standings: "", matrix: "" };
+  const lastETag: Record<View, string> = { standings: "", matrix: "", finals: "" };
+  const lastURL: Record<View, string> = { standings: "", matrix: "", finals: "" };
   let historyETag = "";
   let historyRaw: HistorySeries[] = [];
   let historyEnd: number | null = null;
@@ -366,6 +435,21 @@
   $: scorePages = Math.max(1, Math.ceil(scoreMatching / SCORE_PAGE_SIZE));
   $: matrixPages = Math.max(1, Math.ceil(matrixMatching / MATRIX_PAGE_SIZE));
   $: anyLoaded = loaded.standings || loaded.matrix;
+  $: isFinalsMode = !!$platformInfo?.game_state;
+
+  async function loadFinals() {
+    if (!isFinalsMode) return;
+    try {
+      const [rowsRes, kothRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/arena/scoreboard`, { headers: authHeaders() }),
+        fetch(`${API_BASE}/api/v1/arena/koth/scores`, { headers: authHeaders() })
+      ]);
+      if (rowsRes.ok) { const d = await rowsRes.json(); finalsRows = d.rows ?? finalsRows; }
+      if (kothRes.ok) { const d = await kothRes.json(); finalsKoth = d.hills ?? finalsKoth; }
+    } catch { /* keep mock */ } finally {
+      loaded.finals = true;
+    }
+  }
   // the api says whether rows are teams; /info covers the first paint
   $: teamsBoard =
     boardTeams ?? !!($platformInfo?.teams_mode || $platformInfo?.economy_enabled);
@@ -466,6 +550,16 @@
           <OpticalIcon icon="mdi:view-grid-outline" size={12} box={12} />
           <span class="optical-label">Matrix</span>
         </button>
+        {#if isFinalsMode}
+          <button
+            class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view === 'finals' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
+            on:click={() => { view = 'finals'; if (!loaded.finals) loadFinals(); }}
+            aria-pressed={view === "finals"}
+          >
+            <OpticalIcon icon="mdi:sword-cross" size={12} box={12} />
+            <span class="optical-label">Finals</span>
+          </button>
+        {/if}
       </div>
 
       {#if view === "matrix" && matrixCategories.length > 1}
@@ -603,7 +697,130 @@
       </div>
     {/if}
 
-    {#if view === "matrix"}
+    {#if view === "finals" && isFinalsMode}
+      <!-- Finals Mirror scoreboard -->
+      <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+        <span class="text-stone-500">AD 70% + KotH 30%, median-relative</span>
+        {#if frozen}
+          <span class="rounded bg-amber-500/10 px-2 py-0.5 text-amber-400 border border-amber-500/30">FROZEN</span>
+        {/if}
+        <div class="ml-auto flex overflow-hidden rounded-md border border-stone-800">
+          <button
+            class="px-2.5 py-1.5 transition-colors {!finalsDefense ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
+            on:click={() => finalsDefense = false}
+          >Mirror</button>
+          <button
+            class="border-l border-stone-800 px-2.5 py-1.5 transition-colors {finalsDefense ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
+            on:click={() => finalsDefense = true}
+          >Defense</button>
+        </div>
+      </div>
+
+      <Card title="Finals standings" bodyClass="p-0">
+        <span slot="meta" class="metadata-label text-stone-500">{finalsRows.length} teams</span>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="metadata-label border-b border-stone-800 text-stone-500 text-xs">
+                <th class="w-10 py-2.5 pl-3 pr-2 text-left">#</th>
+                <th class="px-3 py-2.5 text-left">Team</th>
+                {#if !finalsDefense}
+                  <th class="px-3 py-2.5 text-right text-[#e08a85]">STEAL</th>
+                  <th class="px-3 py-2.5 text-right text-[#9bcea8]">HOLD</th>
+                  <th class="px-3 py-2.5 text-right text-stone-400">UP</th>
+                  <th class="hidden px-3 py-2.5 text-right sm:table-cell">AD</th>
+                  <th class="hidden px-3 py-2.5 text-right text-amber-400 sm:table-cell">KotH</th>
+                {/if}
+                {#if finalsDefense}
+                  <th class="px-3 py-2.5 text-right text-[#9bcea8]">HOLD</th>
+                  <th class="px-3 py-2.5 text-right text-stone-400">UP</th>
+                  <th class="hidden px-3 py-2.5 text-right sm:table-cell">AD</th>
+                {/if}
+                <th class="px-3 py-2.5 text-right font-semibold text-stone-100">TOTAL</th>
+                <th class="w-8 py-2.5 pr-2"></th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-stone-800/50">
+              {#each finalsRows as row (row.team_id)}
+                <tr class="hover:bg-stone-800/30 transition-colors">
+                  <td class="py-2.5 pl-3 pr-2 tabular-nums text-stone-500 text-xs">{row.rank}</td>
+                  <td class="px-3 py-2.5 font-medium text-stone-200 truncate max-w-[8rem]">{row.team_name}</td>
+                  {#if !finalsDefense}
+                    <td class="px-3 py-2.5 text-right tabular-nums text-[#e08a85]">{row.steal.toLocaleString()}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums text-[#9bcea8]">{row.hold.toLocaleString()}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums text-stone-400">{row.up.toLocaleString()}</td>
+                    <td class="hidden px-3 py-2.5 text-right tabular-nums text-stone-300 sm:table-cell">{row.ad.toLocaleString()}</td>
+                    <td class="hidden px-3 py-2.5 text-right tabular-nums text-amber-400 sm:table-cell">{row.koth.toLocaleString()}</td>
+                  {/if}
+                  {#if finalsDefense}
+                    <td class="px-3 py-2.5 text-right tabular-nums text-[#9bcea8]">{row.hold.toLocaleString()}</td>
+                    <td class="px-3 py-2.5 text-right tabular-nums text-stone-400">{row.up.toLocaleString()}</td>
+                    <td class="hidden px-3 py-2.5 text-right tabular-nums text-stone-300 sm:table-cell">{row.ad.toLocaleString()}</td>
+                  {/if}
+                  <td class="px-3 py-2.5 text-right font-semibold tabular-nums text-amber-500">{row.total.toLocaleString()}</td>
+                  <td class="pr-2 py-2.5">
+                    <button
+                      class="text-stone-600 hover:text-stone-400 transition-colors"
+                      on:click={() => finalsExpanded = finalsExpanded === row.team_id ? null : row.team_id}
+                      aria-label="Expand service breakdown"
+                      aria-expanded={finalsExpanded === row.team_id}
+                    >
+                      <Icon icon={finalsExpanded === row.team_id ? 'mdi:chevron-up' : 'mdi:chevron-down'} class="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+                {#if finalsExpanded === row.team_id}
+                  <tr>
+                    <td colspan="9" class="bg-stone-900/60 px-4 py-2">
+                      <div class="overflow-x-auto">
+                        <table class="w-full text-xs">
+                          <thead>
+                            <tr class="text-stone-600">
+                              <th class="py-1 pr-3 text-left">Service</th>
+                              <th class="px-3 py-1 text-right text-[#e08a85]">STEAL</th>
+                              <th class="px-3 py-1 text-right text-[#9bcea8]">HOLD</th>
+                              <th class="px-3 py-1 text-right text-stone-500">UP</th>
+                            </tr>
+                          </thead>
+                          <tbody class="divide-y divide-stone-800/30">
+                            {#each row.services as svc}
+                              <tr>
+                                <td class="py-1 pr-3 text-stone-400">{svc.name}</td>
+                                <td class="px-3 py-1 text-right tabular-nums text-[#e08a85]">{svc.steal}</td>
+                                <td class="px-3 py-1 text-right tabular-nums text-[#9bcea8]">{svc.hold}</td>
+                                <td class="px-3 py-1 text-right tabular-nums text-stone-500">{svc.up}</td>
+                              </tr>
+                            {/each}
+                          </tbody>
+                        </table>
+                      </div>
+                    </td>
+                  </tr>
+                {/if}
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <!-- KotH summary -->
+      <div class="mt-4">
+      <Card title="King of the Hill" bodyClass="p-0">
+        <div class="divide-y divide-stone-800/50">
+          {#each finalsKoth as h}
+            <div class="flex items-center gap-3 px-4 py-2.5 text-sm">
+              <Icon icon="mdi:crown" class="h-4 w-4 shrink-0 text-amber-400" />
+              <span class="text-stone-400 min-w-0 flex-1 truncate">{h.hill}</span>
+              <span class="font-medium text-stone-200">{h.team_name}</span>
+              <span class="tabular-nums text-stone-500 text-xs">{h.held_ticks} ticks</span>
+              <span class="tabular-nums text-amber-500 font-semibold">{h.score.toLocaleString()}</span>
+            </div>
+          {/each}
+        </div>
+      </Card>
+      </div>
+
+    {:else if view === "matrix"}
       <Card title="Challenge matrix" bodyClass="p-0">
         <span slot="meta" class="metadata-label text-stone-500"
           >{matrixChallenges.length} challenges</span
@@ -648,7 +865,7 @@
         {/if}
       </Card>
     {:else}
-      <Card title="Standings" bodyClass="p-0">
+      <Card title={view === "standings" ? "Standings" : "Scoreboard"} bodyClass="p-0">
         <span slot="meta" class="metadata-label text-stone-500"
           >{scoreMatching.toLocaleString()} {noun}{scoreMatching === 1 ? "" : "s"}</span
         >

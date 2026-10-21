@@ -8,6 +8,10 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { confirmDialog } from '$lib/stores/dialog';
 	import { hasTeam, platformInfo } from '$lib/stores/platform';
+	import { goto } from '$app/navigation';
+	import { browser } from '$app/environment';
+
+	$: if (browser && $platformInfo?.game_state) goto('/team/finals');
 
 	let loading = true;
 	let teamsDisabled = false;
