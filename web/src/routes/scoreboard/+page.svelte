@@ -64,8 +64,6 @@
     steal: number;
     hold: number;
     up: number;
-    flags_held: number;
-    flags_settled: number;
   }
   interface FinalsRow {
     rank: number;
@@ -80,8 +78,10 @@
     services: FinalsServiceBreakdown[];
   }
   interface KothEntry {
+    hill_id: string;
     hill: string;
-    team_name: string;
+    team_id: string | null;
+    team_name: string | null;
     held_ticks: number;
     score: number;
   }
@@ -107,8 +107,6 @@
         steal: Math.max(0, Math.round((15 - i + j) * 3.2 * (1 - i * 0.04))),
         hold: Math.round((180 - i * 11 + j * 4) * 0.9),
         up: Math.round((6 - Math.min(5, i * 0.4 + j * 0.1)) * 3.87 * 4),
-        flags_held: Math.max(0, 28 - i * 2 + j),
-        flags_settled: 30,
       }));
       const steal = services.reduce((s, r) => s + r.steal, 0);
       const hold = services.reduce((s, r) => s + r.hold, 0);
@@ -121,9 +119,9 @@
   })();
 
   const MOCK_KOTH: KothEntry[] = [
-    { hill: 'GridWatch II', team_name: 'ByteBrigade', held_ticks: 22, score: 847 },
-    { hill: 'Hostile Takeover II', team_name: 'CipherPunk', held_ticks: 17, score: 621 },
-    { hill: 'Harbor Master', team_name: 'ByteBrigade', held_ticks: 31, score: 1032 },
+    { hill_id: 'h1', hill: 'GridWatch II', team_id: 't1', team_name: 'ByteBrigade', held_ticks: 22, score: 847 },
+    { hill_id: 'h2', hill: 'Hostile Takeover II', team_id: 't2', team_name: 'CipherPunk', held_ticks: 17, score: 621 },
+    { hill_id: 'h3', hill: 'Harbor Master', team_id: null, team_name: null, held_ticks: 0, score: 0 },
   ];
 
   // only the open tab polls; the api caches each page for 2-5s per pod
@@ -441,15 +439,25 @@
   $: anyLoaded = loaded.standings || loaded.matrix;
   $: isFinalsMode = !!$platformInfo?.game_state;
 
-  async function loadFinals() {
+  async function loadFinals(force = false) {
     if (!isFinalsMode) return;
+    if (loaded.finals && !force) return;
     try {
       const [rowsRes, kothRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/arena/scoreboard`, { headers: authHeaders() }),
         fetch(`${API_BASE}/api/v1/arena/koth/scores`, { headers: authHeaders() })
       ]);
-      if (rowsRes.ok) { const d = await rowsRes.json(); finalsRows = d.rows ?? finalsRows; }
-      if (kothRes.ok) { const d = await kothRes.json(); finalsKoth = d.hills ?? finalsKoth; }
+      if (rowsRes.ok) {
+        const d = await rowsRes.json();
+        // /arena/scoreboard: {frozen, rows:[{rank,team_id,team_name,steal,hold,up,ad,koth,total,services:[...]}]}
+        if (d.rows) finalsRows = d.rows;
+        frozen = !!d.frozen;
+      }
+      if (kothRes.ok) {
+        const d = await kothRes.json();
+        // /arena/koth/scores: {hills:[{hill_id,hill,team_id,team_name,held_ticks,score}]}
+        if (d.hills) finalsKoth = d.hills;
+      }
     } catch { /* keep mock */ } finally {
       loaded.finals = true;
     }
@@ -784,7 +792,6 @@
                               <th class="px-3 py-1 text-right text-[#e08a85]">STEAL</th>
                               <th class="px-3 py-1 text-right text-[#9bcea8]">HOLD</th>
                               <th class="px-3 py-1 text-right text-stone-500">UP</th>
-                              <th class="hidden px-3 py-1 text-right text-stone-600 sm:table-cell">FLAGS</th>
                             </tr>
                           </thead>
                           <tbody class="divide-y divide-stone-800/30">
@@ -794,7 +801,6 @@
                                 <td class="px-3 py-1 text-right tabular-nums text-[#e08a85]">{svc.steal}</td>
                                 <td class="px-3 py-1 text-right tabular-nums text-[#9bcea8]">{svc.hold}</td>
                                 <td class="px-3 py-1 text-right tabular-nums text-stone-500">{svc.up}</td>
-                                <td class="hidden px-3 py-1 text-right tabular-nums text-stone-600 sm:table-cell">{svc.flags_held}/{svc.flags_settled}</td>
                               </tr>
                             {/each}
                           </tbody>
@@ -815,11 +821,15 @@
         <div class="divide-y divide-stone-800/50">
           {#each finalsKoth as h}
             <div class="flex items-center gap-3 px-4 py-2.5 text-sm">
-              <Icon icon="mdi:crown" class="h-4 w-4 shrink-0 text-amber-400" />
+              <Icon icon="mdi:crown" class="h-4 w-4 shrink-0 {h.team_name ? 'text-amber-400' : 'text-stone-700'}" />
               <span class="text-stone-400 min-w-0 flex-1 truncate">{h.hill}</span>
-              <span class="font-medium text-stone-200">{h.team_name}</span>
-              <span class="tabular-nums text-stone-500 text-xs">{h.held_ticks} ticks</span>
-              <span class="tabular-nums text-amber-500 font-semibold">{h.score.toLocaleString()}</span>
+              {#if h.team_name}
+                <span class="font-medium text-stone-200">{h.team_name}</span>
+                <span class="tabular-nums text-stone-500 text-xs">{h.held_ticks} ticks</span>
+                <span class="tabular-nums text-amber-500 font-semibold">{h.score.toLocaleString()}</span>
+              {:else}
+                <span class="text-stone-600 italic text-xs">not released</span>
+              {/if}
             </div>
           {/each}
         </div>
