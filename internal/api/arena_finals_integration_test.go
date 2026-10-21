@@ -225,3 +225,125 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		t.Errorf("created service = stores %d noise %d havoc %d release %v", stores, noise, havoc, release)
 	}
 }
+
+// the pipeline's server-to-server calls and the organizer re-credit
+func TestFinalsInternalEndpointsAndCredit(t *testing.T) {
+	name := os.Getenv("ANVIL_TEST_DB_NAME")
+	if !strings.HasSuffix(name, "_test") {
+		t.Skip("set ANVIL_TEST_DB_HOST/PORT/USER/PASSWORD/NAME (name ending _test)")
+	}
+	port, _ := strconv.Atoi(os.Getenv("ANVIL_TEST_DB_PORT"))
+	db, err := database.New(config.DatabaseConfig{
+		Host: os.Getenv("ANVIL_TEST_DB_HOST"), Port: port, User: os.Getenv("ANVIL_TEST_DB_USER"),
+		Password: os.Getenv("ANVIL_TEST_DB_PASSWORD"), Database: name, SSLMode: "disable",
+		MaxOpenConns: 8, MaxIdleConns: 2,
+	})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer db.Close()
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	ctx := context.Background()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.Pool.Exec(ctx, q, args...); err != nil {
+			t.Fatalf("%v\n%s", err, q)
+		}
+	}
+	team, svc, admin := uuid.New(), uuid.New(), uuid.New()
+	sfx := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	exec(`TRUNCATE game_teams, game_services, game_ticks CASCADE`)
+	defer func() {
+		exec(`TRUNCATE game_teams, game_services, game_ticks CASCADE`)
+		exec(`DELETE FROM users WHERE id = $1`, admin)
+		exec(`DELETE FROM platform_settings WHERE key = 'game.vulnbox_mode'`)
+	}()
+	exec(`INSERT INTO users (id, username, email, role, status) VALUES ($1, 'ad'||$2, 'ad'||$2||'@x', 'admin', 'active')`, admin, sfx)
+	exec(`INSERT INTO game_teams (id, name, slug, vulnbox_ip, team_number) VALUES ($1, 'alpha', 'alpha', '10.60.1.2', 1)`, team)
+	exec(`INSERT INTO game_services (id, name, slug, category, port, checker_ref) VALUES ($1, 'Berth', 'berth', 'web', 7004, 'http://c:9000')`, svc)
+	exec(`INSERT INTO game_ticks (tick_number, status) VALUES (1, 'closed'), (2, 'running')`)
+	exec(`INSERT INTO game_sla_checks (tick_number, team_id, service_id, status, step) VALUES (1, $1, $2, 'DOWN', 'putflag')`, team, svc)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	cfg.JWT.Secret = "integration-secret-integration-secret!"
+	cfg.JWT.Issuer = ""
+	cfg.RateLimit.Enabled = false
+	cfg.VPN.Enabled = false
+	cfg.Game.Enabled = true
+	cfg.Game.InternalToken = "pipeline-" + sfx
+	containerSvc, err := container.NewService(cfg.Container, zap.NewNop())
+	if err != nil {
+		t.Skipf("docker unavailable: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	router := NewServer(cfg, db, containerSvc, nil, nil, nil, nil, nil, zap.NewNop()).Router()
+	adminTok, _ := jwt.NewWithClaims(jwt.SigningMethodHS256, middleware.Claims{
+		UserID: admin, TokenType: "user",
+		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)), ID: uuid.NewString()},
+	}).SignedString([]byte(cfg.JWT.Secret))
+	call := func(method, path, bearer, body string) (int, map[string]any, []byte) {
+		t.Helper()
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		out := map[string]any{}
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out, w.Body.Bytes()
+	}
+	internal := cfg.Game.InternalToken
+
+	if code, _, _ := call("GET", "/api/v1/internal/arena/mode", "", ""); code != http.StatusNotFound {
+		t.Fatalf("internal endpoint without token = %d, want 404", code)
+	}
+	if code, _, _ := call("GET", "/api/v1/internal/arena/mode", "wrong", ""); code != http.StatusNotFound {
+		t.Fatalf("internal endpoint with a wrong token = %d, want 404", code)
+	}
+	if _, body, _ := call("GET", "/api/v1/internal/arena/mode", internal, ""); body["mode"] != "pipeline" {
+		t.Fatalf("default mode = %v", body)
+	}
+	exec(`INSERT INTO platform_settings (key, value) VALUES ('game.vulnbox_mode', '"root"'::jsonb)
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
+	if _, body, _ := call("GET", "/api/v1/internal/arena/mode", internal, ""); body["mode"] != "root" {
+		t.Fatalf("fallback mode = %v", body)
+	}
+
+	deploy := `{"team_id":"` + team.String() + `","service":"berth","kind":"deploy","image_digest":"sha256:abc","diff_lines":3}`
+	for i, want := range []float64{2, 1, 0, 0} {
+		code, body, _ := call("POST", "/api/v1/internal/arena/deploys", internal, deploy)
+		if code != http.StatusCreated || body["free_left"] != want {
+			t.Fatalf("deploy %d = %d %v, want free_left %v", i+1, code, body, want)
+		}
+	}
+	if code, _, _ := call("POST", "/api/v1/internal/arena/deploys", internal,
+		`{"team_id":"`+team.String()+`","service":"nope","kind":"deploy"}`); code != http.StatusNotFound {
+		t.Fatalf("deploy for an unknown service = %d, want 404", code)
+	}
+	var digest string
+	if err := db.Pool.QueryRow(ctx, `SELECT image_digest FROM game_deploys WHERE team_id = $1 LIMIT 1`, team).Scan(&digest); err != nil || digest != "sha256:abc" {
+		t.Fatalf("deploy row digest = %q err %v", digest, err)
+	}
+
+	code, _, raw := call("GET", "/api/v1/internal/arena/sla?team_id="+team.String()+"&service=berth&since=1", internal, "")
+	if code != http.StatusOK || !strings.Contains(string(raw), `"status":"DOWN"`) {
+		t.Fatalf("sla before credit = %d %s", code, raw)
+	}
+	if code, _, _ := call("POST", "/api/v1/admin/arena/credits", adminTok,
+		`{"service":"berth","team_id":"`+team.String()+`","tick_from":1,"tick_to":1,"reason":"router reboot"}`); code != http.StatusCreated {
+		t.Fatalf("admin credit = %d", code)
+	}
+	_, _, raw = call("GET", "/api/v1/internal/arena/sla?team_id="+team.String()+"&service=berth&since=1", internal, "")
+	if !strings.Contains(string(raw), `"status":"ERROR"`) || !strings.Contains(string(raw), `"raw_status":"DOWN"`) {
+		t.Fatalf("sla after credit = %s, want effective ERROR over raw DOWN", raw)
+	}
+}

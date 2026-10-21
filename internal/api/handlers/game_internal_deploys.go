@@ -135,3 +135,18 @@ func (h *GameInternalHandler) SLA(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, out)
 }
+
+// Mode tells the pipeline whether production is pipeline-only (model c) or root
+// on the box (model a, the fallback when the pipeline fails). Global switch.
+func (h *GameInternalHandler) Mode(c *gin.Context) {
+	mode, err := textSettingOrDefault(c.Request.Context(), h.db, "game.vulnbox_mode", "pipeline")
+	if err != nil {
+		h.logger.Error("internal: vulnbox mode", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	if mode != "root" {
+		mode = "pipeline"
+	}
+	c.JSON(http.StatusOK, gin.H{"mode": mode})
+}

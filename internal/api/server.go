@@ -225,6 +225,7 @@ func (s *Server) setupRouter() {
 			gameInternal := handlers.NewGameInternalHandler(s.config, s.db, s.logger)
 			internalArena.POST("/deploys", gameInternal.Deploy)
 			internalArena.GET("/sla", gameInternal.SLA)
+			internalArena.GET("/mode", gameInternal.Mode)
 
 			internalHandler := handlers.NewInternalGameHandler(s.config, s.db, s.logger)
 			internalArena.POST("/gate", internalHandler.Gate)
@@ -466,6 +467,8 @@ func (s *Server) setupRouter() {
 				gameAdmin.PUT("/hills/:id/windows", gameAdminHandler.SetHillWindows)
 				gameAdmin.PUT("/services/:id/outbreak", gameAdminHandler.SetServiceOutbreak)
 				gameAdmin.POST("/extend", gameAdminHandler.Extend)
+				gameAdmin.POST("/credits", gameAdminHandler.Credit)
+				gameAdmin.POST("/resettle", gameAdminHandler.Resettle)
 				gameAdmin.DELETE("/hills/:id", gameAdminHandler.DeleteHill)
 
 				// shared-target launcher: spawn the one contested instance for a KotH

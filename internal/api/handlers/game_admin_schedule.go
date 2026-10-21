@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/api/middleware"
 	"github.com/anvil-lab/anvil/internal/game"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -28,7 +29,7 @@ func (h *GameAdminHandler) Extend(c *gin.Context) {
 		h.fail(c, "extend game", err)
 		return
 	}
-	h.logger.Info("finals extended", zap.Int("minutes", req.Minutes), zap.String("by", c.GetString("user_id")))
+	h.logger.Info("finals extended", zap.Int("minutes", req.Minutes), zap.String("by", adminID(c)))
 	c.JSON(http.StatusOK, gin.H{"status": "extended", "minutes": req.Minutes})
 }
 
@@ -141,4 +142,60 @@ func (h *GameAdminHandler) SetServiceOutbreak(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "updated"})
+}
+
+type creditReq struct {
+	Service  string `json:"service" binding:"required"` // slug
+	TeamID   string `json:"team_id"`                    // empty = every team
+	TickFrom int    `json:"tick_from" binding:"required"`
+	TickTo   int    `json:"tick_to" binding:"required"`
+	Reason   string `json:"reason" binding:"required"`
+}
+
+// Credit records an organizer re-credit: those ticks count as ORG_FAULT for the
+// scorer and every team's status page from the next recompute on.
+func (h *GameAdminHandler) Credit(c *gin.Context) {
+	var req creditReq
+	if err := bindArenaAdminJSON(c, &req); err != nil || req.TickTo < req.TickFrom || req.TickFrom < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "service, tick_from <= tick_to and reason required"})
+		return
+	}
+	reason, err := validateArenaText(req.Reason, "reason", 200)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var team *string
+	if t := strings.TrimSpace(req.TeamID); t != "" {
+		team = &t
+	}
+	var id int64
+	err = h.db.Pool.QueryRow(c.Request.Context(),
+		`INSERT INTO game_sla_credits (service_id, team_id, tick_from, tick_to, reason, created_by)
+		 SELECT s.id, $2::uuid, $3, $4, $5, NULLIF($6, '')::uuid FROM game_services s WHERE s.slug = $1
+		 RETURNING id`,
+		req.Service, team, req.TickFrom, req.TickTo, reason, adminID(c)).Scan(&id)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unknown service or team"})
+		return
+	}
+	h.logger.Info("sla re-credit", zap.Int64("id", id), zap.String("service", req.Service),
+		zap.Int("from", req.TickFrom), zap.Int("to", req.TickTo), zap.String("reason", reason))
+	c.JSON(http.StatusCreated, gin.H{"id": id})
+}
+
+// Resettle re-scores a finished game from raw rows (after a late re-credit).
+func (h *GameAdminHandler) Resettle(c *gin.Context) {
+	if err := game.Resettle(c.Request.Context(), h.config.Game, h.db, h.logger); err != nil {
+		h.fail(c, "resettle", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "resettled"})
+}
+
+func adminID(c *gin.Context) string {
+	if uid := middleware.GetUserID(c); uid != nil {
+		return uid.String()
+	}
+	return ""
 }

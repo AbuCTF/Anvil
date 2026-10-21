@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 )
 
 // applyHillWindows opens and closes scheduled hills for this tick. A hill with any
@@ -99,4 +101,15 @@ func ExtendGame(ctx context.Context, db *database.DB, d time.Duration) error {
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// Resettle re-scores the finished game from raw rows, e.g. after an organizer
+// re-credit once the board was already settled.
+func Resettle(ctx context.Context, cfg config.GameConfig, db *database.DB, logger *zap.Logger) error {
+	c := NewController(cfg, db, logger)
+	last, _, err := c.lastTickState(ctx)
+	if err != nil || last == 0 {
+		return err
+	}
+	return c.recomputeFinals(ctx, last, true)
 }
