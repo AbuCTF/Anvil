@@ -12,6 +12,8 @@
 	interface TickRow {
 		tick: number;
 		status: SlaStatus;
+		effective_status?: SlaStatus; // ORG_FAULT ticks get effective UP for scoring
+		credited_reason?: string | null;
 		step: string | null;
 		code: string | null;
 		message: string | null;
@@ -23,6 +25,11 @@
 	interface StoreRow {
 		store_index: number;
 		store_name: string;
+		steal: number;
+		hold: number;
+		up: number;
+		flags_held: number;
+		flags_settled: number;
 		ticks: TickRow[];
 	}
 	interface ServiceRow {
@@ -30,7 +37,9 @@
 		name: string;
 		port: number;
 		stores: StoreRow[];
-		points_this_hour: { steal: number; hold: number; up: number };
+		steal: number;
+		hold: number;
+		up: number;
 		active_attackers: number;
 	}
 	interface ArenaMe {
@@ -87,33 +96,39 @@
 	const MOCK_SERVICES: ServiceRow[] = [
 		{
 			slug: 'harbor-id', name: 'Harbor ID', port: 8001,
+			steal: 18.2, hold: 127.4, up: 46.4, active_attackers: 6,
 			stores: [
-				{ store_index: 0, store_name: 'creds', ticks: mkTicks(87) },
-				{ store_index: 1, store_name: 'sessions', ticks: mkTicks(87).map((t, i) => ({
-					...t, status: i === 5 ? 'OFFLINE' : 'OK', flag_fate: i === 5 ? null : (i % 4 === 0 ? 'stolen_4_7' : 'held'),
-					hold: i % 4 === 0 ? 0 : 9.8
-				})) }
-			],
-			points_this_hour: { steal: 18.2, hold: 127.4, up: 46.4 },
-			active_attackers: 6
+				{ store_index: 0, store_name: 'creds', steal: 12.1, hold: 87.3, up: 23.2, flags_held: 24, flags_settled: 28, ticks: mkTicks(87) },
+				{ store_index: 1, store_name: 'sessions', steal: 6.1, hold: 40.1, up: 23.2, flags_held: 18, flags_settled: 30,
+					ticks: mkTicks(87).map((t, i) => ({
+						...t, status: (i === 5 ? 'OFFLINE' : 'OK') as SlaStatus,
+						effective_status: (i === 12 ? 'ORG_FAULT' : undefined) as SlaStatus | undefined,
+						credited_reason: i === 12 ? 'nop box failed same step (9 teams)' : null,
+						flag_fate: i === 5 ? null : (i % 4 === 0 ? 'stolen_4_7' : 'held') as FlagFate,
+						hold: i % 4 === 0 ? 0 : 9.8
+					}))
+				}
+			]
 		},
 		{
 			slug: 'tidepay', name: 'TidePay', port: 8002,
+			steal: 0, hold: 87.3, up: 46.4, active_attackers: 4,
 			stores: [
-				{ store_index: 0, store_name: 'balance', ticks: mkTicks(87).map((t, i) => ({ ...t, status: 'OK', flag_fate: i % 3 === 0 ? 'tide' : 'held', hold: i % 3 === 0 ? 0 : 9.8 })) },
-				{ store_index: 1, store_name: 'txlog', ticks: mkTicks(87).map((t) => ({ ...t, status: 'OK', flag_fate: 'held', hold: 9.8 })) }
-			],
-			points_this_hour: { steal: 0, hold: 87.3, up: 46.4 },
-			active_attackers: 4
+				{ store_index: 0, store_name: 'balance', steal: 0, hold: 52.0, up: 23.2, flags_held: 22, flags_settled: 30,
+					ticks: mkTicks(87).map((t, i) => ({ ...t, status: 'OK' as SlaStatus, flag_fate: i % 3 === 0 ? 'tide' : 'held' as FlagFate, hold: i % 3 === 0 ? 0 : 9.8 })) },
+				{ store_index: 1, store_name: 'txlog', steal: 0, hold: 35.3, up: 23.2, flags_held: 28, flags_settled: 30,
+					ticks: mkTicks(87).map((t) => ({ ...t, status: 'OK' as SlaStatus, flag_fate: 'held' as FlagFate, hold: 9.8 })) }
+			]
 		},
 		{
 			slug: 'bollard', name: 'Bollard', port: 8003,
+			steal: 12.1, hold: 0, up: 31.2, active_attackers: 8,
 			stores: [
-				{ store_index: 0, store_name: 'firmware', ticks: mkTicks(87).map((t, i) => ({ ...t, flag_fate: i < 5 ? 'unreadable' : 'safe' as FlagFate, hold: 0, status: i < 5 ? 'FLAG_NOT_FOUND' : 'OK' as SlaStatus })) },
-				{ store_index: 1, store_name: 'config', ticks: mkTicks(87).map((t) => ({ ...t, status: 'OK' as SlaStatus, flag_fate: 'safe' as FlagFate, hold: 0 })) }
-			],
-			points_this_hour: { steal: 12.1, hold: 0, up: 31.2 },
-			active_attackers: 8
+				{ store_index: 0, store_name: 'firmware', steal: 12.1, hold: 0, up: 15.6, flags_held: 0, flags_settled: 22,
+					ticks: mkTicks(87).map((t, i) => ({ ...t, flag_fate: i < 5 ? 'unreadable' : 'safe' as FlagFate, hold: 0, status: i < 5 ? 'FLAG_NOT_FOUND' : 'OK' as SlaStatus })) },
+				{ store_index: 1, store_name: 'config', steal: 0, hold: 0, up: 15.6, flags_held: 0, flags_settled: 30,
+					ticks: mkTicks(87).map((t) => ({ ...t, status: 'OK' as SlaStatus, flag_fate: 'safe' as FlagFate, hold: 0 })) }
+			]
 		}
 	];
 
@@ -252,15 +267,7 @@
 	function svcUptime(svc: ServiceRow): number {
 		const all = svc.stores.flatMap(s => s.ticks);
 		if (!all.length) return 0;
-		return all.filter(t => t.status === 'OK' || t.status === 'ORG_FAULT').length / all.length;
-	}
-
-	function heldCount(store: StoreRow): number {
-		return store.ticks.filter(t => t.flag_fate === 'held').length;
-	}
-
-	function holdPts(store: StoreRow): number {
-		return store.ticks.reduce((s, t) => s + t.hold, 0);
+		return all.filter(t => (t.effective_status ?? t.status) === 'OK').length / all.length;
 	}
 
 	function alertAge(a: Alert): string {
@@ -358,27 +365,30 @@
 				<span class="rounded px-1.5 py-0.5 text-xs font-medium {statusChipColor[svcStatus]}">{svcStatus}</span>
 				<span class="text-xs text-stone-600">{(svcUptime(svc) * 100).toFixed(1)}% up (30 ticks)</span>
 				<div class="ml-auto flex items-center gap-4 text-xs tabular-nums">
-					<span class="text-[#e08a85]">STEAL <span class="font-semibold">{fmt1(svc.points_this_hour.steal)}</span></span>
-					<span class="text-[#9bcea8]">HOLD <span class="font-semibold">{fmt1(svc.points_this_hour.hold)}</span></span>
-					<span class="text-stone-400">UP <span class="font-semibold">{fmt1(svc.points_this_hour.up)}</span></span>
+					<span class="text-[#e08a85]">STEAL <span class="font-semibold">{fmt1(svc.steal)}</span></span>
+					<span class="text-[#9bcea8]">HOLD <span class="font-semibold">{fmt1(svc.hold)}</span></span>
+					<span class="text-stone-400">UP <span class="font-semibold">{fmt1(svc.up)}</span></span>
 				</div>
 			</div>
 
 			<!-- stores -->
 			{#each svc.stores as store (store.store_index)}
 				{@const latest = latestCheck(store)}
-				{@const held = heldCount(store)}
-				{@const hp = holdPts(store)}
 				<div class="px-4 py-3 {store.store_index < svc.stores.length - 1 ? 'border-b border-stone-800/60' : ''}">
 					<div class="flex items-center gap-2 mb-2">
 						<span class="metadata-label text-stone-500 text-xs w-20 shrink-0">{store.store_name}</span>
 						<div class="flex gap-px overflow-x-auto">
 							{#each store.ticks as t}
+								{@const displayStatus = t.effective_status ?? t.status}
 								{@const g = fateGlyph(t.flag_fate)}
+								{@const isCredited = !!t.credited_reason}
 								<div
-									class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm {statusColor[t.status]} transition-opacity"
-									title="{statusLabel[t.status]} · t{t.tick}{t.message ? ' · ' + t.message : ''}"
+									class="relative flex h-5 w-5 shrink-0 items-center justify-center rounded-sm {statusColor[displayStatus]} transition-opacity {isCredited ? 'ring-1 ring-amber-400/50' : ''}"
+									title="{statusLabel[displayStatus]}{isCredited ? ' (credited: ' + t.credited_reason + ')' : ''} · t{t.tick}{t.message ? ' · ' + t.message : ''}"
 								>
+									{#if isCredited}
+										<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
+									{/if}
 									{#if g.text}
 										<span class="text-[0.45rem] leading-none font-bold {g.cls}">{g.text}</span>
 									{/if}
@@ -394,9 +404,9 @@
 						</div>
 					{/if}
 					<div class="mt-1.5 text-xs text-stone-600">
-						held <span class="text-stone-400 tabular-nums">{held}/{store.ticks.length}</span> flags
+						held <span class="text-stone-400 tabular-nums">{store.flags_held}/{store.flags_settled}</span> flags
 						against <span class="text-stone-400 tabular-nums">{svc.active_attackers}</span> active attackers
-						<span class="ml-2 text-[#9bcea8] tabular-nums">+{fmt1(hp)} HOLD</span>
+						<span class="ml-2 text-[#9bcea8] tabular-nums">+{fmt1(store.hold)} HOLD</span>
 					</div>
 				</div>
 			{/each}
@@ -426,6 +436,7 @@
 		<span class="inline-flex items-center gap-1 text-[#e08a85]">x2 stolen</span>
 		<span class="inline-flex items-center gap-1 text-amber-400">T tide bot</span>
 		<span class="inline-flex items-center gap-1 text-warn">? unreadable</span>
+		<span class="ml-4 inline-flex items-center gap-1"><span class="relative h-2.5 w-2.5 rounded-sm bg-stone-700"><span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span></span><span class="text-amber-400/70">credited</span></span>
 	</div>
 
 	<div class="grid gap-4 sm:grid-cols-2">
@@ -494,6 +505,25 @@
 			</div>
 		</Card>
 	</div>
+
+	<!-- ORG_FAULT rule -->
+	<details class="mt-5 rounded-lg border border-stone-800 bg-stone-900/30 overflow-hidden">
+		<summary class="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm text-stone-400 hover:text-stone-300 transition-colors select-none">
+			<Icon icon="mdi:information-outline" class="h-4 w-4 shrink-0 text-stone-600" />
+			<span class="font-medium">Our faults rule</span>
+			<Icon icon="mdi:chevron-down" class="h-4 w-4 shrink-0 text-stone-600 ml-auto details-chevron" />
+		</summary>
+		<div class="border-t border-stone-800 px-4 py-3 text-xs text-stone-400 leading-relaxed space-y-2">
+			<p>Our faults are credited, never charged. A tick counts as ORG_FAULT and scores as up, for UP and for the hold life rule, when:</p>
+			<ul class="ml-4 space-y-1 list-disc list-outside text-stone-500">
+				<li>our checker itself fails;</li>
+				<li>the untouched NOP box fails the same check step as 3 or more teams in the same tick;</li>
+				<li>the Outbreak wave crashes your service; or</li>
+				<li>organizers re-credit it after review.</li>
+			</ul>
+			<p>Every credited tick shows on your status page with a credited mark and its reason.</p>
+		</div>
+	</details>
 </div>
 
 {/if}

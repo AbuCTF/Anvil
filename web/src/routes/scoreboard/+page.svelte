@@ -64,6 +64,8 @@
     steal: number;
     hold: number;
     up: number;
+    flags_held: number;
+    flags_settled: number;
   }
   interface FinalsRow {
     rank: number;
@@ -105,6 +107,8 @@
         steal: Math.max(0, Math.round((15 - i + j) * 3.2 * (1 - i * 0.04))),
         hold: Math.round((180 - i * 11 + j * 4) * 0.9),
         up: Math.round((6 - Math.min(5, i * 0.4 + j * 0.1)) * 3.87 * 4),
+        flags_held: Math.max(0, 28 - i * 2 + j),
+        flags_settled: 30,
       }));
       const steal = services.reduce((s, r) => s + r.steal, 0);
       const hold = services.reduce((s, r) => s + r.hold, 0);
@@ -780,6 +784,7 @@
                               <th class="px-3 py-1 text-right text-[#e08a85]">STEAL</th>
                               <th class="px-3 py-1 text-right text-[#9bcea8]">HOLD</th>
                               <th class="px-3 py-1 text-right text-stone-500">UP</th>
+                              <th class="hidden px-3 py-1 text-right text-stone-600 sm:table-cell">FLAGS</th>
                             </tr>
                           </thead>
                           <tbody class="divide-y divide-stone-800/30">
@@ -789,6 +794,7 @@
                                 <td class="px-3 py-1 text-right tabular-nums text-[#e08a85]">{svc.steal}</td>
                                 <td class="px-3 py-1 text-right tabular-nums text-[#9bcea8]">{svc.hold}</td>
                                 <td class="px-3 py-1 text-right tabular-nums text-stone-500">{svc.up}</td>
+                                <td class="hidden px-3 py-1 text-right tabular-nums text-stone-600 sm:table-cell">{svc.flags_held}/{svc.flags_settled}</td>
                               </tr>
                             {/each}
                           </tbody>
