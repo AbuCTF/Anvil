@@ -188,6 +188,38 @@ func TestLoadGameCheckerDefaultsAndEnv(t *testing.T) {
 	}
 }
 
+func TestLoadGameMirrorScoringDefaultsAndEnv(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned an error: %v", err)
+	}
+	sc := cfg.Game.Scoring
+	if sc.Formula != "legacy" || sc.WeightAD != 0.7 || sc.WeightKoth != 0.3 || sc.AttackerBonus != 0 ||
+		sc.FreeDeploys != 3 || sc.NTeams != 0 || sc.MassFaultTeams != 3 || cfg.Game.InternalToken != "" {
+		t.Fatalf("mirror defaults = %+v token=%q", sc, cfg.Game.InternalToken)
+	}
+
+	t.Setenv("ANVIL_GAME_SCORING_FORMULA", "mirror")
+	t.Setenv("ANVIL_GAME_SCORING_WEIGHT_AD", "0.65")
+	t.Setenv("ANVIL_GAME_SCORING_WEIGHT_KOTH", "0.35")
+	t.Setenv("ANVIL_GAME_SCORING_ATTACKER_BONUS", "1.5")
+	t.Setenv("ANVIL_GAME_SCORING_FREE_DEPLOYS", "5")
+	t.Setenv("ANVIL_GAME_SCORING_N_TEAMS", "15")
+	t.Setenv("ANVIL_GAME_SCORING_MASS_FAULT_TEAMS", "4")
+	t.Setenv("ANVIL_GAME_INTERNAL_TOKEN", "s3cret")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() with env returned an error: %v", err)
+	}
+	sc = cfg.Game.Scoring
+	if sc.Formula != "mirror" || sc.WeightAD != 0.65 || sc.WeightKoth != 0.35 || sc.AttackerBonus != 1.5 ||
+		sc.FreeDeploys != 5 || sc.NTeams != 15 || sc.MassFaultTeams != 4 || cfg.Game.InternalToken != "s3cret" {
+		t.Fatalf("mirror env overrides not applied: %+v token=%q", sc, cfg.Game.InternalToken)
+	}
+}
+
 func TestDefaultEconomyMatchesVersionedPreset(t *testing.T) {
 	t.Chdir(t.TempDir())
 	cfg, err := Load()

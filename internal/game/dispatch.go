@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
@@ -151,7 +152,7 @@ func (d *Dispatcher) runJob(ctx context.Context, tick int, p tickPlan, j job) er
 		wg.Add(1)
 		go func(v int) {
 			defer wg.Done()
-			flag, planted, err := d.reserveFlag(ctx, tick, j.team, j.service, v)
+			flagID, flag, planted, err := d.reserveFlag(ctx, tick, j.team, j.service, v)
 			if err != nil {
 				fail(fmt.Errorf("reserve flag team %s service %s: %w", j.team, j.service, err))
 				add(true, Result{Status: models.SLAError, Message: "flag reservation failed"})
@@ -173,7 +174,9 @@ func (d *Dispatcher) runJob(ctx context.Context, tick int, p tickPlan, j job) er
 				}
 			}
 			task.Method = MethodGetFlag
-			add(true, d.runTask(ctx, p, j, task, p.pick(2, 3)))
+			res := d.runTask(ctx, p, j, task, p.pick(2, 3))
+			d.recordRead(flagID, tick, res)
+			add(true, res)
 		}(v)
 	}
 
@@ -188,7 +191,9 @@ func (d *Dispatcher) runJob(ctx context.Context, tick int, p tickPlan, j job) er
 			task := base
 			task.Method, task.Variant, task.Flag = MethodGetFlag, f.variant, f.flag
 			task.RelatedTick, task.ChainID = f.tick, chainID("flag", j, f.tick, f.variant)
-			add(false, d.runTask(ctx, p, j, task, p.pick(1, 3)))
+			res := d.runTask(ctx, p, j, task, p.pick(1, 3))
+			d.recordRead(f.id, tick, res)
+			add(false, res)
 		}(f)
 	}
 
@@ -264,6 +269,7 @@ func (d *Dispatcher) runTask(ctx context.Context, p tickPlan, j job, task Task, 
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	res := j.checker.Run(tctx, j.target, task)
 	cancel()
+	res.Step = task.Method
 
 	if id != 0 {
 		if err := d.closeTask(id, res); err != nil {
@@ -465,6 +471,7 @@ func (d *Dispatcher) teamTargets(ctx context.Context) ([]teamTarget, error) {
 }
 
 type oldFlag struct {
+	id      uuid.UUID
 	tick    int
 	variant int
 	flag    string
@@ -478,7 +485,7 @@ func (d *Dispatcher) oldFlags(ctx context.Context, tick int, team, service uuid.
 		checked = d.flagValidTicks
 	}
 	rows, err := d.db.Pool.Query(ctx,
-		`SELECT tick_number, store_index, flag FROM game_flags
+		`SELECT id, tick_number, store_index, flag FROM game_flags
 		 WHERE team_id = $1 AND service_id = $2 AND planted_at IS NOT NULL
 		   AND tick_number < $3 AND tick_number >= $3 - $4
 		 ORDER BY tick_number, store_index`, team, service, tick, checked)
@@ -490,7 +497,7 @@ func (d *Dispatcher) oldFlags(ctx context.Context, tick int, team, service uuid.
 	var out []oldFlag
 	for rows.Next() {
 		var f oldFlag
-		if err := rows.Scan(&f.tick, &f.variant, &f.flag); err != nil {
+		if err := rows.Scan(&f.id, &f.tick, &f.variant, &f.flag); err != nil {
 			return nil, err
 		}
 		out = append(out, f)
@@ -501,7 +508,8 @@ func (d *Dispatcher) oldFlags(ctx context.Context, tick int, team, service uuid.
 // reserveFlag persists the value before invoking the checker. If the process dies
 // between those operations, retrying the running tick places the same value;
 // planted_at keeps the reservation from becoming submittable early.
-func (d *Dispatcher) reserveFlag(ctx context.Context, tick int, team, service uuid.UUID, variant int) (string, bool, error) {
+func (d *Dispatcher) reserveFlag(ctx context.Context, tick int, team, service uuid.UUID, variant int) (uuid.UUID, string, bool, error) {
+	var id uuid.UUID
 	var flag string
 	var planted bool
 	err := d.db.Pool.QueryRow(ctx,
@@ -510,10 +518,23 @@ func (d *Dispatcher) reserveFlag(ctx context.Context, tick int, team, service uu
 		 VALUES ($1, $2, $3, $4, $5, $1, $6, NULL)
 		 ON CONFLICT (tick_number, team_id, service_id, store_index) DO UPDATE
 		 SET tick_number = EXCLUDED.tick_number
-		 RETURNING flag, planted_at IS NOT NULL`,
+		 RETURNING id, flag, planted_at IS NOT NULL`,
 		tick, team, service, variant, mintFlag(d.flagPrefix), tick+d.flagValidTicks,
-	).Scan(&flag, &planted)
-	return flag, planted, err
+	).Scan(&id, &flag, &planted)
+	return id, flag, planted, err
+}
+
+// recordRead notes whether a getflag read the flag back on this tick; the mirror
+// life rule needs every tick of a flag's life, not just the last verdict.
+func (d *Dispatcher) recordRead(flagID uuid.UUID, tick int, res Result) {
+	ctx, cancel := context.WithTimeout(context.Background(), dbWriteTimeout)
+	defer cancel()
+	if _, err := d.db.Pool.Exec(ctx,
+		`INSERT INTO game_flag_checks (flag_id, tick_number, readable) VALUES ($1, $2, $3)
+		 ON CONFLICT (flag_id, tick_number) DO UPDATE SET readable = EXCLUDED.readable, checked_at = NOW()`,
+		flagID, tick, res.Status == models.SLAOk); err != nil {
+		d.logger.Warn("record flag read", zap.Error(err))
+	}
 }
 
 func (d *Dispatcher) markFlagPlanted(tick int, team, service uuid.UUID, variant int, attackInfo string) error {
@@ -552,17 +573,30 @@ func (d *Dispatcher) closeTask(id int64, res Result) error {
 	return err
 }
 
+// checker messages lead with a stable code, e.g. "BERTH-HAVOC-04: ..."
+var messageCode = regexp.MustCompile(`^([A-Z0-9]+-[A-Z]+-[0-9]+):`)
+
 func (d *Dispatcher) recordSLA(tick int, team, service uuid.UUID, res Result) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbWriteTimeout)
 	defer cancel()
+	var code string
+	if m := messageCode.FindStringSubmatch(res.Message); m != nil {
+		code = m[1]
+	}
+	// stamp the image that was live, so a disputed verdict names the exact build
 	_, err := d.db.Pool.Exec(ctx,
-		`INSERT INTO game_sla_checks (tick_number, team_id, service_id, status, latency_ms, message)
-		 VALUES ($1, $2, $3, $4, $5, $6)
+		`INSERT INTO game_sla_checks (tick_number, team_id, service_id, status, latency_ms, message, step, code, image_digest)
+		 VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''),
+		   (SELECT image_digest FROM game_deploys WHERE team_id = $2 AND service_id = $3
+		    ORDER BY deployed_at DESC LIMIT 1))
 		 ON CONFLICT (tick_number, team_id, service_id) DO UPDATE SET
 		   status = EXCLUDED.status,
 		   latency_ms = EXCLUDED.latency_ms,
 		   message = EXCLUDED.message,
+		   step = EXCLUDED.step,
+		   code = EXCLUDED.code,
+		   image_digest = EXCLUDED.image_digest,
 		   checked_at = NOW()`,
-		tick, team, service, string(res.Status), int(res.Latency.Milliseconds()), res.Message)
+		tick, team, service, string(res.Status), int(res.Latency.Milliseconds()), res.Message, res.Step, code)
 	return err
 }

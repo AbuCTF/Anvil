@@ -440,6 +440,10 @@ func TestIntegrationOldFlagLossRecoversAndClosedTickIsNotRepeated(t *testing.T) 
 	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE tick_number = 2 AND status = 'RECOVERING'`); n != 2 {
 		t.Fatalf("lost old flags should mark both teams RECOVERING on tick 2, got %d", n)
 	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flag_checks fc JOIN game_flags f ON f.id = fc.flag_id
+		WHERE fc.tick_number = 2 AND f.tick_number = 1 AND NOT fc.readable`); n != 2 {
+		t.Fatalf("old flags read on tick 2 should be recorded unreadable, got %d", n)
+	}
 	before := calls.Load()
 	// put+get per team on tick 1, then put+get+old get per team on tick 2
 	if before != 10 {
@@ -815,7 +819,12 @@ func TestIntegrationENOVariantsAttackInfoAndTaskLog(t *testing.T) {
 	if err := db.Pool.QueryRow(ctx, `SELECT flag FROM game_flags WHERE team_id = $1 LIMIT 1`, nop).Scan(&nopFlag); err != nil {
 		t.Fatal(err)
 	}
-	assertOutcome(t, db, alpha, nopFlag, SubmitAccepted)
+	// the nop's flags prove an exploit works but never score
+	assertOutcome(t, db, alpha, nopFlag, SubmitNop)
+	// every getflag's read is kept per tick for the hold life rule: 3 teams x 2 stores
+	if n := count(t, db, `SELECT COUNT(*) FROM game_flag_checks WHERE tick_number = 1 AND readable`); n != 6 {
+		t.Fatalf("flag reads recorded = %d, want 6", n)
+	}
 }
 
 func TestIntegrationHungCheckerDoesNotStallTheTick(t *testing.T) {
@@ -856,8 +865,8 @@ func TestIntegrationHungCheckerDoesNotStallTheTick(t *testing.T) {
 	if n := count(t, db, `SELECT COUNT(*) FROM game_ticks WHERE tick_number = 1 AND status = 'closed'`); n != 1 {
 		t.Fatal("tick 1 did not close")
 	}
-	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE status = 'DOWN'`); n != 2 {
-		t.Fatalf("a timed-out havoc should mark both teams DOWN, got %d", n)
+	if n := count(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE status = 'DOWN' AND step = 'havoc'`); n != 2 {
+		t.Fatalf("a timed-out havoc should mark both teams DOWN on the havoc step, got %d", n)
 	}
 	if n := count(t, db, `SELECT COUNT(*) FROM game_koth_control WHERE controller_team_id = '`+a.String()+`'`); n != 1 {
 		t.Fatalf("koth did not score beside the hung checker")

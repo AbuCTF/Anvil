@@ -52,6 +52,7 @@ type Result struct {
 	Latency    time.Duration
 	Message    string
 	AttackInfo string
+	Step       string // the task method that produced it
 }
 
 // Checker runs tasks against a service. checker_ref picks the implementation: an

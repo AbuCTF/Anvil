@@ -24,14 +24,20 @@ type Controller struct {
 	logger     *zap.Logger
 	dispatcher *Dispatcher
 	emitClient *http.Client
+	// the outbreak wave bot, run beside dispatch on finals ticks when set
+	outbreak func(ctx context.Context, tick int, started time.Time)
 }
+
+// outbreakFactory is filled in by the outbreak bot's own file; it returns nil when
+// the bot is disabled, so the engine runs without it.
+var outbreakFactory func(*Controller) func(ctx context.Context, tick int, started time.Time)
 
 // finishing a finals tick (koth fold, standings, close) gets its own budget, since
 // checker tasks may run right up to the tick's tail margin
 const finishTimeout = 30 * time.Second
 
 func NewController(cfg config.GameConfig, db *database.DB, logger *zap.Logger) *Controller {
-	return &Controller{
+	c := &Controller{
 		cfg:    cfg,
 		db:     db,
 		logger: logger,
@@ -51,6 +57,10 @@ func NewController(cfg config.GameConfig, db *database.DB, logger *zap.Logger) *
 		},
 		emitClient: &http.Client{Timeout: 10 * time.Second},
 	}
+	if outbreakFactory != nil {
+		c.outbreak = outbreakFactory(c)
+	}
+	return c
 }
 
 // Run ticks until ctx is cancelled. It returns immediately unless the engine is enabled.
@@ -243,18 +253,25 @@ func (c *Controller) runFinalsTick(parent context.Context, tick int) error {
 	}
 
 	tickCtx, cancelTick := context.WithDeadline(parent, started.Add(c.cfg.TickInterval))
-	var koth sync.WaitGroup
-	koth.Add(1)
+	var beside sync.WaitGroup
+	beside.Add(1)
 	go func() {
-		defer koth.Done()
+		defer beside.Done()
 		if err := c.runKoth(tickCtx, tick); err != nil && parent.Err() == nil {
 			c.logger.Error("tick koth", zap.Int("tick", tick), zap.Error(err))
 		}
 	}()
+	if c.outbreak != nil {
+		beside.Add(1)
+		go func() {
+			defer beside.Done()
+			c.outbreak(tickCtx, tick, started)
+		}()
+	}
 	if err := c.dispatcher.dispatch(tickCtx, tick, started); err != nil && parent.Err() == nil {
 		c.logger.Error("tick dispatch", zap.Int("tick", tick), zap.Error(err))
 	}
-	koth.Wait()
+	beside.Wait()
 	cancelTick()
 	if err := parent.Err(); err != nil {
 		return err // shutting down: leave the tick running so a restart resumes it

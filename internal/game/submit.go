@@ -17,6 +17,8 @@ const (
 	SubmitOwnFlag   SubmitOutcome = "own"
 	SubmitExpired   SubmitOutcome = "expired"
 	SubmitDuplicate SubmitOutcome = "duplicate"
+	// the nop team is a test target: its flags prove an exploit works and score nothing
+	SubmitNop SubmitOutcome = "nop"
 )
 
 // TeamForUser returns the game team a user belongs to, if any. A game team shares its
@@ -52,11 +54,13 @@ func SubmitFlag(ctx context.Context, db *database.DB, attacker uuid.UUID, flag s
 		owner      uuid.UUID
 		service    uuid.UUID
 		validUntil int
+		ownerNop   bool
 	)
 	err := db.Pool.QueryRow(ctx,
-		`SELECT id, team_id, service_id, valid_until_tick
-		 FROM game_flags WHERE flag = $1 AND planted_at IS NOT NULL`, flag).
-		Scan(&flagID, &owner, &service, &validUntil)
+		`SELECT f.id, f.team_id, f.service_id, f.valid_until_tick, t.is_nop
+		 FROM game_flags f JOIN game_teams t ON t.id = f.team_id
+		 WHERE f.flag = $1 AND f.planted_at IS NOT NULL`, flag).
+		Scan(&flagID, &owner, &service, &validUntil, &ownerNop)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SubmitInvalid, nil
 	}
@@ -65,6 +69,9 @@ func SubmitFlag(ctx context.Context, db *database.DB, attacker uuid.UUID, flag s
 	}
 	if owner == attacker {
 		return SubmitOwnFlag, nil
+	}
+	if ownerNop {
+		return SubmitNop, nil
 	}
 
 	var currentTick int

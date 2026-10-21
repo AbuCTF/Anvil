@@ -171,6 +171,8 @@ func (h *GameHandler) SubmitFlag(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"status": "rejected", "message": "own flag"})
 	case game.SubmitExpired:
 		c.JSON(http.StatusBadRequest, gin.H{"status": "rejected", "message": "flag expired"})
+	case game.SubmitNop:
+		c.JSON(http.StatusBadRequest, gin.H{"status": "rejected", "message": "nop team flag, scores nothing"})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"status": "rejected", "message": "invalid flag"})
 	}

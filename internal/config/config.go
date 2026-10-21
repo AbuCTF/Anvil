@@ -345,6 +345,8 @@ type GameConfig struct {
 	Scoring ScoringConfig `mapstructure:"scoring"`
 	Webhook WebhookConfig `mapstructure:"webhook"`
 	Checker CheckerConfig `mapstructure:"checker"`
+	// shared secret for server-to-server calls (pipeline, runner); empty = endpoints off
+	InternalToken string `mapstructure:"internal_token"`
 }
 
 // paces attack-defense checker tasks inside a tick, enowars style: puts in the first
@@ -368,6 +370,15 @@ type ScoringConfig struct {
 	SLAPoints     float64 `mapstructure:"sla_points"`
 	KothHold      float64 `mapstructure:"koth_hold"`
 	KothRank      []int   `mapstructure:"koth_rank"`
+
+	// h7 mirror (finals): legacy keeps the quals formula
+	Formula        string  `mapstructure:"formula"`   // legacy | mirror
+	WeightAD       float64 `mapstructure:"weight_ad"` // median-relative merge weights
+	WeightKoth     float64 `mapstructure:"weight_koth"`
+	AttackerBonus  float64 `mapstructure:"attacker_bonus"`   // 0 = off; the pre-freeze dial (1.5)
+	FreeDeploys    int     `mapstructure:"free_deploys"`     // per team x service before UP is halved
+	NTeams         int     `mapstructure:"n_teams"`          // 0 = count active non-nop teams
+	MassFaultTeams int     `mapstructure:"mass_fault_teams"` // teams failing with the nop canary => ORG_FAULT
 }
 
 type WebhookConfig struct {
@@ -593,6 +604,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.webhook.url", "")
 	v.SetDefault("game.webhook.secret", "")
 	v.SetDefault("game.webhook.id", "")
+	v.SetDefault("game.internal_token", "")
+	v.SetDefault("game.scoring.formula", "legacy")
+	v.SetDefault("game.scoring.weight_ad", 0.7)
+	v.SetDefault("game.scoring.weight_koth", 0.3)
+	v.SetDefault("game.scoring.attacker_bonus", 0)
+	v.SetDefault("game.scoring.free_deploys", 3)
+	v.SetDefault("game.scoring.n_teams", 0)
+	v.SetDefault("game.scoring.mass_fault_teams", 3)
 	v.SetDefault("game.checker.task_timeout", "30s")
 	v.SetDefault("game.checker.tail_margin", "10s")
 	v.SetDefault("game.checker.checked_ticks", 0)
