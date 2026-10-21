@@ -2,12 +2,15 @@ package game
 
 // outbreak.go — the Outbreak wave bot (§4 of INTERNAL-API.md).
 //
-// Schedule:
-//   - Per (service, flag_store): advisory publishes at first blood (3+ distinct victims),
-//     OR at game_services.advisory_at (IST) for stores that never go orange naturally.
-//   - Wave starts orangeDelay (15) ticks after the advisory.
-//   - Each wave tick: call exploit for every green team, write to game_bot_reads.
-//   - Quiet window 00:00–06:00 IST: new advisories and first wave ticks defer; ongoing waves continue.
+// Schedule (wall-clock IST, not tick-count):
+//   - Per (service, flag_store): advisory publishes at first blood (3+ distinct victims)
+//     OR at game_services.advisory_at for stores that never go orange naturally.
+//     Advisory defers if the first eligible tick is in [00:00, 06:00) IST → publishes at 06:00.
+//   - Wave starts orangeDelay ticks (default 15 × tickInterval = 30 min) after the advisory.
+//     wave_start_time = advisory_time + orangeDelay × tickInterval.
+//     If wave_start_time ∈ [00:00, 06:00) IST → pushed to 06:30 IST that morning.
+//   - Wave fires every tick while started >= wave_start_time.
+//   - Waves that began before 00:00 continue through the quiet window naturally.
 //
 // Gated behind game.outbreak.enabled (default false).
 // Sets outbreakFactory in init() so it's automatically wired by NewController.
@@ -173,10 +176,10 @@ func inQuietWindow(t time.Time) bool {
 }
 
 // orangeStores returns all (service, store) pairs in wave mode for this tick.
-// A pair enters wave mode when: firstBlood+orangeDelay <= tick, OR advisory_at <= tick start.
+// Wave eligibility is wall-clock: started >= quietWaveStart(advisory_time + waveDelay).
 func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.Time) ([]orangeStore, error) {
-	// advisory_tick (from game_events) is the canonical source of truth for when
-	// the advisory was published. if absent, the advisory hasn't been published yet.
+	// advisory_time: started_at of the tick when the advisory was published (from game_ticks).
+	// NULL means the advisory has not been published yet.
 	rows, err := b.db.Pool.Query(ctx, `
 		SELECT
 		    gs.id,
@@ -187,7 +190,7 @@ func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.T
 		    s.store_index,
 		    gs.advisory_at,
 		    fb.first_blood_tick,
-		    adv.advisory_tick
+		    gt.started_at AS advisory_time
 		FROM game_services gs
 		CROSS JOIN LATERAL (
 		    SELECT generate_series(0, GREATEST(gs.flag_stores, 1) - 1) AS store_index
@@ -200,16 +203,23 @@ func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.T
 		    HAVING COUNT(DISTINCT gc.victim_team_id) >= $2
 		) fb ON TRUE
 		LEFT JOIN LATERAL (
-		    SELECT MIN(tick_number) AS advisory_tick
-		    FROM game_events
-		    WHERE kind = 'advisory' AND service_id = gs.id AND store_index = s.store_index
+		    SELECT ge.tick_number AS advisory_tick
+		    FROM game_events ge
+		    WHERE ge.kind = 'advisory' AND ge.service_id = gs.id AND ge.store_index = s.store_index
+		    ORDER BY ge.tick_number ASC LIMIT 1
 		) adv ON TRUE
+		LEFT JOIN game_ticks gt ON gt.tick_number = adv.advisory_tick
 		WHERE gs.enabled = true AND gs.checker_ref IS NOT NULL AND gs.checker_ref <> ''
 	`, tick, firstBloodThreshold)
 	if err != nil {
 		return nil, fmt.Errorf("orange stores: %w", err)
 	}
 	defer rows.Close()
+
+	waveDelay := time.Duration(orangeDelay) * b.cfg.TickInterval
+	if waveDelay <= 0 {
+		waveDelay = time.Duration(orangeDelay) * 2 * time.Minute
+	}
 
 	var result []orangeStore
 	for rows.Next() {
@@ -222,10 +232,10 @@ func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.T
 			storeIndex   int
 			advisoryAt   *time.Time
 			firstBlood   *int
-			advisoryTick *int
+			advisoryTime *time.Time
 		)
 		if err := rows.Scan(&id, &slug, &checkerRef, &port, &waveExplJSON, &storeIndex,
-			&advisoryAt, &firstBlood, &advisoryTick); err != nil {
+			&advisoryAt, &firstBlood, &advisoryTime); err != nil {
 			return nil, err
 		}
 
@@ -241,25 +251,25 @@ func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.T
 			}
 		}
 
-		// advisory publishes at first blood (or advisory_at), outside quiet window.
-		// the advisory tick (game_events row) is the clock for when the wave may start.
-		// new advisories defer during 00:00-06:00 IST; running waves continue.
-		if advisoryTick == nil {
+		// advisory publishes at first blood (or advisory_at) on the first tick that
+		// is outside the quiet window (00:00–06:00 IST). advisory_time is used as the
+		// wall-clock anchor for wave_start_time = quietWaveStart(advisory_time + waveDelay).
+		if advisoryTime == nil {
 			triggerMet := (firstBlood != nil && tick >= *firstBlood) ||
 				(advisoryAt != nil && !advisoryAt.After(started))
 			if triggerMet && !inQuietWindow(started) {
 				b.publishAdvisory(ctx, tick, id, storeIndex)
-				advisoryTick = &tick
+				advisoryTime = &started
 			}
 		}
-
-		// wave starts orangeDelay ticks after the advisory
-		if advisoryTick == nil || tick < *advisoryTick+orangeDelay {
+		if advisoryTime == nil {
 			continue
 		}
 
-		// first wave tick defers if quiet window is active; ongoing waves continue
-		if inQuietWindow(started) && tick == *advisoryTick+orangeDelay {
+		// wave fires when the tick's wall-clock start reaches wave_start_time.
+		// quietWaveStart pushes times inside [00:00, 06:00) IST to 06:30 that morning.
+		waveStartTime := quietWaveStart(advisoryTime.Add(waveDelay))
+		if started.Before(waveStartTime) {
 			continue
 		}
 
@@ -273,6 +283,17 @@ func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.T
 		})
 	}
 	return result, rows.Err()
+}
+
+// quietWaveStart adjusts a wave start time that falls inside [00:00, 06:00) IST
+// to 06:30 IST that morning, ensuring waves never start during the quiet window.
+func quietWaveStart(t time.Time) time.Time {
+	local := t.In(istLocation)
+	if h := local.Hour(); h >= quietStartHour && h < quietEndHour {
+		return time.Date(local.Year(), local.Month(), local.Day(),
+			6, 30, 0, 0, istLocation)
+	}
+	return t
 }
 
 // currentFlag returns the flag and attack_info for (team, service, store) planted this tick.
