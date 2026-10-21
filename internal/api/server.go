@@ -225,6 +225,10 @@ func (s *Server) setupRouter() {
 			gameInternal := handlers.NewGameInternalHandler(s.config, s.db, s.logger)
 			internalArena.POST("/deploys", gameInternal.Deploy)
 			internalArena.GET("/sla", gameInternal.SLA)
+
+			internalHandler := handlers.NewInternalGameHandler(s.config, s.db, s.logger)
+			internalArena.POST("/gate", internalHandler.Gate)
+			internalArena.GET("/metrics", internalHandler.Metrics)
 		}
 
 		protected := v1.Group("")

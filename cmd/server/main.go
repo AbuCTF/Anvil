@@ -390,8 +390,13 @@ func main() {
 	}()
 
 	// game engine (attack-defense + koth) — no-op unless game.enabled.
+	// game.controller_enabled lets API replicas skip the controller loop so only
+	// one dedicated gameserver process drives ticking. Default true keeps the demo
+	// behavior (single process runs everything).
 	gameCtx, gameCancel := context.WithCancel(context.Background())
-	go game.NewController(cfg.Game, db, logger).Run(gameCtx)
+	if cfg.Game.ControllerEnabled {
+		go game.NewController(cfg.Game, db, logger).Run(gameCtx)
+	}
 
 	// tcp flag submission server — off by default, finals-only path.
 	if cfg.Game.TCPSubmitEnabled {

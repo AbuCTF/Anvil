@@ -335,21 +335,27 @@ type RateLimit struct {
 }
 
 // tunes the attack-defense + koth engine. off by default.
+type OutbreakConfig struct {
+	Enabled bool `mapstructure:"enabled"` // run the wave bot; default false
+}
+
 type GameConfig struct {
-	Enabled        bool          `mapstructure:"enabled"`
-	TickInterval   time.Duration `mapstructure:"tick_interval"`
-	FlagValidTicks int           `mapstructure:"flag_valid_ticks"`
-	FlagPrefix     string        `mapstructure:"flag_prefix"`
+	Enabled           bool          `mapstructure:"enabled"`
+	ControllerEnabled bool          `mapstructure:"controller_enabled"`
+	TickInterval      time.Duration `mapstructure:"tick_interval"`
+	FlagValidTicks    int           `mapstructure:"flag_valid_ticks"`
+	FlagPrefix        string        `mapstructure:"flag_prefix"`
 
 	// TCPSubmitEnabled enables the raw-TCP flag submission server (default false).
 	// TCPSubmitPort is the port it binds on (default 4141).
 	TCPSubmitEnabled bool `mapstructure:"tcp_submit_enabled"`
 	TCPSubmitPort    int  `mapstructure:"tcp_submit_port"`
 
-	Koth    KothConfig    `mapstructure:"koth"`
-	Scoring ScoringConfig `mapstructure:"scoring"`
-	Webhook WebhookConfig `mapstructure:"webhook"`
-	Checker CheckerConfig `mapstructure:"checker"`
+	Koth     KothConfig     `mapstructure:"koth"`
+	Scoring  ScoringConfig  `mapstructure:"scoring"`
+	Webhook  WebhookConfig  `mapstructure:"webhook"`
+	Checker  CheckerConfig  `mapstructure:"checker"`
+	Outbreak OutbreakConfig `mapstructure:"outbreak"`
 	// shared secret for server-to-server calls (pipeline, runner); empty = endpoints off
 	InternalToken string `mapstructure:"internal_token"`
 }
@@ -592,6 +598,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rate_limit.graded_report.window", "1m")
 
 	v.SetDefault("game.enabled", false)
+	// controller_enabled gates the tick loop. Set false in API replicas; the dedicated
+	// gameserver process keeps it true. Default true preserves the current demo behavior.
+	v.SetDefault("game.controller_enabled", true)
+	// outbreak.enabled runs the wave bot; off by default so the demo is unchanged.
+	v.SetDefault("game.outbreak.enabled", false)
 	v.SetDefault("game.tick_interval", "2m")
 	v.SetDefault("game.flag_valid_ticks", 10)
 	v.SetDefault("game.flag_prefix", "CTF")

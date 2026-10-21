@@ -347,3 +347,33 @@ jwt:
 		t.Errorf("storage path = %q, want /srv/anvil/storage", cfg.Storage.Path)
 	}
 }
+
+func TestLoadGameControllerAndOutbreakDefaults(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned an error: %v", err)
+	}
+	// controller_enabled defaults true; outbreak.enabled defaults false
+	if !cfg.Game.ControllerEnabled {
+		t.Error("game.controller_enabled default should be true")
+	}
+	if cfg.Game.Outbreak.Enabled {
+		t.Error("game.outbreak.enabled default should be false")
+	}
+
+	// verify env vars are honoured (SetDefault must exist for BindEnv to work)
+	t.Setenv("ANVIL_GAME_CONTROLLER_ENABLED", "false")
+	t.Setenv("ANVIL_GAME_OUTBREAK_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() with env returned an error: %v", err)
+	}
+	if cfg.Game.ControllerEnabled {
+		t.Error("ANVIL_GAME_CONTROLLER_ENABLED=false was not applied")
+	}
+	if !cfg.Game.Outbreak.Enabled {
+		t.Error("ANVIL_GAME_OUTBREAK_ENABLED=true was not applied")
+	}
+}
