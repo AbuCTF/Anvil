@@ -218,6 +218,14 @@ func (s *Server) setupRouter() {
 			}
 		}
 
+		// server-to-server finals calls (pipeline, runner); 404 unless game.internal_token is set
+		internalArena := v1.Group("/internal/arena", handlers.RequireInternalToken(s.config.Game.InternalToken))
+		{
+			gameInternal := handlers.NewGameInternalHandler(s.config, s.db, s.logger)
+			internalArena.POST("/deploys", gameInternal.Deploy)
+			internalArena.GET("/sla", gameInternal.SLA)
+		}
+
 		protected := v1.Group("")
 		protected.Use(middleware.Auth(s.config, s.db))
 		{

@@ -55,6 +55,7 @@ type slaCredit struct {
 	Service  uuid.UUID
 	Team     *uuid.UUID // nil = every team
 	From, To int
+	Reason   string
 }
 
 type mirrorInput struct {
@@ -101,20 +102,26 @@ func green(s models.SLAStatus) bool {
 // effectiveSLA applies organizer credit to the raw verdicts: checker faults are
 // ERROR already; admin re-credits, outbreak crashes and mass failures shared with
 // the nop canary become ERROR too. ERROR counts as green for UP and the life rule.
-func effectiveSLA(in *mirrorInput) map[slaKey]models.SLAStatus {
+func effectiveSLA(in *mirrorInput) (map[slaKey]models.SLAStatus, map[slaKey]string) {
 	eff := make(map[slaKey]models.SLAStatus, len(in.SLA))
+	why := map[slaKey]string{}
 	for k, v := range in.SLA {
 		eff[k] = v.Status
+		if v.Status == models.SLAError {
+			why[k] = "checker fault"
+		}
 	}
 	for k := range in.BotCrashed {
 		if s, ok := eff[k]; ok && !green(s) {
 			eff[k] = models.SLAError
+			why[k] = "outbreak wave crashed the service"
 		}
 	}
 	for _, c := range in.Credits {
 		for k, s := range eff {
 			if k.service == c.Service && k.tick >= c.From && k.tick <= c.To && (c.Team == nil || *c.Team == k.team) && !green(s) {
 				eff[k] = models.SLAError
+				why[k] = c.Reason
 			}
 		}
 	}
@@ -148,12 +155,13 @@ func effectiveSLA(in *mirrorInput) map[slaKey]models.SLAStatus {
 				if len(keys) >= in.MassFault {
 					for _, tk := range keys {
 						eff[tk] = models.SLAError
+						why[tk] = "shared failure with the nop box"
 					}
 				}
 			}
 		}
 	}
-	return eff
+	return eff, why
 }
 
 func scoreMirror(in *mirrorInput) mirrorResult {
@@ -174,7 +182,7 @@ func scoreMirror(in *mirrorInput) mirrorResult {
 		}
 		return b
 	}
-	eff := effectiveSLA(in)
+	eff, _ := effectiveSLA(in)
 	res.Effective = eff
 
 	// STEAL comes pre-summed per (attacker, store) over settled flags

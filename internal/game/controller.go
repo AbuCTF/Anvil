@@ -94,6 +94,7 @@ func (c *Controller) Run(ctx context.Context) {
 
 	ticker := time.NewTicker(c.cfg.TickInterval)
 	defer ticker.Stop()
+	finalized := false
 
 	for {
 		select {
@@ -107,6 +108,16 @@ func (c *Controller) Run(ctx context.Context) {
 			// arenas, which pollutes the arena graph. Flipping koth_native_enabled back on
 			// resumes ticking live, no restart.
 			if !c.tickingAllowed(ctx) {
+				if !finalized {
+					if phase, finals, err := FinalsPhase(ctx, c.db); err == nil && finals && phase == PhaseOver {
+						if err := c.finalize(ctx); err != nil {
+							c.logger.Error("finals settlement failed", zap.Error(err))
+						} else {
+							finalized = true
+							c.logger.Info("finals settled")
+						}
+					}
+				}
 				continue
 			}
 			next, err := c.nextTick(ctx)
@@ -279,7 +290,7 @@ func (c *Controller) runFinalsTick(parent context.Context, tick int) error {
 
 	ctx, cancel := context.WithTimeout(parent, finishTimeout)
 	defer cancel()
-	if err := c.recomputeStandings(ctx); err != nil {
+	if err := c.recomputeFinals(ctx, tick, false); err != nil {
 		return fmt.Errorf("recompute standings: %w", err)
 	}
 	if native {
@@ -295,6 +306,37 @@ func (c *Controller) runFinalsTick(parent context.Context, tick int) error {
 	}
 	c.emitStandings(ctx, tick)
 	return nil
+}
+
+// recomputeFinals scores a finals tick with the configured formula; legacy keeps
+// the quals recompute so a finals rehearsal can still compare the two.
+func (c *Controller) recomputeFinals(ctx context.Context, tick int, final bool) error {
+	if c.cfg.Scoring.Formula == "mirror" {
+		return c.recomputeMirror(ctx, tick, final)
+	}
+	return c.recomputeStandings(ctx)
+}
+
+// finalize settles the board once the finals are over: every flag is judged on the
+// ticks that exist and the last koth round gets its rank bonus. idempotent, so each
+// replica may run it.
+func (c *Controller) finalize(ctx context.Context) error {
+	release, acquired, err := c.acquireTickLock(ctx)
+	if err != nil || !acquired {
+		return err
+	}
+	defer release()
+	last, status, err := c.lastTickState(ctx)
+	if err != nil || last == 0 || status != "closed" {
+		return err
+	}
+	if err := c.closeRound(ctx, c.roundForTick(last)); err != nil {
+		return fmt.Errorf("close final round: %w", err)
+	}
+	if err := c.recomputeFinals(ctx, last, true); err != nil {
+		return fmt.Errorf("final recompute: %w", err)
+	}
+	return c.snapshotStandings(ctx, last)
 }
 
 func (c *Controller) acquireTickLock(ctx context.Context) (func(), bool, error) {

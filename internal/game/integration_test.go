@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -896,5 +897,91 @@ func TestIntegrationTeamForUserViaPlatformTeam(t *testing.T) {
 	got, ok, err := TeamForUser(ctx, db, user)
 	if err != nil || !ok || got != team {
 		t.Fatalf("TeamForUser via users.team_id: got %v ok=%v err=%v want %v", got, ok, err, team)
+	}
+}
+
+func TestIntegrationMirrorScoresThroughTicks(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+	setFinals(t, db)
+
+	alpha := seedTeam(t, db, "alpha")
+	bravo := seedTeam(t, db, "bravo")
+	charlie := seedTeam(t, db, "charlie")
+	nop := seedTeam(t, db, "nop")
+	if _, err := db.Pool.Exec(ctx, `UPDATE game_teams SET is_nop = TRUE WHERE id = $1`, nop); err != nil {
+		t.Fatal(err)
+	}
+	srv, _ := enoFake(t, func(enoTaskMessage) enoResultMessage { return enoResult("OK", "") })
+	svc := seedENOService(t, db, srv.URL, 1, 0, 0)
+
+	cfg := testController(db).cfg
+	cfg.FlagValidTicks = 1 // a flag lives ticks t and t+1
+	cfg.Scoring.Formula = "mirror"
+	cfg.Scoring.WeightAD, cfg.Scoring.WeightKoth = 0.7, 0.3
+	cfg.Scoring.MassFaultTeams, cfg.Scoring.FreeDeploys = 3, 3
+	ctrl := NewController(cfg, db, zap.NewNop())
+
+	runTickOK(t, ctrl, ctx, 1)
+	var bravoFlag, nopFlag string
+	if err := db.Pool.QueryRow(ctx, `SELECT flag FROM game_flags WHERE team_id = $1 AND tick_number = 1`, bravo).Scan(&bravoFlag); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT flag FROM game_flags WHERE team_id = $1 AND tick_number = 1`, nop).Scan(&nopFlag); err != nil {
+		t.Fatal(err)
+	}
+	assertOutcome(t, db, alpha, bravoFlag, SubmitAccepted)
+	assertOutcome(t, db, alpha, nopFlag, SubmitNop)
+	runTickOK(t, ctrl, ctx, 2)
+	runTickOK(t, ctrl, ctx, 3) // tick-1 flags (valid through 2) settle while 3 closes
+
+	up := 3 * math.Sqrt(3) // three green ticks, three scored teams, one store
+	type row struct{ steal, hold, up, ad float64 }
+	get := func(team uuid.UUID) row {
+		var r row
+		if err := db.Pool.QueryRow(ctx,
+			`SELECT attack, defense, sla, ad FROM game_standings WHERE team_id = $1`, team).
+			Scan(&r.steal, &r.hold, &r.up, &r.ad); err != nil {
+			t.Fatalf("standing: %v", err)
+		}
+		return r
+	}
+	near := func(a, b float64) bool { return math.Abs(a-b) < 1e-3 }
+	if r := get(alpha); !near(r.steal, 2) || r.hold != 0 || !near(r.up, up) {
+		t.Fatalf("alpha = %+v, want steal 2 (sole captor), hold 0 (nobody attacked it), up %.3f", r, up)
+	}
+	if r := get(bravo); r.steal != 0 || r.hold != 0 || !near(r.up, up) {
+		t.Fatalf("bravo = %+v, want only up (its flag was stolen)", r)
+	}
+	if r := get(charlie); !near(r.hold, 2) || !near(r.ad, 2+up) {
+		t.Fatalf("charlie = %+v, want hold 2 (held against one attacker, h = 1)", r)
+	}
+	if n := count(t, db, `SELECT COUNT(*) FROM game_standings WHERE team_id = '`+nop.String()+`'`); n != 0 {
+		t.Fatal("the nop team is on the board")
+	}
+	var held, settled int
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT flags_held, flags_settled FROM game_score_breakdown WHERE team_id = $1 AND service_id = $2`,
+		charlie, svc).Scan(&held, &settled); err != nil {
+		t.Fatalf("breakdown: %v", err)
+	}
+	if held != 1 || settled != 1 {
+		t.Fatalf("charlie breakdown held/settled = %d/%d, want 1/1", held, settled)
+	}
+
+	// an admin re-credit of a red tick is visible through EffectiveSLA with its reason
+	if _, err := db.Pool.Exec(ctx,
+		`UPDATE game_sla_checks SET status = 'DOWN' WHERE team_id = $1 AND tick_number = 3`, bravo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_sla_credits (service_id, team_id, tick_from, tick_to, reason) VALUES ($1, $2, 3, 3, 'router reboot')`,
+		svc, bravo); err != nil {
+		t.Fatal(err)
+	}
+	ticks, err := EffectiveSLA(ctx, db, bravo, 3, 3)
+	if err != nil || len(ticks) != 1 || ticks[0].Effective != "ERROR" || ticks[0].Credited != "router reboot" {
+		t.Fatalf("effective sla = %+v err %v", ticks, err)
 	}
 }
