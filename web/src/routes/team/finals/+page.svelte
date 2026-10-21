@@ -31,10 +31,9 @@
 		status: SlaStatus;
 		message: string | null;
 		latency_ms?: number;
-		// present once Finals-3 exports EffectiveSLA into /arena/me/status:
-		effective_status?: SlaStatus;
+		effective_status?: SlaStatus; // EffectiveSLA: LIVE as of v0.343.0
 		credited_reason?: string | null;
-		stores?: StoreTickEntry[]; // per-store flag fate + totals; service effective_status applies to all
+		stores?: StoreTickEntry[];
 	}
 
 	interface ServiceTimeline {
@@ -89,16 +88,27 @@
 	const SVC_STATUS_POOL: SlaStatus[] = ['OK','OK','OK','OK','OK','OK','OK','RECOVERING','MUMBLE','OK','OK','OK','FLAG_NOT_FOUND','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK'];
 
 	const MOCK_TICKS: TickEntry[] = SERVICES_META.flatMap((svc, si) =>
-		Array.from({ length: 30 }, (_, i) => ({
-			service_id: svc.id,
-			service_name: svc.name,
-			tick: 58 + i,
-			status: SVC_STATUS_POOL[(i + si * 7) % SVC_STATUS_POOL.length],
-			message: (i + si * 7) % SVC_STATUS_POOL.length === 8 ? `${svc.name.toUpperCase().replace(' ','-')}-HAVOC-04: search by tag returned no results` : null,
-			latency_ms: 200 + Math.round(Math.random() * 300),
-			flag_fate: (i % 5 === 0 ? 'stolen:3' : i % 9 === 0 ? 'tide' : 'held') as FlagFate,
-			hold_pts: (i + si * 7) % SVC_STATUS_POOL.length === 8 ? 0 : 9.8,
-		}))
+		Array.from({ length: 30 }, (_, i) => {
+			const si7 = (i + si * 7) % SVC_STATUS_POOL.length;
+			const rawStatus = SVC_STATUS_POOL[si7];
+			const credited = rawStatus === 'ORG_FAULT';
+			const fate = (i % 5 === 0 ? 'stolen:3' : i % 9 === 0 ? 'tide' : 'held') as FlagFate;
+			const hp = si7 === 8 ? 0 : 9.8;
+			return {
+				service_id: svc.id,
+				service_name: svc.name,
+				tick: 58 + i,
+				status: rawStatus,
+				effective_status: credited ? ('ORG_FAULT' as SlaStatus) : rawStatus,
+				credited_reason: credited ? 'outbreak-wave' : null,
+				message: si7 === 8 ? `${svc.name.toUpperCase().replace(' ', '-')}-HAVOC-04: search by tag returned no results` : null,
+				latency_ms: 200 + ((i * 37 + si * 13) % 300),
+				stores: [
+					{ store_index: 0, store_name: 'flag1', flag_fate: fate, steal_pts: fate === 'held' ? 0 : 1.5, hold_pts: hp, up_pts: 3.87 },
+					{ store_index: 1, store_name: 'flag2', flag_fate: (i % 3 === 0 ? 'safe' : 'held') as FlagFate, steal_pts: 0, hold_pts: hp, up_pts: 3.87 },
+				],
+			};
+		})
 	);
 
 	const MOCK_ME: ArenaMe = {
@@ -470,7 +480,7 @@
 							<span class="text-xs text-stone-600 italic">no data yet</span>
 						{/if}
 					</div>
-					<p class="mt-1 text-[0.65rem] text-stone-700">per-store flag fate available once EffectiveSLA is wired</p>
+					<p class="mt-1 text-[0.65rem] text-stone-700">per-store breakdown not yet available for this tick</p>
 				{/if}
 			</div>
 		</div>
