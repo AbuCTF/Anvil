@@ -36,6 +36,13 @@ type GameHandler struct {
 	attackMu      sync.Mutex
 	attackBody    []byte
 	attackExpires time.Time
+
+	warMu       sync.Mutex
+	warRoom     *warRoom
+	warExpires  time.Time
+	warFlightMu sync.Mutex
+	warFlight   *warRoomFlight
+	warLoad     func(context.Context) (*warRoom, error)
 }
 
 type gameStateCacheEntry struct {
@@ -45,6 +52,11 @@ type gameStateCacheEntry struct {
 }
 
 type gameStateFlight struct {
+	done chan struct{}
+	err  error
+}
+
+type warRoomFlight struct {
 	done chan struct{}
 	err  error
 }
