@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 test_dir=$(mktemp -d)
+test_bin_dir=$(mktemp -d "$repo_root/.finals-test-bin.XXXXXX")
 nginx_container=
 test_images=()
 cleanup() {
@@ -14,6 +15,7 @@ cleanup() {
         docker image rm "$image" >/dev/null 2>&1 || true
     done
     [[ -n ${test_dir:-} && -d $test_dir ]] && rm -rf -- "$test_dir"
+    [[ -n ${test_bin_dir:-} && -d $test_bin_dir ]] && rm -rf -- "$test_bin_dir"
 }
 trap cleanup EXIT
 
@@ -259,8 +261,7 @@ if ANVIL_ENV_FILE="$env_file" "$script_dir/restore.sh" "$test_dir/missing" >/dev
     exit 1
 fi
 
-mkdir -p "$test_dir/bin"
-cat >"$test_dir/bin/docker" <<'EOF'
+cat >"$test_bin_dir/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 args=" $* "
@@ -276,16 +277,16 @@ case "$args" in
     *) echo "unexpected docker invocation: $*" >&2; exit 1 ;;
 esac
 EOF
-chmod 755 "$test_dir/bin/docker"
+chmod 755 "$test_bin_dir/docker"
 printf 'stored artifact\n' >"$test_dir/storage/artifact.txt"
-backup_set=$(ANVIL_ENV_FILE="$env_file" PATH="$test_dir/bin:$PATH" "$script_dir/backup.sh")
+backup_set=$(ANVIL_ENV_FILE="$env_file" PATH="$test_bin_dir:$PATH" "$script_dir/backup.sh")
 (
     cd -- "$backup_set"
     sha256sum --check --strict SHA256SUMS >/dev/null
 )
 mv -- "$test_dir/storage" "$test_dir/storage-source"
 mkdir "$test_dir/storage"
-ANVIL_RESTORE_CONFIRM=empty-target ANVIL_ENV_FILE="$env_file" PATH="$test_dir/bin:$PATH" \
+ANVIL_RESTORE_CONFIRM=empty-target ANVIL_ENV_FILE="$env_file" PATH="$test_bin_dir:$PATH" \
     "$script_dir/restore.sh" "$backup_set" >/dev/null
 cmp "$test_dir/storage-source/artifact.txt" "$test_dir/storage/artifact.txt"
 
