@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy, tick } from 'svelte';
 	import { platformInfo } from '$lib/stores/platform';
-	import { authToken } from '$lib/stores/auth';
+	import { auth } from '$lib/stores/auth';
 
 	interface FinalsServiceBreakdown {
 		slug: string;
@@ -43,7 +43,6 @@
 	let animating = false;
 
 	$: isFinalsMode = !!$platformInfo?.game_state;
-	$: isFrozen = !!$platformInfo?.game_frozen;
 
 	// currently shown rows in display order (top=1st), only revealed ones
 	$: displayed = queue.slice(0, revealed).reverse();
@@ -59,7 +58,7 @@
 		error = '';
 		try {
 			const headers: Record<string, string> = {};
-			if ($authToken) headers['Authorization'] = `Bearer ${$authToken}`;
+			if ($auth.accessToken) headers['Authorization'] = `Bearer ${$auth.accessToken}`;
 			const res = await fetch('/api/v1/arena/scoreboard', { headers });
 			if (!res.ok) throw new Error(`${res.status}`);
 			const data = await res.json();
@@ -236,7 +235,7 @@
 			{/each}
 
 			<!-- pending slots placeholder -->
-			{#each Array(Math.max(0, queue.length - revealed)).fill(0) as _, i}
+			{#each Array(Math.max(0, queue.length - revealed)).keys() as i}
 				<div class="flex items-center gap-4 rounded-lg border border-stone-900 bg-stone-950/50 px-5 py-4">
 					<div class="w-10 shrink-0 text-center">
 						<span class="text-stone-800">#{queue.length - revealed - i}</span>
