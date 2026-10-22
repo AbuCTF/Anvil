@@ -5,10 +5,14 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/../.." && pwd)
 test_dir=$(mktemp -d)
 nginx_container=
+test_images=()
 cleanup() {
     if [[ -n $nginx_container ]]; then
         docker container rm --force "$nginx_container" >/dev/null 2>&1 || true
     fi
+    for image in "${test_images[@]}"; do
+        docker image rm "$image" >/dev/null 2>&1 || true
+    done
     [[ -n ${test_dir:-} && -d $test_dir ]] && rm -rf -- "$test_dir"
 }
 trap cleanup EXIT
@@ -35,6 +39,10 @@ if [[ $(awk 'toupper($1) == "FROM" && $2 ~ /^node:/ { print $2 }' \
 fi
 
 while read -r image; do
+    if [[ $image == 'anvil-finals-api:${ANVIL_IMAGE_REVISION:?ANVIL_IMAGE_REVISION_required}' ||
+        $image == 'anvil-finals-web:${ANVIL_IMAGE_REVISION:?ANVIL_IMAGE_REVISION_required}' ]]; then
+        continue
+    fi
     if [[ ! $image =~ @sha256:[[:xdigit:]]{64}$ ]]; then
         echo "test: unpinned finals runtime image: $image" >&2
         exit 1
@@ -48,6 +56,11 @@ systemd-analyze verify \
     "$test_dir/anvil-finals.service" \
     "$test_dir/anvil-finals-backup.service" \
     "$test_dir/anvil-finals-backup.timer"
+[[ $(grep -Ec '^Exec(Start|Reload)=/opt/anvil/current/deployments/finals/preflight\.sh$' \
+    "$script_dir/anvil-finals.service") == 2 ]]
+[[ $(grep -Ec '^Exec(Start|Reload)=.* up .* --no-build .* --wait$' \
+    "$script_dir/anvil-finals.service") == 2 ]]
+! grep -Eq '^Exec(Start|Reload)=.* --build([[:space:]]|$)' "$script_dir/anvil-finals.service"
 
 mkdir -p "$test_dir/database" "$test_dir/storage" "$test_dir/backups" "$test_dir/tls"
 openssl req -x509 -newkey rsa:2048 -nodes -days 8 \
@@ -57,10 +70,20 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 8 \
     -addext 'subjectAltName=DNS:finals.h7tex.com' >/dev/null 2>&1
 chmod 600 "$test_dir/tls/privkey.pem"
 
+image_revision=$(openssl rand -hex 20)
+api_image="anvil-finals-api:$image_revision"
+web_image="anvil-finals-web:$image_revision"
+test_images=("$api_image" "$web_image")
+nginx_image=nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
+docker pull "$nginx_image" >/dev/null
+docker image tag "$nginx_image" "$api_image"
+docker image tag "$nginx_image" "$web_image"
+
 env_file="$test_dir/finals.env"
 cat >"$env_file" <<EOF
 ANVIL_PRIVATE_ADDRESS=127.0.0.1
 PUBLIC_API_URL=https://finals.h7tex.com
+ANVIL_IMAGE_REVISION=$image_revision
 ANVIL_DATABASE_PASSWORD=11111111111111111111111111111111
 ANVIL_JWT_SECRET=22222222222222222222222222222222
 ANVIL_SECRETS_ENCRYPTION_KEY=33333333333333333333333333333333
@@ -89,6 +112,27 @@ expect_preflight_failure() {
         exit 1
     fi
 }
+
+missing_revision_env="$test_dir/missing-revision.env"
+grep -v '^ANVIL_IMAGE_REVISION=' "$env_file" >"$missing_revision_env"
+expect_preflight_failure "$missing_revision_env" "a missing image revision"
+
+for invalid_revision in abcdef ABCDEF0123456789ABCDEF0123456789ABCDEF01; do
+    invalid_revision_env="$test_dir/invalid-revision-$invalid_revision.env"
+    sed "s/^ANVIL_IMAGE_REVISION=.*/ANVIL_IMAGE_REVISION=$invalid_revision/" \
+        "$env_file" >"$invalid_revision_env"
+    expect_preflight_failure "$invalid_revision_env" "an invalid image revision"
+done
+
+missing_image_revision=$(openssl rand -hex 20)
+while docker image inspect "anvil-finals-api:$missing_image_revision" >/dev/null 2>&1 ||
+    docker image inspect "anvil-finals-web:$missing_image_revision" >/dev/null 2>&1; do
+    missing_image_revision=$(openssl rand -hex 20)
+done
+missing_image_env="$test_dir/missing-image.env"
+sed "s/^ANVIL_IMAGE_REVISION=.*/ANVIL_IMAGE_REVISION=$missing_image_revision/" \
+    "$env_file" >"$missing_image_env"
+expect_preflight_failure "$missing_image_env" "a revision without both prebuilt images"
 
 missing_gate_env="$test_dir/missing-gate.env"
 grep -v '^ANVIL_VPN_ENABLED=' "$env_file" >"$missing_gate_env"
@@ -160,6 +204,9 @@ grep -Fq "context: $repo_root" "$rendered"
 grep -Fq "source: $test_dir/database" "$rendered"
 grep -Fq 'postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685' "$rendered"
 grep -Fq 'nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236' "$rendered"
+grep -Fq "image: anvil-finals-api:$image_revision" "$rendered"
+grep -Fq "image: anvil-finals-web:$image_revision" "$rendered"
+[[ $(grep -c 'pull_policy: never' "$rendered") == 2 ]]
 grep -Fq 'ANVIL_VPN_ENABLED: "false"' "$rendered"
 grep -Fq 'ANVIL_VPN_PEER_CONTROL: external' "$rendered"
 grep -Fq 'ANVIL_VPN_PUBLIC_ENDPOINT: vpn.h7tex.com:443' "$rendered"
@@ -188,7 +235,6 @@ nginx_options=(
     --volume "$test_dir/tls/fullchain.pem:/run/anvil/tls/fullchain.pem:ro"
     --volume "$test_dir/tls/privkey.pem:/run/anvil/tls/privkey.pem:ro"
 )
-nginx_image=nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
 docker run --rm "${nginx_options[@]}" --entrypoint nginx "$nginx_image" -t
 
 nginx_container="anvil-finals-nginx-test-$BASHPID"

@@ -26,6 +26,11 @@ The API container does not receive the Docker socket, host PID namespace, SSH
 keys or cloud credentials. It receives only its database password, JWT signing
 secret, encryption key and game internal token. TLS keys are mounted only into
 Nginx. PostgreSQL and Nginx base images are pinned by manifest digest.
+The API and web images are prebuilt as
+`anvil-finals-api:<40-character-release-sha>` and
+`anvil-finals-web:<40-character-release-sha>`. Their Compose build definitions
+exist only for that explicit bake step. The service unit runs with `--no-build`,
+and preflight refuses to start unless both exact local tags exist.
 
 VPN enrollment is an explicit, default-off activation gate. The production
 profile fixes peer control to `external`, the participant endpoint to
@@ -40,10 +45,10 @@ deployments/finals/test.sh
 go test ./internal/config
 ```
 
-The deployment test renders Compose, checks the privilege boundary, validates
-the systemd units, starts the hardened Nginx image, and exercises backup and
-empty-target restore with an isolated command fixture. It does not start a
-production stack.
+The deployment test renders Compose, checks the image and privilege boundaries,
+validates the no-build systemd units, starts the hardened Nginx image, and
+exercises backup and empty-target restore with an isolated command fixture. It
+does not start a production stack.
 
 ## Host preparation
 
@@ -148,11 +153,26 @@ must remain valid for at least seven days when preflight runs. Renewals replace
 both files atomically, run preflight, and reload `anvil-finals.service`.
 
 The service subnet normally has no egress. During commissioning only, enable the
-reviewed temporary NAT path, record its start time and operator, pull the pinned
-PostgreSQL/Nginx manifests, and build the exact reviewed Anvil release. Disable
-the NAT path afterward and prove a preflight, service restart and health check
-with egress blocked. Every later release must either use the offline mirror or
-repeat that controlled window; never leave general egress enabled for the event.
+reviewed temporary NAT path and record its start time and operator. Set
+`ANVIL_IMAGE_REVISION` in `/etc/anvil/finals.env` to the full lowercase commit
+SHA of the reviewed release, pull the pinned PostgreSQL/Nginx manifests, and
+explicitly bake the revision-tagged application images:
+
+```bash
+release_sha=$(git -C /opt/anvil/current rev-parse HEAD)
+test "$release_sha" = "$(sudo sed -n 's/^ANVIL_IMAGE_REVISION=//p' /etc/anvil/finals.env)"
+sudo docker compose --project-name anvil-finals \
+  --project-directory /opt/anvil/current/deployments/finals \
+  --env-file /etc/anvil/finals.env \
+  -f /opt/anvil/current/deployments/finals/compose.yaml build api web
+sudo docker image inspect \
+  "anvil-finals-api:$release_sha" "anvil-finals-web:$release_sha" >/dev/null
+```
+
+Disable the NAT path afterward and prove preflight, service restart and health
+checks with egress blocked. Every later release must either use the offline
+mirror or repeat that controlled window; never leave general egress enabled for
+the event. Neither systemd start nor reload builds an image.
 
 Generate four independent values; do not derive one from another:
 
@@ -186,7 +206,7 @@ sudo systemctl daemon-reload
 ```
 
 Run the preflight before the first start and after every configuration or
-certificate change:
+certificate change. The service unit repeats it before every start and reload:
 
 ```bash
 sudo /opt/anvil/current/deployments/finals/preflight.sh
@@ -301,9 +321,9 @@ encrypted off-site layer, not a live-platform dependency.
 ## Restore rehearsal and recovery
 
 Never restore over the only production copy. Provision a replacement host or
-new data volume, install the same release and secrets, create empty storage and
-backup directories, and copy one verified backup set there. Do not start the
-platform service.
+new data volume, install the same release and secrets, import or build its exact
+revision-tagged API and web images, create empty storage and backup directories,
+and copy one verified backup set there. Do not start the platform service.
 
 On the empty target only:
 
@@ -331,15 +351,18 @@ For an upgrade:
 
 1. Fetch and verify the reviewed commit on an operator machine.
 2. Place that exact commit in a new `/opt/anvil/releases/<git-sha>` directory.
-3. Run a backup and verify its manifest.
-4. Point `/opt/anvil/current` at the new release.
-5. Run preflight, then `sudo systemctl reload anvil-finals.service`.
-6. Run health, admin readiness and the test-team flow.
+3. Set `ANVIL_IMAGE_REVISION` to that full SHA and explicitly build or import
+   both revision-tagged images. Verify both with `docker image inspect`.
+4. Run a backup and verify its manifest.
+5. Point `/opt/anvil/current` at the new release.
+6. Run preflight, then `sudo systemctl reload anvil-finals.service`.
+7. Run health, admin readiness and the test-team flow.
 
-If application checks fail, point `current` back to the prior release and reload.
-Do not roll the database backward in place. Repository migrations are additive;
-if a data recovery is genuinely required, restore the saved set to a new target,
-validate it, and switch ingress only after approval.
+If application checks fail, restore `ANVIL_IMAGE_REVISION` to the prior full SHA,
+verify both prior tags still exist, point `current` back to that release, and
+reload. Do not roll the database backward in place. Repository migrations are
+additive; if a data recovery is genuinely required, restore the saved set to a
+new target, validate it, and switch ingress only after approval.
 
 Stopping the service preserves the database volume and host storage:
 

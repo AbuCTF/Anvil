@@ -24,6 +24,7 @@ set +a
 required=(
     ANVIL_PRIVATE_ADDRESS
     PUBLIC_API_URL
+    ANVIL_IMAGE_REVISION
     ANVIL_DATABASE_PASSWORD
     ANVIL_JWT_SECRET
     ANVIL_SECRETS_ENCRYPTION_KEY
@@ -38,6 +39,9 @@ required=(
 for name in "${required[@]}"; do
     [[ -n ${!name:-} ]] || fail "$name is required"
 done
+
+[[ $ANVIL_IMAGE_REVISION =~ ^[0-9a-f]{40}$ ]] ||
+    fail "ANVIL_IMAGE_REVISION must be exactly 40 lowercase hexadecimal characters"
 
 [[ $ANVIL_VPN_ENABLED == true || $ANVIL_VPN_ENABLED == false ]] ||
     fail "ANVIL_VPN_ENABLED must be true or false"
@@ -101,6 +105,11 @@ fi
 
 docker info >/dev/null 2>&1 || fail "Docker daemon is not available"
 docker compose up --help | grep -q -- '--wait' || fail "Docker Compose does not support up --wait"
+for image in \
+    "anvil-finals-api:$ANVIL_IMAGE_REVISION" \
+    "anvil-finals-web:$ANVIL_IMAGE_REVISION"; do
+    docker image inspect "$image" >/dev/null 2>&1 || fail "prebuilt image is missing: $image"
+done
 docker compose \
     --project-name anvil-finals \
     --project-directory "$script_dir" \

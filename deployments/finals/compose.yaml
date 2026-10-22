@@ -24,6 +24,8 @@ services:
     restart: unless-stopped
 
   api:
+    image: anvil-finals-api:${ANVIL_IMAGE_REVISION:?ANVIL_IMAGE_REVISION_required}
+    pull_policy: never
     build:
       context: ../..
       dockerfile: deployments/docker/Dockerfile.api
@@ -70,6 +72,8 @@ services:
     restart: unless-stopped
 
   web:
+    image: anvil-finals-web:${ANVIL_IMAGE_REVISION:?ANVIL_IMAGE_REVISION_required}
+    pull_policy: never
     build:
       context: ../../web
       dockerfile: ../deployments/docker/Dockerfile.web
