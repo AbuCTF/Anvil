@@ -1,322 +1,539 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onMount } from 'svelte';
 	import Icon from '@iconify/svelte';
-	import { platformInfo } from '$lib/stores/platform';
+	import EmptyState from '$lib/components/EmptyState.svelte';
+	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import { API_BASE } from '$lib/config';
 
-	// ---- types ---------------------------------------------------------------
-	type SvcStatus = 'up' | 'mumble' | 'down';
+	type ServiceStatus = 'up' | 'mumble' | 'down';
+
+	interface WarTeam {
+		id: string;
+		name: string;
+		is_nop: boolean;
+	}
+
+	interface WarService {
+		slug: string;
+		name: string;
+		port: number;
+	}
+
 	interface GridCell {
 		team_id: string;
 		service_slug: string;
-		status: SvcStatus;
-		breach_flash: boolean; // victim saw breach in last 60s (delayed, no attacker name)
+		status: ServiceStatus;
+		breach_flash: boolean;
 		is_own: boolean;
 	}
+
 	interface HillState {
 		slug: string;
 		name: string;
 		holder_name: string | null;
 		held_ticks: number;
-		round_ends_in: number; // seconds
+		round_ends_in: number;
 		is_active: boolean;
 	}
-	// /api/v1/arena/koth/scores shape (P1-confirmed, v0.344.0)
-	interface KothEntry {
-		hill_id: string;
-		hill: string;
-		team_id: string | null;
-		team_name: string | null;
-		held_ticks: number;
-		score: number;
-	}
+
 	interface EventEntry {
-		kind: 'first_blood' | 'shield_up' | 'crown' | 'service_down' | 'koth_flip';
-		team_name: string;
+		kind: string;
+		team_name?: string;
 		service?: string;
 		hill?: string;
+		text?: string;
 		tick: number;
 		ts: string;
 	}
+
 	interface WarRoomState {
 		tick: number;
-		teams: { id: string; name: string }[];
-		services: { slug: string; name: string; port: number }[];
+		view_tick: number;
+		frozen: boolean;
+		teams: WarTeam[];
+		services: WarService[];
 		grid: GridCell[];
 		hills: HillState[];
 		events: EventEntry[];
 	}
 
-	// ---- mock data -----------------------------------------------------------
-	const TEAMS = [
-		'ByteBrigade','CipherPunk','RedSignal','NullRoute','PacketStorm',
-		'SegFault','DeepProbe','VoidMatrix','IronSocket','GhostBit',
-		'LoopBreak','NetMancer','HexWarden','BinVector','DarkShell'
-	];
-	const SERVICES = [
-		{ slug: 'harbor-id', name: 'Harbor ID', port: 8001 },
-		{ slug: 'tidepay', name: 'TidePay', port: 8002 },
-		{ slug: 'bollard', name: 'Bollard', port: 8003 },
-		{ slug: 'berth-board', name: 'Berth Board', port: 8004 },
-		{ slug: 'dockyard', name: 'Dockyard', port: 8005 },
-		{ slug: 'tariff-studio', name: 'Tariff Studio', port: 8006 },
-	];
-
-	function mkGrid(): GridCell[] {
-		const cells: GridCell[] = [];
-		const statusPool: SvcStatus[] = ['up','up','up','up','up','up','up','up','mumble','down'];
-		for (let ti = 0; ti < TEAMS.length; ti++) {
-			for (let si = 0; si < SERVICES.length; si++) {
-				cells.push({
-					team_id: `t${ti}`,
-					service_slug: SERVICES[si].slug,
-					status: statusPool[(ti * 3 + si * 7) % statusPool.length],
-					breach_flash: Math.random() < 0.08,
-					is_own: ti === 0
-				});
-			}
-		}
-		return cells;
+	interface EventMeta {
+		icon: string;
+		className: string;
+		label: string;
 	}
 
-	const MOCK_STATE: WarRoomState = {
-		tick: 87,
-		teams: TEAMS.map((name, i) => ({ id: `t${i}`, name })),
-		services: SERVICES,
-		grid: mkGrid(),
-		hills: [
-			{ slug: 'gridwatch-ii', name: 'GridWatch II', holder_name: 'ByteBrigade', held_ticks: 22, round_ends_in: 47, is_active: true },
-			{ slug: 'hostile-takeover-ii', name: 'Hostile Takeover II', holder_name: 'CipherPunk', held_ticks: 17, round_ends_in: 0, is_active: true },
-			{ slug: 'harbor-master', name: 'Harbor Master', holder_name: null, held_ticks: 0, round_ends_in: 0, is_active: false },
-		],
-		events: [
-			{ kind: 'crown', team_name: 'ByteBrigade', hill: 'GridWatch II', tick: 86, ts: new Date(Date.now() - 120000).toISOString() },
-			{ kind: 'shield_up', team_name: 'NullRoute', service: 'TidePay', tick: 85, ts: new Date(Date.now() - 240000).toISOString() },
-			{ kind: 'first_blood', team_name: 'SegFault', service: 'Harbor ID', tick: 84, ts: new Date(Date.now() - 360000).toISOString() },
-			{ kind: 'koth_flip', team_name: 'CipherPunk', hill: 'Hostile Takeover II', tick: 83, ts: new Date(Date.now() - 480000).toISOString() },
-			{ kind: 'service_down', team_name: 'DarkShell', service: 'Bollard', tick: 82, ts: new Date(Date.now() - 600000).toISOString() },
-		]
+	const POLL_MS = 5000;
+	const IDLE_POLL_MS = 30000;
+	const REQUEST_TIMEOUT_MS = 10000;
+
+	const statusMeta: Record<ServiceStatus, { color: string; label: string }> = {
+		up: { color: '#4b7355', label: 'Up' },
+		mumble: { color: '#9c7a30', label: 'Degraded' },
+		down: { color: '#b0453a', label: 'Down' },
 	};
 
-	// ---- state ---------------------------------------------------------------
-	let state: WarRoomState = MOCK_STATE;
-	let kothEntries: KothEntry[] = []; // wired: /arena/koth/scores
+	let state: WarRoomState | null = null;
 	let now = Date.now();
-	let clockInterval: ReturnType<typeof setInterval>;
-	let pollInterval: ReturnType<typeof setInterval>;
+	let snapshotAt = Date.now();
+	let loading = true;
+	let unavailable = false;
+	let error = '';
+	let refreshError = '';
+	let inFlight = false;
+	let disposed = false;
+	let timer: ReturnType<typeof setTimeout>;
+	let requestController: AbortController | null = null;
 
-	$: isFinalsMode = !!$platformInfo?.game_state;
-
-	// cell lookup
-	$: cellMap = new Map(state.grid.map(c => [`${c.team_id}:${c.service_slug}`, c]));
-
-	// prefer live KotH entries if loaded; fall back to mock hills
-	$: hills = kothEntries.length
-		? kothEntries.map(e => ({
-			slug: e.hill_id,
-			name: e.hill,
-			holder_name: e.team_name,
-			held_ticks: e.held_ticks,
-			round_ends_in: 0,
-			is_active: true,
-		}))
-		: state.hills;
+	$: cellMap = new Map((state?.grid ?? []).map((cell) => [`${cell.team_id}:${cell.service_slug}`, cell]));
+	$: delayedTicks = state ? Math.max(0, state.tick - state.view_tick) : 0;
+	$: ownTeamID = state?.grid.find((cell) => cell.is_own)?.team_id ?? '';
+	$: serviceCounts = (state?.grid ?? []).reduce(
+		(counts, cell) => {
+			counts[cell.status]++;
+			return counts;
+		},
+		{ up: 0, mumble: 0, down: 0 } as Record<ServiceStatus, number>,
+	);
 
 	function authHeaders(): Record<string, string> {
 		const token = typeof localStorage !== 'undefined' ? localStorage.getItem('accessToken') : null;
 		return token ? { Authorization: `Bearer ${token}` } : {};
 	}
 
-	async function poll() {
-		if (!isFinalsMode) return;
+	function schedule() {
+		clearTimeout(timer);
+		if (disposed || document.visibilityState !== 'visible') return;
+		timer = setTimeout(load, state ? POLL_MS : IDLE_POLL_MS);
+	}
+
+	async function load() {
+		if (inFlight || disposed) return;
+		inFlight = true;
+		const controller = new AbortController();
+		requestController = controller;
+		let timedOut = false;
+		const requestTimeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, REQUEST_TIMEOUT_MS);
+
 		try {
-			const res = await fetch(`${API_BASE}/api/v1/arena/war-room`, { headers: authHeaders() });
-			if (res.ok) state = await res.json();
-		} catch { /* keep mock */ }
+			const response = await fetch(`${API_BASE}/api/v1/arena/war-room`, {
+				headers: authHeaders(),
+				signal: controller.signal,
+			});
+			if (response.status === 404) {
+				state = null;
+				unavailable = true;
+				error = '';
+				refreshError = '';
+				return;
+			}
+			if (!response.ok) throw new Error(`War Room unavailable (HTTP ${response.status})`);
+
+			state = (await response.json()) as WarRoomState;
+			snapshotAt = Date.now();
+			unavailable = false;
+			error = '';
+			refreshError = response.headers.get('X-Anvil-Cache') === 'STALE' ? 'Live updates are delayed' : '';
+		} catch (cause) {
+			if (disposed || (controller.signal.aborted && !timedOut)) return;
+			const message = timedOut
+				? 'War Room request timed out'
+				: cause instanceof Error
+					? cause.message
+					: 'War Room unavailable';
+			if (state) refreshError = message;
+			else error = message;
+		} finally {
+			clearTimeout(requestTimeout);
+			if (requestController === controller) requestController = null;
+			loading = false;
+			inFlight = false;
+			schedule();
+		}
 	}
 
-	async function loadKothScores() {
-		if (!isFinalsMode) return;
-		try {
-			const res = await fetch(`${API_BASE}/api/v1/arena/koth/scores`, { headers: authHeaders() });
-			if (res.ok) { const d = await res.json(); kothEntries = d.hills ?? []; }
-		} catch { /* keep current */ }
+	function cellFor(teamID: string, serviceSlug: string): GridCell | undefined {
+		return cellMap.get(`${teamID}:${serviceSlug}`);
 	}
 
-	function cellStatus(teamId: string, svcSlug: string): GridCell | undefined {
-		return cellMap.get(`${teamId}:${svcSlug}`);
+	function eventMeta(kind: string): EventMeta {
+		switch (kind) {
+			case 'first_blood':
+				return {
+					icon: 'mdi:flag-checkered',
+					className: 'text-[#e0483c]',
+					label: 'First blood',
+				};
+			case 'shield_up':
+				return {
+					icon: 'mdi:shield-check',
+					className: 'text-[#78a584]',
+					label: 'Shield up',
+				};
+			case 'crown':
+				return {
+					icon: 'mdi:crown',
+					className: 'text-amber-500/80',
+					label: 'Crown',
+				};
+			case 'hill_open':
+				return {
+					icon: 'mdi:gate-open',
+					className: 'text-stone-400',
+					label: 'Hill opened',
+				};
+			case 'hill_close':
+				return {
+					icon: 'mdi:gate',
+					className: 'text-stone-500',
+					label: 'Hill closed',
+				};
+			case 'advisory':
+				return {
+					icon: 'mdi:information-outline',
+					className: 'text-[#6f91a8]',
+					label: 'Advisory',
+				};
+			default:
+				return {
+					icon: 'mdi:bell-outline',
+					className: 'text-stone-500',
+					label: 'Event',
+				};
+		}
 	}
 
-	const statusColor: Record<SvcStatus, string> = {
-		up: 'bg-[#4b7355]',
-		mumble: 'bg-[#9c7a30]',
-		down: 'bg-[#b0453a]'
-	};
-	const statusBorder: Record<SvcStatus, string> = {
-		up: 'border-[#4b7355]/60',
-		mumble: 'border-[#9c7a30]/60',
-		down: 'border-[#b0453a]/60'
-	};
-
-	const eventIcon: Record<EventEntry['kind'], { icon: string; cls: string; label: string }> = {
-		first_blood: { icon: 'mdi:flag-checkered', cls: 'text-[#e08a85]', label: 'FIRST BLOOD' },
-		shield_up: { icon: 'mdi:shield-check', cls: 'text-[#9bcea8]', label: 'SHIELD UP' },
-		crown: { icon: 'mdi:crown', cls: 'text-amber-400', label: 'CROWN' },
-		service_down: { icon: 'mdi:server-off', cls: 'text-[#b0453a]', label: 'DOWN' },
-		koth_flip: { icon: 'mdi:swap-horizontal', cls: 'text-stone-400', label: 'HILL FLIP' }
-	};
-
-	function eventAge(ts: string): string {
-		const s = Math.round((now - Date.parse(ts)) / 1000);
-		if (s < 60) return `${s}s`;
-		if (s < 3600) return `${Math.floor(s / 60)}m`;
-		return `${Math.floor(s / 3600)}h`;
+	function eventSummary(event: EventEntry): string {
+		if (event.text) return event.text;
+		return [event.team_name, event.service, event.hill].filter(Boolean).join(' / ');
 	}
 
-	function fmtHillTimer(secs: number): string {
-		if (secs <= 0) return '--:--';
-		return `${String(Math.floor(secs / 60)).padStart(2,'0')}:${String(secs % 60).padStart(2,'0')}`;
+	function eventKey(event: EventEntry): string {
+		return `${event.kind}:${event.tick}:${event.ts}:${event.team_name ?? ''}:${event.service ?? ''}:${event.hill ?? ''}`;
+	}
+
+	function eventAge(timestamp: string): string {
+		const parsed = Date.parse(timestamp);
+		if (!Number.isFinite(parsed)) return '-';
+		const seconds = Math.max(0, Math.floor((now - parsed) / 1000));
+		if (seconds < 60) return `${seconds}s`;
+		if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+		return `${Math.floor(seconds / 3600)}h`;
+	}
+
+	function hillSeconds(hill: HillState): number {
+		return Math.max(0, hill.round_ends_in - Math.floor((now - snapshotAt) / 1000));
+	}
+
+	function formatTimer(seconds: number): string {
+		return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 	}
 
 	onMount(() => {
-		clockInterval = setInterval(() => { now = Date.now(); }, 1000);
-		pollInterval = setInterval(() => { poll(); loadKothScores(); }, 15000);
-		loadKothScores();
-	});
-	onDestroy(() => {
-		clearInterval(clockInterval);
-		clearInterval(pollInterval);
+		disposed = false;
+		const clock = setInterval(() => (now = Date.now()), 1000);
+		const onVisibilityChange = () => {
+			clearTimeout(timer);
+			requestController?.abort();
+			if (document.visibilityState === 'visible') load();
+		};
+
+		load();
+		document.addEventListener('visibilitychange', onVisibilityChange);
+		return () => {
+			disposed = true;
+			clearInterval(clock);
+			clearTimeout(timer);
+			requestController?.abort();
+			document.removeEventListener('visibilitychange', onVisibilityChange);
+		};
 	});
 </script>
 
-<svelte:head><title>War Room - Anvil</title></svelte:head>
+<svelte:head>
+	<title>War Room - Anvil</title>
+</svelte:head>
 
-{#if !isFinalsMode}
-	<div class="flex items-center justify-center py-24 text-stone-600 text-sm">War Room is only available during the finals.</div>
-{:else}
-<div class="w-full px-4 sm:px-6 lg:px-8 py-6 min-h-screen bg-stone-950">
-	<!-- header bar -->
-	<div class="mb-4 flex flex-wrap items-center gap-3">
-		<h1 class="text-lg font-semibold text-stone-100">War Room</h1>
-		<span class="rounded border border-stone-800 bg-stone-900/60 px-2.5 py-0.5 text-xs tabular-nums text-stone-400">Tick {state.tick}</span>
-		<span class="text-xs text-stone-600">Delayed 1 tick. Attacker identities hidden during game.</span>
-		<a href="/arena" class="ml-auto text-xs text-stone-600 hover:text-stone-400 transition-colors">Arena</a>
-		<a href="/scoreboard" class="text-xs text-stone-600 hover:text-stone-400 transition-colors">Scoreboard</a>
-	</div>
-
-	<div class="grid gap-4 lg:grid-cols-[1fr_20rem]">
-		<!-- left: service status grid -->
-		<div>
-			<!-- service header row -->
-			<div class="mb-1 overflow-x-auto">
-				<table class="w-full text-xs">
-					<thead>
-						<tr class="text-stone-600">
-							<th class="w-28 shrink-0 py-1 pr-2 text-left">Team</th>
-							{#each state.services as svc}
-								<th class="px-1 py-1 text-center font-normal truncate max-w-[3.5rem]" title="{svc.name} :{svc.port}">{svc.name}</th>
-							{/each}
-						</tr>
-					</thead>
-					<tbody class="divide-y divide-stone-900">
-						{#each state.teams as team}
-							{@const cells = state.services.map(s => cellStatus(team.id, s.slug))}
-							<tr class="group">
-								<td class="truncate py-1 pr-2 text-xs text-stone-400 max-w-[7rem]" title={team.name}>{team.name}</td>
-								{#each cells as cell, si}
-									{@const s = cell?.status ?? 'down'}
-									<td class="px-1 py-0.5">
-										<div
-											class="relative h-5 w-6 mx-auto rounded-sm border {statusColor[s]} {statusBorder[s]} {cell?.breach_flash ? 'animate-pulse ring-1 ring-red-400/60' : ''} {cell?.is_own ? 'ring-1 ring-amber-400/40' : ''}"
-											title="{team.name} / {state.services[si]?.name ?? ''}: {s}"
-										>
-											{#if cell?.breach_flash}
-												<span class="absolute inset-0 flex items-center justify-center text-[0.4rem] font-bold text-white/80">!</span>
-											{/if}
-										</div>
-									</td>
-								{/each}
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-
-			<!-- legend -->
-			<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[0.65rem] text-stone-600">
-				<span class="inline-flex items-center gap-1"><span class="h-2 w-3 rounded-sm bg-[#4b7355]"></span>up</span>
-				<span class="inline-flex items-center gap-1"><span class="h-2 w-3 rounded-sm bg-[#9c7a30]"></span>mumble</span>
-				<span class="inline-flex items-center gap-1"><span class="h-2 w-3 rounded-sm bg-[#b0453a]"></span>down</span>
-				<span class="inline-flex items-center gap-1"><span class="h-2 w-3 rounded-sm bg-[#b0453a] ring-1 ring-red-400/60"></span>breach detected</span>
-				<span class="inline-flex items-center gap-1"><span class="h-2 w-3 rounded-sm bg-[#4b7355] ring-1 ring-amber-400/40"></span>your service</span>
+<div class="w-full px-4 py-6 sm:px-6 lg:px-8 2xl:px-10">
+	{#if loading}
+		<div class="space-y-4" aria-label="Loading War Room">
+			<div class="h-9 w-64 animate-pulse rounded-md bg-stone-900/60"></div>
+			<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+				<div class="h-96 animate-pulse rounded-lg border border-stone-800 bg-stone-900/40"></div>
+				<div class="h-96 animate-pulse rounded-lg border border-stone-800 bg-stone-900/40"></div>
 			</div>
 		</div>
-
-		<!-- right: hills + event ticker -->
-		<div class="flex flex-col gap-4">
-			<!-- hills panel -->
-			<div class="rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden">
-				<div class="border-b border-stone-800 px-4 py-2.5 flex items-center gap-2">
-					<Icon icon="mdi:crown" class="h-4 w-4 text-amber-400" />
-					<span class="text-sm font-medium text-stone-300">Hills</span>
+	{:else if error}
+		<div class="rounded-lg border border-stone-800 bg-stone-900/40 p-6 text-center">
+			<Icon icon="mdi:alert-circle-outline" class="mx-auto mb-3 h-10 w-10 text-stone-500" />
+			<p class="text-sm text-stone-400">{error}</p>
+			<p class="mt-1 text-xs text-stone-600">
+				Retrying every {IDLE_POLL_MS / 1000}s…
+			</p>
+		</div>
+	{:else if unavailable || !state}
+		<PageHeader title="War Room" compact>
+			<a
+				slot="actions"
+				href="/arena"
+				class="inline-flex items-center gap-1.5 text-xs text-stone-500 transition-colors hover:text-stone-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/60"
+			>
+				<OpticalIcon icon="mdi:arrow-left" size={13} box={13} />
+				<span class="optical-label">Arena overview</span>
+			</a>
+		</PageHeader>
+		<EmptyState icon="mdi:shield-off-outline" text="War Room is not available for this event." />
+	{:else}
+		<PageHeader title="War Room" compact>
+			<div slot="actions" class="flex flex-wrap items-center justify-end gap-2">
+				<a
+					href="/arena"
+					class="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-stone-500 transition-colors hover:bg-stone-800/30 hover:text-stone-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/60"
+				>
+					<OpticalIcon icon="mdi:arrow-left" size={13} box={13} />
+					<span class="optical-label">Arena overview</span>
+				</a>
+				<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/60 px-3 py-1.5 text-xs">
+					<span class="metadata-label text-stone-500">Tick</span>
+					<span class="optical-label font-semibold tabular-nums text-stone-100">{state.tick}</span>
 				</div>
-				<div class="divide-y divide-stone-800/60">
-					{#each hills as hill}
-						<div class="px-4 py-3">
-							<div class="flex items-center gap-2 mb-1">
-								<span class="text-xs font-medium text-stone-200 truncate flex-1">{hill.name}</span>
-								{#if !hill.is_active}
-									<span class="text-[0.6rem] rounded bg-stone-800 px-1.5 py-0.5 text-stone-600">not released</span>
-								{:else if hill.holder_name}
-									<span class="text-[0.6rem] font-mono tabular-nums text-stone-500">{fmtHillTimer(hill.round_ends_in - Math.round((now - Date.now()) / 1000))}</span>
-								{/if}
-							</div>
-							{#if hill.is_active}
-								<div class="flex items-center gap-2 text-xs">
-									{#if hill.holder_name}
-										<Icon icon="mdi:crown" class="h-3 w-3 text-amber-400 shrink-0" />
-										<span class="font-medium text-stone-200 truncate">{hill.holder_name}</span>
-										<span class="tabular-nums text-stone-600 ml-auto">{hill.held_ticks}t</span>
+				<span
+					class="inline-flex items-center gap-1.5 text-xs {refreshError
+						? 'text-[#9c7a30]'
+						: state.frozen
+							? 'text-stone-400'
+							: 'text-stone-600'}"
+					title={refreshError || (state.frozen ? 'Public view frozen' : 'Live War Room feed')}
+				>
+					<span
+						class="h-1.5 w-1.5 rounded-full {refreshError
+							? 'bg-[#9c7a30]'
+							: state.frozen
+								? 'bg-stone-500'
+								: 'animate-pulse bg-amber-500/70'}"
+					></span>
+					<span class="optical-label">{refreshError ? 'delayed' : state.frozen ? 'frozen' : 'live'}</span>
+				</span>
+			</div>
+		</PageHeader>
+
+		<div
+			class="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border border-stone-800 bg-stone-900/30 px-3 py-2 text-xs text-stone-500"
+		>
+			<span>Public view <span class="tabular-nums text-stone-300">t{state.view_tick}</span></span>
+			<span>{delayedTicks ? `${delayedTicks}-tick disclosure delay` : 'current public tick'}</span>
+			<span class="text-stone-600">Breach indicators never reveal the attacker.</span>
+		</div>
+
+		<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+			<section
+				class="overflow-hidden rounded-lg border border-stone-800 bg-stone-900/40"
+				aria-labelledby="service-grid-title"
+			>
+				<div class="flex flex-wrap items-center gap-3 border-b border-stone-800 px-4 py-3">
+					<h2 id="service-grid-title" class="text-[0.95rem] font-semibold text-stone-200">Service status</h2>
+					<span class="ml-auto text-xs text-stone-600"
+						><span class="tabular-nums">{state.teams.length}</span> teams ·
+						<span class="tabular-nums">{state.services.length}</span> services</span
+					>
+				</div>
+
+				{#if state.services.length === 0 || state.teams.length === 0}
+					<div class="px-4 py-12 text-center text-sm text-stone-500">No released services yet.</div>
+				{:else}
+					<div class="overflow-x-auto">
+						<table class="w-full min-w-[660px] border-separate border-spacing-0 text-xs">
+							<thead>
+								<tr>
+									<th
+										scope="col"
+										class="metadata-label sticky left-0 z-20 w-44 border-b border-stone-800 bg-stone-950 px-4 py-2.5 text-left text-stone-500"
+										>Team</th
+									>
+									{#each state.services as service (service.slug)}
+										<th
+											scope="col"
+											class="min-w-24 border-b border-stone-800 px-2 py-2 text-center font-normal text-stone-400"
+											title={`${service.name}${service.port ? ` on port ${service.port}` : ''}`}
+										>
+											<span class="block truncate">{service.name}</span>
+											{#if service.port}<span class="mt-0.5 block tabular-nums text-[0.62rem] text-stone-700"
+													>:{service.port}</span
+												>{/if}
+										</th>
+									{/each}
+								</tr>
+							</thead>
+							<tbody>
+								{#each state.teams as team (team.id)}
+									<tr class={team.id === ownTeamID ? 'bg-amber-500/[0.025]' : ''}>
+										<th
+											scope="row"
+											class="sticky left-0 z-10 border-b border-stone-800/60 bg-stone-950 px-4 py-2 text-left font-normal"
+										>
+											<div class="flex min-w-0 items-center gap-2">
+												{#if team.id === ownTeamID}<span
+														class="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/70"
+														title="Your team"
+													></span>{/if}
+												<span class="truncate text-stone-300" title={team.name}>{team.name}</span>
+												{#if team.is_nop}<span
+														class="badge-label ml-auto rounded border border-stone-800 px-1.5 py-0.5 text-[0.58rem] text-stone-600"
+														>reference</span
+													>{/if}
+											</div>
+										</th>
+										{#each state.services as service (service.slug)}
+											{@const cell = cellFor(team.id, service.slug)}
+											{@const status = cell?.status ?? 'down'}
+											<td class="border-b border-stone-800/60 px-2 py-1.5 text-center">
+												<span
+													class="relative mx-auto flex h-7 w-7 items-center justify-center rounded-sm border border-white/5 {cell?.breach_flash
+														? 'breach-flash ring-1 ring-[#e0483c]/70'
+														: ''} {cell?.is_own ? 'ring-1 ring-amber-500/50' : ''}"
+													style={`background: ${statusMeta[status].color};`}
+													role="img"
+													aria-label={`${team.name}, ${service.name}: ${statusMeta[status].label}${cell?.breach_flash ? ', breach detected' : ''}${cell?.is_own ? ', your service' : ''}`}
+													title={`${team.name} · ${service.name} · ${statusMeta[status].label}${cell?.breach_flash ? ' · breach detected' : ''}`}
+												>
+													{#if cell?.breach_flash}<Icon icon="mdi:alert" class="h-3.5 w-3.5 text-white/90" />{/if}
+												</span>
+											</td>
+										{/each}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+
+				<div class="flex flex-wrap gap-x-4 gap-y-2 border-t border-stone-800 px-4 py-2.5">
+					{#each Object.entries(statusMeta) as [key, meta]}
+						<span class="inline-flex items-center gap-1.5 text-[0.7rem] text-stone-500">
+							<span class="h-2.5 w-2.5 rounded-sm" style={`background: ${meta.color};`}></span>
+							<span class="optical-label">{meta.label}</span>
+							<span class="tabular-nums text-stone-700">{serviceCounts[key as ServiceStatus]}</span>
+						</span>
+					{/each}
+					<span class="inline-flex items-center gap-1.5 text-[0.7rem] text-stone-500">
+						<span class="flex h-2.5 w-2.5 items-center justify-center rounded-sm bg-[#b0453a] ring-1 ring-[#e0483c]/70"
+						></span>
+						<span class="optical-label">Breach detected</span>
+					</span>
+				</div>
+			</section>
+
+			<div class="flex min-w-0 flex-col gap-4">
+				<section
+					class="overflow-hidden rounded-lg border border-stone-800 bg-stone-900/40"
+					aria-labelledby="hills-title"
+				>
+					<div class="flex items-center gap-2 border-b border-stone-800 px-4 py-3">
+						<OpticalIcon icon="mdi:crown-outline" size={14} box={14} className="text-stone-500" />
+						<h2 id="hills-title" class="text-[0.95rem] font-semibold text-stone-200">Hill control</h2>
+						<span class="ml-auto tabular-nums text-xs text-stone-600">{state.hills.length}</span>
+					</div>
+					{#if state.hills.length === 0}
+						<div class="px-4 py-8 text-center text-sm text-stone-500">No hills scheduled.</div>
+					{:else}
+						<div class="divide-y divide-stone-800/60">
+							{#each state.hills as hill (hill.slug)}
+								<div class="px-4 py-3">
+									<div class="mb-2 flex items-center gap-2">
+										<span class="min-w-0 flex-1 truncate text-xs font-medium text-stone-300" title={hill.name}
+											>{hill.name}</span
+										>
+										{#if hill.is_active && hill.round_ends_in > 0}
+											<span class="tabular-nums text-[0.65rem] text-stone-600" title="Round time remaining"
+												>{formatTimer(hillSeconds(hill))}</span
+											>
+										{:else if !hill.is_active}
+											<span
+												class="badge-label rounded border border-stone-800 px-1.5 py-0.5 text-[0.58rem] text-stone-600"
+												>scheduled</span
+											>
+										{/if}
+									</div>
+									{#if hill.is_active}
+										<div class="flex items-center gap-2 text-xs">
+											<Icon
+												icon={hill.holder_name ? 'mdi:crown' : 'mdi:crown-outline'}
+												class="h-3.5 w-3.5 shrink-0 {hill.holder_name ? 'text-amber-500/80' : 'text-stone-700'}"
+											/>
+											<span class="min-w-0 flex-1 truncate {hill.holder_name ? 'text-stone-300' : 'text-stone-600'}"
+												>{hill.holder_name ?? 'Open'}</span
+											>
+											{#if hill.holder_name}<span class="tabular-nums text-stone-600">{hill.held_ticks}t</span>{/if}
+										</div>
 									{:else}
-										<span class="text-stone-600 italic">contested</span>
+										<p class="text-xs text-stone-600">Not currently active</p>
 									{/if}
 								</div>
-								<!-- hold bar -->
-								<div class="mt-1.5 h-1 w-full rounded-full bg-stone-800 overflow-hidden">
-									<div
-										class="h-full rounded-full bg-amber-400/60 transition-all"
-										style="width: {Math.min(100, (hill.held_ticks / 50) * 100)}%"
-									></div>
-								</div>
-							{/if}
+							{/each}
 						</div>
-					{/each}
-				</div>
-			</div>
+					{/if}
+				</section>
 
-			<!-- event ticker -->
-			<div class="rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden flex-1">
-				<div class="border-b border-stone-800 px-4 py-2.5 flex items-center gap-2">
-					<Icon icon="mdi:bell-outline" class="h-4 w-4 text-stone-500" />
-					<span class="text-sm font-medium text-stone-300">Events</span>
-				</div>
-				<ul class="divide-y divide-stone-800/40 overflow-y-auto max-h-64">
-					{#each state.events as ev}
-						{@const meta = eventIcon[ev.kind]}
-						<li class="flex items-start gap-2.5 px-4 py-2.5 text-xs">
-							<Icon icon={meta.icon} class="h-3.5 w-3.5 shrink-0 mt-0.5 {meta.cls}" />
-							<div class="flex-1 min-w-0">
-								<span class="font-medium {meta.cls}">{meta.label}</span>
-								<span class="text-stone-400 ml-1">{ev.team_name}</span>
-								{#if ev.service}<span class="text-stone-600 ml-1">/ {ev.service}</span>{/if}
-								{#if ev.hill}<span class="text-stone-600 ml-1">/ {ev.hill}</span>{/if}
-							</div>
-							<span class="text-stone-700 tabular-nums shrink-0">{eventAge(ev.ts)}</span>
-						</li>
-					{/each}
-				</ul>
+				<section
+					class="min-h-0 overflow-hidden rounded-lg border border-stone-800 bg-stone-900/40"
+					aria-labelledby="events-title"
+				>
+					<div class="flex items-center gap-2 border-b border-stone-800 px-4 py-3">
+						<OpticalIcon icon="mdi:bell-outline" size={14} box={14} className="text-stone-500" />
+						<h2 id="events-title" class="text-[0.95rem] font-semibold text-stone-200">Event feed</h2>
+						<span class="ml-auto tabular-nums text-xs text-stone-600">{state.events.length}</span>
+					</div>
+					{#if state.events.length === 0}
+						<div class="px-4 py-8 text-center text-sm text-stone-500">No public events yet.</div>
+					{:else}
+						<ul class="max-h-[26rem] divide-y divide-stone-800/40 overflow-y-auto">
+							{#each state.events as event (eventKey(event))}
+								{@const meta = eventMeta(event.kind)}
+								<li class="flex items-start gap-2.5 px-4 py-2.5 text-xs">
+									<Icon icon={meta.icon} class="mt-0.5 h-3.5 w-3.5 shrink-0 {meta.className}" />
+									<div class="min-w-0 flex-1">
+										<div class="flex items-baseline gap-2">
+											<span class="font-medium {meta.className}">{meta.label}</span>
+											<span class="tabular-nums text-[0.62rem] text-stone-700">t{event.tick}</span>
+										</div>
+										{#if eventSummary(event)}<p class="mt-0.5 break-words leading-relaxed text-stone-400">
+												{eventSummary(event)}
+											</p>{/if}
+									</div>
+									<span class="shrink-0 tabular-nums text-[0.65rem] text-stone-700">{eventAge(event.ts)}</span>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				</section>
 			</div>
 		</div>
-	</div>
+	{/if}
 </div>
-{/if}
+
+<style>
+	.breach-flash {
+		animation: breach-pulse 1.4s ease-in-out infinite;
+	}
+
+	@keyframes breach-pulse {
+		0%,
+		100% {
+			opacity: 1;
+		}
+		50% {
+			opacity: 0.62;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.breach-flash,
+		.animate-pulse {
+			animation: none;
+		}
+	}
+</style>
