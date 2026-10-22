@@ -20,6 +20,7 @@ import (
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/anvil-lab/anvil/internal/models"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
@@ -181,6 +182,148 @@ func seedService(t *testing.T, db *database.DB, checker string) uuid.UUID {
 		t.Fatalf("seed service: %v", err)
 	}
 	return id
+}
+
+type integrationCheckerFunc func(context.Context, Target, Task) Result
+
+func (f integrationCheckerFunc) Run(ctx context.Context, target Target, task Task) Result {
+	return f(ctx, target, task)
+}
+
+func TestIntegrationReferenceAttackBatchSafety(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	serviceID := seedService(t, db, "/unused")
+	greenID := seedTeam(t, db, "green")
+	staleID := seedTeam(t, db, "stale")
+	nopID := seedTeam(t, db, "nop")
+	if _, err := db.Pool.Exec(ctx,
+		`UPDATE game_teams SET team_number = CASE id WHEN $1 THEN 1 WHEN $2 THEN 2 ELSE 99 END,
+		                         is_nop = (id = $3)
+		 WHERE id IN ($1, $2, $3)`, greenID, staleID, nopID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_ticks (tick_number, status) VALUES (1, 'closed'), (2, 'closed'), (3, 'running')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_sla_checks (tick_number, team_id, service_id, status) VALUES
+		 (1, $1, $4, 'OK'), (1, $2, $4, 'OK'), (1, $3, $4, 'OK'),
+		 (2, $1, $4, 'OK'), (2, $2, $4, 'DOWN'), (2, $3, $4, 'OK')`,
+		greenID, staleID, nopID, serviceID); err != nil {
+		t.Fatal(err)
+	}
+
+	bot := &outbreakBot{
+		cfg:    config.GameConfig{FlagPrefix: "H7CTF", TickInterval: 2 * time.Minute},
+		db:     db,
+		logger: zap.NewNop(),
+	}
+	eligible, err := bot.greenTeams(ctx, 3, serviceID)
+	if err != nil {
+		t.Fatalf("green teams: %v", err)
+	}
+	if len(eligible) != 2 {
+		t.Fatalf("eligible teams = %+v, want current-green team and NOP only", eligible)
+	}
+	for _, team := range eligible {
+		if team.id == staleID {
+			t.Fatal("team with stale green SLA and latest closed-tick DOWN was eligible")
+		}
+	}
+
+	flags := make(map[uuid.UUID]outbreakFlag)
+	insertFlag := func(teamID uuid.UUID, value string) outbreakFlag {
+		t.Helper()
+		var flag outbreakFlag
+		if err := db.Pool.QueryRow(ctx,
+			`INSERT INTO game_flags
+			 (tick_number, team_id, service_id, store_index, flag, valid_from_tick, valid_until_tick, planted_at, attack_info)
+			 VALUES (3, $1, $2, 0, $3, 3, 6, NOW(), $4)
+			 RETURNING id, flag, attack_info`, teamID, serviceID, value, `{"account":"reference"}`,
+		).Scan(&flag.id, &flag.value, &flag.attackInfo); err != nil {
+			t.Fatalf("insert flag: %v", err)
+		}
+		flags[teamID] = flag
+		return flag
+	}
+	insertFlag(nopID, "H7CTF{00000000000000000000000000000001}")
+
+	var calls int
+	checker := integrationCheckerFunc(func(_ context.Context, _ Target, task Task) Result {
+		calls++
+		return Result{Status: models.SLAOk, Message: task.Flag, Flag: task.Flag, Latency: time.Millisecond}
+	})
+	store := orangeStore{serviceID: serviceID, storeIndex: 0, waveVariant: 0, port: 7001}
+	bot.runStore(ctx, 3, store, eligible, checker, time.Second)
+	if calls != 0 || count(t, db, `SELECT COUNT(*) FROM game_checker_tasks`) != 0 || count(t, db, `SELECT COUNT(*) FROM game_bot_reads`) != 0 {
+		t.Fatal("incomplete flag lookup batch called the checker or persisted an outcome")
+	}
+
+	insertFlag(greenID, "H7CTF{00000000000000000000000000000002}")
+	calls = 0
+	var taskMu sync.Mutex
+	var taskIDs []int64
+	checker = integrationCheckerFunc(func(_ context.Context, _ Target, task Task) Result {
+		taskMu.Lock()
+		taskIDs = append(taskIDs, task.ID)
+		taskMu.Unlock()
+		return Result{Status: models.SLAOk, Message: task.Flag, Flag: task.Flag, Latency: time.Millisecond}
+	})
+	bot.runStore(ctx, 3, store, eligible, checker, time.Second)
+	if len(taskIDs) != 2 || taskIDs[0] <= 0 || taskIDs[1] <= 0 || taskIDs[0] == taskIDs[1] {
+		t.Fatalf("reference checker task IDs = %v, want two unique nonzero IDs", taskIDs)
+	}
+	if got := count(t, db, `SELECT COUNT(*) FROM game_checker_tasks WHERE finished_at IS NOT NULL AND message IS NULL`); got != 2 {
+		t.Fatalf("sanitized completed checker tasks = %d, want 2", got)
+	}
+	if got := count(t, db, `SELECT COUNT(*) FROM game_bot_reads`); got != 2 {
+		t.Fatalf("NOP-approved bot read batch = %d, want 2", got)
+	}
+	// A MUMBLE exploit result is persisted as FAULTY for audit, but Reference
+	// Attack is not an SLA task and must not affect service-health aggregates.
+	if _, err := db.Pool.Exec(ctx,
+		`UPDATE game_checker_tasks SET status = 'FAULTY', latency_ms = 60000
+		 WHERE id = (SELECT MIN(id) FROM game_checker_tasks WHERE method = 'exploit')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_checker_tasks
+		   (tick_number, related_tick, team_id, service_id, method, variant, status, latency_ms, finished_at)
+		 VALUES
+		   (3, 3, $1, $2, 'putflag', 0, 'OK', 10, NOW()),
+		   (3, 3, $1, $2, 'getflag', 0, 'FAULTY', 20, NOW())`, greenID, serviceID); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := QueryMetrics(ctx, db, 2*time.Minute, 5)
+	if err != nil {
+		t.Fatalf("query metrics: %v", err)
+	}
+	if len(metrics.Services) != 1 {
+		t.Fatalf("service metrics = %+v, want one service", metrics.Services)
+	}
+	health := metrics.Services[0]
+	if health.TasksTotal != 2 || health.TasksOK != 1 || health.ErrorRate != 0.5 || health.LatencyP95Ms > 20 {
+		t.Fatalf("service health included Reference Attack tasks: %+v", health)
+	}
+
+	if _, err := db.Pool.Exec(ctx, `DELETE FROM game_bot_reads`); err != nil {
+		t.Fatal(err)
+	}
+	valid := flags[greenID]
+	err = bot.recordBotReads(3, []botRead{
+		{flagID: valid.id, teamID: greenID, outcome: "stolen"},
+		{flagID: uuid.New(), teamID: nopID, isNOP: true, outcome: "stolen"},
+	})
+	if err == nil {
+		t.Fatal("atomic bot-read batch with an invalid flag unexpectedly succeeded")
+	}
+	if got := count(t, db, `SELECT COUNT(*) FROM game_bot_reads`); got != 0 {
+		t.Fatalf("failed bot-read transaction persisted %d rows, want 0", got)
+	}
 }
 
 func kothChecker(t *testing.T, controllerToken string) string {

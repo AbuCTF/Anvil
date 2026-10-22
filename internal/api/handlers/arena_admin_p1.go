@@ -155,7 +155,7 @@ type suspiciousSLARow struct {
 func (h *ArenaAdminHandler) PcapCapture(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{
 		"error": "pcap capture not yet implemented",
-		"hint": "will accept: {duration_sec, filter} and return a signed GCS URL",
+		"hint":  "will accept: {duration_sec, filter} and return a signed GCS URL",
 	})
 }
 
@@ -165,7 +165,7 @@ func (h *ArenaAdminHandler) PcapCapture(c *gin.Context) {
 func (h *ArenaAdminHandler) VulnboxReset(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{
 		"error": "vulnbox reset not yet implemented",
-		"hint": "will accept: {service_id?} and trigger a docker-compose restart on the vulnbox",
+		"hint":  "will accept: {service_id?} and trigger a docker-compose restart on the vulnbox",
 	})
 }
 
@@ -175,7 +175,7 @@ func (h *ArenaAdminHandler) VulnboxReset(c *gin.Context) {
 func (h *ArenaAdminHandler) VulnboxReboot(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{
 		"error": "vulnbox reboot not yet implemented",
-		"hint": "will call OCI instance action=RESET for the team's VM",
+		"hint":  "will call OCI instance action=RESET for the team's VM",
 	})
 }
 
@@ -207,7 +207,7 @@ func (h *ArenaAdminHandler) SuspiciousSLA(c *gin.Context) {
 		 FROM game_checker_tasks ct
 		 JOIN game_teams t ON t.id = ct.team_id
 		 JOIN game_services s ON s.id = ct.service_id
-		 WHERE ct.tick_number >= $1
+		 WHERE ct.tick_number >= $1 AND ct.method <> 'exploit'
 		 GROUP BY t.id, t.name, s.id, s.name, ct.tick_number
 		 HAVING COUNT(*) >= 3
 		    AND SUM(CASE WHEN ct.status IN ('DOWN','FAULTY') THEN 1 ELSE 0 END)::numeric / COUNT(*) >= 0.6

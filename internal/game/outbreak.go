@@ -17,9 +17,12 @@ package game
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
@@ -65,10 +68,12 @@ func init() {
 }
 
 type outbreakBot struct {
-	cfg    config.GameConfig
-	db     *database.DB
-	logger *zap.Logger
-	client *http.Client
+	cfg       config.GameConfig
+	db        *database.DB
+	logger    *zap.Logger
+	client    *http.Client
+	taskOpen  func(uuid.UUID, uuid.UUID, Task) (int64, error)
+	taskClose func(int64, Result) error
 }
 
 // orangeStore describes a (service, store) pair in wave mode this tick.
@@ -108,15 +113,6 @@ func (b *outbreakBot) run(ctx context.Context, tick int, started time.Time) {
 		return
 	}
 
-	teams, err := b.greenTeams(ctx)
-	if err != nil {
-		b.logger.Error("green teams query", zap.Int("tick", tick), zap.Error(err))
-		return
-	}
-	if len(teams) == 0 {
-		return
-	}
-
 	taskTimeout := tickInterval / 4
 	if b.cfg.Checker.TaskTimeout > 0 && b.cfg.Checker.TaskTimeout < taskTimeout {
 		taskTimeout = b.cfg.Checker.TaskTimeout
@@ -124,36 +120,47 @@ func (b *outbreakBot) run(ctx context.Context, tick int, started time.Time) {
 
 	var wg sync.WaitGroup
 	for _, store := range stores {
-		checker := checkerFor(store.checkerRef, b.client)
-		for _, team := range teams {
-			flag, attackInfo, err := b.currentFlag(ctx, tick, team.id, store.serviceID, store.storeIndex)
-			if err != nil || flag == "" {
-				continue // no flag for this team this tick (maybe NOP with no flag)
-			}
-
-			wg.Add(1)
-			go func(store orangeStore, team greenTeam, flag, attackInfo string) {
-				defer wg.Done()
-				b.callExploit(ctx, tick, started, store, team, flag, attackInfo, checker, taskTimeout)
-			}(store, team, flag, attackInfo)
+		teams, err := b.greenTeams(ctx, tick, store.serviceID)
+		if err != nil {
+			b.logger.Error("green teams query", zap.Int("tick", tick), zap.Stringer("service", store.serviceID), zap.Error(err))
+			continue
 		}
+		if len(teams) == 0 {
+			continue
+		}
+		checker := checkerFor(store.checkerRef, b.client)
+		wg.Add(1)
+		go func(store orangeStore, teams []greenTeam, checker Checker) {
+			defer wg.Done()
+			b.runStore(ctx, tick, store, teams, checker, taskTimeout)
+		}(store, teams, checker)
 	}
 	wg.Wait()
 }
 
 type greenTeam struct {
-	id         uuid.UUID
-	number     int
-	name       string
-	vulnboxIP  string
+	id        uuid.UUID
+	number    int
+	name      string
+	vulnboxIP string
+	isNOP     bool
 }
 
-// greenTeams returns all active game teams (green = UP or no SLA check yet).
-// NOP teams are included per spec.
-func (b *outbreakBot) greenTeams(ctx context.Context) ([]greenTeam, error) {
+// greenTeams returns active teams whose service was green on the last completed
+// tick. A missing SLA result and a missing service address both fail closed. NOP
+// teams are included because their successful read validates the whole batch.
+func (b *outbreakBot) greenTeams(ctx context.Context, tick int, serviceID uuid.UUID) ([]greenTeam, error) {
 	rows, err := b.db.Pool.Query(ctx,
-		`SELECT id, COALESCE(team_number, 0), name, COALESCE(vulnbox_ip, '127.0.0.1')
-		 FROM game_teams WHERE status = 'active'`)
+		`SELECT t.id, COALESCE(t.team_number, 0), t.name, host(t.vulnbox_ip), t.is_nop, sla.status
+		 FROM game_teams t
+		 JOIN LATERAL (
+		   SELECT MAX(tick_number) AS tick_number
+		   FROM game_ticks
+		   WHERE status = 'closed' AND tick_number < $1
+		 ) previous ON previous.tick_number IS NOT NULL
+		 JOIN game_sla_checks sla ON sla.tick_number = previous.tick_number
+		   AND sla.team_id = t.id AND sla.service_id = $2
+		 WHERE t.status = 'active' AND t.vulnbox_ip IS NOT NULL`, tick, serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -161,10 +168,13 @@ func (b *outbreakBot) greenTeams(ctx context.Context) ([]greenTeam, error) {
 	var teams []greenTeam
 	for rows.Next() {
 		var t greenTeam
-		if err := rows.Scan(&t.id, &t.number, &t.name, &t.vulnboxIP); err != nil {
+		var status models.SLAStatus
+		if err := rows.Scan(&t.id, &t.number, &t.name, &t.vulnboxIP, &t.isNOP, &status); err != nil {
 			return nil, err
 		}
-		teams = append(teams, t)
+		if green(status) {
+			teams = append(teams, t)
+		}
 	}
 	return teams, rows.Err()
 }
@@ -210,6 +220,7 @@ func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.T
 		) adv ON TRUE
 		LEFT JOIN game_ticks gt ON gt.tick_number = adv.advisory_tick
 		WHERE gs.enabled = true AND gs.checker_ref IS NOT NULL AND gs.checker_ref <> ''
+		  AND gs.port BETWEEN 1 AND 65535
 	`, tick, firstBloodThreshold)
 	if err != nil {
 		return nil, fmt.Errorf("orange stores: %w", err)
@@ -296,82 +307,192 @@ func quietWaveStart(t time.Time) time.Time {
 	return t
 }
 
+type outbreakFlag struct {
+	id         uuid.UUID
+	value      string
+	attackInfo string
+}
+
 // currentFlag returns the flag and attack_info for (team, service, store) planted this tick.
-func (b *outbreakBot) currentFlag(ctx context.Context, tick int, teamID, serviceID uuid.UUID, storeIndex int) (string, string, error) {
-	var flag, attackInfo string
+func (b *outbreakBot) currentFlag(ctx context.Context, tick int, teamID, serviceID uuid.UUID, storeIndex int) (outbreakFlag, error) {
+	var flag outbreakFlag
 	err := b.db.Pool.QueryRow(ctx,
-		`SELECT flag, COALESCE(attack_info, '') FROM game_flags
+		`SELECT id, flag, COALESCE(attack_info, '') FROM game_flags
 		 WHERE tick_number = $1 AND team_id = $2 AND service_id = $3 AND store_index = $4
 		   AND planted_at IS NOT NULL`,
 		tick, teamID, serviceID, storeIndex,
-	).Scan(&flag, &attackInfo)
-	if err != nil {
-		return "", "", err
-	}
-	return flag, attackInfo, nil
+	).Scan(&flag.id, &flag.value, &flag.attackInfo)
+	return flag, err
 }
 
-// callExploit calls the exploit checker for one (team, service, store) and records the outcome.
-func (b *outbreakBot) callExploit(
-	ctx context.Context,
-	tick int,
-	started time.Time,
-	store orangeStore,
-	team greenTeam,
-	flag, attackInfo string,
-	checker Checker,
-	taskTimeout time.Duration,
-) {
-	chainID := fmt.Sprintf("outbreak_s%s_t%s_i%d_tick%d",
-		store.serviceID, team.id, store.storeIndex, tick)
-	task := Task{
+type botRead struct {
+	flagID  uuid.UUID
+	teamID  uuid.UUID
+	isNOP   bool
+	outcome string
+	latency time.Duration
+}
+
+func newExploitTask(cfg config.GameConfig, tick int, store orangeStore, team greenTeam, flag outbreakFlag, timeout time.Duration) Task {
+	digest := sha256.Sum256([]byte(flag.value))
+	return Task{
 		Tick:        tick,
 		RelatedTick: tick,
 		TeamNumber:  team.number,
 		TeamName:    team.name,
 		Method:      MethodExploit,
 		Variant:     store.waveVariant,
-		Flag:        flag,
-		ChainID:     chainID,
-		Timeout:     taskTimeout,
-		RoundLength: b.cfg.TickInterval,
+		Flag:        flag.value,
+		AttackInfo:  flag.attackInfo,
+		FlagRegex:   regexp.QuoteMeta(cfg.FlagPrefix) + `\{[0-9a-f]{32}\}`,
+		FlagHash:    hex.EncodeToString(digest[:]),
+		ChainID: fmt.Sprintf("outbreak_s%s_t%s_i%d_tick%d",
+			store.serviceID, team.id, store.storeIndex, tick),
+		Timeout:     timeout,
+		RoundLength: cfg.TickInterval,
 	}
+}
+
+// callExploit calls the exploit checker for one (team, service, store). The
+// result is not persisted until the NOP canary for the same store and tick wins.
+func (b *outbreakBot) callExploit(
+	ctx context.Context,
+	tick int,
+	store orangeStore,
+	team greenTeam,
+	flag outbreakFlag,
+	checker Checker,
+	taskTimeout time.Duration,
+) (botRead, error) {
+	task := newExploitTask(b.cfg, tick, store, team, flag, taskTimeout)
+	id, err := b.openTask(team.id, store.serviceID, task)
+	if err != nil {
+		return botRead{}, fmt.Errorf("open checker task: %w", err)
+	}
+	if id <= 0 {
+		return botRead{}, fmt.Errorf("open checker task returned invalid id %d", id)
+	}
+	task.ID = id
 
 	tctx, cancel := context.WithTimeout(ctx, taskTimeout)
 	res := checker.Run(tctx, Target{Host: team.vulnboxIP, Port: store.port}, task)
 	cancel()
+	res.Step = task.Method
+	auditResult := res
+	auditResult.Flag = ""
+	auditResult.Message = ""
+	if err := b.closeTask(id, auditResult); err != nil {
+		return botRead{}, fmt.Errorf("close checker task %d: %w", id, err)
+	}
 
-	outcome := botOutcome(res, flag)
+	return botRead{flagID: flag.id, teamID: team.id, isNOP: team.isNOP, outcome: botOutcome(res, flag.value), latency: res.Latency}, nil
+}
 
-	// find the flag_id for this (team, service, store, tick) row
-	var flagID uuid.UUID
-	if err := b.db.Pool.QueryRow(ctx,
-		`SELECT id FROM game_flags
-		 WHERE tick_number = $1 AND team_id = $2 AND service_id = $3 AND store_index = $4`,
-		tick, team.id, store.serviceID, store.storeIndex,
-	).Scan(&flagID); err != nil {
-		b.logger.Warn("outbreak: flag_id lookup",
-			zap.Int("tick", tick), zap.Stringer("team", team.id), zap.Error(err))
+func (b *outbreakBot) openTask(teamID, serviceID uuid.UUID, task Task) (int64, error) {
+	if b.taskOpen != nil {
+		return b.taskOpen(teamID, serviceID, task)
+	}
+	return openCheckerTask(b.db, teamID, serviceID, task)
+}
+
+func (b *outbreakBot) closeTask(id int64, res Result) error {
+	if b.taskClose != nil {
+		return b.taskClose(id, res)
+	}
+	return closeCheckerTask(b.db, id, res)
+}
+
+func canariedBotReads(reads []botRead) []botRead {
+	for _, read := range reads {
+		if read.isNOP && read.outcome == "stolen" {
+			return reads
+		}
+	}
+	return nil
+}
+
+func (b *outbreakBot) runStore(ctx context.Context, tick int, store orangeStore, teams []greenTeam, checker Checker, taskTimeout time.Duration) {
+	type candidate struct {
+		team greenTeam
+		flag outbreakFlag
+	}
+	candidates := make([]candidate, 0, len(teams))
+	for _, team := range teams {
+		flag, err := b.currentFlag(ctx, tick, team.id, store.serviceID, store.storeIndex)
+		if err != nil || flag.value == "" {
+			b.logger.Warn("outbreak: incomplete flag batch",
+				zap.Int("tick", tick), zap.Stringer("service", store.serviceID),
+				zap.Int("store", store.storeIndex), zap.Stringer("team", team.id), zap.Error(err))
+			return
+		}
+		candidates = append(candidates, candidate{team: team, flag: flag})
+	}
+
+	type callResult struct {
+		read botRead
+		err  error
+	}
+	results := make(chan callResult, len(candidates))
+	var wg sync.WaitGroup
+	for _, item := range candidates {
+		wg.Add(1)
+		go func(candidate candidate) {
+			defer wg.Done()
+			read, err := b.callExploit(ctx, tick, store, candidate.team, candidate.flag, checker, taskTimeout)
+			results <- callResult{read: read, err: err}
+		}(item)
+	}
+	wg.Wait()
+	close(results)
+
+	reads := make([]botRead, 0, len(teams))
+	for result := range results {
+		if result.err != nil {
+			b.logger.Warn("outbreak: incomplete checker batch",
+				zap.Int("tick", tick), zap.Stringer("service", store.serviceID),
+				zap.Int("store", store.storeIndex), zap.Error(result.err))
+			return
+		}
+		reads = append(reads, result.read)
+	}
+	approved := canariedBotReads(reads)
+	if len(approved) != len(candidates) {
 		return
 	}
-
-	if _, err := b.db.Pool.Exec(ctx,
-		`INSERT INTO game_bot_reads (flag_id, tick_number, outcome, latency_ms)
-		 VALUES ($1, $2, $3, $4)
-		 ON CONFLICT (flag_id, tick_number) DO NOTHING`,
-		flagID, tick, outcome, res.Latency.Milliseconds(),
-	); err != nil {
-		b.logger.Warn("outbreak: record bot read",
-			zap.Int("tick", tick), zap.Stringer("team", team.id), zap.Error(err))
+	if err := b.recordBotReads(tick, approved); err != nil {
+		b.logger.Warn("outbreak: record bot read batch",
+			zap.Int("tick", tick), zap.Stringer("service", store.serviceID),
+			zap.Int("store", store.storeIndex), zap.Error(err))
 	}
+}
+
+func (b *outbreakBot) recordBotReads(tick int, reads []botRead) error {
+	ctx, cancel := context.WithTimeout(context.Background(), dbWriteTimeout)
+	defer cancel()
+	tx, err := b.db.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, read := range reads {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO game_bot_reads (flag_id, tick_number, outcome, latency_ms)
+			 VALUES ($1, $2, $3, $4)
+			 ON CONFLICT (flag_id, tick_number) DO NOTHING`,
+			read.flagID, tick, read.outcome, read.latency.Milliseconds(),
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 // botOutcome maps a checker result to the game_bot_reads outcome vocabulary.
 func botOutcome(res Result, expectedFlag string) string {
 	switch res.Status {
 	case models.SLAOk:
-		// checker returned OK; stolen if it echoed the exact flag in message
-		if res.Message == expectedFlag {
+		// checker returned OK; stolen only if its dedicated flag field matches.
+		if res.Flag == expectedFlag {
 			return "stolen"
 		}
 		return "blocked"

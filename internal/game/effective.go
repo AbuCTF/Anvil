@@ -83,7 +83,14 @@ func EffectiveSLA(ctx context.Context, db *database.DB, teamID uuid.UUID, since,
 	rows, err = db.Pool.Query(ctx,
 		`SELECT f.team_id, f.service_id, b.tick_number FROM game_bot_reads b
 		 JOIN game_flags f ON f.id = b.flag_id
-		 WHERE b.outcome = 'crashed' AND b.tick_number >= $1`, since)
+		 WHERE b.outcome = 'crashed' AND b.tick_number >= $1
+		   AND EXISTS (
+		     SELECT 1 FROM game_bot_reads nb
+		     JOIN game_flags nf ON nf.id = nb.flag_id
+		     JOIN game_teams nt ON nt.id = nf.team_id AND nt.is_nop
+		     WHERE nf.service_id = f.service_id AND nf.store_index = f.store_index
+		       AND nb.tick_number = b.tick_number AND nb.outcome = 'stolen'
+		   )`, since)
 	if err != nil {
 		return nil, fmt.Errorf("load bot crashes: %w", err)
 	}

@@ -37,6 +37,9 @@ type Task struct {
 	Method      string
 	Variant     int
 	Flag        string
+	AttackInfo  string
+	FlagRegex   string
+	FlagHash    string
 	ChainID     string
 	Tick        int
 	RelatedTick int
@@ -52,6 +55,7 @@ type Result struct {
 	Latency    time.Duration
 	Message    string
 	AttackInfo string
+	Flag       string
 	Step       string // the task method that produced it
 }
 
@@ -166,6 +170,9 @@ type enoTaskMessage struct {
 	CurrentRoundID int     `json:"currentRoundId"`
 	RelatedRoundID int     `json:"relatedRoundId"`
 	Flag           *string `json:"flag"`
+	AttackInfo     *string `json:"attackInfo,omitempty"`
+	FlagRegex      string  `json:"flagRegex,omitempty"`
+	FlagHash       string  `json:"flagHash,omitempty"`
 	VariantID      int     `json:"variantId"`
 	Timeout        int64   `json:"timeout"`
 	RoundLength    int64   `json:"roundLength"`
@@ -176,6 +183,7 @@ type enoResultMessage struct {
 	Result     string  `json:"result"`
 	Message    *string `json:"message"`
 	AttackInfo *string `json:"attackInfo"`
+	Flag       *string `json:"flag"`
 }
 
 func (e enoChecker) Run(ctx context.Context, t Target, task Task) Result {
@@ -195,6 +203,14 @@ func (e enoChecker) Run(ctx context.Context, t Target, task Task) Result {
 	if task.Method == MethodPutFlag || task.Method == MethodGetFlag {
 		flag := task.Flag
 		msg.Flag = &flag
+	}
+	if task.Method == MethodExploit {
+		if task.AttackInfo != "" {
+			attackInfo := task.AttackInfo
+			msg.AttackInfo = &attackInfo
+		}
+		msg.FlagRegex = task.FlagRegex
+		msg.FlagHash = task.FlagHash
 	}
 	body, _ := json.Marshal(msg)
 
@@ -236,6 +252,9 @@ func (e enoChecker) Run(ctx context.Context, t Target, task Task) Result {
 	}
 	if res.AttackInfo != nil && task.Method == MethodPutFlag {
 		out.AttackInfo = *res.AttackInfo
+	}
+	if res.Flag != nil && task.Method == MethodExploit {
+		out.Flag = *res.Flag
 	}
 	return out
 }

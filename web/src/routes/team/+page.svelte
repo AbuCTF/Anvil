@@ -263,10 +263,12 @@
 				</svelte:fragment>
 
 				<div class="grid gap-4 sm:grid-cols-2">
-					<div>
-						<p class="metadata-label text-stone-500 mb-1">{$platformInfo?.economy_enabled ? 'Ledger score' : 'Score'}</p>
-						<p class="text-2xl font-semibold text-stone-100 tabular-nums">{team.total_score ?? 0}</p>
-					</div>
+					{#if team.total_score !== undefined}
+						<div>
+							<p class="metadata-label text-stone-500 mb-1">{$platformInfo?.economy_enabled ? 'Ledger score' : 'Score'}</p>
+							<p class="text-2xl font-semibold text-stone-100 tabular-nums">{team.total_score}</p>
+						</div>
+					{/if}
 					<div>
 						<p class="metadata-label text-stone-500 mb-1">Join Code</p>
 						<div class="flex items-center gap-2">
@@ -285,7 +287,9 @@
 						{#each (team.members ?? []) as m}
 							<div class="flex items-center justify-between px-3 py-2.5">
 								<span class="text-sm text-stone-200">{m.display_name || m.username}</span>
-								<span class="text-xs text-stone-500 tabular-nums">{m.solve_count} solve{m.solve_count === 1 ? '' : 's'}</span>
+								{#if m.solve_count !== undefined}
+									<span class="text-xs text-stone-500 tabular-nums">{m.solve_count} solve{m.solve_count === 1 ? '' : 's'}</span>
+								{/if}
 							</div>
 						{/each}
 					</div>

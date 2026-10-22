@@ -2,13 +2,17 @@ package game
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/models"
+	"github.com/google/uuid"
 )
 
 func enoServer(t *testing.T, reply func(enoTaskMessage) (int, string)) (*httptest.Server, chan enoTaskMessage) {
@@ -59,6 +63,71 @@ func TestEnoCheckerOmitsFlagForNoise(t *testing.T) {
 	}
 }
 
+func TestReferenceAttackCheckerContract(t *testing.T) {
+	const expectedFlag = "H7CTF{0123456789abcdef0123456789abcdef}"
+	srv, seen := enoServer(t, func(enoTaskMessage) (int, string) {
+		return 200, `{"result":"OK","message":null,"flag":"` + expectedFlag + `"}`
+	})
+	store := orangeStore{serviceID: uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), storeIndex: 1, waveVariant: 3, port: 7001}
+	team := greenTeam{id: uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), number: 7, name: "bravo", vulnboxIP: "10.60.7.2"}
+	flag := outbreakFlag{id: uuid.New(), value: expectedFlag, attackInfo: `{"account":"victim-7"}`}
+	var opened []Task
+	var closed []struct {
+		id  int64
+		res Result
+	}
+	bot := &outbreakBot{
+		cfg: config.GameConfig{FlagPrefix: "H7CTF", TickInterval: 2 * time.Minute},
+		taskOpen: func(_ uuid.UUID, _ uuid.UUID, task Task) (int64, error) {
+			opened = append(opened, task)
+			return int64(len(opened)), nil
+		},
+		taskClose: func(id int64, res Result) error {
+			closed = append(closed, struct {
+				id  int64
+				res Result
+			}{id: id, res: res})
+			return nil
+		},
+	}
+	checker := checkerFor(srv.URL, srv.Client())
+	for range 2 {
+		read, err := bot.callExploit(context.Background(), 23, store, team, flag, checker, 15*time.Second)
+		if err != nil {
+			t.Fatalf("reference attack: %v", err)
+		}
+		if read.outcome != "stolen" {
+			t.Fatalf("reference attack outcome = %q, want stolen", read.outcome)
+		}
+	}
+
+	digest := sha256.Sum256([]byte(expectedFlag))
+	var taskIDs []int64
+	for range 2 {
+		msg := <-seen
+		taskIDs = append(taskIDs, msg.TaskID)
+		if msg.Method != MethodExploit || msg.Address != "10.60.7.2" || msg.Flag != nil ||
+			msg.AttackInfo == nil || *msg.AttackInfo != `{"account":"victim-7"}` ||
+			msg.FlagRegex != `H7CTF\{[0-9a-f]{32}\}` || msg.FlagHash != hex.EncodeToString(digest[:]) {
+			t.Fatalf("reference attack task = %+v", msg)
+		}
+	}
+	if taskIDs[0] == 0 || taskIDs[1] == 0 || taskIDs[0] == taskIDs[1] {
+		t.Fatalf("reference attack task ids = %v, want unique nonzero values", taskIDs)
+	}
+	if len(closed) != 2 || closed[0].id != taskIDs[0] || closed[1].id != taskIDs[1] {
+		t.Fatalf("closed task ids = %+v, want %v", closed, taskIDs)
+	}
+	for _, audit := range closed {
+		if audit.res.Status != models.SLAOk || audit.res.Message != "" || audit.res.Flag != "" {
+			t.Fatalf("persisted reference attack result = %+v", audit.res)
+		}
+	}
+	if got := botOutcome(Result{Status: models.SLAOk, Message: expectedFlag}, expectedFlag); got != "blocked" {
+		t.Fatalf("human message produced outcome %q, want blocked", got)
+	}
+}
+
 func TestEnoCheckerResultMapping(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
@@ -69,6 +138,7 @@ func TestEnoCheckerResultMapping(t *testing.T) {
 	}{
 		{"mumble getflag", 200, `{"result":"MUMBLE","message":"flag missing"}`, MethodGetFlag, models.SLAFlagNotFound},
 		{"mumble putflag", 200, `{"result":"MUMBLE","message":"bad login"}`, MethodPutFlag, models.SLAFaulty},
+		{"mumble exploit", 200, `{"result":"MUMBLE","message":"reference attack failed"}`, MethodExploit, models.SLAFaulty},
 		{"offline", 200, `{"result":"OFFLINE","message":"refused"}`, MethodHavoc, models.SLADown},
 		{"internal error", 200, `{"result":"INTERNAL_ERROR","message":"trace"}`, MethodPutFlag, models.SLAError},
 		{"unknown result", 200, `{"result":"MAYBE"}`, MethodPutFlag, models.SLAError},

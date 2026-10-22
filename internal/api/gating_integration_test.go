@@ -59,9 +59,10 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	c1, c2, c3, cat := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	flag1Hash := sha256.Sum256([]byte("flag{one}"))
 
-	exec(`TRUNCATE users, teams, challenges, categories CASCADE`) // cascades into platform_settings too
+	exec(`TRUNCATE users, teams, challenges, categories, revoked_access_tokens CASCADE`) // cascades into platform_settings too
 	exec(`INSERT INTO platform_settings (key, value) VALUES
-		('economy_mode', 'true'), ('teams_mode', 'true'), ('registration_mode', '"token"')
+		('economy_mode', 'true'), ('teams_mode', 'true'), ('registration_mode', '"token"'),
+		('event.start_at', '"2020-01-01T00:00:00Z"'), ('event.end_at', '"2099-01-01T00:00:00Z"')
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
 	exec(`INSERT INTO teams (id, name, join_code, total_score, koth_score) VALUES
 		($1, 'alpha', 'ja', 0, 0), ($2, 'bravo', 'jb', 0, 50), ($3, 'h7 test', 'jt', 0, 0),
@@ -108,6 +109,9 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 	cfg.JWT.Issuer = ""
 	cfg.RateLimit.Enabled = false
 	cfg.VPN.Enabled = false
+	// The test never provisions a container; reusing Docker's built-in network
+	// avoids creating a test-only subnet on a shared development daemon.
+	cfg.Container.NetworkName = "bridge"
 	containerSvc, err := container.NewService(cfg.Container, zap.NewNop())
 	if err != nil {
 		t.Skipf("docker unavailable for the instance gate: %v", err)
@@ -163,6 +167,122 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 		}
 		return out
 	}
+
+	// Before release, every player-facing challenge API is admin-only. Missing
+	// and malformed event windows fail closed instead of publishing the catalog.
+	exec(`UPDATE platform_settings SET value = '"2098-01-01T00:00:00Z"' WHERE key = 'event.start_at'`)
+	if code, body, _ := call("GET", "/api/v1/info", nil, ""); code != http.StatusOK {
+		t.Fatalf("public platform info before release = %d %v, want 200", code, body)
+	}
+	if code, body, _ := call("GET", "/api/v1/challenges", nil, ""); code != http.StatusUnauthorized {
+		t.Fatalf("anonymous pre-release catalog = %d %v, want 401", code, body)
+	}
+	if code, body, _ := call("GET", "/api/v1/challenges/static-one", &author, ""); code != http.StatusForbidden {
+		t.Fatalf("author pre-release detail = %d %v, want 403", code, body)
+	}
+	if code, body, _ := call("GET", "/api/v1/challenges", &admin, ""); code != http.StatusOK {
+		t.Fatalf("admin pre-release catalog = %d %v, want 200", code, body)
+	}
+	if code, body, _ := call("GET", "/api/v1/challenges/static-one/flags", &p1, ""); code != http.StatusForbidden {
+		t.Fatalf("participant pre-release challenge API = %d %v, want 403", code, body)
+	}
+	if code, body, _ := call("GET", "/api/v1/teams/me", &p2, ""); code != http.StatusOK || body["team"] != nil {
+		t.Fatalf("pre-release nonmember team reload = %d %v, want 200 with null team", code, body)
+	}
+	assertSafeTeam := func(what string, body map[string]any) {
+		t.Helper()
+		team, ok := body["team"].(map[string]any)
+		if !ok || team["join_code"] == nil || team["members"] == nil {
+			t.Fatalf("%s membership response = %v", what, body)
+		}
+		if _, leaked := team["total_score"]; leaked {
+			t.Errorf("%s leaked total_score before release: %v", what, team)
+		}
+		for _, rawMember := range team["members"].([]any) {
+			if member := rawMember.(map[string]any); member["solve_count"] != nil {
+				t.Errorf("%s leaked solve_count before release: %v", what, member)
+			}
+		}
+		raw, _ := json.Marshal(body)
+		for _, secret := range []string{"Static One", "static-one", "SECRET BRIEF"} {
+			if strings.Contains(string(raw), secret) {
+				t.Errorf("%s leaked challenge data %q: %s", what, secret, raw)
+			}
+		}
+	}
+	if code, body, _ := call("GET", "/api/v1/teams/me", &p1, ""); code != http.StatusOK {
+		t.Fatalf("pre-release member team reload = %d %v, want 200", code, body)
+	} else {
+		assertSafeTeam("member", body)
+	}
+	if code, body, _ := call("POST", "/api/v1/teams/join", &p2, `{"join_code":"ja"}`); code != http.StatusOK {
+		t.Fatalf("pre-release team join = %d %v, want 200", code, body)
+	}
+	if code, body, _ := call("GET", "/api/v1/teams/me", &p2, ""); code != http.StatusOK {
+		t.Fatalf("post-join pre-release reload = %d %v, want 200", code, body)
+	} else {
+		assertSafeTeam("post-join member", body)
+	}
+	if code, body, _ := call("POST", "/api/v1/teams/leave", &p2, `{}`); code != http.StatusOK {
+		t.Fatalf("pre-release team leave = %d %v, want 200", code, body)
+	}
+	if code, body, _ := call("POST", "/api/v1/teams", &p2, `{"name":"pre-release-new"}`); code != http.StatusCreated {
+		t.Fatalf("pre-release team create = %d %v, want 201", code, body)
+	}
+	if code, body, _ := call("GET", "/api/v1/teams/me", &p2, ""); code != http.StatusOK {
+		t.Fatalf("post-create pre-release reload = %d %v, want 200", code, body)
+	} else {
+		assertSafeTeam("post-create member", body)
+	}
+	if code, body, _ := call("POST", "/api/v1/teams/leave", &p2, `{}`); code != http.StatusOK {
+		t.Fatalf("pre-release created-team leave = %d %v, want 200", code, body)
+	}
+	exec(`DELETE FROM teams WHERE name = 'pre-release-new'`)
+	if code, body, _ := call("GET", "/api/v1/teams/me", &admin, ""); code != http.StatusOK {
+		t.Fatalf("admin pre-release team reload = %d %v, want 200", code, body)
+	} else {
+		team := body["team"].(map[string]any)
+		if _, ok := team["total_score"]; !ok {
+			t.Errorf("admin pre-release team response omitted total_score: %v", team)
+		}
+		for _, rawMember := range team["members"].([]any) {
+			if member := rawMember.(map[string]any); member["solve_count"] == nil {
+				t.Errorf("admin pre-release team response omitted solve_count: %v", member)
+			}
+		}
+	}
+	for _, route := range []struct {
+		method string
+		path   string
+		who    *uuid.UUID
+	}{
+		{method: "GET", path: "/api/v1/scoreboard", who: &p1},
+		{method: "GET", path: "/api/v1/scoreboard/matrix", who: &p1},
+		{method: "GET", path: "/api/v1/profile/p1", who: &p1},
+		{method: "GET", path: "/api/v1/teams/" + teamA.String(), who: &p1},
+		{method: "GET", path: "/api/v1/stats", who: &p1},
+		{method: "GET", path: "/api/v1/user/me/rank", who: &p1},
+		{method: "GET", path: "/api/v1/user/me/stats", who: &p1},
+		{method: "GET", path: "/api/v1/user/me/solves", who: &p1},
+		{method: "GET", path: "/api/v1/economy/me", who: &p1},
+		{method: "GET", path: "/api/v1/instances", who: &p1},
+		{method: "POST", path: "/api/v1/instances", who: &author},
+		{method: "POST", path: "/api/v1/challenges/static-one/open", who: &author},
+	} {
+		if code, body, _ := call(route.method, route.path, route.who, ""); code != http.StatusForbidden {
+			t.Errorf("pre-release %s %s = %d %v, want 403", route.method, route.path, code, body)
+		}
+	}
+	exec(`DELETE FROM platform_settings WHERE key IN ('event.start_at', 'event.end_at')`)
+	if code, body, _ := call("GET", "/api/v1/challenges", &p1, ""); code != http.StatusServiceUnavailable {
+		t.Fatalf("missing-window catalog = %d %v, want 503", code, body)
+	}
+	exec(`INSERT INTO platform_settings (key, value) VALUES
+		('event.start_at', '"invalid"'), ('event.end_at', '"2099-01-01T00:00:00Z"')`)
+	if code, body, _ := call("GET", "/api/v1/challenges", &p1, ""); code != http.StatusServiceUnavailable {
+		t.Fatalf("invalid-window catalog = %d %v, want 503", code, body)
+	}
+	exec(`UPDATE platform_settings SET value = '"2020-01-01T00:00:00Z"' WHERE key = 'event.start_at'`)
 
 	// Infrastructure artifact ingestion is an admin surface. A participant is
 	// rejected before an upload service/session can be reached or created.

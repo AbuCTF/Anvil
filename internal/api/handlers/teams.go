@@ -362,36 +362,38 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 		return
 	}
 
-	economyMode, err := isEconomyMode(ctx, h.db)
-	if err != nil {
-		h.logger.Error("failed to read economy_mode", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
-		return
-	}
 	var name, joinCode string
-	var totalScore int
 	var maxMembers *int
 	var expiresAt *time.Time
-	// same total the board shows: economy points or jeopardy score, plus koth hold-time
 	if err := h.db.Pool.QueryRow(ctx,
-		`SELECT name, join_code,
-		        CASE WHEN $2 THEN ROUND(COALESCE((SELECT points FROM economy_team_score WHERE team_id = t.id), 0) + koth_score)::int
-		             ELSE (total_score + koth_score)::int END,
-		        max_members, join_expires_at
+		`SELECT name, join_code, max_members, join_expires_at
 		 FROM teams t WHERE id = $1`,
-		*teamID, economyMode,
-	).Scan(&name, &joinCode, &totalScore, &maxMembers, &expiresAt); err != nil {
+		*teamID,
+	).Scan(&name, &joinCode, &maxMembers, &expiresAt); err != nil {
 		h.logger.Error("failed to load team", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
 		return
 	}
 
-	rows, err := h.db.Pool.Query(ctx,
-		`SELECT u.id, u.username, u.display_name,
+	start, end, windowErr := loadEventWindow(ctx, h.db)
+	challengeDataReleased, _ := challengeReleaseAccess(c.GetString("role"), start, end, windowErr, time.Now().UTC())
+	if windowErr != nil {
+		h.logger.Error("failed to read event window for team response", zap.Error(windowErr))
+	}
+
+	membersQuery := `SELECT u.id, u.username, u.display_name, 0
+		 FROM users u
+		 WHERE u.team_id = $1
+		 ORDER BY u.username ASC`
+	if challengeDataReleased {
+		membersQuery = `SELECT u.id, u.username, u.display_name,
 		        COALESCE((SELECT COUNT(*) FROM solves s WHERE s.user_id = u.id), 0) AS solve_count
 		 FROM users u
 		 WHERE u.team_id = $1
-		 ORDER BY solve_count DESC, u.username ASC`,
+		 ORDER BY solve_count DESC, u.username ASC`
+	}
+	rows, err := h.db.Pool.Query(ctx,
+		membersQuery,
 		*teamID,
 	)
 	if err != nil {
@@ -412,9 +414,11 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
 			return
 		}
-		members = append(members, gin.H{
-			"id": mid.String(), "username": mname, "display_name": mdisplay, "solve_count": solves,
-		})
+		member := gin.H{"id": mid.String(), "username": mname, "display_name": mdisplay}
+		if challengeDataReleased {
+			member["solve_count"] = solves
+		}
+		members = append(members, member)
 	}
 	if err := rows.Err(); err != nil {
 		h.logger.Error("failed iterating team roster", zap.Error(err))
@@ -422,15 +426,35 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"team": gin.H{
-			"id":              teamID.String(),
-			"name":            name,
-			"join_code":       joinCode,
-			"total_score":     totalScore,
-			"max_members":     maxMembers,
-			"join_expires_at": expiresAt,
-			"members":         members,
-		},
-	})
+	team := gin.H{
+		"id":              teamID.String(),
+		"name":            name,
+		"join_code":       joinCode,
+		"max_members":     maxMembers,
+		"join_expires_at": expiresAt,
+		"members":         members,
+	}
+	if challengeDataReleased {
+		economyMode, err := isEconomyMode(ctx, h.db)
+		if err != nil {
+			h.logger.Error("failed to read economy_mode", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
+			return
+		}
+		var totalScore int
+		// Same total the board shows: economy points or jeopardy score, plus KotH hold-time.
+		if err := h.db.Pool.QueryRow(ctx,
+			`SELECT CASE WHEN $2
+			             THEN ROUND(COALESCE((SELECT points FROM economy_team_score WHERE team_id = t.id), 0) + koth_score)::int
+			             ELSE (total_score + koth_score)::int END
+			 FROM teams t WHERE id = $1`, *teamID, economyMode,
+		).Scan(&totalScore); err != nil {
+			h.logger.Error("failed to load team score", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
+			return
+		}
+		team["total_score"] = totalScore
+	}
+
+	c.JSON(http.StatusOK, gin.H{"team": team})
 }

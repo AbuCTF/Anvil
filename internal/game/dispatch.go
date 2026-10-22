@@ -554,20 +554,28 @@ func (d *Dispatcher) markFlagPlanted(tick int, team, service uuid.UUID, variant 
 }
 
 func (d *Dispatcher) openTask(j job, task Task) (int64, error) {
+	return openCheckerTask(d.db, j.team, j.service, task)
+}
+
+func openCheckerTask(db *database.DB, teamID, serviceID uuid.UUID, task Task) (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), dbWriteTimeout)
 	defer cancel()
 	var id int64
-	err := d.db.Pool.QueryRow(ctx,
+	err := db.Pool.QueryRow(ctx,
 		`INSERT INTO game_checker_tasks (tick_number, related_tick, team_id, service_id, method, variant)
 		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		task.Tick, task.RelatedTick, j.team, j.service, task.Method, task.Variant).Scan(&id)
+		task.Tick, task.RelatedTick, teamID, serviceID, task.Method, task.Variant).Scan(&id)
 	return id, err
 }
 
 func (d *Dispatcher) closeTask(id int64, res Result) error {
+	return closeCheckerTask(d.db, id, res)
+}
+
+func closeCheckerTask(db *database.DB, id int64, res Result) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbWriteTimeout)
 	defer cancel()
-	_, err := d.db.Pool.Exec(ctx,
+	_, err := db.Pool.Exec(ctx,
 		`UPDATE game_checker_tasks SET status = $2, message = NULLIF($3, ''), latency_ms = $4, finished_at = NOW()
 		 WHERE id = $1`, id, string(res.Status), res.Message, int(res.Latency.Milliseconds()))
 	return err

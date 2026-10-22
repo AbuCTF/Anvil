@@ -1,9 +1,128 @@
 package handlers
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
+
+func TestChallengeReleaseAccess(t *testing.T) {
+	now := time.Date(2026, 10, 24, 4, 0, 0, 0, time.UTC)
+	start, end := now.Add(time.Hour), now.Add(25*time.Hour)
+	for _, test := range []struct {
+		name       string
+		role       string
+		start, end *time.Time
+		err        error
+		wantAllow  bool
+		wantStatus int
+	}{
+		{name: "admin can preview", role: "admin", start: &start, end: &end, wantAllow: true},
+		{name: "author cannot preview", role: "author", start: &start, end: &end, wantStatus: http.StatusForbidden},
+		{name: "participant cannot preview", role: "user", start: &start, end: &end, wantStatus: http.StatusForbidden},
+		{name: "anonymous must authenticate", start: &start, end: &end, wantStatus: http.StatusUnauthorized},
+		{name: "missing window fails closed", role: "user", wantStatus: http.StatusServiceUnavailable},
+		{name: "invalid window fails closed", role: "user", err: errors.New("invalid window"), wantStatus: http.StatusServiceUnavailable},
+		{name: "released catalog is public", start: timePtr(now.Add(-time.Minute)), end: &end, wantAllow: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			allowed, status := challengeReleaseAccess(test.role, test.start, test.end, test.err, now)
+			if allowed != test.wantAllow || status != test.wantStatus {
+				t.Fatalf("access = (%v, %d), want (%v, %d)", allowed, status, test.wantAllow, test.wantStatus)
+			}
+		})
+	}
+}
+
+func TestChallengeReleaseGateFailsClosed(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Now().UTC()
+	start, end := now.Add(time.Hour), now.Add(25*time.Hour)
+	loadErr := errors.New("settings unavailable")
+
+	tests := []struct {
+		name       string
+		role       string
+		load       eventWindowLoader
+		wantStatus int
+		wantCalled bool
+	}{
+		{
+			name: "missing window",
+			role: "user",
+			load: func(context.Context) (*time.Time, *time.Time, error) {
+				return nil, nil, nil
+			},
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name: "invalid window",
+			role: "user",
+			load: func(context.Context) (*time.Time, *time.Time, error) {
+				return nil, nil, errors.New("event.end_at must be after event.start_at")
+			},
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name: "unreadable window",
+			role: "user",
+			load: func(context.Context) (*time.Time, *time.Time, error) {
+				return nil, nil, loadErr
+			},
+			wantStatus: http.StatusServiceUnavailable,
+		},
+		{
+			name: "author cannot preview",
+			role: "author",
+			load: func(context.Context) (*time.Time, *time.Time, error) {
+				return &start, &end, nil
+			},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "admin bypasses unreadable window",
+			role: "admin",
+			load: func(context.Context) (*time.Time, *time.Time, error) {
+				t.Fatal("admin gate loaded event window")
+				return nil, nil, loadErr
+			},
+			wantStatus: http.StatusNoContent,
+			wantCalled: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			called := false
+			router := gin.New()
+			router.GET("/guarded", func(c *gin.Context) {
+				c.Set("role", test.role)
+				c.Next()
+			}, challengeReleaseGate(test.load, zap.NewNop()), func(c *gin.Context) {
+				called = true
+				c.Status(http.StatusNoContent)
+			})
+
+			request := httptest.NewRequest(http.MethodGet, "/guarded", nil)
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, request)
+			if response.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", response.Code, test.wantStatus)
+			}
+			if called != test.wantCalled {
+				t.Fatalf("downstream called = %v, want %v", called, test.wantCalled)
+			}
+		})
+	}
+}
+
+func timePtr(value time.Time) *time.Time { return &value }
 
 func TestValidatePlatformSetting(t *testing.T) {
 	tests := []struct {

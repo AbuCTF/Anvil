@@ -161,6 +161,7 @@ func (s *Server) setupRouter() {
 			// when the caller supplies a valid jwt.
 			challengesPublic := v1.Group("")
 			challengesPublic.Use(middleware.OptionalAuth(s.config, s.db))
+			challengesPublic.Use(handlers.ChallengeReleaseGate(s.db, s.logger))
 			{
 				attachmentHandler := handlers.NewAttachmentHandler(s.db, s.storageSvc, s.logger, s.config.JWT.Secret)
 				challengeHandler := handlers.NewChallengeHandlerWithAttachments(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger, attachmentHandler)
@@ -174,13 +175,17 @@ func (s *Server) setupRouter() {
 			scoreboardHandler := handlers.NewScoreboardHandler(s.config, s.db, s.logger)
 			scoreboardRoutes := public.Group("")
 			scoreboardRoutes.Use(middleware.OptionalAuth(s.config, s.db))
+			scoreboardRoutes.Use(handlers.ChallengeReleaseGate(s.db, s.logger))
 			scoreboardRoutes.GET("/scoreboard", scoreboardHandler.Get)
 			scoreboardRoutes.GET("/scoreboard/history", scoreboardHandler.History)
 			scoreboardRoutes.GET("/scoreboard/matrix", scoreboardHandler.Matrix)
 			scoreboardRoutes.GET("/profile/:username", scoreboardHandler.Profile)
 			scoreboardRoutes.GET("/teams/:id", scoreboardHandler.TeamProfile)
 
-			public.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
+			stats := public.Group("")
+			stats.Use(middleware.OptionalAuth(s.config, s.db))
+			stats.Use(handlers.ChallengeReleaseGate(s.db, s.logger))
+			stats.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
 
 			// arena (attack-defense + koth) read endpoints. OptionalAuth so a logged-in
 			// admin is recognised and can preview the arena before the drop (arena_enabled
@@ -249,11 +254,12 @@ func (s *Server) setupRouter() {
 			user := protected.Group("/user")
 			{
 				userHandler := handlers.NewUserHandler(s.config, s.db, s.logger)
+				challengeRelease := handlers.ChallengeReleaseGate(s.db, s.logger)
 				user.GET("/me", userHandler.GetProfile)
-				user.GET("/me/rank", userHandler.GetRank)
+				user.GET("/me/rank", challengeRelease, userHandler.GetRank)
 				user.PUT("/me", userHandler.UpdateProfile)
-				user.GET("/me/stats", userHandler.GetStats)
-				user.GET("/me/solves", userHandler.GetSolves)
+				user.GET("/me/stats", challengeRelease, userHandler.GetStats)
+				user.GET("/me/solves", challengeRelease, userHandler.GetSolves)
 			}
 
 			// gated by the teams_mode platform setting
@@ -267,6 +273,7 @@ func (s *Server) setupRouter() {
 			}
 
 			challenges := protected.Group("/challenges")
+			challenges.Use(handlers.ChallengeReleaseGate(s.db, s.logger))
 			{
 				challengeHandler := handlers.NewChallengeHandler(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger)
 				challenges.GET("/:slug/flags", challengeHandler.GetFlags)
@@ -303,6 +310,7 @@ func (s *Server) setupRouter() {
 
 			// team-level; gated by economy_mode
 			economyRoutes := protected.Group("/economy")
+			economyRoutes.Use(handlers.ChallengeReleaseGate(s.db, s.logger))
 			{
 				economyHandler := handlers.NewEconomyHandler(s.config, s.db, s.logger)
 				economyRoutes.GET("/me", economyHandler.Balance)
@@ -315,6 +323,7 @@ func (s *Server) setupRouter() {
 			}
 
 			instances := protected.Group("/instances")
+			instances.Use(handlers.ChallengeReleaseGate(s.db, s.logger))
 			{
 				instanceHandler := handlers.NewInstanceHandler(s.config, s.db, s.containerSvc, s.instancerSvc, s.vmSvc, s.logger)
 				instances.GET("", instanceHandler.List)

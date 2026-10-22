@@ -270,6 +270,60 @@ func eventPlayState(c *gin.Context, db *database.DB) (phase string, staff bool) 
 	return eventPhase(time.Now().UTC(), *start, *end), staff
 }
 
+// ChallengeReleaseGate keeps every player-facing challenge API private until a
+// valid event window reaches its start. Admins can preview it; authors cannot.
+// Missing, malformed, or unreadable window state never releases challenge data.
+type eventWindowLoader func(context.Context) (*time.Time, *time.Time, error)
+
+func ChallengeReleaseGate(db *database.DB, logger *zap.Logger) gin.HandlerFunc {
+	return challengeReleaseGate(func(ctx context.Context) (*time.Time, *time.Time, error) {
+		return loadEventWindow(ctx, db)
+	}, logger)
+}
+
+func challengeReleaseGate(load eventWindowLoader, logger *zap.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.GetString("role") == "admin" {
+			c.Next()
+			return
+		}
+		start, end, err := load(c.Request.Context())
+		allowed, status := challengeReleaseAccess(c.GetString("role"), start, end, err, time.Now().UTC())
+		if allowed {
+			c.Next()
+			return
+		}
+		if status == http.StatusServiceUnavailable {
+			if err != nil {
+				logger.Error("challenge release gate: event window", zap.Error(err))
+			}
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "challenge catalog unavailable"})
+			return
+		}
+		if status == http.StatusUnauthorized {
+			c.AbortWithStatusJSON(status, gin.H{"error": "authentication required"})
+		} else {
+			c.AbortWithStatusJSON(status, gin.H{"error": "challenge catalog has not been released"})
+		}
+	}
+}
+
+func challengeReleaseAccess(role string, start, end *time.Time, windowErr error, now time.Time) (bool, int) {
+	if role == "admin" {
+		return true, 0
+	}
+	if windowErr != nil || start == nil || end == nil {
+		return false, http.StatusServiceUnavailable
+	}
+	if now.Before(*start) {
+		if role == "" {
+			return false, http.StatusUnauthorized
+		}
+		return false, http.StatusForbidden
+	}
+	return true, 0
+}
+
 func parseEventWindow(startRaw, endRaw string) (*time.Time, *time.Time, error) {
 	startRaw = strings.TrimSpace(startRaw)
 	endRaw = strings.TrimSpace(endRaw)

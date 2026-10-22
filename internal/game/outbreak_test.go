@@ -3,11 +3,40 @@ package game
 import (
 	"testing"
 	"time"
+
+	"github.com/anvil-lab/anvil/internal/models"
+	"github.com/google/uuid"
 )
 
 // ist builds a wall-clock time in IST for tests.
 func ist(year, month, day, hour, min int) time.Time {
 	return time.Date(year, time.Month(month), day, hour, min, 0, 0, istLocation)
+}
+
+func TestCanariedBotReads(t *testing.T) {
+	victim := botRead{flagID: uuid.New(), outcome: "crashed"}
+	failedCanary := botRead{flagID: uuid.New(), isNOP: true, outcome: "blocked"}
+	if got := canariedBotReads([]botRead{victim, failedCanary}); got != nil {
+		t.Fatalf("failed NOP canary retained %d bot reads", len(got))
+	}
+
+	passedCanary := botRead{flagID: uuid.New(), isNOP: true, outcome: "stolen"}
+	if got := canariedBotReads([]botRead{victim, passedCanary}); len(got) != 2 {
+		t.Fatalf("successful NOP canary retained %d bot reads, want 2", len(got))
+	}
+}
+
+func TestReferenceAttackTargetsOnlyGreenSLA(t *testing.T) {
+	for _, status := range []models.SLAStatus{models.SLAOk, models.SLARecovering, models.SLAError} {
+		if !green(status) {
+			t.Errorf("status %s should be eligible", status)
+		}
+	}
+	for _, status := range []models.SLAStatus{models.SLADown, models.SLAFaulty, models.SLAFlagNotFound} {
+		if green(status) {
+			t.Errorf("status %s should not be eligible", status)
+		}
+	}
 }
 
 func TestInQuietWindow(t *testing.T) {
@@ -36,10 +65,10 @@ func TestInQuietWindow(t *testing.T) {
 
 // TestQuietWaveStart covers the four rulebook cases for wave start time adjustment.
 //
-//   (1) advisory 23:45 → wave_start 00:15 → adjusted to 06:30
-//   (2) first blood 02:00 → advisory deferred to 06:00 → wave_start = 06:30
-//   (3) advisory_at 06:00 (S5 fallback) → wave_start = 06:30
-//   (4) ongoing wave: advisory 20:00 → wave_start 20:30 → no adjustment (continues through midnight)
+//	(1) advisory 23:45 → wave_start 00:15 → adjusted to 06:30
+//	(2) first blood 02:00 → advisory deferred to 06:00 → wave_start = 06:30
+//	(3) advisory_at 06:00 (S5 fallback) → wave_start = 06:30
+//	(4) ongoing wave: advisory 20:00 → wave_start 20:30 → no adjustment (continues through midnight)
 func TestQuietWaveStart(t *testing.T) {
 	waveDelay := 30 * time.Minute // 15 ticks × 2 min default tick
 

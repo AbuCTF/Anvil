@@ -36,9 +36,9 @@ func TestBulkFlagSubmit(t *testing.T) {
 	port, _ := strconv.Atoi(os.Getenv("ANVIL_TEST_DB_PORT"))
 	db, err := database.New(config.DatabaseConfig{
 		Host: os.Getenv("ANVIL_TEST_DB_HOST"), Port: port,
-		User:         os.Getenv("ANVIL_TEST_DB_USER"),
-		Password:     os.Getenv("ANVIL_TEST_DB_PASSWORD"),
-		Database:     name, SSLMode: "disable",
+		User:     os.Getenv("ANVIL_TEST_DB_USER"),
+		Password: os.Getenv("ANVIL_TEST_DB_PASSWORD"),
+		Database: name, SSLMode: "disable",
 		MaxOpenConns: 8, MaxIdleConns: 2,
 	})
 	if err != nil {
@@ -117,6 +117,7 @@ func TestBulkFlagSubmit(t *testing.T) {
 	cfg.RateLimit.Enabled = false
 	cfg.VPN.Enabled = false
 	cfg.Game.Enabled = true
+	cfg.Container.NetworkName = "bridge" // no container is provisioned by this API test
 	containerSvc, err := container.NewService(cfg.Container, zap.NewNop())
 	if err != nil {
 		t.Skipf("docker unavailable: %v", err)
@@ -211,7 +212,9 @@ func TestBulkFlagSubmit(t *testing.T) {
 		if code != http.StatusOK {
 			t.Fatalf("want 200, got %d %s", code, raw)
 		}
-		var results []struct{ Status string `json:"status"` }
+		var results []struct {
+			Status string `json:"status"`
+		}
 		json.Unmarshal(raw, &results)
 		for _, r := range results {
 			if r.Status != string(game.SubmitNop) {
@@ -222,10 +225,10 @@ func TestBulkFlagSubmit(t *testing.T) {
 
 	t.Run("accepted, own, invalid, duplicate", func(t *testing.T) {
 		flags := []string{
-			"H7CTF{BRAVO_FLAG}",  // teamA attacks teamB: accepted
-			"H7CTF{ALPHA_FLAG}",  // teamA attacks self: own
-			"H7CTF{NOTREAL}",     // invalid
-			"H7CTF{BRAVO_FLAG}",  // duplicate
+			"H7CTF{BRAVO_FLAG}", // teamA attacks teamB: accepted
+			"H7CTF{ALPHA_FLAG}", // teamA attacks self: own
+			"H7CTF{NOTREAL}",    // invalid
+			"H7CTF{BRAVO_FLAG}", // duplicate
 		}
 		code, raw := callToken("PUT", "/api/v1/arena/flags", tokA, flags)
 		if code != http.StatusOK {
@@ -265,7 +268,9 @@ func TestBulkFlagSubmit(t *testing.T) {
 		if code != http.StatusOK {
 			t.Fatalf("want 200, got %d %s", code, raw)
 		}
-		var resp struct{ Token string `json:"token"` }
+		var resp struct {
+			Token string `json:"token"`
+		}
 		json.Unmarshal(raw, &resp)
 		if len(resp.Token) != 64 {
 			t.Errorf("want 64-char token, got %q", resp.Token)
@@ -285,7 +290,9 @@ func TestBulkFlagSubmit(t *testing.T) {
 			t.Errorf("want 200, got %d %s", code, raw)
 		}
 		var row struct{ VulnboxIP string }
-		db.Pool.QueryRow(ctx, `SELECT vulnbox_ip FROM game_teams WHERE id = $1`, teamA).Scan(&row.VulnboxIP)
+		if err := db.Pool.QueryRow(ctx, `SELECT host(vulnbox_ip) FROM game_teams WHERE id = $1`, teamA).Scan(&row.VulnboxIP); err != nil {
+			t.Fatal(err)
+		}
 		if row.VulnboxIP != "10.60.1.99" {
 			t.Errorf("want 10.60.1.99, got %s", row.VulnboxIP)
 		}
@@ -301,11 +308,60 @@ func TestBulkFlagSubmit(t *testing.T) {
 			t.Errorf("want 200, got %d %s", code, raw)
 		}
 		var resp struct {
-			Tasks []struct{ Method string `json:"method"` } `json:"tasks"`
+			Tasks []struct {
+				Method string `json:"method"`
+			} `json:"tasks"`
 		}
 		json.Unmarshal(raw, &resp)
 		if len(resp.Tasks) == 0 {
 			t.Error("want at least one checker task row")
+		}
+	})
+
+	t.Run("reference attack failures remain audit-only", func(t *testing.T) {
+		// ENO MUMBLE maps to FAULTY. These rows remain in the checker log, but
+		// must not contribute to SLA suspicion or service-health calculations.
+		for i := 0; i < 4; i++ {
+			exec(`INSERT INTO game_checker_tasks (tick_number, related_tick, team_id, service_id, method, variant, status)
+				VALUES (2, 2, $1, $2, 'exploit', $3, 'FAULTY')`, teamA, svc, i)
+		}
+		code, raw := callAdmin("GET", "/api/v1/admin/arena/sla-suspicious?since_tick=1", nil)
+		if code != http.StatusOK {
+			t.Fatalf("want 200, got %d %s", code, raw)
+		}
+		var suspicious struct {
+			Rows []struct {
+				TeamID string `json:"team_id"`
+			} `json:"rows"`
+		}
+		if err := json.Unmarshal(raw, &suspicious); err != nil {
+			t.Fatal(err)
+		}
+		if len(suspicious.Rows) != 0 {
+			t.Fatalf("exploit failures triggered suspicious SLA: %+v", suspicious.Rows)
+		}
+
+		code, raw = callAdmin("GET",
+			fmt.Sprintf("/api/v1/admin/arena/checker-log?team_id=%s&service_id=%s&tick=2", teamA, svc), nil)
+		if code != http.StatusOK {
+			t.Fatalf("checker log: want 200, got %d %s", code, raw)
+		}
+		var audit struct {
+			Tasks []struct {
+				Method string `json:"method"`
+			} `json:"tasks"`
+		}
+		if err := json.Unmarshal(raw, &audit); err != nil {
+			t.Fatal(err)
+		}
+		var exploits int
+		for _, task := range audit.Tasks {
+			if task.Method == game.MethodExploit {
+				exploits++
+			}
+		}
+		if exploits != 4 {
+			t.Fatalf("checker audit contains %d exploit rows, want 4", exploits)
 		}
 	})
 
@@ -321,12 +377,13 @@ func TestBulkFlagSubmit(t *testing.T) {
 		}
 		var resp struct {
 			Rows []struct {
+				TeamID   string  `json:"team_id"`
 				DownRate float64 `json:"down_rate"`
 			} `json:"rows"`
 		}
 		json.Unmarshal(raw, &resp)
-		if len(resp.Rows) == 0 {
-			t.Error("want at least one suspicious row for teamB")
+		if len(resp.Rows) != 1 || resp.Rows[0].TeamID != teamB.String() || resp.Rows[0].DownRate != 1 {
+			t.Errorf("suspicious rows = %+v, want only normal getflag failures for teamB", resp.Rows)
 		}
 	})
 }

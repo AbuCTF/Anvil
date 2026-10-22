@@ -18,20 +18,20 @@ type EngineMetrics struct {
 
 // TickMetrics describes the current / most recent tick.
 type TickMetrics struct {
-	Current    int     `json:"current"`      // tick number of the latest row
-	Status     string  `json:"status"`       // "running" | "closed"
-	OpenForS   float64 `json:"open_for_s"`   // seconds since started_at (0 when closed)
-	IntervalS  int     `json:"interval_s"`   // configured tick interval, for context
+	Current   int     `json:"current"`    // tick number of the latest row
+	Status    string  `json:"status"`     // "running" | "closed"
+	OpenForS  float64 `json:"open_for_s"` // seconds since started_at (0 when closed)
+	IntervalS int     `json:"interval_s"` // configured tick interval, for context
 }
 
 // ServiceHealth is per-service health over the last lookback ticks.
 type ServiceHealth struct {
-	Slug          string  `json:"slug"`
-	TicksSampled  int     `json:"ticks_sampled"`
-	TasksTotal    int     `json:"tasks_total"`
-	TasksOK       int     `json:"tasks_ok"`
-	ErrorRate     float64 `json:"error_rate"`       // (non-OK tasks) / total; 0 when no tasks
-	LatencyP95Ms  int     `json:"latency_p95_ms"`   // 0 when no latency data
+	Slug         string  `json:"slug"`
+	TicksSampled int     `json:"ticks_sampled"`
+	TasksTotal   int     `json:"tasks_total"`
+	TasksOK      int     `json:"tasks_ok"`
+	ErrorRate    float64 `json:"error_rate"`     // (non-OK tasks) / total; 0 when no tasks
+	LatencyP95Ms int     `json:"latency_p95_ms"` // 0 when no latency data
 }
 
 // QueryMetrics reads the engine health snapshot from the DB.
@@ -69,7 +69,7 @@ func QueryMetrics(ctx context.Context, db *database.DB, tickInterval time.Durati
 		JOIN game_services gs ON gs.id = ct.service_id
 		WHERE ct.tick_number > (
 		    SELECT COALESCE(MAX(tick_number) - $1, 0) FROM game_ticks
-		)
+		) AND ct.method <> 'exploit'
 		GROUP BY gs.slug
 		ORDER BY gs.slug`, lookbackTicks)
 	if err != nil {
@@ -104,7 +104,7 @@ func QueryMetrics(ctx context.Context, db *database.DB, tickInterval time.Durati
 		JOIN game_services gs ON gs.id = ct.service_id
 		WHERE ct.tick_number > (
 		    SELECT COALESCE(MAX(tick_number) - $1, 0) FROM game_ticks
-		) AND ct.latency_ms IS NOT NULL
+		) AND ct.method <> 'exploit' AND ct.latency_ms IS NOT NULL
 		GROUP BY gs.slug`, lookbackTicks)
 	if err != nil {
 		return m, err

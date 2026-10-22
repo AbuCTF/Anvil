@@ -168,7 +168,14 @@ func (c *Controller) loadMirror(ctx context.Context, tx pgx.Tx, current int, fin
 	if err := scan("bot crashes", `
 		SELECT f.team_id, f.service_id, b.tick_number
 		FROM game_bot_reads b JOIN game_flags f ON f.id = b.flag_id
-		WHERE b.outcome = 'crashed'`, nil, func(r pgx.Rows) error {
+		WHERE b.outcome = 'crashed'
+		  AND EXISTS (
+		    SELECT 1 FROM game_bot_reads nb
+		    JOIN game_flags nf ON nf.id = nb.flag_id
+		    JOIN game_teams nt ON nt.id = nf.team_id AND nt.is_nop
+		    WHERE nf.service_id = f.service_id AND nf.store_index = f.store_index
+		      AND nb.tick_number = b.tick_number AND nb.outcome = 'stolen'
+		  )`, nil, func(r pgx.Rows) error {
 		var k slaKey
 		if err := r.Scan(&k.team, &k.service, &k.tick); err != nil {
 			return err

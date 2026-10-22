@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 
 	"github.com/anvil-lab/anvil/internal/api/middleware"
@@ -78,13 +80,18 @@ func (h *GameHandler) BulkSubmitFlags(c *gin.Context) {
 	for i, flag := range flags {
 		outcome, err := game.SubmitFlag(c.Request.Context(), h.db, *teamID, flag)
 		if err != nil {
-			h.logger.Error("bulk submit: SubmitFlag", zap.Error(err), zap.String("flag", flag))
+			logBulkSubmitError(h.logger, err, flag)
 			results[i] = flagResult{Flag: flag, Status: "error", Msg: "internal error"}
 			continue
 		}
 		results[i] = flagResult{Flag: flag, Status: string(outcome), Msg: submitMsg(outcome)}
 	}
 	c.JSON(http.StatusOK, results)
+}
+
+func logBulkSubmitError(logger *zap.Logger, err error, flag string) {
+	digest := sha256.Sum256([]byte(flag))
+	logger.Error("bulk submit: SubmitFlag", zap.Error(err), zap.String("flag_sha256", hex.EncodeToString(digest[:])))
 }
 
 // submitMsg maps a SubmitOutcome to the message substring required by farm
