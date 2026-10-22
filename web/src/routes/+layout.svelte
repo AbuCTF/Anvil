@@ -20,6 +20,7 @@
 
 	let mobileMenuOpen = false;
 	let userMenuOpen = false;
+	let authReady = false;
 
 	// admins preview gated features (Arena) before they're switched on for players.
 	$: isAdmin = $auth.user?.role === 'admin';
@@ -47,7 +48,7 @@
 	// route guard: a disabled feature's URL redirects home, so hidden != reachable.
 	// wait for auth to settle first, else an admin cold-loading /arena is bounced
 	// before isAdmin resolves.
-	$: if (browser && $platformInfo && !$auth.isLoading) {
+	$: if (browser && authReady && $platformInfo && !$auth.isLoading) {
 		const p = $page.url.pathname;
 		if (p.startsWith('/team/finals') && !$platformInfo.arena_enabled) goto('/team');
 		const blocked =
@@ -219,7 +220,7 @@
 	}
 
 	onMount(() => {
-		auth.checkAuth();
+		auth.checkAuth().finally(() => { authReady = true; });
 		loadPlatformInfo();
 		const systemTheme = window.matchMedia('(prefers-color-scheme: light)');
 		try {
