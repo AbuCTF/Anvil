@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +40,84 @@ type deployReq struct {
 	DiffFiles    *int       `json:"diff_files"`
 	DiffLines    *int       `json:"diff_lines"`
 	DiffBytes    *int       `json:"diff_bytes"`
+}
+
+type desiredVPNPeer struct {
+	PeerID     uuid.UUID `json:"peer_id"`
+	TeamID     uuid.UUID `json:"team_id"`
+	TeamNumber int       `json:"team_number"`
+	PublicKey  string    `json:"public_key"`
+	Address    string    `json:"address"`
+}
+
+func (h *GameInternalHandler) VPNPeers(c *gin.Context) {
+	if !h.config.VPN.Enabled || !strings.EqualFold(strings.TrimSpace(h.config.VPN.PeerControl), "external") {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	rows, err := h.db.Pool.Query(c.Request.Context(), `
+		SELECT v.id, identity.team_id, identity.team_number, v.public_key, v.assigned_ip
+		FROM vpn_configs v
+		LEFT JOIN LATERAL (
+			SELECT team_id, team_number
+			FROM vpn_peer_history
+			WHERE user_id = v.user_id AND action = 'issued' AND public_key = v.public_key
+			ORDER BY id DESC LIMIT 1
+		) identity ON TRUE
+		WHERE v.is_active = TRUE
+		ORDER BY identity.team_number, v.assigned_ip, v.id`)
+	if err != nil {
+		h.logger.Error("internal: desired VPN peers", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	defer rows.Close()
+
+	peers := make([]desiredVPNPeer, 0)
+	keys, addresses := make(map[string]struct{}), make(map[string]struct{})
+	for rows.Next() {
+		var peer desiredVPNPeer
+		var teamID *uuid.UUID
+		var teamNumber *int
+		var address string
+		if err := rows.Scan(&peer.PeerID, &teamID, &teamNumber, &peer.PublicKey, &address); err != nil {
+			h.logger.Error("internal: scan desired VPN peer", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+		parsed, parseErr := netip.ParseAddr(address)
+		if teamID == nil || teamNumber == nil || *teamNumber < 1 || *teamNumber > 15 ||
+			parseErr != nil || !parsed.Is4() || peer.PublicKey == "" {
+			h.logger.Error("internal: invalid desired VPN peer", zap.String("peer_id", peer.PeerID.String()))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid desired peer inventory"})
+			return
+		}
+		octets := parsed.As4()
+		if octets[0] != 10 || octets[1] != 80 || int(octets[2]) != *teamNumber || octets[3] < 200 || octets[3] > 239 {
+			h.logger.Error("internal: desired VPN peer outside team pool", zap.String("peer_id", peer.PeerID.String()))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid desired peer inventory"})
+			return
+		}
+		if _, duplicate := keys[peer.PublicKey]; duplicate {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid desired peer inventory"})
+			return
+		}
+		if _, duplicate := addresses[address]; duplicate {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid desired peer inventory"})
+			return
+		}
+		keys[peer.PublicKey], addresses[address] = struct{}{}, struct{}{}
+		peer.TeamID = *teamID
+		peer.TeamNumber = *teamNumber
+		peer.Address = fmt.Sprintf("%s/32", address)
+		peers = append(peers, peer)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("internal: desired VPN peers", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"peers": peers})
 }
 
 func (h *GameInternalHandler) serviceID(c *gin.Context, slug string) (uuid.UUID, bool) {

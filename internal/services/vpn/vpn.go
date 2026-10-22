@@ -5,18 +5,28 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
+
+var (
+	ErrInvalidTeamNumber = errors.New("invalid VPN team number")
+	ErrTeamPoolExhausted = errors.New("team VPN address pool exhausted")
+)
+
+const teamPoolAdvisoryLock = 0x56504e50
 
 type Service struct {
 	config config.VPNConfig
@@ -192,11 +202,42 @@ func (s *Service) ReleaseIP(ip string) {
 	}
 }
 
+func (s *Service) AllocateTeamIP(ctx context.Context, tx pgx.Tx, teamNumber int) (string, error) {
+	if teamNumber < 1 || teamNumber > 15 {
+		return "", ErrInvalidTeamNumber
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, teamPoolAdvisoryLock, teamNumber); err != nil {
+		return "", err
+	}
+
+	var ip string
+	err := tx.QueryRow(ctx, `
+		SELECT format('10.80.%s.%s', $1::integer, host_number)
+		FROM generate_series(200, 239) AS host_number
+		WHERE NOT EXISTS (
+			SELECT 1 FROM vpn_configs
+			WHERE assigned_ip = format('10.80.%s.%s', $1::integer, host_number)
+			  AND is_active = TRUE
+		) AND NOT EXISTS (
+			SELECT 1 FROM vpn_peer_history
+			WHERE assigned_ip = format('10.80.%s.%s', $1::integer, host_number)::inet
+		)
+		ORDER BY host_number
+		LIMIT 1`, teamNumber).Scan(&ip)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrTeamPoolExhausted
+	}
+	return ip, err
+}
+
 func (s *Service) GenerateClientConfig(privateKey, assignedIP string) string {
 	// AllowedIPs - route challenge networks through VPN
 	// 10.100.0.0/16 = VM network (libvirt)
 	// 172.20.0.0/16 = Container network (docker)
-	allowedIPs := "10.100.0.0/16, 172.20.0.0/16"
+	allowedIPs := strings.TrimSpace(s.config.AllowedIPs)
+	if allowedIPs == "" {
+		allowedIPs = "10.100.0.0/16, 172.20.0.0/16"
+	}
 
 	// DNS is optional
 	dnsLine := ""

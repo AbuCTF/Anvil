@@ -146,6 +146,22 @@ func (c Config) Validate() error {
 		if secret == defaultJWTSecret || len([]byte(secret)) < 32 {
 			return fmt.Errorf("jwt.secret must be at least 32 bytes and non-default in production")
 		}
+		if c.VPN.Enabled && len([]byte(strings.TrimSpace(c.Secrets.EncryptionKey))) < 32 {
+			return fmt.Errorf("secrets.encryption_key must be at least 32 bytes when VPN is enabled in production")
+		}
+	}
+	for _, route := range strings.Split(c.VPN.AllowedIPs, ",") {
+		route = strings.TrimSpace(route)
+		if route == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(route); err != nil || !prefix.IsValid() {
+			return fmt.Errorf("vpn.allowed_ips must contain valid CIDR prefixes")
+		}
+	}
+	peerControl := strings.ToLower(strings.TrimSpace(c.VPN.PeerControl))
+	if peerControl != "" && peerControl != "local" && peerControl != "external" {
+		return fmt.Errorf("vpn.peer_control must be local or external")
 	}
 	if c.Container.HTTPRouting {
 		if strings.Trim(strings.TrimSpace(c.Container.HTTPBaseDomain), ".") == "" {
@@ -300,6 +316,8 @@ type VPNConfig struct {
 	PrivateKey        string        `mapstructure:"private_key"`
 	PublicKey         string        `mapstructure:"public_key"`
 	AddressRange      string        `mapstructure:"address_range"` // e.g., "10.10.0.0/16"
+	AllowedIPs        string        `mapstructure:"allowed_ips"`
+	PeerControl       string        `mapstructure:"peer_control"` // local | external
 	DNS               string        `mapstructure:"dns"`
 	MTU               int           `mapstructure:"mtu"`
 	KeepaliveInterval time.Duration `mapstructure:"keepalive_interval"`
@@ -587,6 +605,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("vpn.private_key", "")
 	v.SetDefault("vpn.public_key", "")
 	v.SetDefault("vpn.address_range", "10.10.0.0/16")
+	v.SetDefault("vpn.allowed_ips", "")
+	v.SetDefault("vpn.peer_control", "local")
 	v.SetDefault("vpn.dns", "1.1.1.1")
 	v.SetDefault("vpn.mtu", 1420)
 	v.SetDefault("vpn.keepalive_interval", "8s")

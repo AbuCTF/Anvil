@@ -227,6 +227,7 @@ func (s *Server) setupRouter() {
 			internalArena.POST("/deploys", gameInternal.Deploy)
 			internalArena.GET("/sla", gameInternal.SLA)
 			internalArena.GET("/mode", gameInternal.Mode)
+			internalArena.GET("/vpn/peers", gameInternal.VPNPeers)
 
 			internalHandler := handlers.NewInternalGameHandler(s.config, s.db, s.logger)
 			internalArena.POST("/gate", internalHandler.Gate)
@@ -339,6 +340,9 @@ func (s *Server) setupRouter() {
 				vpnRoutes.POST("/config/regenerate", middleware.RateLimitEndpoint(
 					s.config.RateLimit.VPNConfigGen,
 				), vpnHandler.RegenerateConfig)
+				vpnRoutes.POST("/config/revoke", middleware.RateLimitEndpoint(
+					s.config.RateLimit.VPNConfigGen,
+				), vpnHandler.RevokeConfig)
 				vpnRoutes.GET("/status", vpnHandler.GetStatus)
 			}
 
@@ -470,6 +474,7 @@ func (s *Server) setupRouter() {
 				gameAdmin.POST("/extend", gameAdminHandler.Extend)
 				gameAdmin.POST("/credits", gameAdminHandler.Credit)
 				gameAdmin.POST("/resettle", gameAdminHandler.Resettle)
+				gameAdmin.PUT("/state", gameAdminHandler.SetState)
 				gameAdmin.DELETE("/hills/:id", gameAdminHandler.DeleteHill)
 
 				// shared-target launcher: spawn the one contested instance for a KotH

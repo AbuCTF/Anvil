@@ -13,6 +13,7 @@
 	let loading = true;
 	let generating = false;
 	let regenerating = false;
+	let revoking = false;
 	let error = '';
 	let loadFailed = false;
 	let statusError = '';
@@ -24,6 +25,7 @@
 	let ready = false;
 	let disposed = false;
 	let showRegenerateConfirm = false;
+	let showRevokeConfirm = false;
 	const REQUEST_TIMEOUT_MS = 10000;
 
 	onMount(() => {
@@ -168,6 +170,21 @@
 			error = e instanceof Error ? e.message : 'Failed to regenerate VPN config';
 		} finally {
 			regenerating = false;
+		}
+	}
+
+	async function revokeConfig() {
+		revoking = true;
+		error = '';
+		try {
+			await api.revokeVPNConfig();
+			vpnConfig = null;
+			showRevokeConfirm = false;
+			if (await loadVPNData()) startStatusPolling();
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to revoke VPN config';
+		} finally {
+			revoking = false;
 		}
 	}
 
@@ -367,6 +384,22 @@
 							<button on:click={() => showRegenerateConfirm = true} class="w-full {btnBase} {btnNeutral} py-2">
 								<Icon icon="mdi:refresh" class="w-3.5 h-3.5 shrink-0" />
 								<span>Regenerate config</span>
+							</button>
+						{/if}
+						{#if showRevokeConfirm}
+							<div class="border border-down/30 bg-down/5 rounded-md p-4">
+								<p class="text-down text-sm mb-3">Revoke this profile now? The tunnel will stop working and the private key cannot be recovered.</p>
+								<div class="flex gap-2">
+									<button on:click={revokeConfig} disabled={revoking} class="flex-1 {btnBase} {btnDanger} py-2">
+										{revoking ? 'Revoking...' : 'Confirm revoke'}
+									</button>
+									<button on:click={() => showRevokeConfirm = false} class="{btnBase} {btnNeutral} py-2">Cancel</button>
+								</div>
+							</div>
+						{:else}
+							<button on:click={() => showRevokeConfirm = true} class="w-full {btnBase} {btnDanger} py-2">
+								<Icon icon="mdi:key-remove" class="w-3.5 h-3.5 shrink-0" />
+								<span>Revoke config</span>
 							</button>
 						{/if}
 					</div>

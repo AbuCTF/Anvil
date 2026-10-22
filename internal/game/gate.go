@@ -8,7 +8,7 @@ package game
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base32"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"sync"
@@ -266,19 +266,18 @@ func (g *GateRunner) runGateTask(ctx context.Context, checker Checker, target Ta
 	return checker.Run(tctx, target, task)
 }
 
-// gateFlag generates a valid-format flag (H7CTF{[A-Z2-7]{32}}) that is never written
+// gateFlag generates a valid-format flag (H7CTF{[0-9a-f]{32}}) that is never written
 // to game_flags. Checkers store and retrieve it by chainID, so any stable value per
 // (round, variant) would work; using the real format means checkers that validate
 // format (they shouldn't, but some do) still accept it.
 func gateFlag(flagPrefix string, round, variant int) string {
-	b := make([]byte, 20) // 20 bytes -> 32-char base32 (no padding)
+	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		// deterministic fallback: should never happen
 		for i := range b {
 			b[i] = byte(round*13 + variant*7 + i)
 		}
 	}
-	enc := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(b)
+	enc := hex.EncodeToString(b)
 	return fmt.Sprintf("%s{%s}", flagPrefix, enc)
 }
-

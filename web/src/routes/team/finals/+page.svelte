@@ -5,6 +5,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import { API_BASE } from '$lib/config';
+	import { api, ApiError } from '$api';
 
 	// ---- types ---------------------------------------------------------------
 	// ENO raw names; Finals-3 may map to display names but we handle both.
@@ -111,10 +112,8 @@
 
 	function authHeaders(): Record<string, string> {
 		const token = typeof localStorage !== 'undefined' ? localStorage.getItem('accessToken') : null;
-		const teamToken = typeof localStorage !== 'undefined' ? localStorage.getItem('teamToken') : null;
 		const h: Record<string, string> = {};
 		if (token) h['Authorization'] = `Bearer ${token}`;
-		if (teamToken) h['X-Team-Token'] = teamToken;
 		return h;
 	}
 
@@ -194,16 +193,25 @@
 		submitResult = '';
 		try {
 			const flags = submitFlag.trim().split(/[\s,]+/).filter(Boolean);
-			const res = await fetch(`${API_BASE}/api/v1/arena/flags`, {
-				method: 'PUT',
-				headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-				body: JSON.stringify(flags) // bare array per API spec
-			});
-			if (res.status === 401) { submitResult = '401: check your team token'; return; }
-			if (res.status === 400) { submitResult = '400: bad request'; return; }
-			const d: Array<{ flag: string; status: string; msg: string }> = await res.json();
-			submitResult = d.map(r => `${r.flag.slice(-8)}: ${r.status} (${r.msg})`).join('\n');
-			if (res.ok && d.every(r => r.status === 'accepted' || r.status === 'duplicate')) submitFlag = '';
+			const results: Array<{ flag: string; status: string; message: string }> = [];
+			for (const flag of flags) {
+				try {
+					const result = await api.submitArenaFlag(flag);
+					results.push({ flag, status: result.status, message: result.message ?? result.status });
+				} catch (error) {
+					if (error instanceof ApiError) {
+						results.push({
+							flag,
+							status: String(error.details.status ?? 'rejected'),
+							message: error.message
+						});
+						continue;
+					}
+					throw error;
+				}
+			}
+			submitResult = results.map(r => `${r.flag.slice(-8)}: ${r.status} (${r.message})`).join('\n');
+			if (results.every(r => r.status === 'accepted' || r.status === 'duplicate')) submitFlag = '';
 		} catch (e: any) {
 			submitResult = e?.message ?? 'submit failed';
 		} finally {

@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/anvil-lab/anvil/internal/config"
@@ -20,6 +21,7 @@ func TestVPNHandlersRejectInvalidUserContext(t *testing.T) {
 		{name: "generate config", handle: handler.GenerateConfig},
 		{name: "get status", handle: handler.GetStatus},
 		{name: "regenerate config", handle: handler.RegenerateConfig},
+		{name: "revoke config", handle: handler.RevokeConfig},
 	}
 
 	for _, test := range tests {
@@ -42,18 +44,50 @@ func TestVPNHandlersRejectInvalidUserContext(t *testing.T) {
 	}
 }
 
+func TestVPNPrivateKeyEncryption(t *testing.T) {
+	handler := &VPNHandler{config: &config.Config{
+		Secrets: config.SecretsConfig{EncryptionKey: strings.Repeat("k", 32)},
+	}}
+	ciphertext, err := handler.encryptPrivateKey("client-private-key")
+	if err != nil {
+		t.Fatalf("encrypt private key: %v", err)
+	}
+	if strings.Contains(string(ciphertext), "client-private-key") {
+		t.Fatal("ciphertext contains plaintext private key")
+	}
+	plaintext, err := handler.decryptPrivateKey(ciphertext)
+	if err != nil || plaintext != "client-private-key" {
+		t.Fatalf("decrypt private key = %q, %v", plaintext, err)
+	}
+}
+
 func TestVPNHandlerManagesWireGuardPeersOnlyInProduction(t *testing.T) {
 	for _, test := range []struct {
-		environment string
-		want        bool
+		environment, peerControl string
+		want                     bool
 	}{
 		{environment: "production", want: true},
 		{environment: " Production ", want: true},
 		{environment: "development", want: false},
+		{environment: "production", peerControl: "external", want: false},
 	} {
-		handler := &VPNHandler{config: &config.Config{Environment: test.environment}}
+		handler := &VPNHandler{config: &config.Config{Environment: test.environment, VPN: config.VPNConfig{PeerControl: test.peerControl}}}
 		if got := handler.managesWireGuardPeers(); got != test.want {
-			t.Fatalf("managesWireGuardPeers() for %q = %v, want %v", test.environment, got, test.want)
+			t.Fatalf("managesWireGuardPeers() for %q/%q = %v, want %v", test.environment, test.peerControl, got, test.want)
 		}
+	}
+}
+
+func TestGenerateWireGuardConfigUsesConfiguredRoutes(t *testing.T) {
+	handler := &VPNHandler{config: &config.Config{
+		VPN: config.VPNConfig{
+			PublicEndpoint: "vpn.h7tex.com:443",
+			PublicKey:      "server-key",
+			AllowedIPs:     " 10.60.0.0/15,10.80.0.0/16 ",
+		},
+	}}
+	generated := handler.generateWireGuardConfig("private-key", "10.80.1.2")
+	if !strings.Contains(generated, "AllowedIPs = 10.60.0.0/15, 10.80.0.0/16") {
+		t.Fatalf("generated config does not contain configured routes:\n%s", generated)
 	}
 }

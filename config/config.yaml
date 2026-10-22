@@ -72,6 +72,10 @@ vpn:
   private_key: ""       # set via ANVIL_VPN_PRIVATE_KEY in .env
   public_key: ""        # set via ANVIL_VPN_PUBLIC_KEY in .env
   address_range: "10.10.0.0/16"
+  # Empty preserves the built-in VM + container routes. Finals uses 10.60.0.0/15.
+  allowed_ips: ""
+  # external commits desired peers to the database for a gateway reconciler.
+  peer_control: local
   dns: "1.1.1.1"
   mtu: 1420
   keepalive_interval: 8s

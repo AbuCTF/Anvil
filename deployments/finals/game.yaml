@@ -11,6 +11,10 @@ server:
   trusted_proxies:
     - 172.31.26.10/32
 
+vpn:
+  allowed_ips: "10.60.0.0/15"
+  peer_control: external
+
 game:
   enabled: true
   tick_interval: 2m

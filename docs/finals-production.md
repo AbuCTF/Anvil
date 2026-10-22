@@ -15,6 +15,7 @@ volumes, certificates, signing keys or environment file.
 |---|---|
 | `deployments/finals/compose.yaml` | Postgres, one API/game controller, web and TLS ingress |
 | `deployments/finals/game.yaml` | Versioned finals game settings |
+| `deployments/finals/settings.sql` | Idempotent finals database settings |
 | `deployments/finals/production.env.example` | Names of host-owned settings and secrets |
 | `deployments/finals/preflight.sh` | Secret, certificate, address and Compose checks |
 | `deployments/finals/backup.sh` | PostgreSQL dump plus storage archive |
@@ -198,6 +199,17 @@ serialized with a PostgreSQL advisory lock and their names and checksums are
 validated. A migration failure keeps the API unhealthy and prevents Nginx from
 becoming ready. Never bypass that failure or edit `schema_migrations`; retain the
 old release, logs and pre-upgrade backup for diagnosis.
+
+After the API is healthy, apply the idempotent participant-facing finals settings:
+
+```bash
+sudo docker compose --project-name anvil-finals \
+  --project-directory /opt/anvil/current/deployments/finals \
+  --env-file /etc/anvil/finals.env \
+  -f /opt/anvil/current/deployments/finals/compose.yaml \
+  exec -T postgres psql -v ON_ERROR_STOP=1 -U anvil -d anvil \
+  < /opt/anvil/current/deployments/finals/settings.sql
+```
 
 Exactly one API process in this profile owns game ticks and TCP submission. Do
 not scale `api` without first moving the controller role to one explicit process.

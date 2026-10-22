@@ -1,9 +1,20 @@
 package vpn
 
 import (
+	"context"
+	"errors"
 	"net"
 	"testing"
 )
+
+func TestAllocateTeamIPRejectsInvalidTeamNumber(t *testing.T) {
+	service := &Service{}
+	for _, number := range []int{0, 16} {
+		if _, err := service.AllocateTeamIP(context.Background(), nil, number); !errors.Is(err, ErrInvalidTeamNumber) {
+			t.Fatalf("AllocateTeamIP(%d) error = %v, want ErrInvalidTeamNumber", number, err)
+		}
+	}
+}
 
 func TestAbbreviatedPublicKeyHandlesShortAndNormalKeys(t *testing.T) {
 	for _, test := range []struct {

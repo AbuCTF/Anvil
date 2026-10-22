@@ -117,6 +117,7 @@
 	let economyPolicyDocument: EconomyPolicyDocument | null = null;
 	let economyPolicyLoading = false;
 	let showEconomyPolicy = false;
+	let gameStateBusy = false;
 
 	let announcements: AdminAnnouncement[] = [];
 	let announcementsLoading = false;
@@ -873,6 +874,26 @@
 		platformSettings = { ...platformSettings, [key]: value };
 		settingsChanged = true;
 		settingsError = '';
+	}
+
+	async function setGameState(state: 'running' | 'paused' | 'stopped') {
+		if (gameStateBusy || $platformInfo?.game_state === state) return;
+		const action = state === 'running' ? 'start or resume' : state === 'paused' ? 'pause' : 'stop';
+		if (!(await confirmDialog({
+			title: `${action[0].toUpperCase()}${action.slice(1)} finals`,
+			message: `${action[0].toUpperCase()}${action.slice(1)} the attack-defense game now?`,
+			confirmLabel: action,
+			danger: state === 'stopped'
+		}))) return;
+		gameStateBusy = true;
+		try {
+			await api.setArenaState(state);
+			await refreshPlatformInfo();
+		} catch (e) {
+			alertDialog({ title: 'Finals state unchanged', message: e instanceof Error ? e.message : 'Failed to update finals state' });
+		} finally {
+			gameStateBusy = false;
+		}
 	}
 
 	async function loadEconomyPolicy() {
@@ -2576,6 +2597,25 @@
 					</div>
 				</nav>
 				<div class="space-y-6 {settingsError ? 'pointer-events-none select-none opacity-40' : ''}" aria-disabled={settingsError ? 'true' : undefined}>
+					<Card bodyClass="p-4">
+						<div slot="header">
+							<h2 class="flex items-center gap-2 text-sm font-semibold leading-none text-stone-200">
+								<OpticalIcon icon="mdi:sword-cross" size={14} box={14} className="text-stone-500" />
+								<span class="optical-label">Finals control</span>
+							</h2>
+						</div>
+						<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+							<div>
+								<p class="text-sm text-stone-300">Attack-defense engine</p>
+								<p class="mt-1 text-xs text-stone-600">Current state: <span class="font-medium text-stone-400">{$platformInfo?.game_state ?? 'not configured'}</span></p>
+							</div>
+							<div class="flex flex-wrap gap-2" aria-label="Finals game state">
+								<button type="button" class={btnPrimary} disabled={gameStateBusy || $platformInfo?.game_state === 'running'} on:click={() => setGameState('running')}>Start / Resume</button>
+								<button type="button" class={btnGhost} disabled={gameStateBusy || $platformInfo?.game_state === 'paused'} on:click={() => setGameState('paused')}>Pause</button>
+								<button type="button" class={`${btnGhost} border-down/40 text-down`} disabled={gameStateBusy || $platformInfo?.game_state === 'stopped'} on:click={() => setGameState('stopped')}>Stop</button>
+							</div>
+						</div>
+					</Card>
 					{#if settingsChanged}
 						<div class="flex justify-end">
 							<button on:click={savePlatformSettings} disabled={savingSettings || !!eventWindowError || !!historyEndError} class={btnPrimary}>

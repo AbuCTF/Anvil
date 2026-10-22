@@ -2,14 +2,16 @@ package game
 
 import (
 	"crypto/rand"
-	"encoding/base32"
+	"encoding/hex"
 )
 
-var flagEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
+var flagRandRead = rand.Read
 
 // mintFlag returns a fresh flag of the form PREFIX{RANDOM}.
 func mintFlag(prefix string) string {
-	var b [20]byte
-	rand.Read(b[:])
-	return prefix + "{" + flagEncoding.EncodeToString(b[:]) + "}"
+	var b [16]byte
+	if _, err := flagRandRead(b[:]); err != nil {
+		panic(err)
+	}
+	return prefix + "{" + hex.EncodeToString(b[:]) + "}"
 }

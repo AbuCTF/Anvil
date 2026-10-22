@@ -794,6 +794,12 @@ class ApiClient {
 		});
 	}
 
+	async revokeVPNConfig() {
+		return this.request<{ status: 'revoked' }>('/vpn/config/revoke', {
+			method: 'POST'
+		});
+	}
+
 	async getVPNStatus(options: RequestInit = {}) {
 		return this.request<VpnStatusResponse>('/vpn/status', options);
 	}
@@ -849,6 +855,13 @@ class ApiClient {
 
 	async leaveTeam() {
 		return this.request<{ message: string }>('/teams/leave', { method: 'POST' });
+	}
+
+	async submitArenaFlag(flag: string) {
+		return this.request<{ status: string; message?: string }>('/arena/submit', {
+			method: 'POST',
+			body: JSON.stringify({ flag })
+		});
 	}
 
 	// economy (active when economy_mode is enabled)
@@ -917,6 +930,13 @@ class ApiClient {
 	// admin
 	async getAdminStats() {
 		return this.request<any>('/admin/stats');
+	}
+
+	async setArenaState(state: 'running' | 'paused' | 'stopped') {
+		return this.request<{ state: 'running' | 'paused' | 'stopped'; phase?: string }>('/admin/arena/state', {
+			method: 'PUT',
+			body: JSON.stringify({ state })
+		});
 	}
 
 	async getAdminAnnouncements() {

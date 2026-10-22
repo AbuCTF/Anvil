@@ -26,11 +26,43 @@ func TestValidateAllowsConfiguredProductionJWTSecret(t *testing.T) {
 	}
 }
 
+func TestValidateProductionVPNEncryptionKey(t *testing.T) {
+	cfg := Config{Environment: "production", VPN: VPNConfig{Enabled: true}}
+	cfg.JWT.Secret = "0123456789abcdef0123456789abcdef"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() accepted production VPN without a stored-secret encryption key")
+	}
+	cfg.Secrets.EncryptionKey = "abcdef0123456789abcdef0123456789"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() rejected production VPN encryption key: %v", err)
+	}
+}
+
 func TestValidateAllowsDevelopmentDefaultJWTSecret(t *testing.T) {
 	cfg := Config{Environment: "development"}
 	cfg.JWT.Secret = defaultJWTSecret
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() rejected development JWT secret: %v", err)
+	}
+}
+
+func TestValidateVPNRoutingAndPeerControl(t *testing.T) {
+	valid := Config{Environment: "development"}
+	valid.VPN.AllowedIPs = "10.60.0.0/15, 10.80.0.0/16"
+	valid.VPN.PeerControl = "external"
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("Validate() rejected valid VPN config: %v", err)
+	}
+
+	badRoute := valid
+	badRoute.VPN.AllowedIPs = "10.60.0.0/15, not-a-network"
+	if err := badRoute.Validate(); err == nil {
+		t.Fatal("Validate() accepted an invalid VPN route")
+	}
+	badControl := valid
+	badControl.VPN.PeerControl = "nsenter-somewhere"
+	if err := badControl.Validate(); err == nil {
+		t.Fatal("Validate() accepted an unknown VPN peer control mode")
 	}
 }
 

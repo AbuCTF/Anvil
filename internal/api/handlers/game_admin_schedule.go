@@ -9,11 +9,81 @@ import (
 	"github.com/anvil-lab/anvil/internal/api/middleware"
 	"github.com/anvil-lab/anvil/internal/game"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
 type extendReq struct {
 	Minutes int `json:"minutes" binding:"required"`
+}
+
+type gameStateReq struct {
+	State string `json:"state" binding:"required"`
+}
+
+func (h *GameAdminHandler) SetState(c *gin.Context) {
+	if !h.config.Game.Enabled {
+		c.JSON(http.StatusConflict, gin.H{"error": "game engine is disabled"})
+		return
+	}
+	var req gameStateReq
+	if err := bindArenaAdminJSON(c, &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "state must be running, paused, or stopped"})
+		return
+	}
+	next := game.State(strings.ToLower(strings.TrimSpace(req.State)))
+	if next != game.StateRunning && next != game.StatePaused && next != game.StateStopped {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "state must be running, paused, or stopped"})
+		return
+	}
+
+	ctx := c.Request.Context()
+	tx, err := h.db.Pool.Begin(ctx)
+	if err != nil {
+		h.fail(c, "game state", err)
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var previous string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(value #>> '{}', '') FROM platform_settings WHERE key = 'game.state' FOR UPDATE`,
+	).Scan(&previous); err != nil && err != pgx.ErrNoRows {
+		h.fail(c, "game state", err)
+		return
+	}
+	actor := adminID(c)
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO platform_settings (key, value, description, category, updated_by)
+		VALUES ('game.state', to_jsonb($1::text), 'Attack-defense game state', 'arena', NULLIF($2, '')::uuid)
+		ON CONFLICT (key) DO UPDATE SET
+			value = EXCLUDED.value,
+			updated_at = NOW(),
+			updated_by = EXCLUDED.updated_by`, string(next), actor); err != nil {
+		h.fail(c, "game state", err)
+		return
+	}
+	metadata, _ := json.Marshal(gin.H{"previous": previous, "state": next})
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO audit_log (user_id, action, entity_type, new_values, ip_address, user_agent)
+		VALUES (NULLIF($1, '')::uuid, 'arena.state_changed', 'arena', $2::jsonb, $3, $4)`,
+		actor, string(metadata), c.ClientIP(), c.Request.UserAgent()); err != nil {
+		h.fail(c, "game state audit", err)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.fail(c, "game state", err)
+		return
+	}
+
+	h.logger.Info("finals state changed", zap.String("previous", previous), zap.String("state", string(next)), zap.String("by", actor))
+	response := gin.H{"state": next}
+	if phase, _, err := game.FinalsPhase(ctx, h.db); err != nil {
+		h.logger.Warn("failed to resolve finals phase after state change", zap.Error(err))
+	} else {
+		response["phase"] = phase
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 // Extend shifts every future scheduled moment after a pause: the end and freeze of

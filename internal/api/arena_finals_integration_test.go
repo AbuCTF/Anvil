@@ -189,11 +189,28 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	if code, msg := submit("H7CTF{BRAVO0}"); code != http.StatusOK || msg != "accepted" {
 		t.Fatalf("legacy submit = %d %q, want 200 accepted", code, msg)
 	}
-	setting("game.state", `"paused"`)
+	if code, _ := call("PUT", "/api/v1/admin/arena/state", &admin, `{"state":"invalid"}`); code != http.StatusBadRequest {
+		t.Fatalf("invalid admin state = %d, want 400", code)
+	}
+	if code, raw := call("PUT", "/api/v1/admin/arena/state", &admin, `{"state":"paused"}`); code != http.StatusOK {
+		t.Fatalf("bootstrap paused state = %d %s", code, raw)
+	}
+	if code, raw := call("GET", "/api/v1/info", nil, ""); code != http.StatusOK ||
+		!strings.Contains(string(raw), `"game_state":"paused"`) || !strings.Contains(string(raw), `"game_frozen":false`) {
+		t.Fatalf("platform info finals state = %d %s", code, raw)
+	}
+	var stateAudits int
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM audit_log WHERE action = 'arena.state_changed' AND user_id = $1`, admin,
+	).Scan(&stateAudits); err != nil || stateAudits != 1 {
+		t.Fatalf("state transition audit rows = %d err=%v, want 1", stateAudits, err)
+	}
 	if code, msg := submit("H7CTF{BRAVO1}"); code != http.StatusForbidden || msg != "game paused" {
 		t.Errorf("paused submit = %d %q", code, msg)
 	}
-	setting("game.state", `"running"`)
+	if code, raw := call("PUT", "/api/v1/admin/arena/state", &admin, `{"state":"running"}`); code != http.StatusOK {
+		t.Fatalf("resume state = %d %s", code, raw)
+	}
 
 	// The War Room is a full, delayed matrix. Tick 3 is current, so public view
 	// tick 1 is visible and the tick-3 advisory must remain hidden. Team markers

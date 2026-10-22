@@ -10,6 +10,7 @@ import (
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/anvil-lab/anvil/internal/game"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -53,6 +54,8 @@ type platformInfoResponse struct {
 	RegisterURL        string                          `json:"register_url,omitempty"`
 	ServerTime         time.Time                       `json:"server_time"`
 	Event              *publicEventInfo                `json:"event,omitempty"`
+	GameState          string                          `json:"game_state,omitempty"`
+	GameFrozen         *bool                           `json:"game_frozen,omitempty"`
 }
 
 func (h *PlatformHandler) GetInfo(c *gin.Context) {
@@ -142,6 +145,17 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	if economy {
 		policy := h.config.EconomyPolicyDescriptor()
 		response.EconomyPolicy = &policy
+	}
+	state, err := game.ReadState(ctx, h.db)
+	if err != nil {
+		h.logger.Warn("failed to read game state", zap.Error(err))
+	} else if state != game.StateLegacy {
+		response.GameState = string(state)
+		if frozen, freezeErr := game.IsFrozen(ctx, h.db); freezeErr != nil {
+			h.logger.Warn("failed to read game freeze", zap.Error(freezeErr))
+		} else {
+			response.GameFrozen = &frozen
+		}
 	}
 
 	startAt, endAt, err := h.eventWindow(c.Request.Context())

@@ -10,6 +10,8 @@ import (
 
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
+	"github.com/anvil-lab/anvil/internal/game"
+	"github.com/anvil-lab/anvil/internal/services/mailer"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -51,7 +53,85 @@ func commitVPNTransaction(tx pgx.Tx) error {
 }
 
 func (h *VPNHandler) managesWireGuardPeers() bool {
-	return strings.EqualFold(strings.TrimSpace(h.config.Environment), "production")
+	return strings.EqualFold(strings.TrimSpace(h.config.Environment), "production") &&
+		!h.usesExternalPeerControl()
+}
+
+func (h *VPNHandler) usesExternalPeerControl() bool {
+	return strings.EqualFold(strings.TrimSpace(h.config.VPN.PeerControl), "external")
+}
+
+type vpnTeam struct {
+	ID     uuid.UUID
+	Number int
+}
+
+var errVPNTeamRequired = errors.New("active finals team required")
+
+func (h *VPNHandler) teamForVPN(ctx context.Context, uid uuid.UUID) (vpnTeam, error) {
+	teamID, ok, err := game.TeamForUser(ctx, h.db, uid)
+	if err != nil {
+		return vpnTeam{}, err
+	}
+	if !ok {
+		return vpnTeam{}, errVPNTeamRequired
+	}
+	var number *int
+	if err := h.db.Pool.QueryRow(ctx,
+		`SELECT team_number FROM game_teams WHERE id = $1 AND status = 'active' AND is_nop = FALSE`, teamID,
+	).Scan(&number); err != nil {
+		return vpnTeam{}, err
+	}
+	if number == nil || *number < 1 || *number > 15 {
+		return vpnTeam{}, vpn.ErrInvalidTeamNumber
+	}
+	return vpnTeam{ID: teamID, Number: *number}, nil
+}
+
+func (h *VPNHandler) requestVPNTeam(c *gin.Context, uid uuid.UUID) (vpnTeam, bool) {
+	if !h.usesExternalPeerControl() {
+		return vpnTeam{}, true
+	}
+	team, err := h.teamForVPN(c.Request.Context(), uid)
+	if err == nil {
+		return team, true
+	}
+	if errors.Is(err, errVPNTeamRequired) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "active finals team required for VPN access"})
+	} else if errors.Is(err, vpn.ErrInvalidTeamNumber) {
+		c.JSON(http.StatusConflict, gin.H{"error": "team has no valid VPN address pool"})
+	} else {
+		h.logger.Error("failed to resolve VPN team", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve VPN team"})
+	}
+	return vpnTeam{}, false
+}
+
+func vpnHistoryTeam(team vpnTeam) (any, any) {
+	if team.ID == uuid.Nil {
+		return nil, nil
+	}
+	return team.ID, team.Number
+}
+
+func (h *VPNHandler) privateKeyCipher() (*mailer.Cipher, error) {
+	return mailer.NewScopedCipher(strings.TrimSpace(h.config.Secrets.EncryptionKey), "vpn-config")
+}
+
+func (h *VPNHandler) encryptPrivateKey(privateKey string) ([]byte, error) {
+	cipher, err := h.privateKeyCipher()
+	if err != nil {
+		return nil, err
+	}
+	return cipher.Encrypt(privateKey)
+}
+
+func (h *VPNHandler) decryptPrivateKey(ciphertext []byte) (string, error) {
+	cipher, err := h.privateKeyCipher()
+	if err != nil {
+		return "", err
+	}
+	return cipher.Decrypt(ciphertext)
 }
 
 func (h *VPNHandler) removePeerForCleanup(publicKey string) {
@@ -96,16 +176,17 @@ func (h *VPNHandler) GetConfig(c *gin.Context) {
 	}
 
 	var vpnConfig struct {
-		IPAddress  string
-		PublicKey  string
-		PrivateKey string
-		CreatedAt  time.Time
+		IPAddress            string
+		PublicKey            string
+		PrivateKey           string
+		PrivateKeyCiphertext []byte
+		CreatedAt            time.Time
 	}
 
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT assigned_ip, public_key, private_key, created_at
-		 FROM vpn_configs WHERE user_id = $1`, uid).Scan(
-		&vpnConfig.IPAddress, &vpnConfig.PublicKey, &vpnConfig.PrivateKey, &vpnConfig.CreatedAt,
+		`SELECT assigned_ip, public_key, private_key, private_key_ciphertext, created_at
+		 FROM vpn_configs WHERE user_id = $1 AND is_active = TRUE`, uid).Scan(
+		&vpnConfig.IPAddress, &vpnConfig.PublicKey, &vpnConfig.PrivateKey, &vpnConfig.PrivateKeyCiphertext, &vpnConfig.CreatedAt,
 	)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -119,6 +200,33 @@ func (h *VPNHandler) GetConfig(c *gin.Context) {
 		h.logger.Error("failed to load VPN config", zap.String("user_id", uid.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load VPN config"})
 		return
+	}
+	if len(vpnConfig.PrivateKeyCiphertext) > 0 {
+		vpnConfig.PrivateKey, err = h.decryptPrivateKey(vpnConfig.PrivateKeyCiphertext)
+		if err != nil {
+			h.logger.Error("failed to decrypt VPN config", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load VPN config"})
+			return
+		}
+	} else {
+		if strings.TrimSpace(vpnConfig.PrivateKey) == "" {
+			h.logger.Error("VPN config has no private key", zap.String("user_id", uid.String()))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load VPN config"})
+			return
+		}
+		ciphertext, encryptErr := h.encryptPrivateKey(vpnConfig.PrivateKey)
+		if encryptErr != nil {
+			h.logger.Error("failed to encrypt legacy VPN config", zap.String("user_id", uid.String()), zap.Error(encryptErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load VPN config"})
+			return
+		}
+		if _, err := h.db.Pool.Exec(c.Request.Context(), `
+			UPDATE vpn_configs SET private_key = '', private_key_ciphertext = $2, updated_at = NOW()
+			WHERE user_id = $1 AND private_key_ciphertext IS NULL`, uid, ciphertext); err != nil {
+			h.logger.Error("failed to migrate legacy VPN config", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load VPN config"})
+			return
+		}
 	}
 
 	createdAt := vpnConfig.CreatedAt.Unix()
@@ -146,10 +254,14 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
+	team, ok := h.requestVPNTeam(c, uid)
+	if !ok {
+		return
+	}
 
 	var existingIP string
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT assigned_ip FROM vpn_configs WHERE user_id = $1`, uid).Scan(&existingIP)
+		`SELECT assigned_ip FROM vpn_configs WHERE user_id = $1 AND is_active = TRUE`, uid).Scan(&existingIP)
 	if err == nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":      "VPN config already exists",
@@ -170,19 +282,12 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate VPN keys"})
 		return
 	}
-
-	ipAddress, err := h.vpnSvc.AllocateIP()
+	privateKeyCiphertext, err := h.encryptPrivateKey(privateKey)
 	if err != nil {
-		h.logger.Error("failed to allocate IP", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to allocate IP address"})
+		h.logger.Error("failed to encrypt VPN private key", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to secure VPN config"})
 		return
 	}
-	releaseIPAddress := true
-	defer func() {
-		if releaseIPAddress {
-			h.vpnSvc.ReleaseIP(ipAddress)
-		}
-	}()
 
 	tx, err := h.db.Pool.Begin(c.Request.Context())
 	if err != nil {
@@ -192,12 +297,49 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 	}
 	defer rollbackVPNTransaction(tx)
 
+	var ipAddress string
+	releaseIPAddress := false
+	if h.usesExternalPeerControl() {
+		ipAddress, err = h.vpnSvc.AllocateTeamIP(c.Request.Context(), tx, team.Number)
+	} else {
+		ipAddress, err = h.vpnSvc.AllocateIP()
+		releaseIPAddress = err == nil
+	}
+	if err != nil {
+		if errors.Is(err, vpn.ErrTeamPoolExhausted) {
+			c.JSON(http.StatusConflict, gin.H{"error": "team VPN address pool exhausted"})
+		} else {
+			h.logger.Error("failed to allocate IP", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to allocate IP address"})
+		}
+		return
+	}
+	defer func() {
+		if releaseIPAddress {
+			h.vpnSvc.ReleaseIP(ipAddress)
+		}
+	}()
+
 	configID := uuid.New()
 	createdAt := time.Now().UTC()
-	result, err := tx.Exec(c.Request.Context(),
-		`INSERT INTO vpn_configs (id, user_id, assigned_ip, public_key, private_key, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $6)`,
-		configID, uid, ipAddress, publicKey, privateKey, createdAt)
+	result, err := tx.Exec(c.Request.Context(), `
+		INSERT INTO vpn_configs (
+			id, user_id, assigned_ip, public_key, private_key, private_key_ciphertext,
+			is_active, last_handshake, bytes_sent, bytes_received, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, '', $5, TRUE, NULL, 0, 0, $6, $6)
+		ON CONFLICT (user_id) WHERE user_id IS NOT NULL DO UPDATE SET
+			assigned_ip = EXCLUDED.assigned_ip,
+			public_key = EXCLUDED.public_key,
+			private_key = '',
+			private_key_ciphertext = EXCLUDED.private_key_ciphertext,
+			is_active = TRUE,
+			last_handshake = NULL,
+			bytes_sent = 0,
+			bytes_received = 0,
+			created_at = EXCLUDED.created_at,
+			updated_at = EXCLUDED.updated_at
+		WHERE vpn_configs.is_active = FALSE`,
+		configID, uid, ipAddress, publicKey, privateKeyCiphertext, createdAt)
 	if err != nil {
 		h.logger.Error("failed to store VPN config", zap.Error(err))
 		if postgresErrorCode(err) == "23505" {
@@ -211,6 +353,15 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		h.logger.Error("VPN config insert affected an unexpected number of rows",
 			zap.String("user_id", uid.String()),
 			zap.Int64("rows_affected", result.RowsAffected()))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
+		return
+	}
+	teamID, teamNumber := vpnHistoryTeam(team)
+	if _, err := tx.Exec(c.Request.Context(), `
+		INSERT INTO vpn_peer_history (user_id, team_id, team_number, action, public_key, assigned_ip, occurred_at)
+		VALUES ($1, $2, $3, 'issued', $4, $5, $6)`,
+		uid, teamID, teamNumber, publicKey, ipAddress, createdAt); err != nil {
+		h.logger.Error("failed to record VPN peer issue", zap.String("user_id", uid.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
 		return
 	}
@@ -238,7 +389,9 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 		return
 	}
 	peerMayExist = false
-	releaseIPAddress = false
+	if !h.usesExternalPeerControl() {
+		releaseIPAddress = false
+	}
 
 	configFile := h.generateWireGuardConfig(privateKey, ipAddress)
 	createdAtUnix := createdAt.Unix()
@@ -272,7 +425,7 @@ func (h *VPNHandler) GetStatus(c *gin.Context) {
 
 	err := h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT assigned_ip, last_handshake, COALESCE(bytes_sent, 0), COALESCE(bytes_received, 0) 
-		 FROM vpn_configs WHERE user_id = $1`, uid).Scan(&ipAddress, &lastHandshake, &bytesSent, &bytesReceived)
+		 FROM vpn_configs WHERE user_id = $1 AND is_active = TRUE`, uid).Scan(&ipAddress, &lastHandshake, &bytesSent, &bytesReceived)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusOK, VPNStatusResponse{Connected: false})
 		return
@@ -316,6 +469,10 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	if !ok {
 		return
 	}
+	team, ok := h.requestVPNTeam(c, uid)
+	if !ok {
+		return
+	}
 
 	tx, err := h.db.Pool.Begin(c.Request.Context())
 	if err != nil {
@@ -329,7 +486,7 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	// same row while its wireguard peer is being transitioned.
 	var oldPublicKey, oldIPAddress string
 	err = tx.QueryRow(c.Request.Context(),
-		`SELECT public_key, assigned_ip FROM vpn_configs WHERE user_id = $1 FOR UPDATE`, uid).
+		`SELECT public_key, assigned_ip FROM vpn_configs WHERE user_id = $1 AND is_active = TRUE FOR UPDATE`, uid).
 		Scan(&oldPublicKey, &oldIPAddress)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "VPN config not found"})
@@ -349,14 +506,30 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate VPN keys"})
 		return
 	}
-
-	ipAddress, err := h.vpnSvc.AllocateIP()
+	privateKeyCiphertext, err := h.encryptPrivateKey(privateKey)
 	if err != nil {
-		h.logger.Error("failed to allocate IP", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to allocate IP address"})
+		h.logger.Error("failed to encrypt VPN private key", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to secure VPN config"})
 		return
 	}
-	newIPAddressAllocated := true
+
+	var ipAddress string
+	newIPAddressAllocated := false
+	if h.usesExternalPeerControl() {
+		ipAddress, err = h.vpnSvc.AllocateTeamIP(c.Request.Context(), tx, team.Number)
+	} else {
+		ipAddress, err = h.vpnSvc.AllocateIP()
+		newIPAddressAllocated = err == nil
+	}
+	if err != nil {
+		if errors.Is(err, vpn.ErrTeamPoolExhausted) {
+			c.JSON(http.StatusConflict, gin.H{"error": "team VPN address pool exhausted"})
+		} else {
+			h.logger.Error("failed to allocate IP", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to allocate IP address"})
+		}
+		return
+	}
 	defer func() {
 		if newIPAddressAllocated {
 			h.vpnSvc.ReleaseIP(ipAddress)
@@ -368,17 +541,29 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 		UPDATE vpn_configs
 		SET assigned_ip = $2,
 			public_key = $3,
-			private_key = $4,
+			private_key = '',
+			private_key_ciphertext = $4,
 			is_active = TRUE,
 			last_handshake = NULL,
 			bytes_sent = 0,
 			bytes_received = 0,
 			created_at = $5,
 			updated_at = $5
-		WHERE user_id = $1
-	`, uid, ipAddress, publicKey, privateKey, createdAt)
+		WHERE user_id = $1 AND is_active = TRUE
+	`, uid, ipAddress, publicKey, privateKeyCiphertext, createdAt)
 	if err != nil {
 		h.logger.Error("failed to replace VPN config", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
+		return
+	}
+	teamID, teamNumber := vpnHistoryTeam(team)
+	if _, err := tx.Exec(c.Request.Context(), `
+		INSERT INTO vpn_peer_history (user_id, team_id, team_number, action, public_key, assigned_ip, occurred_at)
+		VALUES
+			($1, $2, $3, 'rotated', $4, $5, $8),
+			($1, $2, $3, 'issued', $6, $7, $8)`,
+		uid, teamID, teamNumber, oldPublicKey, oldIPAddress, publicKey, ipAddress, createdAt); err != nil {
+		h.logger.Error("failed to record VPN peer rotation", zap.String("user_id", uid.String()), zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save VPN config"})
 		return
 	}
@@ -429,8 +614,10 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	peerTransitionComplete = true
 	newPeerMayExist = false
 	oldPeerMayNeedRestore = false
-	newIPAddressAllocated = false
-	h.vpnSvc.ReleaseIP(oldIPAddress)
+	if !h.usesExternalPeerControl() {
+		newIPAddressAllocated = false
+		h.vpnSvc.ReleaseIP(oldIPAddress)
+	}
 
 	configFile := h.generateWireGuardConfig(privateKey, ipAddress)
 	createdAtUnix := createdAt.Unix()
@@ -446,6 +633,91 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	})
 }
 
+func (h *VPNHandler) RevokeConfig(c *gin.Context) {
+	if !h.config.VPN.Enabled {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "VPN is disabled"})
+		return
+	}
+	uid, ok := vpnUserID(c)
+	if !ok {
+		return
+	}
+
+	tx, err := h.db.Pool.Begin(c.Request.Context())
+	if err != nil {
+		h.logger.Error("failed to begin VPN config revocation", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke VPN config"})
+		return
+	}
+	defer rollbackVPNTransaction(tx)
+
+	var publicKey, ipAddress string
+	err = tx.QueryRow(c.Request.Context(), `
+		SELECT public_key, assigned_ip FROM vpn_configs
+		WHERE user_id = $1 AND is_active = TRUE FOR UPDATE`, uid,
+	).Scan(&publicKey, &ipAddress)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "VPN config not found"})
+		return
+	}
+	if err != nil {
+		h.logger.Error("failed to load VPN config for revocation", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke VPN config"})
+		return
+	}
+
+	revokedAt := time.Now().UTC()
+	if _, err := tx.Exec(c.Request.Context(), `
+		UPDATE vpn_configs SET
+			is_active = FALSE,
+			private_key = '',
+			private_key_ciphertext = NULL,
+			last_handshake = NULL,
+			bytes_sent = 0,
+			bytes_received = 0,
+			updated_at = $2
+		WHERE user_id = $1 AND is_active = TRUE`, uid, revokedAt); err != nil {
+		h.logger.Error("failed to deactivate VPN config", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke VPN config"})
+		return
+	}
+	if _, err := tx.Exec(c.Request.Context(), `
+		INSERT INTO vpn_peer_history (user_id, team_id, team_number, action, public_key, assigned_ip, occurred_at)
+		VALUES (
+			$1,
+			(SELECT team_id FROM vpn_peer_history WHERE user_id = $1 ORDER BY occurred_at DESC, id DESC LIMIT 1),
+			(SELECT team_number FROM vpn_peer_history WHERE user_id = $1 ORDER BY occurred_at DESC, id DESC LIMIT 1),
+			'revoked', $2, $3, $4
+		)`, uid, publicKey, ipAddress, revokedAt); err != nil {
+		h.logger.Error("failed to record VPN peer revocation", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke VPN config"})
+		return
+	}
+
+	peerRemoved := false
+	if h.managesWireGuardPeers() {
+		peerRemoved = true
+		if err := h.vpnSvc.RemovePeer(c.Request.Context(), publicKey); err != nil {
+			h.addPeerForCleanup(publicKey, ipAddress)
+			peerRemoved = false
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke VPN config"})
+			return
+		}
+	}
+	if err := commitVPNTransaction(tx); err != nil {
+		if peerRemoved {
+			h.addPeerForCleanup(publicKey, ipAddress)
+		}
+		h.logger.Error("failed to commit VPN config revocation", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to revoke VPN config"})
+		return
+	}
+	if !h.usesExternalPeerControl() {
+		h.vpnSvc.ReleaseIP(ipAddress)
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "revoked"})
+}
+
 func (h *VPNHandler) generateWireGuardConfig(privateKey, ipAddress string) string {
 	endpoint := h.config.VPN.PublicEndpoint
 	if !strings.Contains(endpoint, ":") {
@@ -457,9 +729,12 @@ func (h *VPNHandler) generateWireGuardConfig(privateKey, ipAddress string) strin
 		dnsLine = fmt.Sprintf("DNS = %s\n", h.config.VPN.DNS)
 	}
 
-	allowedIPs := "10.100.0.0/16"
-	if h.config.Container.NetworkSubnet != "" {
-		allowedIPs += ", " + h.config.Container.NetworkSubnet
+	allowedIPs := normalizedAllowedIPs(h.config.VPN.AllowedIPs)
+	if allowedIPs == "" {
+		allowedIPs = "10.100.0.0/16"
+		if h.config.Container.NetworkSubnet != "" {
+			allowedIPs += ", " + h.config.Container.NetworkSubnet
+		}
 	}
 
 	keepaliveSeconds := int(h.config.VPN.KeepaliveInterval / time.Second)
@@ -485,4 +760,14 @@ PersistentKeepalive = %d
 		endpoint,
 		keepaliveSeconds,
 	)
+}
+
+func normalizedAllowedIPs(raw string) string {
+	var routes []string
+	for _, route := range strings.Split(raw, ",") {
+		if route = strings.TrimSpace(route); route != "" {
+			routes = append(routes, route)
+		}
+	}
+	return strings.Join(routes, ", ")
 }
