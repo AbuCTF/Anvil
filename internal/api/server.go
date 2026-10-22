@@ -218,10 +218,6 @@ func (s *Server) setupRouter() {
 				arenaTeam.GET("/arena/me", teamAPIHandler.Me)
 				arenaTeam.GET("/arena/me/status", teamAPIHandler.MeStatus)
 				arenaTeam.GET("/arena/me/alerts", teamAPIHandler.MeAlerts)
-				arenaTeam.GET("/arena/me/pcaps", teamAPIHandler.MePcaps)
-				arenaTeam.POST("/arena/me/vulnbox/reboot", teamAPIHandler.MeVulnboxReboot)
-				arenaTeam.POST("/arena/me/vulnbox/reset", teamAPIHandler.MeVulnboxReset)
-				arenaTeam.GET("/arena/me/vulnbox/reset", teamAPIHandler.MeVulnboxResetStatus)
 			}
 		}
 
@@ -491,16 +487,12 @@ func (s *Server) setupRouter() {
 				gameAdmin.POST("/challenges/:id/launch", gameAdminHandler.LaunchArena)
 				gameAdmin.POST("/challenges/:id/stop", gameAdminHandler.StopArena)
 
-				// p1-teamapi admin: token rotation, vulnbox IP, checker log, suspicious SLA,
-				// and pcap/reset/reboot stubs (501 until control plane is wired).
+				// p1-teamapi admin: token rotation, vulnbox IP, checker log and suspicious SLA.
 				arenaAdminP1 := handlers.NewArenaAdminHandler(s.config, s.db, s.logger)
 				gameAdmin.POST("/teams/:id/token", arenaAdminP1.RotateTeamToken)
 				gameAdmin.PATCH("/teams/:id/vulnbox-ip", arenaAdminP1.UpdateVulnboxIP)
 				gameAdmin.GET("/checker-log", arenaAdminP1.CheckerLog)
 				gameAdmin.GET("/sla-suspicious", arenaAdminP1.SuspiciousSLA)
-				gameAdmin.POST("/teams/:id/pcap", arenaAdminP1.PcapCapture)
-				gameAdmin.POST("/teams/:id/vulnbox-reset", arenaAdminP1.VulnboxReset)
-				gameAdmin.POST("/teams/:id/vulnbox-reboot", arenaAdminP1.VulnboxReboot)
 			}
 
 			challenges := admin.Group("/challenges")

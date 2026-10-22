@@ -163,38 +163,6 @@ type suspiciousSLARow struct {
 	DownRate  float64 `json:"down_rate"`
 }
 
-// --- pcap and vulnbox control stubs (M8) ---
-
-// PcapCapture is a stub endpoint for triggering a pcap capture on a vulnbox.
-// POST /api/v1/arena/teams/:id/pcap
-// Returns 501 Not Implemented until the capture backend is wired.
-func (h *ArenaAdminHandler) PcapCapture(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": "pcap capture not yet implemented",
-		"hint":  "will accept: {duration_sec, filter} and return a signed GCS URL",
-	})
-}
-
-// VulnboxReset is a stub endpoint for requesting a soft-reset of a vulnbox service.
-// POST /api/v1/arena/teams/:id/vulnbox-reset
-// Returns 501 Not Implemented until the OCI/infra control plane is wired.
-func (h *ArenaAdminHandler) VulnboxReset(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": "vulnbox reset not yet implemented",
-		"hint":  "will accept: {service_id?} and trigger a docker-compose restart on the vulnbox",
-	})
-}
-
-// VulnboxReboot is a stub endpoint for rebooting the entire vulnbox VM.
-// POST /api/v1/arena/teams/:id/vulnbox-reboot
-// Returns 501 Not Implemented until the OCI control plane is wired.
-func (h *ArenaAdminHandler) VulnboxReboot(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": "vulnbox reboot not yet implemented",
-		"hint":  "will call OCI instance action=RESET for the team's VM",
-	})
-}
-
 // SuspiciousSLA returns (team, service, tick) triples where checker task DOWN+FAULTY
 // rate exceeds 60% with at least 3 tasks. Useful for detecting checker bugs or
 // organised defence bypasses.

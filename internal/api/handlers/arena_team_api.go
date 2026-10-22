@@ -114,13 +114,13 @@ func (h *GameHandler) currentTickInfo(ctx context.Context) (int, time.Time, erro
 }
 
 type teamInfo struct {
-	TeamID      string  `json:"team_id"`
-	Name        string  `json:"name"`
-	Slug        string  `json:"slug"`
-	TeamNumber  *int    `json:"team_number"`
-	VulnboxIP   *string `json:"vulnbox_ip"`
-	Token       string  `json:"token"`  // masked
-	IsNOP       bool    `json:"is_nop"`
+	TeamID     string  `json:"team_id"`
+	Name       string  `json:"name"`
+	Slug       string  `json:"slug"`
+	TeamNumber *int    `json:"team_number"`
+	VulnboxIP  *string `json:"vulnbox_ip"`
+	Token      string  `json:"token"` // masked
+	IsNOP      bool    `json:"is_nop"`
 }
 
 // Me serves GET /api/v1/arena/me.
@@ -182,15 +182,24 @@ type mePointsHour struct {
 	Up    float64 `json:"up"`
 }
 
+type meDeployment struct {
+	Kind         string    `json:"kind"`
+	OrgInitiated bool      `json:"org_initiated"`
+	Tick         *int      `json:"tick,omitempty"`
+	DeployedAt   time.Time `json:"deployed_at"`
+}
+
 // meServiceRow is one service in the /arena/me/status response.
 type meServiceRow struct {
-	ServiceID       string       `json:"service_id"`
-	Slug            string       `json:"slug"`
-	Name            string       `json:"name"`
-	Port            *int         `json:"port"`
-	Stores          []meStoreRow `json:"stores"`
-	PointsThisHour  mePointsHour `json:"points_this_hour"`
-	ActiveAttackers int          `json:"active_attackers"`
+	ServiceID       string        `json:"service_id"`
+	Slug            string        `json:"slug"`
+	Name            string        `json:"name"`
+	Port            *int          `json:"port"`
+	Stores          []meStoreRow  `json:"stores"`
+	PointsThisHour  mePointsHour  `json:"points_this_hour"`
+	ActiveAttackers int           `json:"active_attackers"`
+	LastDeployment  *meDeployment `json:"last_deployment,omitempty"`
+	FreeDeploysLeft int           `json:"free_deploys_left"`
 }
 
 // MeStatus serves GET /api/v1/arena/me/status?since=<tick>.
@@ -217,23 +226,7 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 		return
 	}
 
-	// index: (serviceID, tick) → SLATick; collect ordered service IDs
-	type slaKey struct {
-		svcID uuid.UUID
-		tick  int
-	}
-	slaByKey := map[slaKey]game.SLATick{}
-	svcIDSet := map[uuid.UUID]bool{}
-	var svcOrder []uuid.UUID
-	for _, t := range slaTicks {
-		slaByKey[slaKey{t.ServiceID, t.Tick}] = t
-		if !svcIDSet[t.ServiceID] {
-			svcIDSet[t.ServiceID] = true
-			svcOrder = append(svcOrder, t.ServiceID)
-		}
-	}
-
-	// load service metadata for the services that have sla records
+	// Load all enabled services so the release inventory is visible before the first tick.
 	type svcMeta struct {
 		id         uuid.UUID
 		slug, name string
@@ -241,30 +234,30 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 		flagStores int
 	}
 	svcMetas := map[uuid.UUID]svcMeta{}
-	if len(svcOrder) > 0 {
-		mRows, err := h.db.Pool.Query(ctx,
-			`SELECT id, name, slug, port, flag_stores
-			 FROM game_services WHERE id = ANY($1) AND enabled = true`, svcOrder)
-		if err != nil {
-			h.logger.Error("arena/me/status: service meta", zap.Error(err))
+	var svcOrder []uuid.UUID
+	mRows, err := h.db.Pool.Query(ctx,
+		`SELECT id, name, slug, port, flag_stores
+		 FROM game_services WHERE enabled = true ORDER BY sort_order, name, id`)
+	if err != nil {
+		h.logger.Error("arena/me/status: service meta", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	defer mRows.Close()
+	for mRows.Next() {
+		var m svcMeta
+		if err := mRows.Scan(&m.id, &m.name, &m.slug, &m.port, &m.flagStores); err != nil {
+			h.logger.Error("arena/me/status: service meta scan", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
-		defer mRows.Close()
-		for mRows.Next() {
-			var m svcMeta
-			if err := mRows.Scan(&m.id, &m.name, &m.slug, &m.port, &m.flagStores); err != nil {
-				h.logger.Error("arena/me/status: service meta scan", zap.Error(err))
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-				return
-			}
-			svcMetas[m.id] = m
-		}
-		if err := mRows.Err(); err != nil {
-			h.logger.Error("arena/me/status: service meta rows", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
-			return
-		}
+		svcMetas[m.id] = m
+		svcOrder = append(svcOrder, m.id)
+	}
+	if err := mRows.Err(); err != nil {
+		h.logger.Error("arena/me/status: service meta rows", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
 	}
 
 	// build per-service tick lists from sla records
@@ -416,6 +409,41 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 		return
 	}
 
+	// Q5: the latest pipeline event and remaining free player deploys per service.
+	lastDeployments := map[uuid.UUID]meDeployment{}
+	deploysUsed := map[uuid.UUID]int{}
+	deployRows, err := h.db.Pool.Query(ctx, `
+		SELECT DISTINCT ON (service_id) service_id, kind, org_initiated, tick_number, deployed_at,
+		    COUNT(*) FILTER (WHERE kind = 'deploy' AND NOT org_initiated)
+		        OVER (PARTITION BY service_id) AS deploys_used
+		FROM game_deploys
+		WHERE team_id = $1
+		ORDER BY service_id, deployed_at DESC, id DESC`, teamID)
+	if err != nil {
+		h.logger.Error("arena/me/status: deployments query", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	defer deployRows.Close()
+	for deployRows.Next() {
+		var svcID uuid.UUID
+		var deployment meDeployment
+		var used int
+		if err := deployRows.Scan(&svcID, &deployment.Kind, &deployment.OrgInitiated,
+			&deployment.Tick, &deployment.DeployedAt, &used); err != nil {
+			h.logger.Error("arena/me/status: deployment scan", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+		lastDeployments[svcID] = deployment
+		deploysUsed[svcID] = used
+	}
+	if err := deployRows.Err(); err != nil {
+		h.logger.Error("arena/me/status: deployment rows", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
 	// assemble response
 	services := make([]meServiceRow, 0, len(svcOrder))
 	for _, svcID := range svcOrder {
@@ -432,16 +460,20 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 			totalUp += b.up
 		}
 		row := meServiceRow{
-			ServiceID: svcID.String(),
-			Slug:      meta.slug,
-			Name:      meta.name,
-			Port:      meta.port,
+			ServiceID:       svcID.String(),
+			Slug:            meta.slug,
+			Name:            meta.name,
+			Port:            meta.port,
+			FreeDeploysLeft: max(0, h.config.Game.Scoring.FreeDeploys-deploysUsed[svcID]),
 			PointsThisHour: mePointsHour{
 				Steal: totalSteal,
 				Hold:  totalHold,
 				Up:    totalUp,
 			},
 			ActiveAttackers: activeAttackers[svcID],
+		}
+		if deployment, ok := lastDeployments[svcID]; ok {
+			row.LastDeployment = &deployment
 		}
 
 		for si := 0; si < meta.flagStores; si++ {
@@ -544,37 +576,6 @@ func (h *GameHandler) MeAlerts(c *gin.Context) {
 		alerts = append(alerts, a)
 	}
 	c.JSON(http.StatusOK, gin.H{"alerts": alerts})
-}
-
-// MePcaps is a stub for GET /api/v1/arena/me/pcaps.
-func (h *GameHandler) MePcaps(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": "pcap listing not yet implemented",
-		"hint":  "will return [{tick, url, size_bytes, expires_at}]",
-	})
-}
-
-// MeVulnboxReboot is a stub for POST /api/v1/arena/me/vulnbox/reboot.
-func (h *GameHandler) MeVulnboxReboot(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": "vulnbox reboot not yet implemented",
-		"hint":  "will trigger OCI instance RESET action for the caller's vulnbox",
-	})
-}
-
-// MeVulnboxReset is a stub for POST /api/v1/arena/me/vulnbox/reset.
-func (h *GameHandler) MeVulnboxReset(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": "vulnbox reset not yet implemented",
-		"hint":  "will trigger OCI boot-volume restore (rate-limited)",
-	})
-}
-
-// MeVulnboxResetStatus is a stub for GET /api/v1/arena/me/vulnbox/reset.
-func (h *GameHandler) MeVulnboxResetStatus(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": "vulnbox reset status not yet implemented",
-	})
 }
 
 // parseSince is a small helper for reading an optional ?since= query param.

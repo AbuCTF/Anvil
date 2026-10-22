@@ -30,6 +30,7 @@
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		...($platformInfo?.economy_enabled && $platformInfo?.market_pulse_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Pulse', href: '/pulse', icon: 'mdi:pulse' }] : []),
 		...($platformInfo?.scoreboard_enabled !== false ? [{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' }] : []),
+		...($platformInfo?.arena_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Operations', href: '/team/finals', icon: 'mdi:shield-sword-outline' }] : []),
 		...(($platformInfo?.arena_enabled || isAdmin) ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
@@ -48,6 +49,7 @@
 	// before isAdmin resolves.
 	$: if (browser && $platformInfo && !$auth.isLoading) {
 		const p = $page.url.pathname;
+		if (p.startsWith('/team/finals') && !$platformInfo.arena_enabled) goto('/team');
 		const blocked =
 			(p.startsWith('/arena') && !$platformInfo.arena_enabled && !isAdmin) ||
 			(p.startsWith('/pulse') && (!$platformInfo.economy_enabled || !$platformInfo.market_pulse_enabled)) ||
@@ -64,6 +66,7 @@
 		'mdi:bell-outline': { size: 14 },
 		'mdi:account-group': { size: 15 },
 		'mdi:sword-cross': { size: 14 },
+		'mdi:shield-sword-outline': { size: 14 },
 		'mdi:server': { size: 12.75 },
 		'mdi:shield-crown': { size: 12.75 },
 		'mdi:chevron-down': { size: 14 },

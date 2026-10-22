@@ -48,6 +48,13 @@
 		stores: StoreStatus[];
 		points_this_hour: { steal: number; hold: number; up: number };
 		active_attackers: number;
+		last_deployment?: {
+			kind: string;
+			org_initiated: boolean;
+			tick?: number;
+			deployed_at: string;
+		};
+		free_deploys_left: number;
 	}
 
 	interface ArenaTickInfo {
@@ -100,12 +107,15 @@
 	let submitFlag = '';
 	let submitResult = '';
 	let submitBusy = false;
+	let refreshError = '';
+	let lastUpdatedAt: number | null = null;
 	let clockInterval: ReturnType<typeof setInterval>;
 	let pollInterval: ReturnType<typeof setInterval>;
 
-	$: isFinalsMode = $platformInfo?.game_state === 'running' || $platformInfo?.game_state === 'paused' || $platformInfo?.game_state === 'stopped';
+	$: isFinalsMode = $platformInfo?.arena_enabled === true;
 	$: tickEndsIn = Math.max(0, Math.round((Date.parse(tickInfo.ends_at) - now) / 1000));
 	$: fmtCountdown = `${String(Math.floor(tickEndsIn / 60)).padStart(2, '0')}:${String(tickEndsIn % 60).padStart(2, '0')}`;
+	$: refreshedAgo = lastUpdatedAt === null ? 'waiting for live data' : `updated ${Math.max(0, Math.round((now - lastUpdatedAt) / 1000))}s ago`;
 
 	// service name lookup for alerts
 	$: svcNames = new Map(services.map(s => [s.service_id, s.name]));
@@ -118,73 +128,76 @@
 	}
 
 	async function loadTick() {
-		try {
-			const res = await fetch(`${API_BASE}/api/v1/arena/tick`);
-			if (res.ok) tickInfo = await res.json();
-		} catch { /* keep current */ }
+		const res = await fetch(`${API_BASE}/api/v1/arena/tick`);
+		if (!res.ok) throw new Error('tick unavailable');
+		tickInfo = await res.json();
 	}
 
 	async function loadMe() {
-		try {
-			const res = await fetch(`${API_BASE}/api/v1/arena/me`, { headers: authHeaders() });
-			if (res.ok) me = await res.json();
-		} catch { /* keep current */ }
+		const res = await fetch(`${API_BASE}/api/v1/arena/me`, { headers: authHeaders() });
+		if (!res.ok) throw new Error('team identity unavailable');
+		me = await res.json();
 	}
 
 	async function loadStatus() {
 		if (!isFinalsMode) return;
-		try {
-			const url = `${API_BASE}/api/v1/arena/me/status${latestTick > 0 ? `?since=${latestTick}` : ''}`;
-			const res = await fetch(url, { headers: authHeaders() });
-			if (!res.ok) return;
-			const d = await res.json();
-			const incoming: ServiceStatus[] = d.services ?? [];
-			if (!incoming.length) return;
+		const url = `${API_BASE}/api/v1/arena/me/status${latestTick > 0 ? `?since=${latestTick}` : ''}`;
+		const res = await fetch(url, { headers: authHeaders() });
+		if (!res.ok) throw new Error('service status unavailable');
+		const d = await res.json();
+		const incoming: ServiceStatus[] = d.services ?? [];
 
-			const svcMap = new Map<string, ServiceStatus>(services.map(s => [s.service_id, s]));
-			for (const svc of incoming) {
-				if (!svcMap.has(svc.service_id)) {
-					// new service: cap ticks
-					svcMap.set(svc.service_id, {
-						...svc,
-						stores: svc.stores.map(st => ({ ...st, ticks: st.ticks.slice(-30) })),
-					});
-					continue;
-				}
-				const existing = svcMap.get(svc.service_id)!;
-				const storeMap = new Map(existing.stores.map(s => [s.store_index, s]));
-				for (const store of svc.stores) {
-					const ex = storeMap.get(store.store_index);
-					if (!ex) {
-						storeMap.set(store.store_index, { ...store, ticks: store.ticks.slice(-30) });
-					} else {
-						const seen = new Set(ex.ticks.map(t => t.tick));
-						const merged = [...ex.ticks, ...store.ticks.filter(t => !seen.has(t.tick))];
-						merged.sort((a, b) => a.tick - b.tick);
-						storeMap.set(store.store_index, {
-							...store,
-							ticks: merged.slice(-30),
-						});
-					}
-				}
+		const svcMap = new Map<string, ServiceStatus>(services.map(s => [s.service_id, s]));
+		for (const svc of incoming) {
+			if (!svcMap.has(svc.service_id)) {
+				// new service: cap ticks
 				svcMap.set(svc.service_id, {
 					...svc,
-					stores: [...storeMap.values()].sort((a, b) => a.store_index - b.store_index),
+					stores: svc.stores.map(st => ({ ...st, ticks: st.ticks.slice(-30) })),
 				});
+				continue;
 			}
-			services = [...svcMap.values()];
+			const existing = svcMap.get(svc.service_id)!;
+			const storeMap = new Map(existing.stores.map(s => [s.store_index, s]));
+			for (const store of svc.stores) {
+				const ex = storeMap.get(store.store_index);
+				if (!ex) {
+					storeMap.set(store.store_index, { ...store, ticks: store.ticks.slice(-30) });
+				} else {
+					const seen = new Set(ex.ticks.map(t => t.tick));
+					const merged = [...ex.ticks, ...store.ticks.filter(t => !seen.has(t.tick))];
+					merged.sort((a, b) => a.tick - b.tick);
+					storeMap.set(store.store_index, {
+						...store,
+						ticks: merged.slice(-30),
+					});
+				}
+			}
+			svcMap.set(svc.service_id, {
+				...svc,
+				stores: [...storeMap.values()].sort((a, b) => a.store_index - b.store_index),
+			});
+		}
+		const enabled = new Set(incoming.map(s => s.service_id));
+		services = [...svcMap.values()].filter(s => enabled.has(s.service_id));
 
-			const allTickNums = services.flatMap(s => s.stores.flatMap(st => st.ticks.map(t => t.tick)));
-			if (allTickNums.length) latestTick = Math.max(...allTickNums, latestTick);
-		} catch { /* keep current */ }
+		const allTickNums = services.flatMap(s => s.stores.flatMap(st => st.ticks.map(t => t.tick)));
+		if (allTickNums.length) latestTick = Math.max(...allTickNums, latestTick);
 	}
 
 	async function loadAlerts() {
 		if (!isFinalsMode) return;
-		try {
-			const res = await fetch(`${API_BASE}/api/v1/arena/me/alerts`, { headers: authHeaders() });
-			if (res.ok) { const d = await res.json(); alerts = d.alerts ?? alerts; }
-		} catch { /* keep current */ }
+		const res = await fetch(`${API_BASE}/api/v1/arena/me/alerts`, { headers: authHeaders() });
+		if (!res.ok) throw new Error('alerts unavailable');
+		const d = await res.json();
+		alerts = d.alerts ?? [];
+	}
+
+	async function refresh() {
+		const results = await Promise.allSettled([loadTick(), loadMe(), loadStatus(), loadAlerts()]);
+		const failed = results.filter(r => r.status === 'rejected').length;
+		refreshError = failed ? `${failed} live data source${failed === 1 ? '' : 's'} unavailable; showing the last confirmed state.` : '';
+		if (!failed) lastUpdatedAt = Date.now();
 	}
 
 	async function submitFlags() {
@@ -297,17 +310,14 @@
 		return n.toLocaleString(undefined, { maximumFractionDigits: 1 });
 	}
 
+	function fmtTime(ts: string): string {
+		return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+	}
+
 	onMount(() => {
 		clockInterval = setInterval(() => { now = Date.now(); }, 1000);
-		pollInterval = setInterval(() => {
-			loadTick();
-			loadStatus();
-			loadAlerts();
-		}, 30000);
-		loadTick();
-		loadMe();
-		loadStatus();
-		loadAlerts();
+		pollInterval = setInterval(refresh, 30000);
+		refresh();
 	});
 	onDestroy(() => {
 		clearInterval(clockInterval);
@@ -315,7 +325,7 @@
 	});
 </script>
 
-<svelte:head><title>Team Status - Anvil</title></svelte:head>
+<svelte:head><title>Operations - Anvil</title></svelte:head>
 
 {#if !isFinalsMode}
 	<script>window.location.replace('/team');</script>
@@ -324,7 +334,7 @@
 <div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-6">
 	<!-- tick clock header -->
 	<div class="mb-5 flex flex-wrap items-center gap-3">
-		<PageHeader title="Team Status" compact />
+		<PageHeader title="Operations" compact />
 		<div class="ml-auto flex flex-wrap items-center gap-2">
 			{#if me.team_number}
 				<span class="rounded-md border border-stone-800 bg-stone-900/60 px-2.5 py-1.5 text-xs text-stone-400">
@@ -352,6 +362,24 @@
 			{/if}
 		</div>
 	</div>
+
+	<div class="mb-5 grid gap-2 rounded-lg border border-stone-800 bg-stone-900/40 p-4 text-xs text-stone-400 sm:grid-cols-3" aria-label="Attack and Defense workflow">
+		<p><span class="mr-2 font-semibold text-stone-200">1</span>Patch services in your workbench and push to the team repository.</p>
+		<p><span class="mr-2 font-semibold text-stone-200">2</span>The Deployment Gate builds, stages and promotes; failed health checks roll back.</p>
+		<p><span class="mr-2 font-semibold text-stone-200">3</span>Attack rival service targets over the VPN and submit captured flags here.</p>
+		<p class="sm:col-span-3 text-stone-600">Production is pipeline-managed. Direct production shell access is not part of normal play.</p>
+	</div>
+
+	<div class="mb-5 flex flex-wrap items-center gap-2 text-xs">
+		<a href="/arena" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60">Open Arena</a>
+		{#if $platformInfo?.vpn_enabled}<a href="/vpn" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60">VPN access</a>{/if}
+		<a href="{API_BASE}/api/v1/arena/attack-info" target="_blank" rel="noreferrer" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60">Attack info</a>
+		<span class="ml-auto text-stone-600">{refreshedAgo}</span>
+	</div>
+
+	{#if refreshError}
+		<div class="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300" role="status">{refreshError}</div>
+	{/if}
 
 	<!-- exploitation alerts -->
 	{#if alerts.length}
@@ -390,12 +418,18 @@
 	<!-- service timelines: services[]{stores[]{ticks[]}} -->
 	{#each services as svc (svc.service_id)}
 		{@const latestT = svcLatestTick(svc)}
-		{@const svcStatus = latestT?.status ?? 'OK'}
+		{@const svcStatus = latestT?.status ?? 'UNKNOWN'}
 		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden">
 			<div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-stone-800">
 				<span class="text-[0.95rem] font-semibold text-stone-200">{svc.name}</span>
 				<span class="rounded px-1.5 py-0.5 text-xs font-medium {statusChipKey(svcStatus)}">{statusLabel(svcStatus)}</span>
-				<span class="text-xs text-stone-600">{(svcUptime(svc) * 100).toFixed(1)}% up</span>
+				<span class="text-xs text-stone-600">{latestT ? `${(svcUptime(svc) * 100).toFixed(1)}% up` : 'awaiting first check'}</span>
+				{#if svc.port}<span class="text-xs font-mono text-stone-600">TCP {svc.port}</span>{/if}
+				<span class="text-xs text-stone-600">{svc.active_attackers} active attacker{svc.active_attackers === 1 ? '' : 's'}</span>
+				<span class="text-xs text-stone-600">{svc.free_deploys_left} free deploy{svc.free_deploys_left === 1 ? '' : 's'}</span>
+				{#if svc.last_deployment}
+					<span class="text-xs text-stone-600" title={svc.last_deployment.deployed_at}>{svc.last_deployment.kind} at {fmtTime(svc.last_deployment.deployed_at)}</span>
+				{/if}
 				{#if latestT?.message}
 					<span class="text-xs text-stone-500 truncate max-w-xs" title={latestT.message}>{latestT.message}</span>
 				{/if}
@@ -412,6 +446,8 @@
 								<div
 									class="relative h-5 w-5 shrink-0 rounded-sm {statusColorKey(t.status)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
 									title="{statusLabel(t.status)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
+								role="img"
+								aria-label="{statusLabel(t.status)} at tick {t.tick}{t.credited_reason ? ', credited: ' + t.credited_reason : ''}"
 								>
 									{#if credited}
 										<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
@@ -431,6 +467,9 @@
 			</div>
 		</div>
 	{/each}
+	{#if services.length === 0}
+		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 px-4 py-8 text-center text-sm text-stone-500">Service inventory is not available yet.</div>
+	{/if}
 
 	<!-- legend -->
 	<div class="mb-5 flex flex-wrap gap-x-4 gap-y-1.5 text-[0.7rem] text-stone-600">
@@ -453,6 +492,7 @@
 			<form on:submit|preventDefault={submitFlags} class="flex flex-col gap-2">
 				<textarea
 					bind:value={submitFlag}
+					aria-label="Captured flags"
 					rows="3"
 					placeholder="H7CTF&#123;...&#125; one per line"
 					class="w-full resize-none rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-sm font-mono text-stone-200 placeholder-stone-600 focus:border-stone-600 focus:outline-none transition-colors"
@@ -466,13 +506,13 @@
 					{submitBusy ? 'Submitting...' : tickInfo.phase !== 'live' ? 'Game not live' : 'Submit'}
 				</button>
 				{#if submitResult}
-					<pre class="text-xs font-mono text-stone-400 whitespace-pre-wrap break-all">{submitResult}</pre>
+					<pre class="text-xs font-mono text-stone-400 whitespace-pre-wrap break-all" role="status" aria-live="polite">{submitResult}</pre>
 				{/if}
 			</form>
 		</Card>
 
 		<!-- team info -->
-		<Card title="Your network">
+		<Card title="Service network">
 			<div class="space-y-3 text-sm">
 				<div class="flex justify-between text-stone-500">
 					<span>Vulnbox</span>
@@ -486,24 +526,7 @@
 					<span>Submit token</span>
 					<span class="font-mono text-stone-500 text-xs">{me.token}</span>
 				</div>
-				<div class="flex gap-2 pt-1">
-					{#if me.vulnbox_ip}
-						<a
-							href="ssh://root@{me.vulnbox_ip}"
-							class="flex-1 rounded-md border border-stone-800 bg-stone-900/60 py-2 text-xs text-center text-stone-300 hover:bg-stone-800/60 transition-colors"
-						>
-							SSH vulnbox
-						</a>
-					{/if}
-					<a
-						href="{API_BASE}/api/v1/arena/attack-info"
-						class="flex-1 rounded-md border border-stone-800 bg-stone-900/60 py-2 text-xs text-center text-stone-300 hover:bg-stone-800/60 transition-colors"
-						target="_blank" rel="noreferrer"
-					>
-						Attack info
-					</a>
-				</div>
-				<p class="text-xs text-stone-600">Vulnbox reboot/reset: 501 until OCI control plane is wired.</p>
+				<p class="text-xs leading-relaxed text-stone-600">This address is your production service target. Deploy and recovery operations run through the team repository and Deployment Gate.</p>
 			</div>
 		</Card>
 	</div>

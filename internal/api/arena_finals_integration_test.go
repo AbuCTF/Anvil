@@ -76,9 +76,10 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	clearGame()
 	defer func() {
 		exec(`TRUNCATE game_teams, game_services, game_ticks CASCADE`)
+		clearGame() // game.state records the admin that changed it
+		exec(`DELETE FROM audit_log WHERE user_id IN ($1, $2, $3)`, p1, p2, admin)
 		exec(`DELETE FROM users WHERE id IN ($1, $2, $3)`, p1, p2, admin)
 		exec(`DELETE FROM teams WHERE id IN ($1, $2, $3)`, teamA, teamB, teamC)
-		clearGame() // the event window is shared with every other api test
 	}()
 	setting("arena_enabled", "true")
 	exec(`INSERT INTO teams (id, name, join_code) VALUES ($1, 'alpha'||$4, 'ja'||$4), ($2, 'bravo'||$4, 'jb'||$4), ($3, 'charlie'||$4, 'jc'||$4)`,
@@ -115,6 +116,7 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	cfg.RateLimit.Enabled = false
 	cfg.VPN.Enabled = false
 	cfg.Game.Enabled = true
+	cfg.Game.Scoring.FreeDeploys = 3
 	containerSvc, err := container.NewService(cfg.Container, zap.NewNop())
 	if err != nil {
 		t.Skipf("docker unavailable: %v", err)
@@ -144,6 +146,32 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
 		return w.Code, w.Body.Bytes()
+	}
+
+	setting("arena_enabled", "false")
+	for _, path := range []string{"/api/v1/arena/me", "/api/v1/arena/me/status", "/api/v1/arena/me/alerts"} {
+		if code, _ := call("GET", path, &p1, ""); code != http.StatusNotFound {
+			t.Fatalf("pre-release %s = %d, want 404", path, code)
+		}
+	}
+	setting("arena_enabled", "true")
+
+	for _, endpoint := range []struct {
+		method string
+		path   string
+		who    uuid.UUID
+	}{
+		{"GET", "/api/v1/arena/me/pcaps", p1},
+		{"POST", "/api/v1/arena/me/vulnbox/reboot", p1},
+		{"POST", "/api/v1/arena/me/vulnbox/reset", p1},
+		{"GET", "/api/v1/arena/me/vulnbox/reset", p1},
+		{"POST", "/api/v1/admin/arena/teams/" + teamA.String() + "/pcap", admin},
+		{"POST", "/api/v1/admin/arena/teams/" + teamA.String() + "/vulnbox-reset", admin},
+		{"POST", "/api/v1/admin/arena/teams/" + teamA.String() + "/vulnbox-reboot", admin},
+	} {
+		if code, _ := call(endpoint.method, endpoint.path, &endpoint.who, ""); code != http.StatusNotFound {
+			t.Fatalf("removed endpoint %s %s = %d, want 404", endpoint.method, endpoint.path, code)
+		}
 	}
 
 	code, raw := call("GET", "/api/v1/arena/attack-info", nil, "")
@@ -312,6 +340,49 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	}
 	if stores != 2 || noise != 1 || havoc != 2 || release == nil {
 		t.Errorf("created service = stores %d noise %d havoc %d release %v", stores, noise, havoc, release)
+	}
+
+	idleService := uuid.New()
+	exec(`INSERT INTO game_services (id, name, slug, category, port, checker_ref, flag_stores)
+		VALUES ($1, 'Waiting Room', 'waiting-room', 'web', 9400, 'http://waiting-checker:9000', 2)`, idleService)
+	exec(`INSERT INTO game_deploys (team_id, service_id, kind, org_initiated, tick_number, deployed_at)
+		VALUES ($1, $2, 'deploy', false, 3, '2026-10-24T13:45:00Z')`, teamA, idleService)
+	code, raw = call("GET", "/api/v1/arena/me/status", &p1, "")
+	if code != http.StatusOK {
+		t.Fatalf("team status = %d %s", code, raw)
+	}
+	var status struct {
+		Services []struct {
+			Slug            string `json:"slug"`
+			FreeDeploysLeft int    `json:"free_deploys_left"`
+			Stores          []struct {
+				Ticks []any `json:"ticks"`
+			} `json:"stores"`
+			LastDeployment *struct {
+				Kind string `json:"kind"`
+				Tick int    `json:"tick"`
+			} `json:"last_deployment"`
+		} `json:"services"`
+	}
+	if err := json.Unmarshal(raw, &status); err != nil {
+		t.Fatalf("decode team status: %v\n%s", err, raw)
+	}
+	foundIdle := false
+	for _, service := range status.Services {
+		if service.Slug != "waiting-room" {
+			continue
+		}
+		foundIdle = true
+		if len(service.Stores) != 2 || len(service.Stores[0].Ticks) != 0 || len(service.Stores[1].Ticks) != 0 {
+			t.Errorf("pre-tick service stores = %#v", service.Stores)
+		}
+		if service.FreeDeploysLeft != 2 || service.LastDeployment == nil ||
+			service.LastDeployment.Kind != "deploy" || service.LastDeployment.Tick != 3 {
+			t.Errorf("pre-tick deployment state = %#v", service)
+		}
+	}
+	if !foundIdle {
+		t.Error("enabled service without SLA ticks was omitted from team status")
 	}
 }
 
