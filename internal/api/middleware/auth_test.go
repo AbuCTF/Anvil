@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,36 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
+
+func TestLoggerDoesNotRecordQuerySecrets(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	core, observed := observer.New(zap.InfoLevel)
+	router := gin.New()
+	router.Use(Logger(zap.New(core)))
+	router.GET("/health", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	secret := "PRIVATE_HIDDEN_SENTINEL"
+	request := httptest.NewRequest(http.MethodGet, "/health?token="+secret, nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	entries := observed.All()
+	if len(entries) != 1 {
+		t.Fatalf("request log entries = %d, want 1", len(entries))
+	}
+	fields := entries[0].ContextMap()
+	if _, ok := fields["query"]; ok {
+		t.Fatalf("request log retained query field: %#v", fields)
+	}
+	for key, value := range fields {
+		if strings.Contains(fmt.Sprint(value), secret) {
+			t.Fatalf("request log field %q leaked query secret", key)
+		}
+	}
+}
 
 func TestCORSAllowsRankRevalidationHeaders(t *testing.T) {
 	gin.SetMode(gin.TestMode)

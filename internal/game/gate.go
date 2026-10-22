@@ -263,7 +263,7 @@ func (g *GateRunner) runGateTask(ctx context.Context, checker Checker, target Ta
 	}
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return checker.Run(tctx, target, task)
+	return sanitizeCheckerResult(checker.Run(tctx, target, task))
 }
 
 // gateFlag generates a valid-format flag (H7CTF{[0-9a-f]{32}}) that is never written

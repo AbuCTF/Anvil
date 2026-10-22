@@ -5,11 +5,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/anvil-lab/anvil/internal/models"
 )
+
+func TestExecCheckerSanitizesDiagnostics(t *testing.T) {
+	secret := "H7CTF{0123456789abcdef0123456789abcdef}"
+	script := writeChecker(t, "#!/bin/sh\ncat >/dev/null\nprintf '{\"status\":\"DOWN\",\"message\":\"BERTH-HAVOC-04: "+secret+"\"}'\n")
+	res := execChecker{command: script}.Run(context.Background(), Target{}, Task{Method: MethodGetFlag})
+	if res.Code != "BERTH-HAVOC-04" || res.Message != "Service unavailable" {
+		t.Fatalf("sanitized result = code %q, message %q", res.Code, res.Message)
+	}
+	if strings.Contains(res.Message, secret) {
+		t.Fatal("checker result retained a flag")
+	}
+}
 
 func writeChecker(t *testing.T, body string) string {
 	t.Helper()

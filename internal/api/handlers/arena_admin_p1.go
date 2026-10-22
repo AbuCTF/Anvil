@@ -7,6 +7,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/config"
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/anvil-lab/anvil/internal/game"
+	"github.com/anvil-lab/anvil/internal/models"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -81,7 +82,6 @@ type checkerLogRow struct {
 	Status      *string `json:"status"`
 	Code        *string `json:"code"`
 	Message     *string `json:"message"`
-	PrivateLog  *string `json:"private_log"`
 	LatencyMS   *int    `json:"latency_ms"`
 }
 
@@ -106,7 +106,7 @@ func (h *ArenaAdminHandler) CheckerLog(c *gin.Context) {
 
 	rows, err := h.db.Pool.Query(c.Request.Context(),
 		`SELECT id, tick_number, related_tick, team_id, service_id, method, variant,
-		        status, code, message, private_log, latency_ms
+		        status, code, message, latency_ms
 		 FROM game_checker_tasks
 		 WHERE team_id = $1 AND service_id = $2 AND tick_number = $3
 		 ORDER BY id`, teamID, serviceID, tick)
@@ -125,11 +125,27 @@ func (h *ArenaAdminHandler) CheckerLog(c *gin.Context) {
 			&r.TeamID, &r.ServiceID,
 			&r.Method, &r.Variant,
 			&r.Status, &r.Code,
-			&r.Message, &r.PrivateLog, &r.LatencyMS,
+			&r.Message, &r.LatencyMS,
 		); err != nil {
 			h.logger.Error("admin: checker log scan", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
+		}
+		if r.Status != nil {
+			var code, message string
+			if r.Code != nil {
+				code = *r.Code
+			}
+			if r.Message != nil {
+				message = *r.Message
+			}
+			code, message = game.SanitizeCheckerDiagnostic(models.SLAStatus(*r.Status), code, message)
+			if code == "" {
+				r.Code = nil
+			} else {
+				r.Code = &code
+			}
+			r.Message = &message
 		}
 		result = append(result, r)
 	}

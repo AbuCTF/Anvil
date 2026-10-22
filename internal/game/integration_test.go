@@ -117,6 +117,41 @@ func TestValidateDestructiveTestDatabase(t *testing.T) {
 	}
 }
 
+func TestIntegrationCheckerDiagnosticsSanitizedBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	team := seedTeam(t, db, "redaction")
+	service := seedService(t, db, "/unused")
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_ticks (tick_number, status) VALUES (1, 'running')`); err != nil {
+		t.Fatal(err)
+	}
+	secret := "eyJhbGciOiJIUzI1NiJ9.PRIVATE_HIDDEN_SENTINEL.signature"
+	result := Result{Status: models.SLADown, Code: "bad code", Message: "BERTH-HAVOC-04: " + secret}
+	taskID, err := openCheckerTask(db, team, service, Task{Tick: 1, RelatedTick: 1, Method: MethodGetFlag})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closeCheckerTask(db, taskID, result); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &Dispatcher{db: db}
+	if err := dispatcher.recordSLA(1, team, service, result); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, table := range []string{"game_checker_tasks", "game_sla_checks"} {
+		var code, message string
+		if err := db.Pool.QueryRow(ctx, `SELECT COALESCE(code, ''), COALESCE(message, '') FROM `+table+` LIMIT 1`).Scan(&code, &message); err != nil {
+			t.Fatal(err)
+		}
+		if code != "" || message != "Service unavailable" || strings.Contains(message, secret) {
+			t.Fatalf("%s persisted code %q, message %q", table, code, message)
+		}
+	}
+}
+
 func okChecker(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "ok.sh")

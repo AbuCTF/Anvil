@@ -53,6 +53,7 @@ type Task struct {
 type Result struct {
 	Status     models.SLAStatus
 	Latency    time.Duration
+	Code       string
 	Message    string
 	AttackInfo string
 	Flag       string
@@ -115,7 +116,8 @@ func runCheckerCommand(ctx context.Context, command string, input []byte) ([]byt
 	return cmd.Output()
 }
 
-func (e execChecker) Run(ctx context.Context, t Target, task Task) Result {
+func (e execChecker) Run(ctx context.Context, t Target, task Task) (result Result) {
+	defer func() { result = sanitizeCheckerResult(result) }()
 	var action string
 	switch task.Method {
 	case MethodPutFlag:
@@ -186,7 +188,8 @@ type enoResultMessage struct {
 	Flag       *string `json:"flag"`
 }
 
-func (e enoChecker) Run(ctx context.Context, t Target, task Task) Result {
+func (e enoChecker) Run(ctx context.Context, t Target, task Task) (result Result) {
+	defer func() { result = sanitizeCheckerResult(result) }()
 	msg := enoTaskMessage{
 		TaskID:         task.ID,
 		Method:         task.Method,

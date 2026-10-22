@@ -299,8 +299,9 @@ func TestBulkFlagSubmit(t *testing.T) {
 	})
 
 	t.Run("admin checker log returns rows", func(t *testing.T) {
-		exec(`INSERT INTO game_checker_tasks (tick_number, related_tick, team_id, service_id, method, variant, status, message, code)
-			VALUES (2, 2, $1, $2, 'putflag', 0, 'OK', 'ok', NULL)`, teamA, svc)
+		secret := "PRIVATE_HIDDEN_SENTINEL"
+		exec(`INSERT INTO game_checker_tasks (tick_number, related_tick, team_id, service_id, method, variant, status, message, code, private_log)
+			VALUES (2, 2, $1, $2, 'putflag', 0, 'OK', 'BERTH-HAVOC-04: ' || $3, NULL, $3)`, teamA, svc, secret)
 		code, raw := callAdmin("GET",
 			fmt.Sprintf("/api/v1/admin/arena/checker-log?team_id=%s&service_id=%s&tick=2", teamA, svc),
 			nil)
@@ -315,6 +316,9 @@ func TestBulkFlagSubmit(t *testing.T) {
 		json.Unmarshal(raw, &resp)
 		if len(resp.Tasks) == 0 {
 			t.Error("want at least one checker task row")
+		}
+		if bytes.Contains(raw, []byte(secret)) || bytes.Contains(raw, []byte("private_log")) {
+			t.Fatalf("checker log exposed private diagnostics: %s", raw)
 		}
 	})
 

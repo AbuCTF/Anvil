@@ -111,13 +111,10 @@ func EffectiveSLA(ctx context.Context, db *database.DB, teamID uuid.UUID, since,
 	out := make([]SLATick, 0, len(mine))
 	for k, x := range mine {
 		raw := in.SLA[k]
+		code, message := SanitizeCheckerDiagnostic(raw.Status, x.code, x.message)
 		t := SLATick{
 			ServiceID: k.service, Tick: k.tick, Status: raw.Status, Effective: eff[k],
-			Credited: why[k], Step: raw.Step, Code: x.code, Message: x.message, ImageDigest: x.digest,
-		}
-		if raw.Status == models.SLAError {
-			// a checker's own error text may carry private detail; teams only see it was ours
-			t.Message, t.Code = "checker error, credited", ""
+			Credited: why[k], Step: raw.Step, Code: code, Message: message, ImageDigest: x.digest,
 		}
 		out = append(out, t)
 	}

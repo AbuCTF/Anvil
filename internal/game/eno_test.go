@@ -66,7 +66,7 @@ func TestEnoCheckerOmitsFlagForNoise(t *testing.T) {
 func TestReferenceAttackCheckerContract(t *testing.T) {
 	const expectedFlag = "H7CTF{0123456789abcdef0123456789abcdef}"
 	srv, seen := enoServer(t, func(enoTaskMessage) (int, string) {
-		return 200, `{"result":"OK","message":null,"flag":"` + expectedFlag + `"}`
+		return 200, `{"result":"OK","message":"REF-ATTACK-01: PRIVATE_HIDDEN_SENTINEL","flag":"` + expectedFlag + `"}`
 	})
 	store := orangeStore{serviceID: uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), storeIndex: 1, waveVariant: 3, port: 7001}
 	team := greenTeam{id: uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), number: 7, name: "bravo", vulnboxIP: "10.60.7.2"}
@@ -119,7 +119,7 @@ func TestReferenceAttackCheckerContract(t *testing.T) {
 		t.Fatalf("closed task ids = %+v, want %v", closed, taskIDs)
 	}
 	for _, audit := range closed {
-		if audit.res.Status != models.SLAOk || audit.res.Message != "" || audit.res.Flag != "" {
+		if audit.res.Status != models.SLAOk || audit.res.Code != "" || audit.res.Message != "" || audit.res.Flag != "" {
 			t.Fatalf("persisted reference attack result = %+v", audit.res)
 		}
 	}

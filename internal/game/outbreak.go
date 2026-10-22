@@ -380,6 +380,7 @@ func (b *outbreakBot) callExploit(
 	res.Step = task.Method
 	auditResult := res
 	auditResult.Flag = ""
+	auditResult.Code = ""
 	auditResult.Message = ""
 	if err := b.closeTask(id, auditResult); err != nil {
 		return botRead{}, fmt.Errorf("close checker task %d: %w", id, err)

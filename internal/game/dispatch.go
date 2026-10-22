@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
-	"regexp"
 	"sync"
 	"time"
 
@@ -269,6 +268,7 @@ func (d *Dispatcher) runTask(ctx context.Context, p tickPlan, j job, task Task, 
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	res := j.checker.Run(tctx, j.target, task)
 	cancel()
+	res = sanitizeCheckerResult(res)
 	res.Step = task.Method
 
 	if id != 0 {
@@ -335,11 +335,10 @@ func aggregate(current, old []Result) (Result, bool) {
 		// an old check our own checker botched is not the team's lost flag
 		if r.Status != models.SLAOk && r.Status != models.SLAError {
 			verdict.Status = models.SLARecovering
-			verdict.Message = "older flag missing: " + r.Message
 			break
 		}
 	}
-	return verdict, true
+	return sanitizeCheckerResult(verdict), true
 }
 
 type serviceTarget struct {
@@ -575,22 +574,17 @@ func (d *Dispatcher) closeTask(id int64, res Result) error {
 func closeCheckerTask(db *database.DB, id int64, res Result) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbWriteTimeout)
 	defer cancel()
+	res = sanitizeCheckerResult(res)
 	_, err := db.Pool.Exec(ctx,
-		`UPDATE game_checker_tasks SET status = $2, message = NULLIF($3, ''), latency_ms = $4, finished_at = NOW()
-		 WHERE id = $1`, id, string(res.Status), res.Message, int(res.Latency.Milliseconds()))
+		`UPDATE game_checker_tasks SET status = $2, code = NULLIF($3, ''), message = NULLIF($4, ''), latency_ms = $5, finished_at = NOW()
+		 WHERE id = $1`, id, string(res.Status), res.Code, res.Message, int(res.Latency.Milliseconds()))
 	return err
 }
-
-// checker messages lead with a stable code, e.g. "BERTH-HAVOC-04: ..."
-var messageCode = regexp.MustCompile(`^([A-Z0-9]+-[A-Z]+-[0-9]+):`)
 
 func (d *Dispatcher) recordSLA(tick int, team, service uuid.UUID, res Result) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dbWriteTimeout)
 	defer cancel()
-	var code string
-	if m := messageCode.FindStringSubmatch(res.Message); m != nil {
-		code = m[1]
-	}
+	res = sanitizeCheckerResult(res)
 	// stamp the image that was live, so a disputed verdict names the exact build
 	_, err := d.db.Pool.Exec(ctx,
 		`INSERT INTO game_sla_checks (tick_number, team_id, service_id, status, latency_ms, message, step, code, image_digest)
@@ -605,6 +599,6 @@ func (d *Dispatcher) recordSLA(tick int, team, service uuid.UUID, res Result) er
 		   code = EXCLUDED.code,
 		   image_digest = EXCLUDED.image_digest,
 		   checked_at = NOW()`,
-		tick, team, service, string(res.Status), int(res.Latency.Milliseconds()), res.Message, res.Step, code)
+		tick, team, service, string(res.Status), int(res.Latency.Milliseconds()), res.Message, res.Step, res.Code)
 	return err
 }

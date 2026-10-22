@@ -267,7 +267,8 @@ func (h *AttachmentHandler) CreateLink(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name and url are required"})
 		return
 	}
-	if u, err := url.Parse(req.URL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	u, err := url.Parse(req.URL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "url must be an absolute http(s) URL"})
 		return
 	}
@@ -315,7 +316,7 @@ func (h *AttachmentHandler) CreateLink(c *gin.Context) {
 	if req.Sha256 != "" {
 		sha = &req.Sha256
 	}
-	_, err := h.db.Pool.Exec(c.Request.Context(),
+	_, err = h.db.Pool.Exec(c.Request.Context(),
 		`INSERT INTO challenge_attachments
 		 (id, challenge_id, uploaded_by, filename, file_size, content_type, url, sha256, description, sort_order, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
@@ -328,7 +329,7 @@ func (h *AttachmentHandler) CreateLink(c *gin.Context) {
 	}
 	h.logger.Info("external attachment added",
 		zap.String("challenge_id", challengeID), zap.String("attachment_id", attachmentID.String()),
-		zap.String("filename", req.Name), zap.String("url", req.URL))
+		zap.String("filename", req.Name), zap.String("url_scheme", u.Scheme), zap.String("url_host", u.Host))
 	c.JSON(http.StatusCreated, gin.H{
 		"id": attachmentID.String(), "filename": req.Name, "file_size": fileSize,
 		"content_type": contentType, "url": req.URL, "sha256": req.Sha256, "sort_order": req.SortOrder,
