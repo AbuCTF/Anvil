@@ -65,6 +65,11 @@ ANVIL_DATABASE_PASSWORD=11111111111111111111111111111111
 ANVIL_JWT_SECRET=22222222222222222222222222222222
 ANVIL_SECRETS_ENCRYPTION_KEY=33333333333333333333333333333333
 ANVIL_GAME_INTERNAL_TOKEN=44444444444444444444444444444444
+ANVIL_VPN_ENABLED=false
+ANVIL_VPN_PEER_CONTROL=external
+ANVIL_VPN_PUBLIC_ENDPOINT=vpn.h7tex.com:443
+ANVIL_VPN_PUBLIC_KEY=
+ANVIL_VPN_ALLOWED_IPS=10.60.0.0/15
 ANVIL_TLS_CERT_PATH=$test_dir/tls/fullchain.pem
 ANVIL_TLS_KEY_PATH=$test_dir/tls/privkey.pem
 ANVIL_DATABASE_HOST_PATH=$test_dir/database
@@ -74,6 +79,61 @@ EOF
 chmod 600 "$env_file"
 
 "$script_dir/preflight.sh" "$env_file"
+
+expect_preflight_failure() {
+    local candidate=$1
+    local reason=$2
+    chmod 600 "$candidate"
+    if "$script_dir/preflight.sh" "$candidate" >/dev/null 2>&1; then
+        echo "test: preflight accepted $reason" >&2
+        exit 1
+    fi
+}
+
+missing_gate_env="$test_dir/missing-gate.env"
+grep -v '^ANVIL_VPN_ENABLED=' "$env_file" >"$missing_gate_env"
+expect_preflight_failure "$missing_gate_env" "a missing VPN activation gate"
+
+invalid_gate_env="$test_dir/invalid-gate.env"
+sed 's/^ANVIL_VPN_ENABLED=.*/ANVIL_VPN_ENABLED=yes/' "$env_file" >"$invalid_gate_env"
+expect_preflight_failure "$invalid_gate_env" "a non-boolean VPN activation gate"
+
+enabled_without_key_env="$test_dir/enabled-without-key.env"
+sed 's/^ANVIL_VPN_ENABLED=.*/ANVIL_VPN_ENABLED=true/' "$env_file" >"$enabled_without_key_env"
+expect_preflight_failure "$enabled_without_key_env" "enabled VPN without a server public key"
+
+wireguard_public_key=$(openssl rand -base64 32)
+enabled_env="$test_dir/enabled.env"
+sed \
+    -e 's/^ANVIL_VPN_ENABLED=.*/ANVIL_VPN_ENABLED=true/' \
+    -e "s|^ANVIL_VPN_PUBLIC_KEY=.*|ANVIL_VPN_PUBLIC_KEY=$wireguard_public_key|" \
+    "$env_file" >"$enabled_env"
+chmod 600 "$enabled_env"
+"$script_dir/preflight.sh" "$enabled_env"
+
+while IFS='|' read -r variable value reason; do
+    invalid_vpn_env="$test_dir/invalid-$variable.env"
+    sed "s|^$variable=.*|$variable=$value|" "$enabled_env" >"$invalid_vpn_env"
+    expect_preflight_failure "$invalid_vpn_env" "$reason"
+done <<'EOF'
+ANVIL_VPN_PEER_CONTROL|local|local VPN peer control
+ANVIL_VPN_PUBLIC_ENDPOINT|vpn.h7tex.com:51820|an unexpected VPN endpoint
+ANVIL_VPN_ALLOWED_IPS|10.80.0.0/16|an unexpected VPN allowed route
+ANVIL_VPN_PUBLIC_KEY|not-a-wireguard-key|an invalid VPN server public key
+EOF
+
+for key_size in 31 33; do
+    wrong_size_key=$(openssl rand "$key_size" | base64 | tr -d '\n')
+    wrong_size_env="$test_dir/public-key-$key_size.env"
+    sed "s|^ANVIL_VPN_PUBLIC_KEY=.*|ANVIL_VPN_PUBLIC_KEY=$wrong_size_key|" \
+        "$enabled_env" >"$wrong_size_env"
+    expect_preflight_failure "$wrong_size_env" "a base64 VPN public key that decodes to $key_size bytes"
+done
+
+private_key_env="$test_dir/private-key.env"
+cp "$env_file" "$private_key_env"
+printf '\nANVIL_VPN_PRIVATE_KEY=must-not-be-here\n' >>"$private_key_env"
+expect_preflight_failure "$private_key_env" "a gateway private key"
 
 duplicate_env="$test_dir/duplicate.env"
 sed 's/^ANVIL_JWT_SECRET=.*/ANVIL_JWT_SECRET=11111111111111111111111111111111/' "$env_file" >"$duplicate_env"
@@ -100,6 +160,21 @@ grep -Fq "context: $repo_root" "$rendered"
 grep -Fq "source: $test_dir/database" "$rendered"
 grep -Fq 'postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685' "$rendered"
 grep -Fq 'nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236' "$rendered"
+grep -Fq 'ANVIL_VPN_ENABLED: "false"' "$rendered"
+grep -Fq 'ANVIL_VPN_PEER_CONTROL: external' "$rendered"
+grep -Fq 'ANVIL_VPN_PUBLIC_ENDPOINT: vpn.h7tex.com:443' "$rendered"
+grep -Fq 'ANVIL_VPN_ALLOWED_IPS: 10.60.0.0/15' "$rendered"
+! grep -Fq 'ANVIL_VPN_PRIVATE_KEY' "$rendered"
+
+default_env="$test_dir/default.env"
+grep -v '^ANVIL_VPN_ENABLED=' "$env_file" >"$default_env"
+default_rendered="$test_dir/default-compose.yaml"
+env -u ANVIL_VPN_ENABLED docker compose \
+    --project-name anvil-finals-test \
+    --project-directory "$script_dir" \
+    --env-file "$default_env" \
+    -f "$script_dir/compose.yaml" config >"$default_rendered"
+grep -Fq 'ANVIL_VPN_ENABLED: "false"' "$default_rendered"
 
 nginx_options=(
     --read-only

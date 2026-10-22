@@ -28,6 +28,7 @@ required=(
     ANVIL_JWT_SECRET
     ANVIL_SECRETS_ENCRYPTION_KEY
     ANVIL_GAME_INTERNAL_TOKEN
+    ANVIL_VPN_ENABLED
     ANVIL_TLS_CERT_PATH
     ANVIL_TLS_KEY_PATH
     ANVIL_DATABASE_HOST_PATH
@@ -37,6 +38,25 @@ required=(
 for name in "${required[@]}"; do
     [[ -n ${!name:-} ]] || fail "$name is required"
 done
+
+[[ $ANVIL_VPN_ENABLED == true || $ANVIL_VPN_ENABLED == false ]] ||
+    fail "ANVIL_VPN_ENABLED must be true or false"
+[[ -z ${ANVIL_VPN_PRIVATE_KEY:-} ]] ||
+    fail "ANVIL_VPN_PRIVATE_KEY must stay on the VPN gateway"
+if [[ $ANVIL_VPN_ENABLED == true ]]; then
+    [[ ${ANVIL_VPN_PEER_CONTROL:-} == external ]] ||
+        fail "ANVIL_VPN_PEER_CONTROL must be external when VPN is enabled"
+    [[ ${ANVIL_VPN_PUBLIC_ENDPOINT:-} == vpn.h7tex.com:443 ]] ||
+        fail "ANVIL_VPN_PUBLIC_ENDPOINT must be vpn.h7tex.com:443 when VPN is enabled"
+    [[ ${ANVIL_VPN_ALLOWED_IPS:-} == 10.60.0.0/15 ]] ||
+        fail "ANVIL_VPN_ALLOWED_IPS must be 10.60.0.0/15 when VPN is enabled"
+    [[ ${ANVIL_VPN_PUBLIC_KEY:-} =~ ^[A-Za-z0-9+/]{43}=$ ]] ||
+        fail "ANVIL_VPN_PUBLIC_KEY must be a base64-encoded 32-byte WireGuard public key"
+    vpn_public_key_size=$(printf '%s' "$ANVIL_VPN_PUBLIC_KEY" | base64 --decode 2>/dev/null | wc -c) ||
+        fail "ANVIL_VPN_PUBLIC_KEY is not valid base64"
+    [[ $vpn_public_key_size -eq 32 ]] ||
+        fail "ANVIL_VPN_PUBLIC_KEY must decode to 32 bytes"
+fi
 
 declare -A seen_secrets=()
 for name in ANVIL_DATABASE_PASSWORD ANVIL_JWT_SECRET ANVIL_SECRETS_ENCRYPTION_KEY ANVIL_GAME_INTERNAL_TOKEN; do

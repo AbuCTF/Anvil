@@ -27,11 +27,11 @@ keys or cloud credentials. It receives only its database password, JWT signing
 secret, encryption key and game internal token. TLS keys are mounted only into
 Nginx. PostgreSQL and Nginx base images are pinned by manifest digest.
 
-This revision deliberately keeps Anvil VPN enrollment disabled. Production
-commissioning is blocked until the external peer-control release is on the base
-branch and a versioned follow-up sets `vpn.enabled=true` and
-`vpn.peer_control=external`. Enabling the current production-mode peer writer
-would require the host PID namespace and is forbidden by this profile.
+VPN enrollment is an explicit, default-off activation gate. The production
+profile fixes peer control to `external`, the participant endpoint to
+`vpn.h7tex.com:443`, and the routed network to `10.60.0.0/15`. Anvil needs only
+the gateway's public key to generate participant configurations; preflight
+rejects any gateway private key in the Anvil environment file.
 
 Validate a reviewed checkout before packaging it:
 
@@ -193,6 +193,39 @@ sudo /opt/anvil/current/deployments/finals/preflight.sh
 sudo systemctl enable --now anvil-finals.service
 sudo systemctl enable --now anvil-finals-backup.timer
 ```
+
+### VPN activation gate
+
+Leave `ANVIL_VPN_ENABLED=false` through initial commissioning. Before enabling
+it, complete the create, regenerate, revoke, signed-snapshot rejection and
+gateway-failover checks in `deployments/finals/VPN_PEER_CONTROL.md`. Read only
+the public key from the active gateway. The shared gateway identity private key
+is confined to encrypted bootstrap and runtime storage on the HA gateway pair;
+it never enters Anvil or appears in Anvil environment or configuration files.
+
+Use `sudoedit /etc/anvil/finals.env` to set exactly:
+
+```dotenv
+ANVIL_VPN_ENABLED=true
+ANVIL_VPN_PEER_CONTROL=external
+ANVIL_VPN_PUBLIC_ENDPOINT=vpn.h7tex.com:443
+ANVIL_VPN_PUBLIC_KEY=<base64-encoded-32-byte-gateway-public-key>
+ANVIL_VPN_ALLOWED_IPS=10.60.0.0/15
+```
+
+Activate the reviewed configuration with:
+
+```bash
+sudo /opt/anvil/current/deployments/finals/preflight.sh
+sudo systemctl reload anvil-finals.service
+```
+
+Confirm a newly generated participant configuration contains the reviewed
+gateway public key, endpoint and allowed route, then verify its attributed peer
+appears in the signed external snapshot and can reach only the intended finals
+network. If the gate fails, set `ANVIL_VPN_ENABLED=false`, rerun preflight, and
+reload the service with the same two commands. This disables Anvil enrollment;
+remove any already-installed test peer through the external gateway controller.
 
 Anvil applies embedded database migrations during API startup. Migrations are
 serialized with a PostgreSQL advisory lock and their names and checksums are
