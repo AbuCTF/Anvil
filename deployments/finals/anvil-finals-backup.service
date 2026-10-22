@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up the Anvil finals platform
+Requires=docker.service
+After=docker.service
+RequiresMountsFor=/srv/anvil /etc/anvil
+ConditionPathIsMountPoint=/srv/anvil
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/anvil/current
+ExecStart=/opt/anvil/current/deployments/finals/backup.sh

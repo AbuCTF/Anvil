@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Anvil API Dockerfile
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26-alpine@sha256:5cb67f19c5e7994dcb80c074f7cfca8aeeada45bbdca035f73df269cefdcce61 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o anvil ./cmd/server
 
 # Final stage
-FROM alpine:3.24
+FROM alpine:3.24@sha256:71e9b7bae160ba167fa17414401b94cbcdaf3c32feeab9298bd794a2a0614c35
 
 # wireguard-tools for wg peer management via nsenter
 # openssh-client for remote VM node operations

@@ -2,7 +2,7 @@
 # Anvil Web Frontend Dockerfile
 
 # Development stage
-FROM node:24-alpine AS development
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS development
 
 WORKDIR /app
 
@@ -20,7 +20,7 @@ EXPOSE 3000
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 
 # Build stage
-FROM node:24-alpine AS builder
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS builder
 
 WORKDIR /app
 
@@ -35,7 +35,7 @@ RUN npx svelte-kit sync
 RUN npm run build
 
 # Production stage
-FROM node:24-alpine AS production
+FROM node:24-alpine@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS production
 
 WORKDIR /app
 

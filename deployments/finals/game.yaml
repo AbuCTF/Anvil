@@ -5,6 +5,12 @@
 # gameserver runs true with ANVIL_GAME_TCP_SUBMIT_ENABLED=true.
 # finals mode itself is platform_settings game.state ("running"), set at the start.
 
+server:
+  # The production Compose network is fixed; forwarded identity is trusted only
+  # from the bundled TLS ingress, never from a client-controlled address.
+  trusted_proxies:
+    - 172.31.26.10/32
+
 game:
   enabled: true
   tick_interval: 2m

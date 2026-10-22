@@ -1,0 +1,20 @@
+[Unit]
+Description=Anvil finals platform
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+RequiresMountsFor=/srv/anvil /etc/anvil
+ConditionPathIsMountPoint=/srv/anvil
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/anvil/current
+ExecStart=/usr/bin/docker compose --project-name anvil-finals --project-directory /opt/anvil/current/deployments/finals --env-file /etc/anvil/finals.env -f /opt/anvil/current/deployments/finals/compose.yaml up -d --build --remove-orphans --wait
+ExecReload=/usr/bin/docker compose --project-name anvil-finals --project-directory /opt/anvil/current/deployments/finals --env-file /etc/anvil/finals.env -f /opt/anvil/current/deployments/finals/compose.yaml up -d --build --remove-orphans --wait
+ExecStop=/usr/bin/docker compose --project-name anvil-finals --project-directory /opt/anvil/current/deployments/finals --env-file /etc/anvil/finals.env -f /opt/anvil/current/deployments/finals/compose.yaml stop --timeout 40
+TimeoutStartSec=20min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target

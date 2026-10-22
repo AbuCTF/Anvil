@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Anvil finals backup
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+Unit=anvil-finals-backup.service
+
+[Install]
+WantedBy=timers.target
