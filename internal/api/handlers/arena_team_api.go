@@ -55,7 +55,7 @@ func (h *GameHandler) teamIdentity(c *gin.Context) (teamID uuid.UUID, maskedToke
 }
 
 // Tick serves GET /api/v1/arena/tick.
-// Returns the current tick number, its start/end timestamps, and the game phase.
+// Returns the current tick number, its start/end/hold timestamps, and the game phase.
 // No auth required (public; used by the status page clock and h7 deploy).
 func (h *GameHandler) Tick(c *gin.Context) {
 	if h.off(c) {
@@ -79,14 +79,26 @@ func (h *GameHandler) Tick(c *gin.Context) {
 		return
 	}
 
-	interval := h.config.Game.TickInterval
-	endsAt := startedAt.Add(interval)
-	c.JSON(http.StatusOK, gin.H{
-		"tick":       tick,
-		"started_at": startedAt,
-		"ends_at":    endsAt,
-		"phase":      string(phase),
-	})
+	c.JSON(http.StatusOK, h.tickResponse(tick, startedAt, phase))
+}
+
+type arenaTickResponse struct {
+	Tick      int       `json:"tick"`
+	StartedAt time.Time `json:"started_at"`
+	EndsAt    time.Time `json:"ends_at"`
+	HoldFrom  time.Time `json:"hold_from"`
+	Phase     string    `json:"phase"`
+}
+
+func (h *GameHandler) tickResponse(tick int, startedAt time.Time, phase game.Phase) arenaTickResponse {
+	endsAt := startedAt.Add(h.config.Game.TickInterval)
+	return arenaTickResponse{
+		Tick:      tick,
+		StartedAt: startedAt,
+		EndsAt:    endsAt,
+		HoldFrom:  endsAt.Add(-h.config.Game.Checker.TailMargin),
+		Phase:     string(phase),
+	}
 }
 
 func (h *GameHandler) currentTickInfo(ctx context.Context) (int, time.Time, error) {

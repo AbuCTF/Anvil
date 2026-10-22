@@ -3,7 +3,28 @@ package handlers
 import (
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/anvil-lab/anvil/internal/config"
+	"github.com/anvil-lab/anvil/internal/game"
 )
+
+func TestArenaTickResponseUsesConfiguredTailMargin(t *testing.T) {
+	startedAt := time.Date(2026, time.October, 24, 13, 30, 0, 0, time.UTC)
+	handler := &GameHandler{config: &config.Config{Game: config.GameConfig{
+		TickInterval: 2 * time.Minute,
+		Checker:      config.CheckerConfig{TailMargin: 17 * time.Second},
+	}}}
+
+	got, err := json.Marshal(handler.tickResponse(42, startedAt, game.PhaseLive))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"tick":42,"started_at":"2026-10-24T13:30:00Z","ends_at":"2026-10-24T13:32:00Z","hold_from":"2026-10-24T13:31:43Z","phase":"live"}`
+	if string(got) != want {
+		t.Fatalf("tick response = %s, want %s", got, want)
+	}
+}
 
 func TestMeStatusServiceJSONContract(t *testing.T) {
 	port := 9001
