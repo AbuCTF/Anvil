@@ -31,6 +31,9 @@ The API and web images are prebuilt as
 `anvil-finals-web:<40-character-release-sha>`. Their Compose build definitions
 exist only for that explicit bake step. The service unit runs with `--no-build`,
 and preflight refuses to start unless both exact local tags exist.
+Every container has the bounded `on-failure:5` restart policy. Docker therefore
+cannot resurrect the stack after a daemon or host restart and bypass preflight;
+the systemd service is the only boot and start gate.
 
 VPN enrollment is an explicit, default-off activation gate. The production
 profile fixes peer control to `external`, the participant endpoint to
@@ -213,6 +216,10 @@ sudo /opt/anvil/current/deployments/finals/preflight.sh
 sudo systemctl enable --now anvil-finals.service
 sudo systemctl enable --now anvil-finals-backup.timer
 ```
+
+After a Docker daemon restart, or after a container exhausts its five local
+failure retries, diagnose the failure and run `sudo systemctl restart
+anvil-finals.service`. This reruns preflight before recreating the stack.
 
 ### VPN activation gate
 

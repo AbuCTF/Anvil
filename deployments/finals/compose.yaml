@@ -21,7 +21,7 @@ services:
     networks:
       - platform
     logging: *default-logging
-    restart: unless-stopped
+    restart: "on-failure:5"
 
   api:
     image: anvil-finals-api:${ANVIL_IMAGE_REVISION:?ANVIL_IMAGE_REVISION_required}
@@ -69,7 +69,7 @@ services:
       - platform
     logging: *default-logging
     stop_grace_period: 35s
-    restart: unless-stopped
+    restart: "on-failure:5"
 
   web:
     image: anvil-finals-web:${ANVIL_IMAGE_REVISION:?ANVIL_IMAGE_REVISION_required}
@@ -89,7 +89,7 @@ services:
       - platform
     logging: *default-logging
     stop_grace_period: 35s
-    restart: unless-stopped
+    restart: "on-failure:5"
 
   ingress:
     image: nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236
@@ -120,7 +120,7 @@ services:
       - /var/run
       - /tmp
     logging: *default-logging
-    restart: unless-stopped
+    restart: "on-failure:5"
 
 networks:
   platform:

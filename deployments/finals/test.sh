@@ -49,6 +49,12 @@ while read -r image; do
     fi
 done < <(awk '$1 == "image:" { print $2 }' "$script_dir/compose.yaml")
 
+! grep -Eq '^[[:space:]]+restart:[[:space:]]+"?(always|unless-stopped)"?[[:space:]]*$' \
+    "$script_dir/compose.yaml"
+[[ $(grep -Ec '^[[:space:]]+restart:[[:space:]]+"on-failure:5"[[:space:]]*$' \
+    "$script_dir/compose.yaml") == 4 ]]
+[[ $(grep -Ec '^[[:space:]]+restart:' "$script_dir/compose.yaml") == 4 ]]
+
 for unit in anvil-finals.service anvil-finals-backup.service anvil-finals-backup.timer; do
     sed "s#/opt/anvil/current#$repo_root#g" "$script_dir/$unit" >"$test_dir/$unit"
 done
@@ -207,6 +213,7 @@ grep -Fq 'nginx:1.28-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a1
 grep -Fq "image: anvil-finals-api:$image_revision" "$rendered"
 grep -Fq "image: anvil-finals-web:$image_revision" "$rendered"
 [[ $(grep -c 'pull_policy: never' "$rendered") == 2 ]]
+[[ $(grep -c 'restart: on-failure:5' "$rendered") == 4 ]]
 grep -Fq 'ANVIL_VPN_ENABLED: "false"' "$rendered"
 grep -Fq 'ANVIL_VPN_PEER_CONTROL: external' "$rendered"
 grep -Fq 'ANVIL_VPN_PUBLIC_ENDPOINT: vpn.h7tex.com:443' "$rendered"
