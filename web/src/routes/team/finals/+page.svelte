@@ -11,8 +11,22 @@
 	type SlaStatus = 'OK' | 'RECOVERING' | 'MUMBLE' | 'OFFLINE' | 'FLAG_NOT_FOUND' | 'ORG_FAULT'
 	               | 'DOWN' | 'FAULTY' | 'ERROR' | 'UNKNOWN';
 
-	// flag_fate: held | safe | stolen:<bucket> | unreadable  (store-level only)
-	type FlagFate = 'held' | 'safe' | 'stolen:1' | 'stolen:3' | 'stolen:7' | 'stolen:8' | 'unreadable' | null;
+	// The API uses underscore buckets; accept the earlier colon vocabulary while
+	// rolling clients forward so an in-flight response remains renderable.
+	type FlagFate =
+		| 'held'
+		| 'safe'
+		| 'tide'
+		| 'stolen_1'
+		| 'stolen_2_3'
+		| 'stolen_4_7'
+		| 'stolen_8plus'
+		| 'stolen:1'
+		| 'stolen:3'
+		| 'stolen:7'
+		| 'stolen:8'
+		| 'unreadable'
+		| null;
 
 	// per-tick checker row; same verdict applies to all stores of that service
 	interface StoreTick {
@@ -305,10 +319,10 @@
 		if (fate === 'safe') return { text: '○', cls: 'text-stone-400' };
 		if (fate === 'tide') return { text: 'T', cls: 'text-amber-400' };
 		if (fate === 'unreadable') return { text: '?', cls: 'text-stone-500' };
-		// stolen:1/3/7/8
-		const bucket = fate.split(':')[1];
-		const label = bucket === '1' ? 'x1' : bucket === '3' ? 'x2' : bucket === '7' ? 'x5' : 'x8';
-		return { text: label, cls: 'text-[#e08a85]' };
+		if (fate === 'stolen_1' || fate === 'stolen:1') return { text: 'x1', cls: 'text-[#e08a85]' };
+		if (fate === 'stolen_2_3' || fate === 'stolen:3') return { text: 'x2', cls: 'text-[#e08a85]' };
+		if (fate === 'stolen_4_7' || fate === 'stolen:7') return { text: 'x5', cls: 'text-[#e08a85]' };
+		return { text: 'x8', cls: 'text-[#e08a85]' };
 	}
 
 	function bucketLabel(bucket: number | null): string {
