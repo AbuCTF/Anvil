@@ -11,49 +11,42 @@
 	type SlaStatus = 'OK' | 'RECOVERING' | 'MUMBLE' | 'OFFLINE' | 'FLAG_NOT_FOUND' | 'ORG_FAULT'
 	               | 'DOWN' | 'FAULTY' | 'ERROR' | 'UNKNOWN';
 
-	// The API uses underscore buckets; accept the earlier colon vocabulary while
-	// rolling clients forward so an in-flight response remains renderable.
 	type FlagFate =
 		| 'held'
-		| 'safe'
 		| 'tide'
 		| 'stolen_1'
 		| 'stolen_2_3'
 		| 'stolen_4_7'
 		| 'stolen_8plus'
-		| 'stolen:1'
-		| 'stolen:3'
-		| 'stolen:7'
-		| 'stolen:8'
-		| 'unreadable'
-		| null;
+		| 'unreadable';
 
-	// per-tick checker row; same verdict applies to all stores of that service
 	interface StoreTick {
 		tick: number;
 		status: SlaStatus;
-		effective_status?: SlaStatus;
 		credited_reason?: string | null;
-		message?: string | null;
-		latency_ms?: number;
+		step?: string;
+		code?: string;
+		message?: string;
+		flag_fate?: FlagFate;
 	}
 
-	// per-store: current flag fate + accumulated totals + tick timeline
 	interface StoreStatus {
 		store_index: number;
 		store_name: string;
-		flag_fate: FlagFate;   // current fate (store-level, not per-tick)
-		steal_pts: number;
-		hold_pts: number;
-		up_pts: number;
-		ticks: StoreTick[];    // sorted oldest→newest, max 30
+		steal: number;
+		hold: number;
+		up: number;
+		ticks: StoreTick[];
 	}
 
-	// top-level response shape: services[]{stores[]{ticks[]}}
 	interface ServiceStatus {
 		service_id: string;
-		service_name: string;
+		slug: string;
+		name: string;
+		port: number | null;
 		stores: StoreStatus[];
+		points_this_hour: { steal: number; hold: number; up: number };
+		active_attackers: number;
 	}
 
 	interface ArenaTickInfo {
@@ -83,73 +76,24 @@
 		created_at: string;
 	}
 
-	// ---- mock data -----------------------------------------------------------
-	const MOCK_TICK: ArenaTickInfo = {
-		tick: 87,
-		started_at: new Date(Date.now() - 73000).toISOString(),
-		ends_at: new Date(Date.now() + 47000).toISOString(),
-		phase: 'live'
+	let tickInfo: ArenaTickInfo = {
+		tick: 0,
+		started_at: '',
+		ends_at: '1970-01-01T00:00:00Z',
+		phase: 'not_started'
 	};
-
-	const SERVICES_META = [
-		{ id: 'svc-1', name: 'Harbor ID' },
-		{ id: 'svc-2', name: 'TidePay' },
-		{ id: 'svc-3', name: 'Bollard' },
-		{ id: 'svc-4', name: 'Berth Board' },
-		{ id: 'svc-5', name: 'Dockyard' },
-		{ id: 'svc-6', name: 'Tariff Studio' },
-	];
-	const SVC_STATUS_POOL: SlaStatus[] = ['OK','OK','OK','OK','OK','OK','OK','RECOVERING','MUMBLE','OK','OK','OK','FLAG_NOT_FOUND','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK','OK'];
-
-	// mock matches locked shape: services[]{stores[]{ticks[]}}
-	const MOCK_SERVICES: ServiceStatus[] = SERVICES_META.map((svc, si) => {
-		const makeTicks = (): StoreTick[] =>
-			Array.from({ length: 30 }, (_, i) => {
-				const si7 = (i + si * 7) % SVC_STATUS_POOL.length;
-				const rawStatus = SVC_STATUS_POOL[si7];
-				const credited = rawStatus === 'ORG_FAULT';
-				return {
-					tick: 58 + i,
-					status: rawStatus,
-					effective_status: credited ? ('ORG_FAULT' as SlaStatus) : rawStatus,
-					credited_reason: credited ? 'outbreak-wave' : null,
-					message: si7 === 8 ? `${svc.name.toUpperCase().replace(' ', '-')}-HAVOC-04: search by tag returned no results` : null,
-					latency_ms: 200 + ((i * 37 + si * 13) % 300),
-				};
-			});
-		return {
-			service_id: svc.id,
-			service_name: svc.name,
-			stores: [
-				{ store_index: 0, store_name: 'flag1', flag_fate: (si % 3 === 0 ? 'stolen:3' : 'held') as FlagFate, steal_pts: si % 3 === 0 ? 1.5 : 0, hold_pts: 98.0, up_pts: 116.1, ticks: makeTicks() },
-				{ store_index: 1, store_name: 'flag2', flag_fate: 'held', steal_pts: 0, hold_pts: 98.0, up_pts: 116.1, ticks: makeTicks() },
-			],
-		};
-	});
-
-	const MOCK_ME: ArenaMe = {
-		team_id: 't1',
-		name: 'ByteBrigade',
-		slug: 'bytebrigade',
-		team_number: 1,
-		vulnbox_ip: '10.60.1.2',
-		token: 'a3f9bc12...',
+	let services: ServiceStatus[] = [];
+	let me: ArenaMe = {
+		team_id: '',
+		name: '',
+		slug: '',
+		team_number: null,
+		vulnbox_ip: null,
+		token: '',
 		is_nop: false
 	};
-
-	const MOCK_ALERTS: Alert[] = [
-		{ id: 1, tick: 86, kind: 'exploit', service_id: 'svc-1', bucket: 3, detail: { count: 2 }, created_at: new Date(Date.now() - 130000).toISOString() },
-		{ id: 2, tick: 85, kind: 'exploit', service_id: 'svc-3', bucket: 8, detail: { count: 10 }, created_at: new Date(Date.now() - 250000).toISOString() },
-		{ id: 3, tick: 84, kind: 'holding', service_id: 'svc-2', bucket: null, detail: null, created_at: new Date(Date.now() - 370000).toISOString() },
-		{ id: 4, tick: 83, kind: 'shield_up', service_id: 'svc-1', bucket: null, detail: null, created_at: new Date(Date.now() - 490000).toISOString() },
-	];
-
-	// ---- state ---------------------------------------------------------------
-	let tickInfo: ArenaTickInfo = MOCK_TICK;
-	let services: ServiceStatus[] = MOCK_SERVICES;
-	let me: ArenaMe = MOCK_ME;
-	let alerts: Alert[] = MOCK_ALERTS;
-	let latestTick = 87;
+	let alerts: Alert[] = [];
+	let latestTick = 0;
 
 	let now = Date.now();
 	let submitFlag = '';
@@ -163,7 +107,7 @@
 	$: fmtCountdown = `${String(Math.floor(tickEndsIn / 60)).padStart(2, '0')}:${String(tickEndsIn % 60).padStart(2, '0')}`;
 
 	// service name lookup for alerts
-	$: svcNames = new Map(services.map(s => [s.service_id, s.service_name]));
+	$: svcNames = new Map(services.map(s => [s.service_id, s.name]));
 
 	function authHeaders(): Record<string, string> {
 		const token = typeof localStorage !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -185,7 +129,7 @@
 		try {
 			const res = await fetch(`${API_BASE}/api/v1/arena/me`, { headers: authHeaders() });
 			if (res.ok) me = await res.json();
-		} catch { /* keep mock */ }
+		} catch { /* keep current */ }
 	}
 
 	async function loadStatus() {
@@ -219,13 +163,13 @@
 						const merged = [...ex.ticks, ...store.ticks.filter(t => !seen.has(t.tick))];
 						merged.sort((a, b) => a.tick - b.tick);
 						storeMap.set(store.store_index, {
-							...store, // update fate + totals from fresh response
+							...store,
 							ticks: merged.slice(-30),
 						});
 					}
 				}
 				svcMap.set(svc.service_id, {
-					...existing,
+					...svc,
 					stores: [...storeMap.values()].sort((a, b) => a.store_index - b.store_index),
 				});
 			}
@@ -268,10 +212,6 @@
 	}
 
 	// ---- display helpers -----------------------------------------------------
-	function effectiveStatus(t: StoreTick): SlaStatus {
-		return t.effective_status ?? t.status;
-	}
-
 	function svcLatestTick(svc: ServiceStatus): StoreTick | null {
 		return svc.stores[0]?.ticks.at(-1) ?? null;
 	}
@@ -313,15 +253,14 @@
 		}
 	}
 
-	function fateGlyph(fate: FlagFate | undefined | null): { text: string; cls: string } {
+	function fateGlyph(fate: FlagFate | undefined): { text: string; cls: string } {
 		if (!fate) return { text: '', cls: '' };
 		if (fate === 'held') return { text: '●', cls: 'text-[#9bcea8]' };
-		if (fate === 'safe') return { text: '○', cls: 'text-stone-400' };
 		if (fate === 'tide') return { text: 'T', cls: 'text-amber-400' };
 		if (fate === 'unreadable') return { text: '?', cls: 'text-stone-500' };
-		if (fate === 'stolen_1' || fate === 'stolen:1') return { text: 'x1', cls: 'text-[#e08a85]' };
-		if (fate === 'stolen_2_3' || fate === 'stolen:3') return { text: 'x2', cls: 'text-[#e08a85]' };
-		if (fate === 'stolen_4_7' || fate === 'stolen:7') return { text: 'x5', cls: 'text-[#e08a85]' };
+		if (fate === 'stolen_1') return { text: 'x1', cls: 'text-[#e08a85]' };
+		if (fate === 'stolen_2_3') return { text: 'x2', cls: 'text-[#e08a85]' };
+		if (fate === 'stolen_4_7') return { text: 'x5', cls: 'text-[#e08a85]' };
 		return { text: 'x8', cls: 'text-[#e08a85]' };
 	}
 
@@ -336,7 +275,7 @@
 	function svcUptime(svc: ServiceStatus): number {
 		const ticks = svc.stores[0]?.ticks ?? [];
 		if (!ticks.length) return 0;
-		return ticks.filter(t => effectiveStatus(t) === 'OK').length / ticks.length;
+		return ticks.filter(t => t.status === 'OK').length / ticks.length;
 	}
 
 	function alertAge(ts: string): string {
@@ -443,10 +382,10 @@
 	<!-- service timelines: services[]{stores[]{ticks[]}} -->
 	{#each services as svc (svc.service_id)}
 		{@const latestT = svcLatestTick(svc)}
-		{@const svcStatus = latestT ? effectiveStatus(latestT) : 'OK'}
+		{@const svcStatus = latestT?.status ?? 'OK'}
 		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden">
 			<div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-stone-800">
-				<span class="text-[0.95rem] font-semibold text-stone-200">{svc.service_name}</span>
+				<span class="text-[0.95rem] font-semibold text-stone-200">{svc.name}</span>
 				<span class="rounded px-1.5 py-0.5 text-xs font-medium {statusChipKey(svcStatus)}">{statusLabel(svcStatus)}</span>
 				<span class="text-xs text-stone-600">{(svcUptime(svc) * 100).toFixed(1)}% up</span>
 				{#if latestT?.message}
@@ -455,16 +394,16 @@
 			</div>
 			<div class="px-4 py-3">
 				{#each svc.stores as store (store.store_index)}
-					{@const g = fateGlyph(store.flag_fate)}
+					{@const fate = store.ticks.at(-1)?.flag_fate}
+					{@const g = fateGlyph(fate)}
 					<div class="mb-2 flex items-center gap-2">
 						<span class="metadata-label text-stone-500 text-xs w-20 shrink-0 truncate" title={store.store_name}>{store.store_name}</span>
 						<div class="flex gap-px overflow-x-auto pb-0.5">
 							{#each store.ticks as t}
-								{@const es = effectiveStatus(t)}
 								{@const credited = !!t.credited_reason}
 								<div
-									class="relative h-5 w-5 shrink-0 rounded-sm {statusColorKey(es)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
-									title="{statusLabel(es)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
+									class="relative h-5 w-5 shrink-0 rounded-sm {statusColorKey(t.status)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
+									title="{statusLabel(t.status)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
 								>
 									{#if credited}
 										<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
@@ -475,11 +414,10 @@
 								<span class="text-xs text-stone-600 italic">no data yet</span>
 							{/if}
 						</div>
-						<!-- current flag fate + totals (store-level) -->
 						{#if g.text}
-							<span class="text-[0.8rem] {g.cls} shrink-0" title={store.flag_fate ?? ''}>{g.text}</span>
+							<span class="text-[0.8rem] {g.cls} shrink-0" title={fate ?? ''}>{g.text}</span>
 						{/if}
-						<span class="text-xs tabular-nums text-[#9bcea8] shrink-0">+{fmt1(store.hold_pts)} HOLD</span>
+						<span class="text-xs tabular-nums text-[#9bcea8] shrink-0">+{fmt1(store.hold)} HOLD</span>
 					</div>
 				{/each}
 			</div>
@@ -492,7 +430,6 @@
 			<span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm {cls}"></span>{lbl}</span>
 		{/each}
 		<span class="ml-4 inline-flex items-center gap-1 text-[#9bcea8]">● held</span>
-		<span class="inline-flex items-center gap-1 text-stone-400">○ safe</span>
 		<span class="inline-flex items-center gap-1 text-[#e08a85]">x2 stolen</span>
 		<span class="inline-flex items-center gap-1 text-amber-400">T tide</span>
 		<span class="inline-flex items-center gap-1 text-stone-500">? unreadable</span>

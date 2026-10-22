@@ -172,6 +172,7 @@ type mePointsHour struct {
 
 // meServiceRow is one service in the /arena/me/status response.
 type meServiceRow struct {
+	ServiceID       string       `json:"service_id"`
 	Slug            string       `json:"slug"`
 	Name            string       `json:"name"`
 	Port            *int         `json:"port"`
@@ -419,9 +420,10 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 			totalUp += b.up
 		}
 		row := meServiceRow{
-			Slug: meta.slug,
-			Name: meta.name,
-			Port: meta.port,
+			ServiceID: svcID.String(),
+			Slug:      meta.slug,
+			Name:      meta.name,
+			Port:      meta.port,
 			PointsThisHour: mePointsHour{
 				Steal: totalSteal,
 				Hold:  totalHold,
