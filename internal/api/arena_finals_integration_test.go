@@ -100,7 +100,11 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		(3, $2, $3, 1, 'H7CTF{ALPHA1}', 3, 8, NOW(), 'a1')`, teamB, teamA, svc)
 	// charlie was DOWN on everything last tick, so farms should skip it
 	exec(`INSERT INTO game_sla_checks (tick_number, team_id, service_id, status) VALUES
+		(1, $1, $4, 'OK'), (1, $2, $4, 'FAULTY'), (1, $3, $4, 'DOWN'),
 		(3, $1, $4, 'OK'), (3, $2, $4, 'FAULTY'), (3, $3, $4, 'DOWN')`, teamA, teamB, teamC, svc)
+	exec(`UPDATE game_services SET advisories = '{"0":"delayed-one"}'::jsonb WHERE id = $1`, svc)
+	exec(`INSERT INTO game_events (kind, tick_number, service_id, store_index) VALUES
+		('advisory', 1, $1, 0), ('advisory', 3, $1, 0)`, svc)
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -190,6 +194,74 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		t.Errorf("paused submit = %d %q", code, msg)
 	}
 	setting("game.state", `"running"`)
+
+	// The War Room is a full, delayed matrix. Tick 3 is current, so public view
+	// tick 1 is visible and the tick-3 advisory must remain hidden. Team markers
+	// are personalized after the shared cache is loaded.
+	type warCell struct {
+		TeamID string `json:"team_id"`
+		Status string `json:"status"`
+		IsOwn  bool   `json:"is_own"`
+	}
+	type warEvent struct {
+		Text string `json:"text"`
+		Tick int    `json:"tick"`
+	}
+	type warPayload struct {
+		Tick     int        `json:"tick"`
+		ViewTick int        `json:"view_tick"`
+		Teams    []any      `json:"teams"`
+		Services []any      `json:"services"`
+		Grid     []warCell  `json:"grid"`
+		Events   []warEvent `json:"events"`
+	}
+	warCall := func(who uuid.UUID) (int, http.Header, warPayload) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/arena/war-room", nil)
+		req.Header.Set("Authorization", "Bearer "+token(who))
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		var payload warPayload
+		if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode war room: %v\n%s", err, w.Body.Bytes())
+		}
+		return w.Code, w.Header(), payload
+	}
+	code, headers, alphaWar := warCall(p1)
+	if code != http.StatusOK || headers.Get("Cache-Control") != "private, no-store" || headers.Get("X-Anvil-Cache") != "MISS" {
+		t.Fatalf("alpha war room = %d cache=%q/%q", code, headers.Get("Cache-Control"), headers.Get("X-Anvil-Cache"))
+	}
+	if alphaWar.Tick != 3 || alphaWar.ViewTick != 1 || len(alphaWar.Teams) != 2 || len(alphaWar.Services) != 1 || len(alphaWar.Grid) != 2 {
+		t.Fatalf("alpha war room shape = %#v", alphaWar)
+	}
+	if len(alphaWar.Events) != 1 || alphaWar.Events[0].Tick != 1 || alphaWar.Events[0].Text != "delayed-one" {
+		t.Fatalf("delayed war room events = %#v", alphaWar.Events)
+	}
+	alphaOwn := 0
+	for _, cell := range alphaWar.Grid {
+		if cell.TeamID == teamA.String() && (cell.Status != "up" || !cell.IsOwn) {
+			t.Errorf("alpha cell = %#v, want own/up", cell)
+		}
+		if cell.TeamID == teamB.String() && (cell.Status != "mumble" || cell.IsOwn) {
+			t.Errorf("bravo cell in alpha view = %#v, want other/mumble", cell)
+		}
+		if cell.IsOwn {
+			alphaOwn++
+		}
+	}
+	if alphaOwn != 1 {
+		t.Fatalf("alpha own cells = %d, want 1", alphaOwn)
+	}
+	code, headers, bravoWar := warCall(p2)
+	if code != http.StatusOK || headers.Get("X-Anvil-Cache") != "HIT" {
+		t.Fatalf("bravo war room = %d cache=%q", code, headers.Get("X-Anvil-Cache"))
+	}
+	for _, cell := range bravoWar.Grid {
+		if cell.IsOwn != (cell.TeamID == teamB.String()) {
+			t.Errorf("bravo personalized cell = %#v", cell)
+		}
+	}
+
 	setting("event.end_at", `"`+time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)+`"`)
 	if code, msg := submit("H7CTF{BRAVO1}"); code != http.StatusForbidden || msg != "game over" {
 		t.Errorf("post-end submit = %d %q", code, msg)
