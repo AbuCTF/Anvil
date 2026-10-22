@@ -61,7 +61,8 @@ func (c *Controller) syncNativeTeams(ctx context.Context) error {
 func (c *Controller) entryTokens(ctx context.Context, challengeID uuid.UUID) (map[string]uuid.UUID, error) {
 	out := make(map[string]uuid.UUID)
 	rows, err := c.db.Pool.Query(ctx,
-		`SELECT token, team_id FROM koth_entries WHERE challenge_id = $1`, challengeID)
+		`SELECT token, team_id FROM koth_entries
+		 WHERE challenge_id = $1 AND token IS NOT NULL`, challengeID)
 	if err != nil {
 		return nil, err
 	}
@@ -73,6 +74,26 @@ func (c *Controller) entryTokens(ctx context.Context, challengeID uuid.UUID) (ma
 			return nil, err
 		}
 		out[token] = id
+	}
+	return out, rows.Err()
+}
+
+func (c *Controller) entryHolders(ctx context.Context, challengeID uuid.UUID) (map[string]uuid.UUID, error) {
+	out := make(map[string]uuid.UUID)
+	rows, err := c.db.Pool.Query(ctx,
+		`SELECT holder_slug, team_id FROM koth_entries
+		 WHERE challenge_id = $1 AND holder_slug IS NOT NULL`, challengeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var holder string
+		var id uuid.UUID
+		if err := rows.Scan(&holder, &id); err != nil {
+			return nil, err
+		}
+		out[holder] = id
 	}
 	return out, rows.Err()
 }

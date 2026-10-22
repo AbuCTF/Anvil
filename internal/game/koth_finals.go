@@ -110,7 +110,7 @@ func (c *Controller) runKothFinals(ctx context.Context, tick int, started time.T
 				return fmt.Errorf("close round %d: %w", round, err)
 			}
 			if c.cfg.Koth.ResetEnabled {
-				c.resetHills(ctx, hills)
+				c.resetHills(ctx, hills, round+1)
 			}
 		}
 		if round, err = c.openRoundFinals(ctx, started); err != nil {

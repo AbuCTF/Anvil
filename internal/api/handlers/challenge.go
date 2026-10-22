@@ -1081,11 +1081,26 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 		return
 	}
+	protocol := "koth-v1-http"
+	err = h.db.Pool.QueryRow(ctx,
+		`SELECT controller_protocol FROM game_koth_hills
+		 WHERE challenge_id = $1 AND enabled = TRUE
+		 ORDER BY generation DESC LIMIT 1`, chalID).Scan(&protocol)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		h.logger.Error("koth enter: load hill protocol", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
 
 	// admin with no team: hand back a DETERMINISTIC preview token (same on every click,
 	// unlike a random one) without charging or persisting an entry. It's UI-preview only —
 	// not in koth_entries, so it won't score; scoring is team-scoped.
 	if teamID == nil {
+		if protocol == "hill-v2-http" {
+			c.JSON(http.StatusOK, gin.H{"status": "preview", "protocol": protocol, "credits": 0,
+				"connect_url": h.arenaConnectURL(ctx, chalID), "message": "admin preview - team credentials are not exposed"})
+			return
+		}
 		sum := sha256.Sum256([]byte(fmt.Sprintf("koth-admin-preview:%v:%s", uid, chalID)))
 		token := "koth_" + hex.EncodeToString(sum[:])[:32]
 		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": token, "credits": 0,
@@ -1110,8 +1125,11 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 
 	// already entered THIS arena? hand back the same token, no re-charge. Each KotH
 	// challenge is an independent arena (koth_entries is per team+challenge).
-	var existing, existingSecret string
-	err = tx.QueryRow(ctx, `SELECT token, COALESCE(rpc_secret, '') FROM koth_entries WHERE team_id = $1 AND challenge_id = $2`, *teamID, chalID).Scan(&existing, &existingSecret)
+	var existing, existingSecret, holder, bearer string
+	err = tx.QueryRow(ctx,
+		`SELECT COALESCE(token, ''), COALESCE(rpc_secret, ''), COALESCE(holder_slug, ''), COALESCE(bearer_token, '')
+		 FROM koth_entries WHERE team_id = $1 AND challenge_id = $2`, *teamID, chalID).
+		Scan(&existing, &existingSecret, &holder, &bearer)
 	if err == nil {
 		var credits float64
 		_ = tx.QueryRow(ctx, `SELECT credits FROM economy_team_score WHERE team_id = $1`, *teamID).Scan(&credits)
@@ -1119,13 +1137,28 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": existing, "rpc_secret": existingSecret,
-			"connect_url": h.arenaConnectURL(ctx, chalID), "credits": credits, "message": "already in this arena"})
+		if protocol == "hill-v2-http" {
+			if holder == "" || bearer == "" {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "arena credentials are not ready"})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{"status": "entered", "protocol": protocol, "holder": holder,
+				"bearer_token": bearer, "connect_url": h.arenaConnectURL(ctx, chalID), "credits": credits,
+				"message": "already in this arena"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "entered", "protocol": protocol, "koth_token": existing,
+			"rpc_secret": existingSecret, "connect_url": h.arenaConnectURL(ctx, chalID), "credits": credits,
+			"message": "already in this arena"})
 		return
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		h.logger.Error("koth enter: check entry", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
+		return
+	}
+	if protocol == "hill-v2-http" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "arena credentials are not ready"})
 		return
 	}
 
@@ -1177,7 +1210,7 @@ func (h *ChallengeHandler) EnterKoth(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enter the arena"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "entered", "koth_token": token, "rpc_secret": rpcSecret,
+	c.JSON(http.StatusOK, gin.H{"status": "entered", "protocol": protocol, "koth_token": token, "rpc_secret": rpcSecret,
 		"connect_url": h.arenaConnectURL(ctx, chalID), "credits": credits,
 		"message": "you're in the arena - plant this token on the target to hold it"})
 }

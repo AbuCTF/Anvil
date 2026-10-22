@@ -685,16 +685,19 @@ func (h *GameAdminHandler) DeleteService(c *gin.Context) {
 type createHillReq struct {
 	Name         string `json:"name" binding:"required"`
 	Slug         string `json:"slug"`
-	Host         string `json:"host" binding:"required"`
-	Port         int    `json:"port" binding:"required"`
-	CheckerRef   string `json:"checker_ref" binding:"required"`
+	Host         string `json:"host"`
+	Port         int    `json:"port"`
+	CheckerRef   string `json:"checker_ref"`
 	ResetSeconds int    `json:"reset_seconds"`
+	Protocol     string `json:"protocol"`
+	BaseURL      string `json:"base_url"`
+	ChallengeID  string `json:"challenge_id"`
 }
 
 func (h *GameAdminHandler) CreateHill(c *gin.Context) {
 	var req createHillReq
 	if err := bindArenaAdminJSON(c, &req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "name, host, port, checker_ref required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid hill configuration"})
 		return
 	}
 	name, err := validateArenaText(req.Name, "name", 100)
@@ -705,6 +708,54 @@ func (h *GameAdminHandler) CreateHill(c *gin.Context) {
 	slug, err := validateArenaSlug(name, req.Slug)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	reset := normalizedResetSeconds(req.ResetSeconds)
+	if reset < 1 || reset > 24*60*60 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "reset_seconds must be between 1 and 86400"})
+		return
+	}
+	protocol := strings.TrimSpace(req.Protocol)
+	if protocol == "" {
+		protocol = "koth-v1-http"
+	}
+	if protocol == "hill-v2-http" {
+		baseURL, err := validateHillBaseURL(req.BaseURL)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		challengeID, err := uuid.Parse(strings.TrimSpace(req.ChallengeID))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "challenge_id must be a uuid"})
+			return
+		}
+		var shared bool
+		if err := h.db.Pool.QueryRow(c.Request.Context(),
+			`SELECT arena_mode = 'shared' FROM challenges WHERE id = $1`, challengeID).Scan(&shared); err != nil || !shared {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "challenge_id must reference a shared arena"})
+			return
+		}
+		resetSecret, err := arenaResetSecret()
+		if err != nil {
+			h.fail(c, "generate hill reset credential", err)
+			return
+		}
+		var id uuid.UUID
+		err = h.db.Pool.QueryRow(c.Request.Context(),
+			`INSERT INTO game_koth_hills
+			 (name, slug, challenge_id, base_url, reset_secret, controller_protocol, reset_seconds)
+			 VALUES ($1, $2, $3, $4, $5, 'hill-v2-http', $6) RETURNING id`,
+			name, slug, challengeID, baseURL, resetSecret, reset).Scan(&id)
+		if err != nil {
+			h.fail(c, "create hill", err)
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"id": id, "protocol": protocol})
+		return
+	}
+	if protocol != "koth-v1-http" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported hill protocol"})
 		return
 	}
 	host := strings.TrimSpace(req.Host)
@@ -722,14 +773,6 @@ func (h *GameAdminHandler) CreateHill(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	reset := req.ResetSeconds
-	if reset == 0 {
-		reset = 900
-	}
-	if reset < 1 || reset > 24*60*60 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "reset_seconds must be between 1 and 86400"})
-		return
-	}
 	var id uuid.UUID
 	err = h.db.Pool.QueryRow(c.Request.Context(),
 		`INSERT INTO game_koth_hills (name, slug, host, port, checker_ref, reset_seconds)
@@ -742,9 +785,27 @@ func (h *GameAdminHandler) CreateHill(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{"id": id})
 }
 
+func normalizedResetSeconds(reset int) int {
+	if reset == 0 {
+		return 900
+	}
+	return reset
+}
+
+func validateHillBaseURL(value string) (string, error) {
+	value = strings.TrimRight(strings.TrimSpace(value), "/")
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.Path != "" {
+		return "", errors.New("base_url must be an HTTP(S) origin without credentials, path, query, or fragment")
+	}
+	return value, nil
+}
+
 func (h *GameAdminHandler) ListHills(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, name, slug, host(host), port, checker_ref, reset_seconds, enabled
+		`SELECT id, name, slug, host(host), port, checker_ref, reset_seconds, enabled,
+		        controller_protocol, base_url, challenge_id
 		 FROM game_koth_hills ORDER BY sort_order, name`)
 	if err != nil {
 		h.fail(c, "list hills", err)
@@ -758,12 +819,16 @@ func (h *GameAdminHandler) ListHills(c *gin.Context) {
 		var host, checker *string
 		var port, reset *int
 		var enabled bool
-		if err := rows.Scan(&id, &name, &slug, &host, &port, &checker, &reset, &enabled); err != nil {
+		var protocol string
+		var baseURL *string
+		var challengeID *uuid.UUID
+		if err := rows.Scan(&id, &name, &slug, &host, &port, &checker, &reset, &enabled, &protocol, &baseURL, &challengeID); err != nil {
 			h.fail(c, "scan hill", err)
 			return
 		}
 		hills = append(hills, gin.H{"id": id, "name": name, "slug": slug, "host": host, "port": port,
-			"checker_ref": checker, "reset_seconds": reset, "enabled": enabled})
+			"checker_ref": checker, "reset_seconds": reset, "enabled": enabled, "protocol": protocol,
+			"base_url": baseURL, "challenge_id": challengeID})
 	}
 	if err := rows.Err(); err != nil {
 		h.fail(c, "iterate hills", err)

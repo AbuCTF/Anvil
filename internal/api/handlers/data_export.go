@@ -199,7 +199,7 @@ func encodeBundle(uid uuid.UUID, anonymized bool, entities []string, collections
 	manifest := exportManifest{
 		Format: "anvil-event-bundle", Version: 1, CreatedAt: time.Now().UTC(), CreatedBy: uid,
 		Anonymized: anonymized, Secrets: "excluded",
-		Excluded:     []string{"password_hashes", "sessions", "refresh_tokens", "flags", "grader_secrets", "join_codes", "koth_tokens", "rpc_secrets", "provider_credentials", "active_instances"},
+		Excluded:     []string{"password_hashes", "sessions", "refresh_tokens", "flags", "grader_secrets", "join_codes", "koth_tokens", "rpc_secrets", "hill_bearer_credentials", "hill_reset_credentials", "provider_credentials", "active_instances"},
 		PolicyNotice: "This bundle is a portable administrative export, not a byte-for-byte database backup.",
 		Files:        []exportManifestFile{},
 	}

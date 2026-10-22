@@ -313,6 +313,8 @@
 	let kothToken = '';
 	let kothConnectUrl = '';
 	let kothSecret = '';
+	let kothHolder = '';
+	let kothProtocol = '';
 	let kothEntering = false;
 	let kothError = '';
 	$: isKoth = challenge?.arena_mode === 'shared';
@@ -327,9 +329,11 @@
 		kothError = '';
 		try {
 			const r = await api.kothEnter(slug!);
-			kothToken = r.koth_token;
+			kothToken = r.bearer_token ?? r.koth_token ?? '';
 			kothConnectUrl = r.connect_url ?? '';
 			kothSecret = r.rpc_secret ?? '';
+			kothHolder = r.holder ?? '';
+			kothProtocol = r.protocol ?? 'koth-v1-http';
 		} catch (e) {
 			kothError = e instanceof Error ? e.message : 'Could not enter the arena';
 		} finally {
@@ -1575,7 +1579,7 @@
 					{#if isKoth && $auth.isAuthenticated}
 						<Card title="King of the Hill Arena">
 							<div class="space-y-3">
-								<p class="text-sm text-stone-400 leading-relaxed">One shared target the whole field contests. Enter the arena, then plant your token on the target - you score for every tick you hold it.</p>
+								<p class="text-sm text-stone-400 leading-relaxed">One shared target the whole field contests. Enter the arena, claim control through the public challenge workflow, and score for every tick you hold it.</p>
 								{#if kothToken}
 									<div class="space-y-3">
 										<div>
@@ -1587,9 +1591,10 @@
 											{/if}
 										</div>
 										<div>
-											<p class="metadata-label text-stone-500 mb-1.5">Your arena token</p>
+											<p class="metadata-label text-stone-500 mb-1.5">{kothProtocol === 'hill-v2-http' ? 'Bearer credential' : 'Your arena token'}</p>
 											<code class="block w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-amber-500 text-sm font-mono break-all">{kothToken}</code>
 										</div>
+										{#if kothHolder}<p class="text-xs text-stone-500">Your scoring identity is <code class="text-stone-300">{kothHolder}</code>.</p>{/if}
 										{#if kothSecret}
 											<div>
 												<p class="metadata-label text-stone-500 mb-1.5">Request secret</p>
@@ -1597,7 +1602,7 @@
 												<p class="text-xs text-stone-500 mt-1.5">Keep this private. Send it with your requests as the challenge describes; your public token alone cannot act.</p>
 											</div>
 										{/if}
-										<p class="text-xs text-stone-500">Send your exploit to the target with your token to claim the hill. Track standings on the <a href="/arena" class="text-stone-300 hover:text-stone-100 underline">Arena</a>.</p>
+										<p class="text-xs text-stone-500">Follow the challenge protocol with this credential to claim the hill. Track standings on the <a href="/arena" class="text-stone-300 hover:text-stone-100 underline">Arena</a>.</p>
 									</div>
 								{:else}
 									<button on:click={enterArena} disabled={kothEntering} class="w-full py-2.5 bg-amber-500/90 text-stone-950 text-sm font-medium rounded-md hover:bg-amber-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">

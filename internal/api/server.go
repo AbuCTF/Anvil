@@ -229,6 +229,7 @@ func (s *Server) setupRouter() {
 			internalArena.GET("/sla", gameInternal.SLA)
 			internalArena.GET("/mode", gameInternal.Mode)
 			internalArena.GET("/vpn/peers", gameInternal.VPNPeers)
+			internalArena.POST("/hills/:id/credentials", gameInternal.HillCredentials)
 
 			internalHandler := handlers.NewInternalGameHandler(s.config, s.db, s.logger)
 			internalArena.POST("/gate", internalHandler.Gate)

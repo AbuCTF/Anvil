@@ -881,9 +881,9 @@ class ApiClient {
 			`/challenges/${slug}/open`, { method: 'POST' });
 	}
 
-	// KotH arena buy-in: pay the one-time cost, receive the opaque token to plant on the target
+	// KotH arena entry returns either legacy planted-token or hill-v2 bearer credentials.
 	async kothEnter(slug: string) {
-		return this.request<{ status: string; koth_token: string; rpc_secret?: string; connect_url?: string; credits: number; message: string }>(
+		return this.request<{ status: string; protocol?: 'koth-v1-http' | 'hill-v2-http'; koth_token?: string; rpc_secret?: string; holder?: string; bearer_token?: string; connect_url?: string; credits: number; message: string }>(
 			`/challenges/${slug}/koth-enter`, { method: 'POST' });
 	}
 
