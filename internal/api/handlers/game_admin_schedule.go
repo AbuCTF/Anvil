@@ -100,14 +100,25 @@ func (h *GameAdminHandler) Extend(c *gin.Context) {
 		return
 	}
 	h.logger.Info("finals extended", zap.Int("minutes", req.Minutes), zap.String("by", adminID(c)))
+	// the shift is committed: a failed read-back must not look like a failed extend,
+	// or an operator retry would extend twice. the times are optional in the reply.
 	var endAt, freezeAt string
-	if err := h.db.Pool.QueryRow(c.Request.Context(), `SELECT
+	err := h.db.Pool.QueryRow(c.Request.Context(), `SELECT
 		COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.end_at'), ''),
-		COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.freeze_at'), '')`).Scan(&endAt, &freezeAt); err != nil {
-		h.fail(c, "read extended schedule", err)
-		return
+		COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.freeze_at'), '')`).Scan(&endAt, &freezeAt)
+	if err != nil {
+		h.logger.Warn("finals extended but the new schedule could not be read back", zap.Error(err))
 	}
-	c.JSON(http.StatusOK, gin.H{"status": "extended", "minutes": req.Minutes, "end_at": endAt, "freeze_at": freezeAt})
+	c.JSON(http.StatusOK, extendReply(req.Minutes, endAt, freezeAt, err))
+}
+
+// extendReply is always a success: by the time it is built the extend has committed.
+func extendReply(minutes int, endAt, freezeAt string, readErr error) gin.H {
+	body := gin.H{"status": "extended", "minutes": minutes}
+	if readErr == nil {
+		body["end_at"], body["freeze_at"] = endAt, freezeAt
+	}
+	return body
 }
 
 type hillWindow struct {

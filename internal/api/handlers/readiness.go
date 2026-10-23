@@ -203,17 +203,17 @@ func (h *ReadinessHandler) buildReport(ctx context.Context) (readinessReport, er
 		add("event.window_ended", "Event", "Competition window has ended", "warning", "The configured end time is in the past.", end)
 	}
 	if h.config.Game.Enabled && h.config.Game.Scoring.Formula == "mirror" {
+		nTeams := h.config.Game.Scoring.MaxTeamNumber()
 		var teams, numberedTeams, nopTeams int
 		if err := h.db.Pool.QueryRow(ctx, `SELECT
 			COUNT(*) FILTER (WHERE status = 'active' AND is_nop = FALSE)::int,
 			COUNT(DISTINCT team_number) FILTER (WHERE status = 'active' AND is_nop = FALSE
 			  AND team_number BETWEEN 1 AND $1 AND vulnbox_ip IS NOT NULL)::int,
 			COUNT(*) FILTER (WHERE status = 'active' AND is_nop = TRUE)::int
-			FROM game_teams`, h.config.Game.Scoring.NTeams).Scan(&teams, &numberedTeams, &nopTeams); err != nil {
+			FROM game_teams`, nTeams).Scan(&teams, &numberedTeams, &nopTeams); err != nil {
 			return report, err
 		}
-		nTeams := h.config.Game.Scoring.NTeams
-		rosterReady := nTeams > 0 && teams == nTeams && numberedTeams == teams && nopTeams == 1
+		rosterReady := teams == nTeams && numberedTeams == teams && nopTeams == 1
 		add("finals.roster", "Finals", "Attack-Defense roster", status(rosterReady, "blocker"),
 			ternary(rosterReady, "All participant teams and the NOP canary are attributed.", fmt.Sprintf("Require %d numbered participant teams with vulnbox addresses and one NOP canary.", nTeams)),
 			gin.H{"participant_teams": teams, "attributed_teams": numberedTeams, "nop_teams": nopTeams})
