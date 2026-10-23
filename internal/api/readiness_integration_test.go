@@ -44,7 +44,7 @@ func TestReleaseReadinessAndImmutableCandidate(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 	ctx := context.Background()
-	if _, err := db.Pool.Exec(ctx, `TRUNCATE users, teams, challenges, categories CASCADE`); err != nil {
+	if _, err := db.Pool.Exec(ctx, `TRUNCATE users, teams, challenges, categories, game_teams, game_services, game_koth_hills CASCADE`); err != nil {
 		t.Fatalf("reset: %v", err)
 	}
 	adminID, userID, categoryID, challengeID, staticID := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
@@ -138,5 +138,67 @@ func TestReleaseReadinessAndImmutableCandidate(t *testing.T) {
 	listed := request(http.MethodGet, "/api/v1/admin/release-candidates", adminToken, nil)
 	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), candidate.ID) {
 		t.Fatalf("list status=%d body=%s", listed.Code, listed.Body.String())
+	}
+
+	cfg.Game.Enabled = true
+	cfg.Game.Scoring.Formula = "mirror"
+	cfg.Game.Scoring.NTeams = 15
+	cfg.Game.Koth.Timezone = "Asia/Kolkata"
+	cfg.Game.Koth.NightStart = "00:00"
+	cfg.Game.Koth.NightEnd = "06:00"
+	cfg.Game.Koth.RoundInterval = 15 * time.Minute
+	cfg.Game.Koth.NightRoundInterval = 30 * time.Minute
+	unseededFinals := request(http.MethodGet, "/api/v1/admin/readiness", adminToken, nil)
+	if unseededFinals.Code != http.StatusOK || !strings.Contains(unseededFinals.Body.String(), `"id":"finals.roster"`) ||
+		!strings.Contains(unseededFinals.Body.String(), `"id":"finals.services"`) || !strings.Contains(unseededFinals.Body.String(), `"ready":false`) {
+		t.Fatalf("unseeded finals readiness=%d body=%s", unseededFinals.Code, unseededFinals.Body.String())
+	}
+
+	for number := 1; number <= 15; number++ {
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO game_teams
+			(name, slug, vulnbox_ip, team_number) VALUES ($1, $2, $3, $4)`,
+			"Finals Team "+strconv.Itoa(number), "finals-team-"+strconv.Itoa(number),
+			"10.60."+strconv.Itoa(number)+".2", number); err != nil {
+			t.Fatalf("seed finals team %d: %v", number, err)
+		}
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_teams (name, slug, is_nop) VALUES ('NOP', 'nop', TRUE)`); err != nil {
+		t.Fatal(err)
+	}
+	sevenIST := time.Date(2026, time.October, 25, 7, 0, 0, 0, time.FixedZone("IST", 5*60*60+30*60))
+	for number := 1; number <= 6; number++ {
+		var release *time.Time
+		if number == 6 {
+			release = &sevenIST
+		}
+		if _, err := db.Pool.Exec(ctx, `INSERT INTO game_services
+			(name, slug, category, port, checker_ref, flag_stores, sort_order, release_at)
+			VALUES ($1, $2, 'web', $3, $4, 2, $5, $6)`, "Finals Service "+strconv.Itoa(number),
+			"finals-service-"+strconv.Itoa(number), 7000+number, "http://checker-"+strconv.Itoa(number), number, release); err != nil {
+			t.Fatalf("seed finals service %d: %v", number, err)
+		}
+	}
+	var hillC uuid.UUID
+	for number := 1; number <= 3; number++ {
+		var id uuid.UUID
+		if err := db.Pool.QueryRow(ctx, `INSERT INTO game_koth_hills
+			(name, slug, base_url, reset_secret, controller_protocol, sort_order)
+			VALUES ($1, $2, $3, $4, 'hill-v2-http', $5) RETURNING id`,
+			"Finals Hill "+strconv.Itoa(number), "finals-hill-"+strconv.Itoa(number),
+			"http://hill-"+strconv.Itoa(number), "private-reset-"+strconv.Itoa(number), number).Scan(&id); err != nil {
+			t.Fatalf("seed finals hill %d: %v", number, err)
+		}
+		if number == 3 {
+			hillC = id
+		}
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_koth_windows (hill_id, opens_at, closes_at)
+		VALUES ($1, $2::timestamptz, $2::timestamptz + INTERVAL '5 hours')`, hillC, sevenIST); err != nil {
+		t.Fatal(err)
+	}
+	seededFinals := request(http.MethodGet, "/api/v1/admin/readiness", adminToken, nil)
+	if seededFinals.Code != http.StatusOK || !strings.Contains(seededFinals.Body.String(), `"ready":true`) ||
+		strings.Contains(seededFinals.Body.String(), `"group":"Finals","status":"blocker"`) {
+		t.Fatalf("seeded finals readiness=%d body=%s", seededFinals.Code, seededFinals.Body.String())
 	}
 }

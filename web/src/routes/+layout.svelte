@@ -52,6 +52,7 @@
 		const p = $page.url.pathname;
 		if (p.startsWith('/team/finals') && !$platformInfo.arena_enabled) goto('/team');
 		const blocked =
+			(p.startsWith('/arena/reveal') && !isAdmin) ||
 			(p.startsWith('/arena') && !$platformInfo.arena_enabled && !isAdmin) ||
 			(p.startsWith('/pulse') && (!$platformInfo.economy_enabled || !$platformInfo.market_pulse_enabled)) ||
 			(p.startsWith('/team') && !$platformInfo.teams_mode) ||

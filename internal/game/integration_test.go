@@ -825,6 +825,76 @@ func TestIntegrationTeamForUser(t *testing.T) {
 	}
 }
 
+func TestIntegrationNightWatchDefersNewActivations(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	ctx := context.Background()
+	ist, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	koth := config.KothConfig{NightStart: "00:00", NightEnd: "06:00", Timezone: "Asia/Kolkata"}
+	beforeNight, dueAtNight := uuid.New(), uuid.New()
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_services
+		(id, name, slug, category, port, checker_ref, release_at) VALUES
+		($1, 'Before Night', 'before-night', 'web', 7001, 'http://checker-one', $3),
+		($2, 'Due At Night', 'due-at-night', 'web', 7002, 'http://checker-two', $4)`,
+		beforeNight, dueAtNight,
+		time.Date(2026, 10, 24, 23, 0, 0, 0, ist),
+		time.Date(2026, 10, 25, 1, 0, 0, 0, ist)); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &Dispatcher{db: db, koth: koth}
+	services, err := dispatcher.releasedServices(ctx, time.Date(2026, 10, 25, 2, 0, 0, 0, ist))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 1 || services[0].id != beforeNight {
+		t.Fatalf("night services = %+v, want only the pre-night release", services)
+	}
+	services, err = dispatcher.releasedServices(ctx, time.Date(2026, 10, 25, 6, 0, 0, 0, ist))
+	if err != nil || len(services) != 2 {
+		t.Fatalf("06:00 services = %+v err=%v, want both releases", services, err)
+	}
+
+	activeHill, dueHill := uuid.New(), uuid.New()
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_koth_hills
+		(id, name, slug, checker_ref, enabled) VALUES
+		($1, 'Active Hill', 'active-hill', '/bin/true', TRUE),
+		($2, 'Due Hill', 'due-hill', '/bin/true', FALSE)`, activeHill, dueHill); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_koth_windows (hill_id, opens_at, closes_at) VALUES
+		($1, $3, $5), ($2, $4, $5)`, activeHill, dueHill,
+		time.Date(2026, 10, 24, 23, 0, 0, 0, ist),
+		time.Date(2026, 10, 25, 1, 0, 0, 0, ist),
+		time.Date(2026, 10, 25, 8, 0, 0, 0, ist)); err != nil {
+		t.Fatal(err)
+	}
+	controller := &Controller{cfg: config.GameConfig{Koth: koth}, db: db, logger: zap.NewNop()}
+	if err := controller.applyHillWindows(ctx, 1, time.Date(2026, 10, 25, 2, 0, 0, 0, ist)); err != nil {
+		t.Fatal(err)
+	}
+	var active, due bool
+	if err := db.Pool.QueryRow(ctx, `SELECT
+		(SELECT enabled FROM game_koth_hills WHERE id = $1),
+		(SELECT enabled FROM game_koth_hills WHERE id = $2)`, activeHill, dueHill).Scan(&active, &due); err != nil {
+		t.Fatal(err)
+	}
+	if !active || due {
+		t.Fatalf("night hills active=%v due=%v, want true/false", active, due)
+	}
+	if err := controller.applyHillWindows(ctx, 2, time.Date(2026, 10, 25, 6, 0, 0, 0, ist)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Pool.QueryRow(ctx, `SELECT enabled FROM game_koth_hills WHERE id = $1`, dueHill).Scan(&due); err != nil || !due {
+		t.Fatalf("06:00 due hill enabled=%v err=%v", due, err)
+	}
+	if err := NewAlertGenerator(db, zap.NewNop()).publishHoldingAlerts(ctx, 5); err != nil {
+		t.Fatalf("holding alert query: %v", err)
+	}
+}
+
 func enoResult(result, message string) enoResultMessage {
 	m := enoResultMessage{Result: result}
 	if message != "" {
@@ -1098,7 +1168,7 @@ func TestIntegrationMirrorScoresThroughTicks(t *testing.T) {
 	cfg.FlagValidTicks = 1 // a flag lives ticks t and t+1
 	cfg.Scoring.Formula = "mirror"
 	cfg.Scoring.WeightAD, cfg.Scoring.WeightKoth = 0.7, 0.3
-	cfg.Scoring.MassFaultTeams, cfg.Scoring.FreeDeploys = 3, 3
+	cfg.Scoring.MassFaultTeams = 3
 	ctrl := NewController(cfg, db, zap.NewNop())
 
 	runTickOK(t, ctrl, ctx, 1)

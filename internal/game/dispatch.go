@@ -29,6 +29,7 @@ type Dispatcher struct {
 	flagValidTicks int
 	tickLength     time.Duration
 	checker        config.CheckerConfig
+	koth           config.KothConfig
 	client         *http.Client
 }
 
@@ -93,7 +94,7 @@ func (p tickPlan) pick(lo, hi float64) time.Time {
 }
 
 func (d *Dispatcher) dispatch(ctx context.Context, tick int, started time.Time) error {
-	jobs, err := d.buildJobs(ctx, tick)
+	jobs, err := d.buildJobs(ctx, tick, started)
 	if err != nil {
 		return fmt.Errorf("build jobs: %w", err)
 	}
@@ -362,8 +363,8 @@ type jobKey struct {
 	service uuid.UUID
 }
 
-func (d *Dispatcher) buildJobs(ctx context.Context, tick int) ([]job, error) {
-	services, err := d.releasedServices(ctx)
+func (d *Dispatcher) buildJobs(ctx context.Context, tick int, started time.Time) ([]job, error) {
+	services, err := d.releasedServices(ctx, started)
 	if err != nil {
 		return nil, err
 	}
@@ -425,12 +426,14 @@ func (d *Dispatcher) completedJobs(ctx context.Context, tick int) (map[jobKey]bo
 	return completed, rows.Err()
 }
 
-func (d *Dispatcher) releasedServices(ctx context.Context) ([]serviceTarget, error) {
+func (d *Dispatcher) releasedServices(ctx context.Context, at time.Time) ([]serviceTarget, error) {
+	nightStart, _, night := nightBounds(d.koth, at)
 	rows, err := d.db.Pool.Query(ctx,
 		`SELECT id, port, checker_ref, GREATEST(flag_stores, 1), noise_variants, havoc_variants
 		 FROM game_services
 		 WHERE enabled = TRUE AND port IS NOT NULL AND checker_ref IS NOT NULL AND checker_ref <> ''
-		   AND (release_at IS NULL OR release_at <= NOW())`)
+		   AND (release_at IS NULL OR
+		     (release_at <= $1 AND (NOT $2 OR release_at < $3)))`, at, night, nightStart)
 	if err != nil {
 		return nil, err
 	}

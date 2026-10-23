@@ -36,7 +36,8 @@ type finalsServiceBreakdown struct {
 
 // FinalsScoreboard serves GET /api/v1/arena/scoreboard in finals mode.
 // Returns mirror scoring standings (steal/hold/up/ad/koth/total) with per-service
-// breakdown. Public (no auth). Delayed by PublicViewTick during freeze.
+// breakdown. Public while live; during a freeze only an authenticated admin may
+// read the exact rows for the reveal console.
 func (h *GameHandler) FinalsScoreboard(c *gin.Context) {
 	ctx := c.Request.Context()
 
@@ -47,6 +48,18 @@ func (h *GameHandler) FinalsScoreboard(c *gin.Context) {
 		return
 	}
 
+	// A freeze is only useful if direct API callers are blinded too. Keep the
+	// exact board available to authenticated organizers for the reveal console,
+	// but never send it to players or anonymous clients during the freeze.
+	if frozen && c.GetString("role") != "admin" {
+		c.Header("Cache-Control", "private, no-store")
+		c.JSON(http.StatusOK, gin.H{
+			"frozen": true,
+			"rows":   []finalsScoreRow{},
+		})
+		return
+	}
+
 	rows, err := h.finalsScoreboardRows(ctx)
 	if err != nil {
 		h.logger.Error("finals scoreboard: query", zap.Error(err))
@@ -54,6 +67,9 @@ func (h *GameHandler) FinalsScoreboard(c *gin.Context) {
 		return
 	}
 
+	if frozen {
+		c.Header("Cache-Control", "private, no-store")
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"frozen": frozen,
 		"rows":   rows,

@@ -189,17 +189,46 @@ type meDeployment struct {
 	DeployedAt   time.Time `json:"deployed_at"`
 }
 
+type meDeploymentEvent struct {
+	State      string    `json:"state"`
+	Message    string    `json:"message"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
 // meServiceRow is one service in the /arena/me/status response.
 type meServiceRow struct {
-	ServiceID       string        `json:"service_id"`
-	Slug            string        `json:"slug"`
-	Name            string        `json:"name"`
-	Port            *int          `json:"port"`
-	Stores          []meStoreRow  `json:"stores"`
-	PointsThisHour  mePointsHour  `json:"points_this_hour"`
-	ActiveAttackers int           `json:"active_attackers"`
-	LastDeployment  *meDeployment `json:"last_deployment,omitempty"`
-	FreeDeploysLeft int           `json:"free_deploys_left"`
+	ServiceID         string              `json:"service_id"`
+	Slug              string              `json:"slug"`
+	Name              string              `json:"name"`
+	Port              *int                `json:"port"`
+	Stores            []meStoreRow        `json:"stores"`
+	PointsThisHour    mePointsHour        `json:"points_this_hour"`
+	ActiveAttackers   int                 `json:"active_attackers"`
+	LastDeployment    *meDeployment       `json:"last_deployment,omitempty"`
+	DeploymentHistory []meDeploymentEvent `json:"deployment_history"`
+}
+
+func deploymentEventMessage(state, reason string) string {
+	if state != "failed" {
+		return map[string]string{
+			"queued":               "Change queued.",
+			"building":             "Building candidate.",
+			"gating":               "Running Deployment Gate.",
+			"waiting_quiet_window": "Gate passed; waiting for a safe promotion window.",
+			"promoted":             "Deployment promoted and under health observation.",
+			"rolled_back":          "Previous healthy deployment restored.",
+		}[state]
+	}
+	return map[string]string{
+		"policy":    "Change rejected by deployment policy.",
+		"build":     "Build failed.",
+		"gate":      "Deployment Gate rejected the candidate.",
+		"promotion": "Promotion failed; the previous service remains active.",
+		"health":    "Health checks failed; the previous healthy deployment was restored.",
+		"rollback":  "Rollback failed; organizer recovery is required.",
+		"operator":  "Deployment paused for organizer recovery.",
+		"unknown":   "Deployment failed.",
+	}[reason]
 }
 
 // MeStatus serves GET /api/v1/arena/me/status?since=<tick>.
@@ -409,13 +438,10 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 		return
 	}
 
-	// Q5: the latest pipeline event and remaining free player deploys per service.
+	// Q5: the latest pipeline event per service.
 	lastDeployments := map[uuid.UUID]meDeployment{}
-	deploysUsed := map[uuid.UUID]int{}
 	deployRows, err := h.db.Pool.Query(ctx, `
-		SELECT DISTINCT ON (service_id) service_id, kind, org_initiated, tick_number, deployed_at,
-		    COUNT(*) FILTER (WHERE kind = 'deploy' AND NOT org_initiated)
-		        OVER (PARTITION BY service_id) AS deploys_used
+		SELECT DISTINCT ON (service_id) service_id, kind, org_initiated, tick_number, deployed_at
 		FROM game_deploys
 		WHERE team_id = $1
 		ORDER BY service_id, deployed_at DESC, id DESC`, teamID)
@@ -428,18 +454,53 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	for deployRows.Next() {
 		var svcID uuid.UUID
 		var deployment meDeployment
-		var used int
 		if err := deployRows.Scan(&svcID, &deployment.Kind, &deployment.OrgInitiated,
-			&deployment.Tick, &deployment.DeployedAt, &used); err != nil {
+			&deployment.Tick, &deployment.DeployedAt); err != nil {
 			h.logger.Error("arena/me/status: deployment scan", zap.Error(err))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 			return
 		}
 		lastDeployments[svcID] = deployment
-		deploysUsed[svcID] = used
 	}
 	if err := deployRows.Err(); err != nil {
 		h.logger.Error("arena/me/status: deployment rows", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+
+	// Q6: the five most recent normalized controller events per service. Only
+	// allow-listed states and server-authored messages reach this team response.
+	deploymentHistory := map[uuid.UUID][]meDeploymentEvent{}
+	eventRows, err := h.db.Pool.Query(ctx, `
+		SELECT service_id, state, COALESCE(reason_code, ''), recorded_at
+		FROM (
+			SELECT service_id, state, reason_code, recorded_at, id,
+				ROW_NUMBER() OVER (PARTITION BY service_id ORDER BY recorded_at DESC, id DESC) AS position
+			FROM game_deployment_events
+			WHERE team_id = $1
+		) recent
+		WHERE position <= 5
+		ORDER BY service_id, recorded_at DESC, id DESC`, teamID)
+	if err != nil {
+		h.logger.Error("arena/me/status: deployment events query", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	defer eventRows.Close()
+	for eventRows.Next() {
+		var svcID uuid.UUID
+		var event meDeploymentEvent
+		var reason string
+		if err := eventRows.Scan(&svcID, &event.State, &reason, &event.RecordedAt); err != nil {
+			h.logger.Error("arena/me/status: deployment event scan", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
+		event.Message = deploymentEventMessage(event.State, reason)
+		deploymentHistory[svcID] = append(deploymentHistory[svcID], event)
+	}
+	if err := eventRows.Err(); err != nil {
+		h.logger.Error("arena/me/status: deployment event rows", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
@@ -460,11 +521,10 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 			totalUp += b.up
 		}
 		row := meServiceRow{
-			ServiceID:       svcID.String(),
-			Slug:            meta.slug,
-			Name:            meta.name,
-			Port:            meta.port,
-			FreeDeploysLeft: max(0, h.config.Game.Scoring.FreeDeploys-deploysUsed[svcID]),
+			ServiceID: svcID.String(),
+			Slug:      meta.slug,
+			Name:      meta.name,
+			Port:      meta.port,
 			PointsThisHour: mePointsHour{
 				Steal: totalSteal,
 				Hold:  totalHold,
@@ -474,6 +534,10 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 		}
 		if deployment, ok := lastDeployments[svcID]; ok {
 			row.LastDeployment = &deployment
+		}
+		row.DeploymentHistory = deploymentHistory[svcID]
+		if row.DeploymentHistory == nil {
+			row.DeploymentHistory = []meDeploymentEvent{}
 		}
 
 		for si := 0; si < meta.flagStores; si++ {

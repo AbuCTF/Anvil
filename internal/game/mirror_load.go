@@ -48,7 +48,6 @@ func (c *Controller) loadMirror(ctx context.Context, tx pgx.Tx, current int, fin
 		NopStolen:  map[storeTick]bool{},
 		Attackers:  map[storeTick]map[uuid.UUID]bool{},
 		Steal:      map[teamStore]float64{},
-		Priced:     map[slaKey]bool{},
 		Koth:       map[uuid.UUID]float64{},
 		MassFault:  sc.MassFaultTeams,
 		Bonus:      sc.AttackerBonus,
@@ -238,24 +237,6 @@ func (c *Controller) loadMirror(ctx context.Context, tx pgx.Tx, current int, fin
 			return err
 		}
 		in.Steal[k] = v
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	// deploy pricing: past the free allowance, the deploying tick earns half UP
-	if err := scan("priced deploys", `
-		SELECT team_id, service_id, tick_number FROM (
-		  SELECT team_id, service_id, tick_number,
-		         ROW_NUMBER() OVER (PARTITION BY team_id, service_id ORDER BY deployed_at, id) AS rn
-		  FROM game_deploys
-		  WHERE kind = 'deploy' AND NOT org_initiated AND tick_number IS NOT NULL) d
-		WHERE rn > $1`, []any{sc.FreeDeploys}, func(r pgx.Rows) error {
-		var k slaKey
-		if err := r.Scan(&k.team, &k.service, &k.tick); err != nil {
-			return err
-		}
-		in.Priced[k] = true
 		return nil
 	}); err != nil {
 		return nil, err

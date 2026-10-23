@@ -20,29 +20,71 @@ import (
 
 // roundLength is the length of a round that starts at t.
 func roundLength(k config.KothConfig, t time.Time) time.Duration {
-	if k.NightRoundInterval <= 0 || !atNight(k, t) {
-		return k.RoundInterval
+	length := k.RoundInterval
+	if _, end, night := nightBounds(k, t); night && k.NightRoundInterval > 0 {
+		length = k.NightRoundInterval
+		if untilEnd := end.Sub(t); untilEnd > 0 && untilEnd < length {
+			return untilEnd
+		}
+		return length
 	}
-	return k.NightRoundInterval
+	if start, ok := nextNightStart(k, t); ok {
+		if untilStart := start.Sub(t); untilStart > 0 && untilStart < length {
+			return untilStart
+		}
+	}
+	return length
 }
 
 func atNight(k config.KothConfig, t time.Time) bool {
+	_, _, ok := nightBounds(k, t)
+	return ok
+}
+
+func nightBounds(k config.KothConfig, t time.Time) (time.Time, time.Time, bool) {
 	loc, err := time.LoadLocation(k.Timezone)
 	if err != nil {
 		loc = time.UTC
 	}
 	start, err1 := time.Parse("15:04", k.NightStart)
 	end, err2 := time.Parse("15:04", k.NightEnd)
-	if err1 != nil || err2 != nil {
-		return false
+	if err1 != nil || err2 != nil || (start.Hour() == end.Hour() && start.Minute() == end.Minute()) {
+		return time.Time{}, time.Time{}, false
 	}
 	local := t.In(loc)
-	m := local.Hour()*60 + local.Minute()
 	s, e := start.Hour()*60+start.Minute(), end.Hour()*60+end.Minute()
+	startToday := time.Date(local.Year(), local.Month(), local.Day(), start.Hour(), start.Minute(), 0, 0, loc)
+	endToday := time.Date(local.Year(), local.Month(), local.Day(), end.Hour(), end.Minute(), 0, 0, loc)
 	if s <= e {
-		return m >= s && m < e
+		if !local.Before(startToday) && local.Before(endToday) {
+			return startToday, endToday, true
+		}
+		return time.Time{}, time.Time{}, false
 	}
-	return m >= s || m < e // a window across midnight
+	if !local.Before(startToday) {
+		return startToday, endToday.AddDate(0, 0, 1), true
+	}
+	if local.Before(endToday) {
+		return startToday.AddDate(0, 0, -1), endToday, true
+	}
+	return time.Time{}, time.Time{}, false
+}
+
+func nextNightStart(k config.KothConfig, t time.Time) (time.Time, bool) {
+	loc, err := time.LoadLocation(k.Timezone)
+	if err != nil {
+		loc = time.UTC
+	}
+	start, err := time.Parse("15:04", k.NightStart)
+	if err != nil || k.NightStart == k.NightEnd {
+		return time.Time{}, false
+	}
+	local := t.In(loc)
+	next := time.Date(local.Year(), local.Month(), local.Day(), start.Hour(), start.Minute(), 0, 0, loc)
+	if !next.After(local) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next, true
 }
 
 // rankPointsSplit ranks by ticks held; teams that tie share the points of the

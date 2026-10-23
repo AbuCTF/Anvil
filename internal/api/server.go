@@ -226,6 +226,7 @@ func (s *Server) setupRouter() {
 		{
 			gameInternal := handlers.NewGameInternalHandler(s.config, s.db, s.logger)
 			internalArena.POST("/deploys", gameInternal.Deploy)
+			internalArena.POST("/deployment-events", gameInternal.DeploymentEvent)
 			internalArena.GET("/sla", gameInternal.SLA)
 			internalArena.GET("/mode", gameInternal.Mode)
 			internalArena.GET("/vpn/peers", gameInternal.VPNPeers)

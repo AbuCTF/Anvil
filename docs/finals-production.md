@@ -295,6 +295,26 @@ must also review `/api/v1/admin/readiness`, authenticate through the UI, exercis
 one test team, submit through both HTTPS and TCP, and verify a full tick without
 making the game live.
 
+The frozen player contract for that rehearsal is six Attack-Defense services,
+three Hills using five doors with three initially open and one lock, and Night
+Watch from 00:00 through 06:00 Asia/Kolkata. Normal cadence resumes at 06:00;
+Service 6 and Hill C release at 07:00. Valid deployments and rollbacks have no
+score penalty. The controller enforces one in-flight candidate per team and
+service plus its reviewed rate limits.
+
+The controller reconciler records player-visible lifecycle changes through
+`POST /api/v1/internal/arena/deployment-events`. The endpoint accepts only the
+normalized states `queued`, `building`, `gating`, `waiting_quiet_window`,
+`promoted`, `rolled_back` and `failed`, with an allow-listed failure code. It
+must never receive logs, source revisions, image digests, flags or runner output.
+The team status response exposes only server-authored messages and the five most
+recent events for that team and service.
+
+Do not publish packet capture, reboot, reset or richer status APIs merely because
+a draft route or document exists. The player rules may advertise only endpoints
+that pass the closed staging journey with a real team identity, authorization,
+rate limits, failure states and redaction verified.
+
 ## Backups
 
 The timer runs hourly with up to five minutes of jitter. It writes a

@@ -28,6 +28,7 @@
 	let frozen = false;
 	let loading = true;
 	let error = '';
+	let requestController: AbortController | null = null;
 
 	// sorted 15→1 (index 0 = last place to reveal first)
 	$: queue = [...rows].sort((a, b) => b.rank - a.rank);
@@ -43,6 +44,7 @@
 	let animating = false;
 
 	$: isFinalsMode = !!$platformInfo?.game_state;
+	$: isAdmin = $auth.user?.role === 'admin';
 
 	// currently shown rows in display order (top=1st), only revealed ones
 	$: displayed = queue.slice(0, revealed).reverse();
@@ -54,19 +56,24 @@
 	$: allDone = revealed >= queue.length;
 
 	async function loadScoreboard() {
+		if (!isAdmin) return;
+		requestController?.abort();
+		requestController = new AbortController();
+		const timeout = setTimeout(() => requestController?.abort(), 8000);
 		loading = true;
 		error = '';
 		try {
 			const headers: Record<string, string> = {};
 			if ($auth.accessToken) headers['Authorization'] = `Bearer ${$auth.accessToken}`;
-			const res = await fetch('/api/v1/arena/scoreboard', { headers });
-			if (!res.ok) throw new Error(`${res.status}`);
+			const res = await fetch('/api/v1/arena/scoreboard', { headers, signal: requestController.signal });
+			if (!res.ok) throw new Error('Final standings are temporarily unavailable.');
 			const data = await res.json();
 			rows = (data.rows ?? []) as FinalsRow[];
 			frozen = !!data.frozen;
 		} catch (e: unknown) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
+			clearTimeout(timeout);
 			loading = false;
 		}
 	}
@@ -100,13 +107,20 @@
 
 	function fmt1(n: number) { return n.toFixed(1); }
 
-	onMount(() => { loadScoreboard(); });
-	onDestroy(() => { if (autoTimer) clearTimeout(autoTimer); });
+	onMount(() => { if (isAdmin) loadScoreboard(); });
+	onDestroy(() => {
+		requestController?.abort();
+		if (autoTimer) clearTimeout(autoTimer);
+	});
 </script>
 
 <svelte:head><title>Final Reveal - H7CTF 2026</title></svelte:head>
 
-{#if !isFinalsMode}
+{#if !isAdmin}
+	<div class="flex min-h-[60vh] items-center justify-center">
+		<p class="text-stone-500">Organizer access required.</p>
+	</div>
+{:else if !isFinalsMode}
 	<div class="flex min-h-[60vh] items-center justify-center">
 		<p class="text-stone-500">finals mode not active</p>
 	</div>
@@ -116,7 +130,10 @@
 	</div>
 {:else if error}
 	<div class="flex min-h-[60vh] items-center justify-center">
-		<p class="text-red-400">error: {error}</p>
+		<div class="text-center">
+			<p class="text-red-400">{error}</p>
+			<button class="mt-3 rounded border border-stone-700 px-4 py-1.5 text-sm text-stone-400 hover:text-stone-200" on:click={loadScoreboard}>retry</button>
+		</div>
 	</div>
 {:else if !frozen}
 	<div class="flex min-h-[60vh] flex-col items-center justify-center gap-4">

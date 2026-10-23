@@ -117,12 +117,12 @@ func (g *AlertGenerator) publishHoldingAlerts(ctx context.Context, tick int) err
 		   AND NOT EXISTS (
 		       SELECT 1 FROM game_captures c
 		       WHERE c.victim_team_id = t.id AND c.service_id = s.id
-		         AND c.tick_number > $1 - $2
+		         AND c.tick_number > $1::integer - $2::integer
 		   )
 		   AND EXISTS (
 		       SELECT 1 FROM game_captures c2
 		       WHERE c2.victim_team_id = t.id AND c2.service_id = s.id
-		         AND c2.tick_number > $1 - $2 - 5
+		         AND c2.tick_number > $1::integer - $2::integer - 5
 		   )`,
 		tick, holdWindow)
 	if err != nil {

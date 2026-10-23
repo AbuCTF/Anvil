@@ -54,7 +54,11 @@
 			tick?: number;
 			deployed_at: string;
 		};
-		free_deploys_left: number;
+		deployment_history: Array<{
+			state: 'queued' | 'building' | 'gating' | 'waiting_quiet_window' | 'promoted' | 'rolled_back' | 'failed';
+			message: string;
+			recorded_at: string;
+		}>;
 	}
 
 	interface ArenaTickInfo {
@@ -109,6 +113,8 @@
 	let submitBusy = false;
 	let refreshError = '';
 	let lastUpdatedAt: number | null = null;
+	let initialLoading = true;
+	let refreshBusy = false;
 	let clockInterval: ReturnType<typeof setInterval>;
 	let pollInterval: ReturnType<typeof setInterval>;
 
@@ -116,6 +122,7 @@
 	$: tickEndsIn = Math.max(0, Math.round((Date.parse(tickInfo.ends_at) - now) / 1000));
 	$: fmtCountdown = `${String(Math.floor(tickEndsIn / 60)).padStart(2, '0')}:${String(tickEndsIn % 60).padStart(2, '0')}`;
 	$: refreshedAgo = lastUpdatedAt === null ? 'waiting for live data' : `updated ${Math.max(0, Math.round((now - lastUpdatedAt) / 1000))}s ago`;
+	$: statusStale = lastUpdatedAt !== null && now - lastUpdatedAt > 75000;
 
 	// service name lookup for alerts
 	$: svcNames = new Map(services.map(s => [s.service_id, s.name]));
@@ -127,14 +134,24 @@
 		return h;
 	}
 
+	async function liveFetch(url: string, init: RequestInit = {}): Promise<Response> {
+		const controller = new AbortController();
+		const timer = window.setTimeout(() => controller.abort(), 8000);
+		try {
+			return await fetch(url, { ...init, signal: controller.signal });
+		} finally {
+			window.clearTimeout(timer);
+		}
+	}
+
 	async function loadTick() {
-		const res = await fetch(`${API_BASE}/api/v1/arena/tick`);
+		const res = await liveFetch(`${API_BASE}/api/v1/arena/tick`);
 		if (!res.ok) throw new Error('tick unavailable');
 		tickInfo = await res.json();
 	}
 
 	async function loadMe() {
-		const res = await fetch(`${API_BASE}/api/v1/arena/me`, { headers: authHeaders() });
+		const res = await liveFetch(`${API_BASE}/api/v1/arena/me`, { headers: authHeaders() });
 		if (!res.ok) throw new Error('team identity unavailable');
 		me = await res.json();
 	}
@@ -142,7 +159,7 @@
 	async function loadStatus() {
 		if (!isFinalsMode) return;
 		const url = `${API_BASE}/api/v1/arena/me/status${latestTick > 0 ? `?since=${latestTick}` : ''}`;
-		const res = await fetch(url, { headers: authHeaders() });
+		const res = await liveFetch(url, { headers: authHeaders() });
 		if (!res.ok) throw new Error('service status unavailable');
 		const d = await res.json();
 		const incoming: ServiceStatus[] = d.services ?? [];
@@ -180,6 +197,7 @@
 		}
 		const enabled = new Set(incoming.map(s => s.service_id));
 		services = [...svcMap.values()].filter(s => enabled.has(s.service_id));
+		lastUpdatedAt = Date.now();
 
 		const allTickNums = services.flatMap(s => s.stores.flatMap(st => st.ticks.map(t => t.tick)));
 		if (allTickNums.length) latestTick = Math.max(...allTickNums, latestTick);
@@ -187,17 +205,23 @@
 
 	async function loadAlerts() {
 		if (!isFinalsMode) return;
-		const res = await fetch(`${API_BASE}/api/v1/arena/me/alerts`, { headers: authHeaders() });
+		const res = await liveFetch(`${API_BASE}/api/v1/arena/me/alerts`, { headers: authHeaders() });
 		if (!res.ok) throw new Error('alerts unavailable');
 		const d = await res.json();
 		alerts = d.alerts ?? [];
 	}
 
 	async function refresh() {
-		const results = await Promise.allSettled([loadTick(), loadMe(), loadStatus(), loadAlerts()]);
-		const failed = results.filter(r => r.status === 'rejected').length;
-		refreshError = failed ? `${failed} live data source${failed === 1 ? '' : 's'} unavailable; showing the last confirmed state.` : '';
-		if (!failed) lastUpdatedAt = Date.now();
+		if (refreshBusy) return;
+		refreshBusy = true;
+		try {
+			const results = await Promise.allSettled([loadTick(), loadMe(), loadStatus(), loadAlerts()]);
+			const failed = results.filter(r => r.status === 'rejected').length;
+			refreshError = failed ? `${failed} live data source${failed === 1 ? '' : 's'} unavailable; showing the last confirmed state.` : '';
+		} finally {
+			initialLoading = false;
+			refreshBusy = false;
+		}
 	}
 
 	async function submitFlags() {
@@ -223,7 +247,7 @@
 					throw error;
 				}
 			}
-			submitResult = results.map(r => `${r.flag.slice(-8)}: ${r.status} (${r.message})`).join('\n');
+			submitResult = results.map((r, index) => `Flag ${index + 1}: ${r.status} (${r.message})`).join('\n');
 			if (results.every(r => r.status === 'accepted' || r.status === 'duplicate')) submitFlag = '';
 		} catch (e: any) {
 			submitResult = e?.message ?? 'submit failed';
@@ -311,7 +335,22 @@
 	}
 
 	function fmtTime(ts: string): string {
-		return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+		return `${new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' })} IST`;
+	}
+
+	function deploymentLabel(state: ServiceStatus['deployment_history'][number]['state']): string {
+		return ({
+			queued: 'Queued', building: 'Building', gating: 'Gating',
+			waiting_quiet_window: 'Waiting', promoted: 'Promoted',
+			rolled_back: 'Rolled back', failed: 'Failed'
+		})[state];
+	}
+
+	function deploymentClass(state: ServiceStatus['deployment_history'][number]['state']): string {
+		if (state === 'promoted') return 'bg-[#4b7355]/20 text-[#9bcea8]';
+		if (state === 'rolled_back') return 'bg-[#3f6a86]/20 text-[#8bbfe0]';
+		if (state === 'failed') return 'bg-[#b0453a]/20 text-[#e08a85]';
+		return 'bg-[#9c7a30]/20 text-[#e0be72]';
 	}
 
 	onMount(() => {
@@ -371,14 +410,17 @@
 	</div>
 
 	<div class="mb-5 flex flex-wrap items-center gap-2 text-xs">
-		<a href="/arena" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60">Open Arena</a>
-		{#if $platformInfo?.vpn_enabled}<a href="/vpn" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60">VPN access</a>{/if}
-		<a href="{API_BASE}/api/v1/arena/attack-info" target="_blank" rel="noreferrer" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60">Attack info</a>
+		<a href="/arena" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">Open Arena</a>
+		{#if $platformInfo?.vpn_enabled}<a href="/vpn" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">VPN access</a>{/if}
+		<a href="{API_BASE}/api/v1/arena/attack-info" target="_blank" rel="noreferrer" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">Attack info</a>
+		<button type="button" on:click={refresh} disabled={refreshBusy} class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 disabled:opacity-50">{refreshBusy ? 'Refreshing…' : 'Refresh'}</button>
 		<span class="ml-auto text-stone-600">{refreshedAgo}</span>
 	</div>
 
 	{#if refreshError}
-		<div class="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300" role="status">{refreshError}</div>
+		<div class="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300" role="alert">{refreshError}</div>
+	{:else if statusStale}
+		<div class="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300" role="status">Service status is stale. Confirm the live state before deploying or attacking.</div>
 	{/if}
 
 	<!-- exploitation alerts -->
@@ -419,6 +461,7 @@
 	{#each services as svc (svc.service_id)}
 		{@const latestT = svcLatestTick(svc)}
 		{@const svcStatus = latestT?.status ?? 'UNKNOWN'}
+		{@const deployment = svc.deployment_history?.[0]}
 		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden">
 			<div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-stone-800">
 				<span class="text-[0.95rem] font-semibold text-stone-200">{svc.name}</span>
@@ -426,8 +469,10 @@
 				<span class="text-xs text-stone-600">{latestT ? `${(svcUptime(svc) * 100).toFixed(1)}% up` : 'awaiting first check'}</span>
 				{#if svc.port}<span class="text-xs font-mono text-stone-600">TCP {svc.port}</span>{/if}
 				<span class="text-xs text-stone-600">{svc.active_attackers} active attacker{svc.active_attackers === 1 ? '' : 's'}</span>
-				<span class="text-xs text-stone-600">{svc.free_deploys_left} free deploy{svc.free_deploys_left === 1 ? '' : 's'}</span>
-				{#if svc.last_deployment}
+				{#if deployment}
+					<span class="rounded px-1.5 py-0.5 text-xs font-medium {deploymentClass(deployment.state)}">{deploymentLabel(deployment.state)}</span>
+					<span class="max-w-sm truncate text-xs text-stone-500" title={deployment.message}>{deployment.message}</span>
+				{:else if svc.last_deployment}
 					<span class="text-xs text-stone-600" title={svc.last_deployment.deployed_at}>{svc.last_deployment.kind} at {fmtTime(svc.last_deployment.deployed_at)}</span>
 				{/if}
 				{#if latestT?.message}
@@ -435,6 +480,22 @@
 				{/if}
 			</div>
 			<div class="px-4 py-3">
+				{#if deployment}
+					<div class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-stone-800/70 pb-3 text-xs text-stone-500">
+						<span class="font-medium text-stone-300">Deployment pipeline</span>
+						<span>{deploymentLabel(deployment.state)} at {fmtTime(deployment.recorded_at)}</span>
+						{#if svc.deployment_history.length > 1}
+							<details class="w-full">
+								<summary class="mt-1 w-fit cursor-pointer rounded text-stone-400 hover:text-stone-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">Recent activity</summary>
+								<ol class="mt-2 space-y-1 border-l border-stone-800 pl-3">
+									{#each svc.deployment_history as event}
+										<li><span class="text-stone-300">{deploymentLabel(event.state)}</span> · {event.message} · {fmtTime(event.recorded_at)}</li>
+									{/each}
+								</ol>
+							</details>
+						{/if}
+					</div>
+				{/if}
 				{#each svc.stores as store (store.store_index)}
 					{@const fate = store.ticks.at(-1)?.flag_fate}
 					{@const g = fateGlyph(fate)}
@@ -467,8 +528,10 @@
 			</div>
 		</div>
 	{/each}
-	{#if services.length === 0}
-		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 px-4 py-8 text-center text-sm text-stone-500">Service inventory is not available yet.</div>
+	{#if initialLoading}
+		<div class="mb-5 flex items-center justify-center gap-2 rounded-lg border border-stone-800 bg-stone-900/40 px-4 py-8 text-sm text-stone-500" role="status"><Icon icon="mdi:loading" class="h-4 w-4 animate-spin" />Loading live operations…</div>
+	{:else if services.length === 0}
+		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 px-4 py-8 text-center text-sm text-stone-500">No service inventory is available. Refresh once, then contact an organizer if this persists.</div>
 	{/if}
 
 	<!-- legend -->
@@ -495,13 +558,13 @@
 					aria-label="Captured flags"
 					rows="3"
 					placeholder="H7CTF&#123;...&#125; one per line"
-					class="w-full resize-none rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-sm font-mono text-stone-200 placeholder-stone-600 focus:border-stone-600 focus:outline-none transition-colors"
+					class="w-full resize-none rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-sm font-mono text-stone-200 placeholder-stone-600 focus:border-stone-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 transition-colors"
 					autocomplete="off" spellcheck="false"
 				></textarea>
 				<button
 					type="submit"
 					disabled={submitBusy || !submitFlag.trim() || tickInfo.phase !== 'live'}
-					class="rounded-md bg-stone-100 text-stone-950 font-medium py-2 text-sm hover:bg-stone-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+					class="rounded-md bg-stone-100 text-stone-950 font-medium py-2 text-sm hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
 				>
 					{submitBusy ? 'Submitting...' : tickInfo.phase !== 'live' ? 'Game not live' : 'Submit'}
 				</button>
@@ -533,7 +596,7 @@
 
 	<!-- ORG_FAULT rule -->
 	<details class="mt-5 rounded-lg border border-stone-800 bg-stone-900/30 overflow-hidden">
-		<summary class="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm text-stone-400 hover:text-stone-300 transition-colors select-none">
+		<summary class="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm text-stone-400 hover:text-stone-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-stone-500 transition-colors select-none">
 			<Icon icon="mdi:information-outline" class="h-4 w-4 shrink-0 text-stone-600" />
 			<span class="font-medium">Our faults rule</span>
 		</summary>

@@ -66,6 +66,7 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		exec(`DELETE FROM platform_settings WHERE key = 'game.state'`)
 		setting("event.start_at", `""`)
 		setting("event.end_at", `""`)
+		setting("event.freeze_at", `""`)
 		setting("arena_enabled", "false")
 	}
 	// truncating users would cascade into platform_settings (updated_by) and break the
@@ -116,7 +117,6 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	cfg.RateLimit.Enabled = false
 	cfg.VPN.Enabled = false
 	cfg.Game.Enabled = true
-	cfg.Game.Scoring.FreeDeploys = 3
 	containerSvc, err := container.NewService(cfg.Container, zap.NewNop())
 	if err != nil {
 		t.Skipf("docker unavailable: %v", err)
@@ -240,6 +240,24 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		t.Fatalf("resume state = %d %s", code, raw)
 	}
 
+	// A frozen finals board must not leak its current rows through the direct API.
+	// Organizers retain a private, no-store view for the reveal console.
+	exec(`INSERT INTO game_standings (team_id, attack, defense, sla, koth, ad, total, rank)
+		VALUES ($1, 12, 8, 6, 4, 26, 30, 1)`, teamA)
+	if code, raw := call("GET", "/api/v1/arena/scoreboard", nil, ""); code != http.StatusOK || !strings.Contains(string(raw), `"team_name":"alpha"`) {
+		t.Fatalf("live public finals board = %d %s", code, raw)
+	}
+	setting("event.freeze_at", `"2020-01-01T00:00:00Z"`)
+	for _, viewer := range []*uuid.UUID{nil, &p1} {
+		if code, raw := call("GET", "/api/v1/arena/scoreboard", viewer, ""); code != http.StatusOK || strings.Contains(string(raw), `"team_name"`) || !strings.Contains(string(raw), `"frozen":true`) {
+			t.Fatalf("frozen player finals board = %d %s", code, raw)
+		}
+	}
+	if code, raw := call("GET", "/api/v1/arena/scoreboard", &admin, ""); code != http.StatusOK || !strings.Contains(string(raw), `"team_name":"alpha"`) {
+		t.Fatalf("frozen admin finals board = %d %s", code, raw)
+	}
+	setting("event.freeze_at", `""`)
+
 	// The War Room is a full, delayed matrix. Tick 3 is current, so public view
 	// tick 1 is visible and the tick-3 advisory must remain hidden. Team markers
 	// are personalized after the shared cache is loaded.
@@ -347,21 +365,28 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		VALUES ($1, 'Waiting Room', 'waiting-room', 'web', 9400, 'http://waiting-checker:9000', 2)`, idleService)
 	exec(`INSERT INTO game_deploys (team_id, service_id, kind, org_initiated, tick_number, deployed_at)
 		VALUES ($1, $2, 'deploy', false, 3, '2026-10-24T13:45:00Z')`, teamA, idleService)
+	exec(`INSERT INTO game_deployment_events (team_id, service_id, source_sequence, state, recorded_at)
+		VALUES ($1, $2, 70, 'waiting_quiet_window', '2026-10-24T13:46:00Z')`, teamA, idleService)
+	exec(`INSERT INTO game_deployment_events (team_id, service_id, source_sequence, state, reason_code, recorded_at)
+		VALUES ($1, $2, 71, 'failed', 'unknown', '2026-10-24T13:47:00Z')`, teamB, idleService)
 	code, raw = call("GET", "/api/v1/arena/me/status", &p1, "")
 	if code != http.StatusOK {
 		t.Fatalf("team status = %d %s", code, raw)
 	}
 	var status struct {
 		Services []struct {
-			Slug            string `json:"slug"`
-			FreeDeploysLeft int    `json:"free_deploys_left"`
-			Stores          []struct {
+			Slug   string `json:"slug"`
+			Stores []struct {
 				Ticks []any `json:"ticks"`
 			} `json:"stores"`
 			LastDeployment *struct {
 				Kind string `json:"kind"`
 				Tick int    `json:"tick"`
 			} `json:"last_deployment"`
+			DeploymentHistory []struct {
+				State   string `json:"state"`
+				Message string `json:"message"`
+			} `json:"deployment_history"`
 		} `json:"services"`
 	}
 	if err := json.Unmarshal(raw, &status); err != nil {
@@ -376,9 +401,13 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		if len(service.Stores) != 2 || len(service.Stores[0].Ticks) != 0 || len(service.Stores[1].Ticks) != 0 {
 			t.Errorf("pre-tick service stores = %#v", service.Stores)
 		}
-		if service.FreeDeploysLeft != 2 || service.LastDeployment == nil ||
+		if service.LastDeployment == nil ||
 			service.LastDeployment.Kind != "deploy" || service.LastDeployment.Tick != 3 {
 			t.Errorf("pre-tick deployment state = %#v", service)
+		}
+		if len(service.DeploymentHistory) != 1 || service.DeploymentHistory[0].State != "waiting_quiet_window" ||
+			service.DeploymentHistory[0].Message != "Gate passed; waiting for a safe promotion window." {
+			t.Errorf("redacted deployment history = %#v", service.DeploymentHistory)
 		}
 	}
 	if !foundIdle {
@@ -479,10 +508,10 @@ func TestFinalsInternalEndpointsAndCredit(t *testing.T) {
 	}
 
 	deploy := `{"team_id":"` + team.String() + `","service":"berth","kind":"deploy","image_digest":"sha256:abc","diff_lines":3}`
-	for i, want := range []float64{2, 1, 0, 0} {
+	for i := 0; i < 4; i++ {
 		code, body, _ := call("POST", "/api/v1/internal/arena/deploys", internal, deploy)
-		if code != http.StatusCreated || body["free_left"] != want {
-			t.Fatalf("deploy %d = %d %v, want free_left %v", i+1, code, body, want)
+		if code != http.StatusCreated || body["id"] == nil || body["free_left"] != nil {
+			t.Fatalf("deploy %d = %d %v, want an id without deployment pricing", i+1, code, body)
 		}
 	}
 	if code, _, _ := call("POST", "/api/v1/internal/arena/deploys", internal,
@@ -492,6 +521,26 @@ func TestFinalsInternalEndpointsAndCredit(t *testing.T) {
 	var digest string
 	if err := db.Pool.QueryRow(ctx, `SELECT image_digest FROM game_deploys WHERE team_id = $1 LIMIT 1`, team).Scan(&digest); err != nil || digest != "sha256:abc" {
 		t.Fatalf("deploy row digest = %q err %v", digest, err)
+	}
+
+	event := `{"team_id":"` + team.String() + `","service":"berth","source_sequence":91,"state":"failed","reason_code":"gate"}`
+	if code, body, _ := call("POST", "/api/v1/internal/arena/deployment-events", internal, event); code != http.StatusCreated || body["id"] == nil {
+		t.Fatalf("deployment event create = %d %v", code, body)
+	}
+	if code, _, _ := call("POST", "/api/v1/internal/arena/deployment-events", internal, event); code != http.StatusOK {
+		t.Fatalf("deployment event retry = %d, want 200", code)
+	}
+	conflict := `{"team_id":"` + team.String() + `","service":"berth","source_sequence":91,"state":"promoted"}`
+	if code, _, _ := call("POST", "/api/v1/internal/arena/deployment-events", internal, conflict); code != http.StatusConflict {
+		t.Fatalf("deployment event conflict = %d, want 409", code)
+	}
+	badReason := `{"team_id":"` + team.String() + `","service":"berth","source_sequence":92,"state":"failed","reason_code":"runner_output"}`
+	if code, _, _ := call("POST", "/api/v1/internal/arena/deployment-events", internal, badReason); code != http.StatusBadRequest {
+		t.Fatalf("deployment event unsafe reason = %d, want 400", code)
+	}
+	oversized := `{"team_id":"` + team.String() + `","service":"` + strings.Repeat("x", 5000) + `","source_sequence":93,"state":"queued"}`
+	if code, _, _ := call("POST", "/api/v1/internal/arena/deployment-events", internal, oversized); code != http.StatusBadRequest {
+		t.Fatalf("oversized deployment event = %d, want 400", code)
 	}
 
 	code, _, raw := call("GET", "/api/v1/internal/arena/sla?team_id="+team.String()+"&service=berth&since=1", internal, "")

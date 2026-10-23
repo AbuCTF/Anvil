@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS game_events (
 );
 CREATE INDEX IF NOT EXISTS idx_game_events_tick ON game_events(tick_number);
 
--- deploys from the model c pipeline; drive deploy pricing and digest stamping
+-- completed live changes from the verified deployment pipeline; used for digest stamping
 CREATE TABLE IF NOT EXISTS game_deploys (
     id BIGSERIAL PRIMARY KEY,
     team_id UUID NOT NULL REFERENCES game_teams(id) ON DELETE CASCADE,

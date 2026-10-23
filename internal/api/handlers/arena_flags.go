@@ -36,6 +36,7 @@ func (h *GameHandler) BulkSubmitFlags(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<10)
 	var flags []string
 	if err := c.ShouldBindJSON(&flags); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "body must be a JSON array of flag strings"})
@@ -48,6 +49,12 @@ func (h *GameHandler) BulkSubmitFlags(c *gin.Context) {
 	if len(flags) > 500 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "at most 500 flags per request"})
 		return
+	}
+	for _, flag := range flags {
+		if len(flag) == 0 || len(flag) > maximumArenaFlagLength {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "each flag must be between 1 and 128 bytes"})
+			return
+		}
 	}
 
 	// NOP teams: accept the request but don't record any captures.

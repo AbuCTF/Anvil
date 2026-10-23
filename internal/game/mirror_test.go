@@ -30,7 +30,6 @@ func newWorld(t *testing.T) *world {
 		NopStolen:  map[storeTick]bool{},
 		Attackers:  map[storeTick]map[uuid.UUID]bool{},
 		Steal:      map[teamStore]float64{},
-		Priced:     map[slaKey]bool{},
 		Koth:       map[uuid.UUID]float64{},
 		MassFault:  3, WeightAD: 0.7, WeightKoth: 0.3,
 	}
@@ -241,7 +240,7 @@ func TestMirrorOrganizerFaults(t *testing.T) {
 	}
 }
 
-func TestMirrorUpRecoveringAndDeployPricing(t *testing.T) {
+func TestMirrorUpAndRecovering(t *testing.T) {
 	w := newWorld(t)
 	w.in.Stores[w.service] = 2
 	a, b, c := w.teams[0], w.teams[1], w.teams[2]
@@ -249,11 +248,10 @@ func TestMirrorUpRecoveringAndDeployPricing(t *testing.T) {
 	w.in.SLA[slaKey{b, w.service, 1}] = slaTick{Status: models.SLARecovering}
 	w.in.RecShare[slaKey{b, w.service, 1}] = 0.6
 	w.in.SLA[slaKey{c, w.service, 1}] = slaTick{Status: models.SLAOk}
-	w.in.Priced[slaKey{c, w.service, 1}] = true
 	r := scoreMirror(w.in)
 	full := math.Sqrt(15) * 2
-	if !near(r.Teams[a].Up, full) || !near(r.Teams[b].Up, full*0.6) || !near(r.Teams[c].Up, full/2) {
-		t.Fatalf("up: ok %.3f recovering %.3f priced %.3f", r.Teams[a].Up, r.Teams[b].Up, r.Teams[c].Up)
+	if !near(r.Teams[a].Up, full) || !near(r.Teams[b].Up, full*0.6) || !near(r.Teams[c].Up, full) {
+		t.Fatalf("up: ok %.3f recovering %.3f second ok %.3f", r.Teams[a].Up, r.Teams[b].Up, r.Teams[c].Up)
 	}
 	if !near(r.Breakdown[teamStore{a, w.service, 1}].Up, full/2) {
 		t.Fatal("up not split evenly across stores")

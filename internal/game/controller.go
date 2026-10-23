@@ -48,6 +48,7 @@ func NewController(cfg config.GameConfig, db *database.DB, logger *zap.Logger) *
 			flagValidTicks: cfg.FlagValidTicks,
 			tickLength:     cfg.TickInterval,
 			checker:        cfg.Checker,
+			koth:           cfg.Koth,
 			// no client timeout: every task carries its own deadline
 			client: &http.Client{Transport: &http.Transport{
 				MaxIdleConns:        512,

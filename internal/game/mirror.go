@@ -72,7 +72,6 @@ type mirrorInput struct {
 	NopStolen  map[storeTick]bool // the wave read the nop's flag: its verdicts stand
 	Attackers  map[storeTick]map[uuid.UUID]bool
 	Steal      map[teamStore]float64 // settled STEAL already summed in sql
-	Priced     map[slaKey]bool       // a deploy beyond the free allowance landed this tick
 	Koth       map[uuid.UUID]float64
 	MassFault  int
 	Bonus      float64 // attacker bonus w; 0 = off
@@ -302,9 +301,6 @@ func scoreMirror(in *mirrorInput) mirrorResult {
 			}
 		default:
 			continue
-		}
-		if in.Priced[k] {
-			q *= 0.5
 		}
 		stores := in.Stores[k.service]
 		if stores < 1 {

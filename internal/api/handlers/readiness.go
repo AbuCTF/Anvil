@@ -14,6 +14,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/database"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -199,6 +200,71 @@ func (h *ReadinessHandler) buildReport(ctx context.Context) (readinessReport, er
 	add("event.schedule", "Event", "Competition window", status(scheduleReady, "blocker"), ternary(scheduleReady, "Start and end form a valid UTC window.", "Set an end time after the start time."), nil)
 	if scheduleReady && end.Before(time.Now()) {
 		add("event.window_ended", "Event", "Competition window has ended", "warning", "The configured end time is in the past.", end)
+	}
+	if h.config.Game.Enabled && h.config.Game.Scoring.Formula == "mirror" {
+		var teams, numberedTeams, nopTeams int
+		if err := h.db.Pool.QueryRow(ctx, `SELECT
+			COUNT(*) FILTER (WHERE status = 'active' AND is_nop = FALSE)::int,
+			COUNT(DISTINCT team_number) FILTER (WHERE status = 'active' AND is_nop = FALSE
+			  AND team_number BETWEEN 1 AND $1 AND vulnbox_ip IS NOT NULL)::int,
+			COUNT(*) FILTER (WHERE status = 'active' AND is_nop = TRUE)::int
+			FROM game_teams`, h.config.Game.Scoring.NTeams).Scan(&teams, &numberedTeams, &nopTeams); err != nil {
+			return report, err
+		}
+		rosterReady := h.config.Game.Scoring.NTeams == 15 && teams == 15 && numberedTeams == teams && nopTeams == 1
+		add("finals.roster", "Finals", "Attack-Defense roster", status(rosterReady, "blocker"),
+			ternary(rosterReady, "All participant teams and the NOP canary are attributed.", "Require 15 numbered participant teams with vulnbox addresses and one NOP canary."),
+			gin.H{"participant_teams": teams, "attributed_teams": numberedTeams, "nop_teams": nopTeams})
+
+		var services, twoStoreServices, fixedPorts int
+		if err := h.db.Pool.QueryRow(ctx, `SELECT
+			COUNT(*) FILTER (WHERE enabled)::int,
+			COUNT(*) FILTER (WHERE enabled AND flag_stores = 2)::int,
+			COUNT(DISTINCT port) FILTER (WHERE enabled AND port BETWEEN 7001 AND 7006)::int
+			FROM game_services`).Scan(&services, &twoStoreServices, &fixedPorts); err != nil {
+			return report, err
+		}
+		servicesReady := services == 6 && twoStoreServices == 6 && fixedPorts == 6
+		add("finals.services", "Finals", "Attack-Defense services", status(servicesReady, "blocker"),
+			ternary(servicesReady, "Six two-store services use the reviewed port inventory.", "Require exactly six enabled two-store services on ports 7001 through 7006."),
+			gin.H{"enabled": services, "two_store": twoStoreServices, "fixed_ports": fixedPorts})
+
+		var hills, v2Hills int
+		if err := h.db.Pool.QueryRow(ctx, `SELECT COUNT(*)::int,
+			COUNT(*) FILTER (WHERE controller_protocol = 'hill-v2-http'
+			  AND COALESCE(base_url, '') <> '' AND COALESCE(reset_secret, '') <> '')::int
+			FROM game_koth_hills`).Scan(&hills, &v2Hills); err != nil {
+			return report, err
+		}
+		hillsReady := hills == 3 && v2Hills == 3
+		add("finals.hills", "Finals", "Adaptive Hills", status(hillsReady, "blocker"),
+			ternary(hillsReady, "Three Hill v2 controllers are provisioned.", "Require exactly three Hill v2 controllers with private reset delivery configured."),
+			gin.H{"configured": hills, "hill_v2": v2Hills})
+
+		nightReady := h.config.Game.Koth.Timezone == "Asia/Kolkata" && h.config.Game.Koth.NightStart == "00:00" &&
+			h.config.Game.Koth.NightEnd == "06:00" && h.config.Game.Koth.RoundInterval == 15*time.Minute &&
+			h.config.Game.Koth.NightRoundInterval == 30*time.Minute
+		add("finals.night_watch", "Finals", "Night Watch", status(nightReady, "blocker"),
+			ternary(nightReady, "Night Watch and the 06:00 cadence boundary match the frozen contract.", "Use Asia/Kolkata, 00:00-06:00, 30-minute night rounds and 15-minute normal rounds."), nil)
+
+		var serviceSixAt, hillThreeAt *time.Time
+		if err := h.db.Pool.QueryRow(ctx, `SELECT release_at FROM game_services
+			WHERE enabled ORDER BY sort_order DESC, id DESC LIMIT 1`).Scan(&serviceSixAt); err != nil && err != pgx.ErrNoRows {
+			return report, err
+		}
+		if err := h.db.Pool.QueryRow(ctx, `SELECT MIN(w.opens_at)
+			FROM game_koth_hills h LEFT JOIN game_koth_windows w ON w.hill_id = h.id
+			WHERE h.id = (SELECT id FROM game_koth_hills ORDER BY sort_order DESC, id DESC LIMIT 1)`).Scan(&hillThreeAt); err != nil && err != pgx.ErrNoRows {
+			return report, err
+		}
+		ist, _ := time.LoadLocation("Asia/Kolkata")
+		atSeven := func(at *time.Time) bool {
+			return at != nil && at.In(ist).Hour() == 7 && at.In(ist).Minute() == 0
+		}
+		delayedReady := atSeven(serviceSixAt) && atSeven(hillThreeAt)
+		add("finals.delayed_release", "Finals", "07:00 release", status(delayedReady, "blocker"),
+			ternary(delayedReady, "Service 6 and Hill C are scheduled for 07:00 IST.", "Schedule Service 6 and Hill C for 07:00 IST."),
+			gin.H{"service_6": serviceSixAt, "hill_c": hillThreeAt})
 	}
 	mode := stringSetting(settings, "registration_mode")
 	accessReady := mode == "open" || mode == "invite" || mode == "disabled"

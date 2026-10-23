@@ -416,7 +416,6 @@ type ScoringConfig struct {
 	WeightAD       float64 `mapstructure:"weight_ad"` // median-relative merge weights
 	WeightKoth     float64 `mapstructure:"weight_koth"`
 	AttackerBonus  float64 `mapstructure:"attacker_bonus"`   // 0 = off; the pre-freeze dial (1.5)
-	FreeDeploys    int     `mapstructure:"free_deploys"`     // per team x service before UP is halved
 	NTeams         int     `mapstructure:"n_teams"`          // 0 = count active non-nop teams
 	MassFaultTeams int     `mapstructure:"mass_fault_teams"` // teams failing with the nop canary => ORG_FAULT
 }
@@ -649,7 +648,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.koth.reset_enabled", true)
 	v.SetDefault("game.koth.night_round_interval", "0s")
 	v.SetDefault("game.koth.night_start", "00:00")
-	v.SetDefault("game.koth.night_end", "07:00")
+	v.SetDefault("game.koth.night_end", "06:00")
 	v.SetDefault("game.koth.timezone", "Asia/Kolkata")
 	v.SetDefault("game.koth.bounty_per_round", 0)
 	v.SetDefault("game.koth.bounty_min_streak", 3)
@@ -671,7 +670,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.scoring.weight_ad", 0.7)
 	v.SetDefault("game.scoring.weight_koth", 0.3)
 	v.SetDefault("game.scoring.attacker_bonus", 0)
-	v.SetDefault("game.scoring.free_deploys", 3)
 	v.SetDefault("game.scoring.n_teams", 0)
 	v.SetDefault("game.scoring.mass_fault_teams", 3)
 	v.SetDefault("game.checker.task_timeout", "30s")

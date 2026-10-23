@@ -229,7 +229,7 @@ func TestLoadGameMirrorScoringDefaultsAndEnv(t *testing.T) {
 	}
 	sc := cfg.Game.Scoring
 	if sc.Formula != "legacy" || sc.WeightAD != 0.7 || sc.WeightKoth != 0.3 || sc.AttackerBonus != 0 ||
-		sc.FreeDeploys != 3 || sc.NTeams != 0 || sc.MassFaultTeams != 3 || cfg.Game.InternalToken != "" {
+		sc.NTeams != 0 || sc.MassFaultTeams != 3 || cfg.Game.InternalToken != "" {
 		t.Fatalf("mirror defaults = %+v token=%q", sc, cfg.Game.InternalToken)
 	}
 
@@ -237,7 +237,6 @@ func TestLoadGameMirrorScoringDefaultsAndEnv(t *testing.T) {
 	t.Setenv("ANVIL_GAME_SCORING_WEIGHT_AD", "0.65")
 	t.Setenv("ANVIL_GAME_SCORING_WEIGHT_KOTH", "0.35")
 	t.Setenv("ANVIL_GAME_SCORING_ATTACKER_BONUS", "1.5")
-	t.Setenv("ANVIL_GAME_SCORING_FREE_DEPLOYS", "5")
 	t.Setenv("ANVIL_GAME_SCORING_N_TEAMS", "15")
 	t.Setenv("ANVIL_GAME_SCORING_MASS_FAULT_TEAMS", "4")
 	t.Setenv("ANVIL_GAME_INTERNAL_TOKEN", "s3cret")
@@ -247,7 +246,7 @@ func TestLoadGameMirrorScoringDefaultsAndEnv(t *testing.T) {
 	}
 	sc = cfg.Game.Scoring
 	if sc.Formula != "mirror" || sc.WeightAD != 0.65 || sc.WeightKoth != 0.35 || sc.AttackerBonus != 1.5 ||
-		sc.FreeDeploys != 5 || sc.NTeams != 15 || sc.MassFaultTeams != 4 || cfg.Game.InternalToken != "s3cret" {
+		sc.NTeams != 15 || sc.MassFaultTeams != 4 || cfg.Game.InternalToken != "s3cret" {
 		t.Fatalf("mirror env overrides not applied: %+v token=%q", sc, cfg.Game.InternalToken)
 	}
 }
@@ -260,7 +259,7 @@ func TestLoadGameKothFinalsDefaultsAndEnv(t *testing.T) {
 		t.Fatalf("Load() returned an error: %v", err)
 	}
 	k := cfg.Game.Koth
-	if k.NightRoundInterval != 0 || k.NightStart != "00:00" || k.NightEnd != "07:00" || k.Timezone != "Asia/Kolkata" ||
+	if k.NightRoundInterval != 0 || k.NightStart != "00:00" || k.NightEnd != "06:00" || k.Timezone != "Asia/Kolkata" ||
 		k.BountyPerRound != 0 || k.BountyMinStreak != 3 || k.BountyCap != 0 {
 		t.Fatalf("koth finals defaults = %+v", k)
 	}
@@ -335,7 +334,9 @@ func TestFinalsOverlayLoads(t *testing.T) {
 	}
 	g := cfg.Game
 	if g.Scoring.Formula != "mirror" || g.FlagValidTicks != 4 || g.Scoring.KothHold != 0 ||
-		len(g.Scoring.KothRank) != 5 || g.Koth.NightRoundInterval != 30*time.Minute || g.Koth.BountyCap != 12 ||
+		g.Scoring.NTeams != 15 || len(g.Scoring.KothRank) != 5 || g.Koth.RoundInterval != 15*time.Minute ||
+		g.Koth.NightRoundInterval != 30*time.Minute || g.Koth.NightStart != "00:00" || g.Koth.NightEnd != "06:00" ||
+		g.Koth.Timezone != "Asia/Kolkata" || g.Koth.BountyCap != 12 ||
 		g.Checker.TaskTimeout > g.TickInterval/4 || g.FlagPrefix != "H7CTF" {
 		t.Fatalf("finals overlay values = %+v", g)
 	}

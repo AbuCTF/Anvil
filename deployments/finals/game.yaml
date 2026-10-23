@@ -33,7 +33,6 @@ game:
     weight_ad: 0.7
     weight_koth: 0.3
     attacker_bonus: 0 # the pre-freeze dial; 1.5 if abu turns it
-    free_deploys: 3
     n_teams: 15
     mass_fault_teams: 3
     koth_hold: 0 # finals score koth by round rank, not held ticks
@@ -43,7 +42,7 @@ game:
     round_interval: 15m
     night_round_interval: 30m
     night_start: "00:00"
-    night_end: "07:00"
+    night_end: "06:00"
     timezone: Asia/Kolkata
     reset_enabled: true
     bounty_per_round: 2

@@ -88,9 +88,15 @@ private_key=$(openssl pkey -in "$ANVIL_TLS_KEY_PATH" -pubout 2>/dev/null | opens
     fail "TLS private key is invalid or encrypted"
 [[ $cert_key == "$private_key" ]] || fail "TLS certificate and private key do not match"
 
-for path in "$ANVIL_DATABASE_HOST_PATH" "$ANVIL_STORAGE_HOST_PATH" "$ANVIL_BACKUP_DIR"; do
-    [[ -d $path && -w $path ]] || fail "durable path is missing or not writable: $path"
-done
+assert_durable_layout() {
+    local label=$1 path=$2 expected=$3 actual
+    [[ -d $path && ! -L $path && -w $path ]] || fail "$label path is missing, linked or not writable: $path"
+    actual=$(stat -Lc '%u:%g:%a' "$path") || fail "$label path metadata is unavailable: $path"
+    [[ $actual == "$expected" ]] || fail "$label path must be $expected, got $actual: $path"
+}
+assert_durable_layout database "$ANVIL_DATABASE_HOST_PATH" 70:70:700
+assert_durable_layout storage "$ANVIL_STORAGE_HOST_PATH" 0:0:700
+assert_durable_layout backups "$ANVIL_BACKUP_DIR" 0:0:700
 if (( EUID == 0 )); then
     root_source=$(findmnt --noheadings --output SOURCE --target /)
     data_source=$(findmnt --noheadings --output SOURCE --target "$ANVIL_DATABASE_HOST_PATH")

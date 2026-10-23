@@ -46,13 +46,37 @@ func TestMeStatusServiceJSONContract(t *testing.T) {
 		PointsThisHour:  mePointsHour{Steal: 1, Hold: 2, Up: 3},
 		ActiveAttackers: 1,
 		LastDeployment:  &meDeployment{Kind: "deploy", Tick: new(7), DeployedAt: deployedAt},
-		FreeDeploysLeft: 2,
+		DeploymentHistory: []meDeploymentEvent{{
+			State: "gating", Message: "Running Deployment Gate.", RecordedAt: deployedAt,
+		}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"service_id":"service-id","slug":"service","name":"Service","port":9001,"stores":[{"store_index":0,"store_name":"flag 1","steal":1,"hold":2,"up":3,"ticks":[{"tick":4,"status":"OK","flag_fate":"held"}]}],"points_this_hour":{"steal":1,"hold":2,"up":3},"active_attackers":1,"last_deployment":{"kind":"deploy","org_initiated":false,"tick":7,"deployed_at":"2026-10-24T13:45:00Z"},"free_deploys_left":2}`
+	want := `{"service_id":"service-id","slug":"service","name":"Service","port":9001,"stores":[{"store_index":0,"store_name":"flag 1","steal":1,"hold":2,"up":3,"ticks":[{"tick":4,"status":"OK","flag_fate":"held"}]}],"points_this_hour":{"steal":1,"hold":2,"up":3},"active_attackers":1,"last_deployment":{"kind":"deploy","org_initiated":false,"tick":7,"deployed_at":"2026-10-24T13:45:00Z"},"deployment_history":[{"state":"gating","message":"Running Deployment Gate.","recorded_at":"2026-10-24T13:45:00Z"}]}`
 	if string(got) != want {
 		t.Fatalf("me status JSON = %s", got)
+	}
+}
+
+func TestDeploymentEventMessagesAreAllowListed(t *testing.T) {
+	tests := map[string]string{
+		"queued":               "Change queued.",
+		"waiting_quiet_window": "Gate passed; waiting for a safe promotion window.",
+		"promoted":             "Deployment promoted and under health observation.",
+		"failed/gate":          "Deployment Gate rejected the candidate.",
+		"failed/operator":      "Deployment paused for organizer recovery.",
+	}
+	for input, want := range tests {
+		state, reason := input, ""
+		if input == "failed/gate" {
+			state, reason = "failed", "gate"
+		}
+		if input == "failed/operator" {
+			state, reason = "failed", "operator"
+		}
+		if got := deploymentEventMessage(state, reason); got != want {
+			t.Errorf("deploymentEventMessage(%q, %q) = %q, want %q", state, reason, got, want)
+		}
 	}
 }

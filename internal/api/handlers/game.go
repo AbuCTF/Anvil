@@ -128,6 +128,8 @@ type submitFlagRequest struct {
 	Flag string `json:"flag" binding:"required"`
 }
 
+const maximumArenaFlagLength = 128
+
 func (h *GameHandler) SubmitFlag(c *gin.Context) {
 	if !h.config.Game.Enabled {
 		c.JSON(http.StatusNotFound, gin.H{"error": "game not active"})
@@ -140,9 +142,14 @@ func (h *GameHandler) SubmitFlag(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<10)
 	var req submitFlagRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "flag required"})
+		return
+	}
+	if len(req.Flag) > maximumArenaFlagLength {
+		c.JSON(http.StatusBadRequest, gin.H{"status": "rejected", "message": "invalid flag"})
 		return
 	}
 

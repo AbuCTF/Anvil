@@ -42,6 +42,25 @@ type deployReq struct {
 	DiffBytes    *int       `json:"diff_bytes"`
 }
 
+type deploymentEventReq struct {
+	TeamID         string `json:"team_id" binding:"required"`
+	Service        string `json:"service" binding:"required"`
+	SourceSequence int64  `json:"source_sequence" binding:"required"`
+	State          string `json:"state" binding:"required"`
+	ReasonCode     string `json:"reason_code"`
+}
+
+var deploymentStates = map[string]bool{
+	"queued": true, "building": true, "gating": true,
+	"waiting_quiet_window": true, "promoted": true,
+	"rolled_back": true, "failed": true,
+}
+
+var deploymentFailureCodes = map[string]bool{
+	"policy": true, "build": true, "gate": true, "promotion": true,
+	"health": true, "rollback": true, "operator": true, "unknown": true,
+}
+
 type desiredVPNPeer struct {
 	PeerID     uuid.UUID `json:"peer_id"`
 	TeamID     uuid.UUID `json:"team_id"`
@@ -135,7 +154,7 @@ func (h *GameInternalHandler) serviceID(c *gin.Context, slug string) (uuid.UUID,
 	return id, true
 }
 
-// Deploy records a pipeline event. Deploy pricing and digest stamping read it.
+// Deploy records a completed live change for checker digest stamping.
 func (h *GameInternalHandler) Deploy(c *gin.Context) {
 	var req deployReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -177,14 +196,70 @@ func (h *GameInternalHandler) Deploy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "could not record deploy (unknown team?)"})
 		return
 	}
-	var used int
-	if err := h.db.Pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM game_deploys
-		 WHERE team_id = $1 AND service_id = $2 AND kind = 'deploy' AND NOT org_initiated`,
-		team, service).Scan(&used); err != nil {
-		h.logger.Error("internal: count deploys", zap.Error(err))
+	c.JSON(http.StatusCreated, gin.H{"id": id})
+}
+
+// DeploymentEvent records one normalized, redacted controller lifecycle event.
+// The source sequence makes reconciliation retries idempotent without exposing
+// controller logs, commits, image digests or runner output to players.
+func (h *GameInternalHandler) DeploymentEvent(c *gin.Context) {
+	var req deploymentEventReq
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 4<<10)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "team_id, service, source_sequence and state required"})
+		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"id": id, "free_left": max(0, h.config.Game.Scoring.FreeDeploys-used)})
+	team, err := uuid.Parse(req.TeamID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "team_id must be a uuid"})
+		return
+	}
+	req.Service = strings.TrimSpace(req.Service)
+	req.State = strings.TrimSpace(req.State)
+	req.ReasonCode = strings.TrimSpace(req.ReasonCode)
+	if req.SourceSequence < 1 || !deploymentStates[req.State] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid deployment event"})
+		return
+	}
+	if (req.State == "failed") != deploymentFailureCodes[req.ReasonCode] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "failed events require an approved reason_code; other states must omit it"})
+		return
+	}
+	service, ok := h.serviceID(c, req.Service)
+	if !ok {
+		return
+	}
+
+	var id int64
+	var inserted bool
+	err = h.db.Pool.QueryRow(c.Request.Context(), `
+		WITH inserted AS (
+			INSERT INTO game_deployment_events
+				(team_id, service_id, source_sequence, state, reason_code)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''))
+			ON CONFLICT (team_id, source_sequence) DO NOTHING
+			RETURNING id
+		)
+		SELECT id, TRUE FROM inserted
+		UNION ALL
+		SELECT id, FALSE FROM game_deployment_events
+		WHERE team_id = $1 AND service_id = $2 AND source_sequence = $3
+		  AND state = $4 AND reason_code IS NOT DISTINCT FROM NULLIF($5, '')
+		LIMIT 1`, team, service, req.SourceSequence, req.State, req.ReasonCode).Scan(&id, &inserted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusConflict, gin.H{"error": "source_sequence was already used for another deployment event"})
+		return
+	}
+	if err != nil {
+		h.logger.Error("internal: record deployment event", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "could not record deployment event (unknown team?)"})
+		return
+	}
+	status := http.StatusOK
+	if inserted {
+		status = http.StatusCreated
+	}
+	c.JSON(status, gin.H{"id": id})
 }
 
 // SLA returns a team's effective per-tick verdicts for one service, for auto-revert.

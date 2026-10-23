@@ -10,16 +10,16 @@ import (
 
 func TestRoundLengthDayAndNight(t *testing.T) {
 	k := config.KothConfig{RoundInterval: 15 * time.Minute, NightRoundInterval: 30 * time.Minute,
-		NightStart: "00:00", NightEnd: "07:00", Timezone: "Asia/Kolkata"}
+		NightStart: "00:00", NightEnd: "06:00", Timezone: "Asia/Kolkata"}
 	ist, _ := time.LoadLocation("Asia/Kolkata")
 	for _, tt := range []struct {
 		at   time.Time
 		want time.Duration
 	}{
-		{time.Date(2026, 10, 24, 23, 59, 0, 0, ist), 15 * time.Minute},
+		{time.Date(2026, 10, 24, 23, 59, 0, 0, ist), time.Minute},
 		{time.Date(2026, 10, 25, 0, 0, 0, 0, ist), 30 * time.Minute},
-		{time.Date(2026, 10, 25, 6, 59, 0, 0, ist), 30 * time.Minute},
-		{time.Date(2026, 10, 25, 7, 0, 0, 0, ist), 15 * time.Minute},
+		{time.Date(2026, 10, 25, 5, 59, 0, 0, ist), time.Minute},
+		{time.Date(2026, 10, 25, 6, 0, 0, 0, ist), 15 * time.Minute},
 		{time.Date(2026, 10, 24, 19, 0, 0, 0, time.UTC), 30 * time.Minute}, // 00:30 IST
 	} {
 		if got := roundLength(k, tt.at); got != tt.want {

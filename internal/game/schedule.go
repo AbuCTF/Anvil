@@ -15,14 +15,16 @@ import (
 // window is enabled exactly while one of its windows covers now; each flip is a
 // public event for the war room.
 func (c *Controller) applyHillWindows(ctx context.Context, tick int, now time.Time) error {
+	nightStart, _, night := nightBounds(c.cfg.Koth, now)
 	rows, err := c.db.Pool.Query(ctx,
 		`UPDATE game_koth_hills h SET enabled = w.open
 		 FROM (
-		   SELECT hill_id, bool_or(opens_at <= $1 AND $1 < closes_at) AS open
+		   SELECT hill_id, bool_or(opens_at <= $1 AND $1 < closes_at
+		     AND (NOT $2 OR opens_at < $3)) AS open
 		   FROM game_koth_windows GROUP BY hill_id
 		 ) w
 		 WHERE h.id = w.hill_id AND h.enabled IS DISTINCT FROM w.open
-		 RETURNING h.id, w.open`, now)
+		 RETURNING h.id, w.open`, now, night, nightStart)
 	if err != nil {
 		return fmt.Errorf("apply hill windows: %w", err)
 	}

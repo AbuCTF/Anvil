@@ -76,6 +76,24 @@ systemd-analyze verify \
 ! grep -Eq '^Exec(Start|Reload)=.* --build([[:space:]]|$)' "$script_dir/anvil-finals.service"
 
 mkdir -p "$test_dir/database" "$test_dir/storage" "$test_dir/backups" "$test_dir/tls"
+chmod 700 "$test_dir/database" "$test_dir/storage" "$test_dir/backups"
+export FINALS_TEST_DATABASE_PATH="$test_dir/database"
+export FINALS_TEST_STORAGE_PATH="$test_dir/storage"
+export FINALS_TEST_BACKUP_PATH="$test_dir/backups"
+cat >"$test_bin_dir/stat" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${1:-} == -Lc && ${2:-} == %u:%g:%a ]]; then
+    mode=$(/usr/bin/stat -Lc %a "$3")
+    case "$3" in
+        "$FINALS_TEST_DATABASE_PATH") printf '70:70:%s\n' "$mode"; exit 0 ;;
+        "$FINALS_TEST_STORAGE_PATH"|"$FINALS_TEST_BACKUP_PATH") printf '0:0:%s\n' "$mode"; exit 0 ;;
+    esac
+fi
+exec /usr/bin/stat "$@"
+EOF
+chmod 755 "$test_bin_dir/stat"
+export PATH="$test_bin_dir:$PATH"
 openssl req -x509 -newkey rsa:2048 -nodes -days 8 \
     -keyout "$test_dir/tls/privkey.pem" \
     -out "$test_dir/tls/fullchain.pem" \
@@ -125,6 +143,24 @@ expect_preflight_failure() {
         exit 1
     fi
 }
+
+wrong_storage_mode_env="$test_dir/wrong-storage-mode.env"
+cp "$env_file" "$wrong_storage_mode_env"
+chmod 750 "$test_dir/storage"
+expect_preflight_failure "$wrong_storage_mode_env" "group-accessible durable storage"
+chmod 700 "$test_dir/storage"
+
+bad_storage="$test_dir/bad-storage-owner"
+mkdir -m 700 "$bad_storage"
+bad_storage_owner_env="$test_dir/bad-storage-owner.env"
+sed "s|^ANVIL_STORAGE_HOST_PATH=.*|ANVIL_STORAGE_HOST_PATH=$bad_storage|" "$env_file" >"$bad_storage_owner_env"
+expect_preflight_failure "$bad_storage_owner_env" "durable storage with the wrong numeric owner"
+
+linked_storage="$test_dir/linked-storage"
+ln -s "$test_dir/storage" "$linked_storage"
+linked_storage_env="$test_dir/linked-storage.env"
+sed "s|^ANVIL_STORAGE_HOST_PATH=.*|ANVIL_STORAGE_HOST_PATH=$linked_storage|" "$env_file" >"$linked_storage_env"
+expect_preflight_failure "$linked_storage_env" "a linked durable path"
 
 missing_revision_env="$test_dir/missing-revision.env"
 grep -v '^ANVIL_IMAGE_REVISION=' "$env_file" >"$missing_revision_env"
