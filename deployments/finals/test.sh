@@ -28,6 +28,9 @@ scoreboard="$repo_root/web/src/routes/scoreboard/+page.svelte"
 grep -Fq 'let finalsRows: FinalsRow[] = [];' "$scoreboard"
 grep -Fq 'Finals standings are temporarily unavailable.' "$scoreboard"
 
+layout="$repo_root/web/src/routes/+layout.svelte"
+grep -Fq "p.startsWith('/team') && p !== '/team/finals' && !\$platformInfo.teams_mode" "$layout"
+
 for dockerfile in \
     "$repo_root/deployments/docker/Dockerfile.api" \
     "$repo_root/deployments/docker/Dockerfile.web"; do
