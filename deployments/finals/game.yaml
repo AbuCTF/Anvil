@@ -33,7 +33,7 @@ game:
     weight_ad: 0.7
     weight_koth: 0.3
     attacker_bonus: 0 # the pre-freeze dial; 1.5 if abu turns it
-    n_teams: 15
+    n_teams: 15 # 16 if a 16th team plays; every team-number bound follows this
     mass_fault_teams: 3
     koth_hold: 0 # finals score koth by round rank, not held ticks
     koth_rank: [12, 7, 4, 2, 1]

@@ -420,6 +420,18 @@ type ScoringConfig struct {
 	MassFaultTeams int     `mapstructure:"mass_fault_teams"` // teams failing with the nop canary => ORG_FAULT
 }
 
+// legacyMaxTeamNumber is the bound from before the roster size was configurable.
+const legacyMaxTeamNumber = 15
+
+// MaxTeamNumber is the highest participant team number the finals network carries:
+// n_teams when set, else the original 15. 10.80.T.x caps it below 255.
+func (s ScoringConfig) MaxTeamNumber() int {
+	if s.NTeams > 0 && s.NTeams < 255 {
+		return s.NTeams
+	}
+	return legacyMaxTeamNumber
+}
+
 type WebhookConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	URL     string `mapstructure:"url"`

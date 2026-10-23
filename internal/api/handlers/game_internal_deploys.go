@@ -105,7 +105,7 @@ func (h *GameInternalHandler) VPNPeers(c *gin.Context) {
 			return
 		}
 		parsed, parseErr := netip.ParseAddr(address)
-		if teamID == nil || teamNumber == nil || *teamNumber < 1 || *teamNumber > 15 ||
+		if teamID == nil || teamNumber == nil || *teamNumber < 1 || *teamNumber > h.config.Game.Scoring.MaxTeamNumber() ||
 			parseErr != nil || !parsed.Is4() || peer.PublicKey == "" {
 			h.logger.Error("internal: invalid desired VPN peer", zap.String("peer_id", peer.PeerID.String()))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid desired peer inventory"})

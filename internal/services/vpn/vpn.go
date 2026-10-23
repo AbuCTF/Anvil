@@ -202,8 +202,8 @@ func (s *Service) ReleaseIP(ip string) {
 	}
 }
 
-func (s *Service) AllocateTeamIP(ctx context.Context, tx pgx.Tx, teamNumber int) (string, error) {
-	if teamNumber < 1 || teamNumber > 15 {
+func (s *Service) AllocateTeamIP(ctx context.Context, tx pgx.Tx, teamNumber, maxTeamNumber int) (string, error) {
+	if teamNumber < 1 || teamNumber > maxTeamNumber || teamNumber > 254 {
 		return "", ErrInvalidTeamNumber
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, teamPoolAdvisoryLock, teamNumber); err != nil {

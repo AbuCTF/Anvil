@@ -82,7 +82,7 @@ func (h *VPNHandler) teamForVPN(ctx context.Context, uid uuid.UUID) (vpnTeam, er
 	).Scan(&number); err != nil {
 		return vpnTeam{}, err
 	}
-	if number == nil || *number < 1 || *number > 15 {
+	if number == nil || *number < 1 || *number > h.config.Game.Scoring.MaxTeamNumber() {
 		return vpnTeam{}, vpn.ErrInvalidTeamNumber
 	}
 	return vpnTeam{ID: teamID, Number: *number}, nil
@@ -300,7 +300,7 @@ func (h *VPNHandler) GenerateConfig(c *gin.Context) {
 	var ipAddress string
 	releaseIPAddress := false
 	if h.usesExternalPeerControl() {
-		ipAddress, err = h.vpnSvc.AllocateTeamIP(c.Request.Context(), tx, team.Number)
+		ipAddress, err = h.vpnSvc.AllocateTeamIP(c.Request.Context(), tx, team.Number, h.config.Game.Scoring.MaxTeamNumber())
 	} else {
 		ipAddress, err = h.vpnSvc.AllocateIP()
 		releaseIPAddress = err == nil
@@ -516,7 +516,7 @@ func (h *VPNHandler) RegenerateConfig(c *gin.Context) {
 	var ipAddress string
 	newIPAddressAllocated := false
 	if h.usesExternalPeerControl() {
-		ipAddress, err = h.vpnSvc.AllocateTeamIP(c.Request.Context(), tx, team.Number)
+		ipAddress, err = h.vpnSvc.AllocateTeamIP(c.Request.Context(), tx, team.Number, h.config.Game.Scoring.MaxTeamNumber())
 	} else {
 		ipAddress, err = h.vpnSvc.AllocateIP()
 		newIPAddressAllocated = err == nil

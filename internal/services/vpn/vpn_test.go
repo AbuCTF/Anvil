@@ -9,9 +9,9 @@ import (
 
 func TestAllocateTeamIPRejectsInvalidTeamNumber(t *testing.T) {
 	service := &Service{}
-	for _, number := range []int{0, 16} {
-		if _, err := service.AllocateTeamIP(context.Background(), nil, number); !errors.Is(err, ErrInvalidTeamNumber) {
-			t.Fatalf("AllocateTeamIP(%d) error = %v, want ErrInvalidTeamNumber", number, err)
+	for _, tc := range []struct{ number, max int }{{0, 15}, {16, 15}, {17, 16}, {255, 255}} {
+		if _, err := service.AllocateTeamIP(context.Background(), nil, tc.number, tc.max); !errors.Is(err, ErrInvalidTeamNumber) {
+			t.Fatalf("AllocateTeamIP(%d, max %d) error = %v, want ErrInvalidTeamNumber", tc.number, tc.max, err)
 		}
 	}
 }

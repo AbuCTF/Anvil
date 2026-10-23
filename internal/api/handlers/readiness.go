@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -211,9 +212,10 @@ func (h *ReadinessHandler) buildReport(ctx context.Context) (readinessReport, er
 			FROM game_teams`, h.config.Game.Scoring.NTeams).Scan(&teams, &numberedTeams, &nopTeams); err != nil {
 			return report, err
 		}
-		rosterReady := h.config.Game.Scoring.NTeams == 15 && teams == 15 && numberedTeams == teams && nopTeams == 1
+		nTeams := h.config.Game.Scoring.NTeams
+		rosterReady := nTeams > 0 && teams == nTeams && numberedTeams == teams && nopTeams == 1
 		add("finals.roster", "Finals", "Attack-Defense roster", status(rosterReady, "blocker"),
-			ternary(rosterReady, "All participant teams and the NOP canary are attributed.", "Require 15 numbered participant teams with vulnbox addresses and one NOP canary."),
+			ternary(rosterReady, "All participant teams and the NOP canary are attributed.", fmt.Sprintf("Require %d numbered participant teams with vulnbox addresses and one NOP canary.", nTeams)),
 			gin.H{"participant_teams": teams, "attributed_teams": numberedTeams, "nop_teams": nopTeams})
 
 		var services, twoStoreServices, fixedPorts int

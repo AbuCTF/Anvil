@@ -334,7 +334,7 @@ func TestFinalsOverlayLoads(t *testing.T) {
 	}
 	g := cfg.Game
 	if g.Scoring.Formula != "mirror" || g.FlagValidTicks != 4 || g.Scoring.KothHold != 0 ||
-		g.Scoring.NTeams != 15 || len(g.Scoring.KothRank) != 5 || g.Koth.RoundInterval != 15*time.Minute ||
+		g.Scoring.NTeams != 15 || g.Scoring.MaxTeamNumber() != 15 || len(g.Scoring.KothRank) != 5 || g.Koth.RoundInterval != 15*time.Minute ||
 		g.Koth.NightRoundInterval != 30*time.Minute || g.Koth.NightStart != "00:00" || g.Koth.NightEnd != "06:00" ||
 		g.Koth.Timezone != "Asia/Kolkata" || g.Koth.BountyCap != 12 ||
 		g.Checker.TaskTimeout > g.TickInterval/4 || g.FlagPrefix != "H7CTF" {
@@ -497,5 +497,13 @@ func TestLoadGameControllerAndOutbreakDefaults(t *testing.T) {
 	}
 	if !cfg.Game.Outbreak.Enabled {
 		t.Error("ANVIL_GAME_OUTBREAK_ENABLED=true was not applied")
+	}
+}
+
+func TestScoringMaxTeamNumber(t *testing.T) {
+	for _, tc := range []struct{ n, want int }{{0, 15}, {15, 15}, {16, 16}, {-1, 15}, {255, 15}} {
+		if got := (ScoringConfig{NTeams: tc.n}).MaxTeamNumber(); got != tc.want {
+			t.Fatalf("MaxTeamNumber(n_teams=%d) = %d, want %d", tc.n, got, tc.want)
+		}
 	}
 }
