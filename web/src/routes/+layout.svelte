@@ -55,7 +55,7 @@
 			(p.startsWith('/arena/reveal') && !isAdmin) ||
 			(p.startsWith('/arena') && !$platformInfo.arena_enabled && !isAdmin) ||
 			(p.startsWith('/pulse') && (!$platformInfo.economy_enabled || !$platformInfo.market_pulse_enabled)) ||
-			(p.startsWith('/team') && !$platformInfo.teams_mode) ||
+			(p.startsWith('/team') && p !== '/team/finals' && !$platformInfo.teams_mode) ||
 			(p.startsWith('/vpn') && !$platformInfo.vpn_enabled) ||
 			(p.startsWith('/scoreboard') && $platformInfo.scoreboard_enabled === false);
 		if (blocked) goto('/challenges');
