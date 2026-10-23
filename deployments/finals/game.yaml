@@ -11,6 +11,16 @@ server:
   trusted_proxies:
     - 172.31.26.10/32
 
+# per-ip limits would be shared here: every public client reaches anvil through
+# the gateway's masquerade and every vpn client through its team's snat identity,
+# so one busy minute at check-in would lock out everybody. keep them as a ceiling.
+rate_limit:
+  requests_per_minute: 20000
+  burst_size: 2000
+  login:
+    requests: 600
+    window: 15m
+
 vpn:
   allowed_ips: "10.60.0.0/15"
   peer_control: external

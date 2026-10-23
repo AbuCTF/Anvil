@@ -337,7 +337,8 @@ func TestFinalsOverlayLoads(t *testing.T) {
 		g.Scoring.NTeams != 15 || g.Scoring.MaxTeamNumber() != 15 || len(g.Scoring.KothRank) != 5 || g.Koth.RoundInterval != 15*time.Minute ||
 		g.Koth.NightRoundInterval != 30*time.Minute || g.Koth.NightStart != "00:00" || g.Koth.NightEnd != "06:00" ||
 		g.Koth.Timezone != "Asia/Kolkata" || g.Koth.BountyCap != 12 ||
-		g.Checker.TaskTimeout > g.TickInterval/4 || g.FlagPrefix != "H7CTF" {
+		g.Checker.TaskTimeout > g.TickInterval/4 || g.FlagPrefix != "H7CTF" ||
+		cfg.RateLimit.RequestsPerMinute < 10000 || cfg.RateLimit.Login.Requests < 500 {
 		t.Fatalf("finals overlay values = %+v", g)
 	}
 }
