@@ -86,44 +86,6 @@
     score: number;
   }
 
-  // mock finals data (replaced by real API in M2)
-  const MOCK_FINALS_ROWS: FinalsRow[] = (() => {
-    const teams = [
-      'ByteBrigade','CipherPunk','RedSignal','NullRoute','PacketStorm',
-      'SegFault','DeepProbe','VoidMatrix','IronSocket','GhostBit',
-      'LoopBreak','NetMancer','HexWarden','BinVector','DarkShell'
-    ];
-    const svcs = [
-      {slug:'harbor-id',name:'Harbor ID'},
-      {slug:'tidepay',name:'TidePay'},
-      {slug:'bollard',name:'Bollard'},
-      {slug:'berth-board',name:'Berth Board'},
-      {slug:'dockyard',name:'Dockyard'},
-      {slug:'tariff-studio',name:'Tariff Studio'},
-    ];
-    return teams.map((name, i) => {
-      const services = svcs.map((s, j) => ({
-        slug: s.slug, name: s.name,
-        steal: Math.max(0, Math.round((15 - i + j) * 3.2 * (1 - i * 0.04))),
-        hold: Math.round((180 - i * 11 + j * 4) * 0.9),
-        up: Math.round((6 - Math.min(5, i * 0.4 + j * 0.1)) * 3.87 * 4),
-      }));
-      const steal = services.reduce((s, r) => s + r.steal, 0);
-      const hold = services.reduce((s, r) => s + r.hold, 0);
-      const up = services.reduce((s, r) => s + r.up, 0);
-      const ad = steal + hold + up;
-      const koth = Math.round((15 - i) * 87.3 * 0.6);
-      const total = Math.round(1000 * (0.7 * (ad / (ad + 200)) + 0.3 * (koth / (koth + 200))));
-      return { rank: i + 1, team_id: `t${i+1}`, team_name: name, steal, hold, up, ad, koth, total, services };
-    }).sort((a, b) => b.total - a.total).map((r, i) => ({ ...r, rank: i + 1 }));
-  })();
-
-  const MOCK_KOTH: KothEntry[] = [
-    { hill_id: 'h1', hill: 'GridWatch II', team_id: 't1', team_name: 'ByteBrigade', held_ticks: 22, score: 847 },
-    { hill_id: 'h2', hill: 'Hostile Takeover II', team_id: 't2', team_name: 'CipherPunk', held_ticks: 17, score: 621 },
-    { hill_id: 'h3', hill: 'Harbor Master', team_id: null, team_name: null, held_ticks: 0, score: 0 },
-  ];
-
   // only the open tab polls; the api caches each page for 2-5s per pod
   const SCORE_POLL_MS = 15000;
   const MATRIX_POLL_MS = 20000;
@@ -141,11 +103,18 @@
   let boardTeams: boolean | null = null;
   let economy = false;
   let frozen = false;
-  let loaded: Record<View, boolean> = { standings: false, matrix: false, finals: false };
-  let finalsRows: FinalsRow[] = MOCK_FINALS_ROWS;
-  let finalsKoth: KothEntry[] = MOCK_KOTH;
+  let loaded: Record<View, boolean> = {
+    standings: false,
+    matrix: false,
+    finals: false,
+  };
+  let finalsRows: FinalsRow[] = [];
+  let finalsKoth: KothEntry[] = [];
   let finalsExpanded: string | null = null;
   let finalsDefense = false;
+  let finalsBusy = false;
+  let finalsError = 0;
+  let finalsStale = false;
   let loadError = 0; // http status of a failed first load (-1 = network)
   let boardStale = false;
   let historyStale = false;
@@ -157,8 +126,16 @@
   let historyTimer: ReturnType<typeof setTimeout>;
   let requestController: AbortController;
   let searchDebounce: ReturnType<typeof setTimeout>;
-  const lastETag: Record<View, string> = { standings: "", matrix: "", finals: "" };
-  const lastURL: Record<View, string> = { standings: "", matrix: "", finals: "" };
+  const lastETag: Record<View, string> = {
+    standings: "",
+    matrix: "",
+    finals: "",
+  };
+  const lastURL: Record<View, string> = {
+    standings: "",
+    matrix: "",
+    finals: "",
+  };
   let historyETag = "";
   let historyRaw: HistorySeries[] = [];
   let historyEnd: number | null = null;
@@ -191,6 +168,10 @@
   // loads the open tab; a newer request (tab, page, search or sort change) supersedes an older one
   async function loadBoard(force = false) {
     if (typeof document !== "undefined" && document.hidden) return;
+    if (view === "finals") {
+      await loadFinals();
+      return;
+    }
     if (boardBusy && !force) return;
     const seq = ++boardSeq;
     const which = view;
@@ -235,7 +216,9 @@
         entries = data.leaderboard ?? [];
         scoreMatching = matching;
         if (!boardTeams) {
-          const viewer = entries.find((entry) => entry.user_id === $auth.user?.id);
+          const viewer = entries.find(
+            (entry) => entry.user_id === $auth.user?.id,
+          );
           if (viewer) auth.updateRank(viewer.rank);
         }
       }
@@ -403,7 +386,8 @@
     if (!points.length) return [];
     const firstX = Math.min(...points.map((point) => point.x));
     const lastX = Math.max(...points.map((point) => point.x));
-    const origin = eventStart != null && eventStart < firstX ? eventStart : firstX;
+    const origin =
+      eventStart != null && eventStart < firstX ? eventStart : firstX;
     const now = Math.min(Date.now() / 1000, historyEnd ?? eventEnd ?? Infinity);
     const edge = Math.max(lastX, now);
     const used = new Set<string>();
@@ -439,32 +423,45 @@
   $: anyLoaded = loaded.standings || loaded.matrix;
   $: isFinalsMode = !!$platformInfo?.game_state;
 
-  async function loadFinals(force = false) {
+  async function loadFinals() {
     if (!isFinalsMode) return;
-    if (loaded.finals && !force) return;
+    if (finalsBusy) return;
+    finalsBusy = true;
     try {
       const [rowsRes, kothRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/arena/scoreboard`, { headers: authHeaders() }),
-        fetch(`${API_BASE}/api/v1/arena/koth/scores`, { headers: authHeaders() })
+        fetch(`${API_BASE}/api/v1/arena/scoreboard`, {
+          headers: authHeaders(),
+          signal: requestController?.signal,
+        }),
+        fetch(`${API_BASE}/api/v1/arena/koth/scores`, {
+          headers: authHeaders(),
+          signal: requestController?.signal,
+        }),
       ]);
-      if (rowsRes.ok) {
-        const d = await rowsRes.json();
-        // /arena/scoreboard: {frozen, rows:[{rank,team_id,team_name,steal,hold,up,ad,koth,total,services:[...]}]}
-        if (d.rows) finalsRows = d.rows;
-        frozen = !!d.frozen;
-      }
-      if (kothRes.ok) {
-        const d = await kothRes.json();
-        // /arena/koth/scores: {hills:[{hill_id,hill,team_id,team_name,held_ticks,score}]}
-        if (d.hills) finalsKoth = d.hills;
-      }
-    } catch { /* keep mock */ } finally {
+      if (!rowsRes.ok) throw rowsRes.status;
+      if (!kothRes.ok) throw kothRes.status;
+      const [scoreboard, koth] = await Promise.all([
+        rowsRes.json(),
+        kothRes.json(),
+      ]);
+      finalsRows = Array.isArray(scoreboard.rows) ? scoreboard.rows : [];
+      finalsKoth = Array.isArray(koth.hills) ? koth.hills : [];
+      frozen = !!scoreboard.frozen;
       loaded.finals = true;
+      finalsError = 0;
+      finalsStale = false;
+    } catch (caught) {
+      if (requestController?.signal.aborted) return;
+      if (loaded.finals) finalsStale = true;
+      else finalsError = typeof caught === "number" ? caught : -1;
+    } finally {
+      finalsBusy = false;
     }
   }
   // the api says whether rows are teams; /info covers the first paint
   $: teamsBoard =
-    boardTeams ?? !!($platformInfo?.teams_mode || $platformInfo?.economy_enabled);
+    boardTeams ??
+    !!($platformInfo?.teams_mode || $platformInfo?.economy_enabled);
   $: noun = teamsBoard ? "team" : "player";
   $: subtitle = !anyLoaded
     ? ""
@@ -511,7 +508,9 @@
 
 <div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
   {#if frozen}
-    <div class="mb-4 flex items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-sm text-amber-500">
+    <div
+      class="mb-4 flex items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-sm text-amber-500"
+    >
       <Icon icon="mdi:snowflake" class="h-4 w-4 shrink-0" />
       Scoreboard frozen - final standings are hidden until the results are published.
     </div>
@@ -521,21 +520,23 @@
       slot="actions"
       class="flex w-full max-w-full flex-wrap items-center justify-start gap-2 sm:w-auto sm:justify-end"
     >
-      <div class="relative w-full sm:w-auto">
-        <Icon
-          icon="mdi:magnify"
-          class="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-600"
-        />
-        <input
-          bind:value={search}
-          type="search"
-          placeholder={teamsBoard ? "Search teams" : "Search players"}
-          aria-label="Search scoreboard"
-          maxlength="50"
-          on:input={scheduleSearch}
-          class="w-full rounded-md border border-stone-800 bg-stone-900/60 py-1.5 pl-8 pr-3 text-sm text-stone-200 placeholder-stone-600 focus:border-stone-700 focus:outline-none sm:w-52"
-        />
-      </div>
+      {#if view !== "finals"}
+        <div class="relative w-full sm:w-auto">
+          <Icon
+            icon="mdi:magnify"
+            class="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-600"
+          />
+          <input
+            bind:value={search}
+            type="search"
+            placeholder={teamsBoard ? "Search teams" : "Search players"}
+            aria-label="Search scoreboard"
+            maxlength="50"
+            on:input={scheduleSearch}
+            class="w-full rounded-md border border-stone-800 bg-stone-900/60 py-1.5 pl-8 pr-3 text-sm text-stone-200 placeholder-stone-600 focus:border-stone-700 focus:outline-none sm:w-52"
+          />
+        </div>
+      {/if}
 
       <div
         class="flex overflow-hidden rounded-md border border-stone-800 text-xs"
@@ -564,8 +565,11 @@
         </button>
         {#if isFinalsMode}
           <button
-            class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view === 'finals' ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
-            on:click={() => { view = 'finals'; if (!loaded.finals) loadFinals(); }}
+            class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view ===
+            'finals'
+              ? 'bg-stone-800 text-stone-200'
+              : 'text-stone-500 hover:text-stone-300'}"
+            on:click={() => setView("finals")}
             aria-pressed={view === "finals"}
           >
             <OpticalIcon icon="mdi:sword-cross" size={12} box={12} />
@@ -587,33 +591,35 @@
         </select>
       {/if}
 
-      <div
-        class="flex overflow-hidden rounded-md border border-stone-800 text-xs"
-      >
-        <button
-          class="px-2.5 py-1.5 transition-colors {sortKey === 'rank'
-            ? 'bg-stone-800 text-stone-200'
-            : 'text-stone-500 hover:text-stone-300'}"
-          on:click={() => setSort("rank")}
-          aria-pressed={sortKey === "rank"}
+      {#if view !== "finals"}
+        <div
+          class="flex overflow-hidden rounded-md border border-stone-800 text-xs"
         >
-          Rank
-        </button>
-        <button
-          class="border-l border-stone-800 px-2.5 py-1.5 transition-colors {sortKey ===
-          'name'
-            ? 'bg-stone-800 text-stone-200'
-            : 'text-stone-500 hover:text-stone-300'}"
-          on:click={() => setSort("name")}
-          aria-pressed={sortKey === "name"}
-        >
-          Name
-        </button>
-      </div>
+          <button
+            class="px-2.5 py-1.5 transition-colors {sortKey === 'rank'
+              ? 'bg-stone-800 text-stone-200'
+              : 'text-stone-500 hover:text-stone-300'}"
+            on:click={() => setSort("rank")}
+            aria-pressed={sortKey === "rank"}
+          >
+            Rank
+          </button>
+          <button
+            class="border-l border-stone-800 px-2.5 py-1.5 transition-colors {sortKey ===
+            'name'
+              ? 'bg-stone-800 text-stone-200'
+              : 'text-stone-500 hover:text-stone-300'}"
+            on:click={() => setSort("name")}
+            aria-pressed={sortKey === "name"}
+          >
+            Name
+          </button>
+        </div>
+      {/if}
     </div>
   </PageHeader>
 
-  {#if !anyLoaded && !loadError}
+  {#if view !== "finals" && !anyLoaded && !loadError}
     <div
       class="flex items-center justify-center py-16"
       role="status"
@@ -621,7 +627,7 @@
     >
       <Icon icon="mdi:loading" class="h-6 w-6 animate-spin text-stone-500" />
     </div>
-  {:else if !anyLoaded}
+  {:else if view !== "finals" && !anyLoaded}
     <Card hasHeader={false}>
       <EmptyState
         icon={loadError === 401
@@ -632,210 +638,369 @@
         text={errorText}
       >
         {#if loadError === 401}
-          <a href="/login" class="mt-3 text-xs text-amber-500 hover:text-amber-400"
-            >Sign in</a
+          <a
+            href="/login"
+            class="mt-3 text-xs text-amber-500 hover:text-amber-400">Sign in</a
           >
         {:else if loadError !== 404}
           <button
             on:click={() => loadBoard(true)}
-            class="mt-3 text-xs text-amber-500 hover:text-amber-400">Retry</button
+            class="mt-3 text-xs text-amber-500 hover:text-amber-400"
+            >Retry</button
           >
         {/if}
       </EmptyState>
     </Card>
-  {:else if total === 0}
+  {:else if view !== "finals" && total === 0}
     <Card title={view === "matrix" ? "Challenge matrix" : "Standings"}>
-      <EmptyState
-        icon="mdi:trophy-outline"
-        text="No solves yet."
-      />
+      <EmptyState icon="mdi:trophy-outline" text="No solves yet." />
     </Card>
   {:else}
-    {#if boardStale}
-      <div
-        role="status"
-        class="mb-4 rounded-md border border-warn/25 bg-warn/5 px-3 py-2 text-xs text-warn"
-      >
-        Live standings update delayed; showing the last successful result.
-      </div>
-    {/if}
-    {#if raceSeries.length}
-      <div class="mb-6">
-        <Card title="Score over time">
-          <span
-            slot="meta"
-            class="metadata-label {historyStale
-              ? 'text-warn'
-              : 'text-stone-500'}"
-          >
-            {historyStale ? "Update delayed" : `Top ${raceSeries.length}`}
-          </span>
-          <div class="mb-3 flex flex-wrap gap-x-4 gap-y-2">
-            {#each raceSeries as series}
-              <span
-                class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500"
-              >
-                <span
-                  class="h-2 w-2 shrink-0 rounded-full"
-                  style="background: {series.color};"
-                ></span>
-                <span class="optical-label max-w-44 truncate sm:max-w-60" title={series.label}
-                  >{series.label}</span
-                >
-              </span>
-            {/each}
-          </div>
-          <LineChart
-            series={raceSeries}
-            height={260}
-            curve="step"
-            emphasize={leaderIndex}
-            xFormat={raceTime}
-          />
-        </Card>
-      </div>
-    {:else if historyError}
-      <div
-        role="status"
-        class="mb-6 flex items-center justify-between gap-3 rounded-md border border-stone-800 bg-stone-900/20 px-3 py-2.5 text-xs text-stone-500"
-      >
-        <span>{historyError}</span>
-        <button
-          type="button"
-          on:click={loadHistory}
-          class="shrink-0 text-amber-500 transition-colors hover:text-amber-400"
-          >Retry</button
+    {#if view !== "finals"}
+      {#if boardStale}
+        <div
+          role="status"
+          class="mb-4 rounded-md border border-warn/25 bg-warn/5 px-3 py-2 text-xs text-warn"
         >
-      </div>
+          Live standings update delayed; showing the last successful result.
+        </div>
+      {/if}
+      {#if raceSeries.length}
+        <div class="mb-6">
+          <Card title="Score over time">
+            <span
+              slot="meta"
+              class="metadata-label {historyStale
+                ? 'text-warn'
+                : 'text-stone-500'}"
+            >
+              {historyStale ? "Update delayed" : `Top ${raceSeries.length}`}
+            </span>
+            <div class="mb-3 flex flex-wrap gap-x-4 gap-y-2">
+              {#each raceSeries as series}
+                <span
+                  class="inline-flex items-center gap-1.5 text-xs leading-none text-stone-500"
+                >
+                  <span
+                    class="h-2 w-2 shrink-0 rounded-full"
+                    style="background: {series.color};"
+                  ></span>
+                  <span
+                    class="optical-label max-w-44 truncate sm:max-w-60"
+                    title={series.label}>{series.label}</span
+                  >
+                </span>
+              {/each}
+            </div>
+            <LineChart
+              series={raceSeries}
+              height={260}
+              curve="step"
+              emphasize={leaderIndex}
+              xFormat={raceTime}
+            />
+          </Card>
+        </div>
+      {:else if historyError}
+        <div
+          role="status"
+          class="mb-6 flex items-center justify-between gap-3 rounded-md border border-stone-800 bg-stone-900/20 px-3 py-2.5 text-xs text-stone-500"
+        >
+          <span>{historyError}</span>
+          <button
+            type="button"
+            on:click={loadHistory}
+            class="shrink-0 text-amber-500 transition-colors hover:text-amber-400"
+            >Retry</button
+          >
+        </div>
+      {/if}
     {/if}
 
     {#if view === "finals" && isFinalsMode}
-      <!-- Finals Mirror scoreboard -->
-      <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
-        <span class="text-stone-500">AD 70% + KotH 30%, median-relative</span>
-        {#if frozen}
-          <span class="rounded bg-amber-500/10 px-2 py-0.5 text-amber-400 border border-amber-500/30">FROZEN</span>
-        {/if}
-        <div class="ml-auto flex overflow-hidden rounded-md border border-stone-800">
-          <button
-            class="px-2.5 py-1.5 transition-colors {!finalsDefense ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
-            on:click={() => finalsDefense = false}
-          >Mirror</button>
-          <button
-            class="border-l border-stone-800 px-2.5 py-1.5 transition-colors {finalsDefense ? 'bg-stone-800 text-stone-200' : 'text-stone-500 hover:text-stone-300'}"
-            on:click={() => finalsDefense = true}
-          >Defense</button>
-        </div>
-      </div>
-
-      <Card title="Finals standings" bodyClass="p-0">
-        <span slot="meta" class="metadata-label text-stone-500">{finalsRows.length} teams</span>
-        <div class="overflow-x-auto">
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="metadata-label border-b border-stone-800 text-stone-500 text-xs">
-                <th class="w-10 py-2.5 pl-3 pr-2 text-left">#</th>
-                <th class="px-3 py-2.5 text-left">Team</th>
-                {#if !finalsDefense}
-                  <th class="px-3 py-2.5 text-right text-[#e08a85]">STEAL</th>
-                  <th class="px-3 py-2.5 text-right text-[#9bcea8]">HOLD</th>
-                  <th class="px-3 py-2.5 text-right text-stone-400">UP</th>
-                  <th class="hidden px-3 py-2.5 text-right sm:table-cell">AD</th>
-                  <th class="hidden px-3 py-2.5 text-right text-amber-400 sm:table-cell">KotH</th>
-                {/if}
-                {#if finalsDefense}
-                  <th class="px-3 py-2.5 text-right text-[#9bcea8]">HOLD</th>
-                  <th class="px-3 py-2.5 text-right text-stone-400">UP</th>
-                  <th class="hidden px-3 py-2.5 text-right sm:table-cell">AD</th>
-                {/if}
-                <th class="px-3 py-2.5 text-right font-semibold text-stone-100">TOTAL</th>
-                <th class="w-8 py-2.5 pr-2"></th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-stone-800/50">
-              {#each finalsRows as row (row.team_id)}
-                <tr class="hover:bg-stone-800/30 transition-colors">
-                  <td class="py-2.5 pl-3 pr-2 tabular-nums text-stone-500 text-xs">{row.rank}</td>
-                  <td class="px-3 py-2.5 font-medium text-stone-200 truncate max-w-[8rem]">{row.team_name}</td>
-                  {#if !finalsDefense}
-                    <td class="px-3 py-2.5 text-right tabular-nums text-[#e08a85]">{row.steal.toLocaleString()}</td>
-                    <td class="px-3 py-2.5 text-right tabular-nums text-[#9bcea8]">{row.hold.toLocaleString()}</td>
-                    <td class="px-3 py-2.5 text-right tabular-nums text-stone-400">{row.up.toLocaleString()}</td>
-                    <td class="hidden px-3 py-2.5 text-right tabular-nums text-stone-300 sm:table-cell">{row.ad.toLocaleString()}</td>
-                    <td class="hidden px-3 py-2.5 text-right tabular-nums text-amber-400 sm:table-cell">{row.koth.toLocaleString()}</td>
-                  {/if}
-                  {#if finalsDefense}
-                    <td class="px-3 py-2.5 text-right tabular-nums text-[#9bcea8]">{row.hold.toLocaleString()}</td>
-                    <td class="px-3 py-2.5 text-right tabular-nums text-stone-400">{row.up.toLocaleString()}</td>
-                    <td class="hidden px-3 py-2.5 text-right tabular-nums text-stone-300 sm:table-cell">{row.ad.toLocaleString()}</td>
-                  {/if}
-                  <td class="px-3 py-2.5 text-right font-semibold tabular-nums text-amber-500">{row.total.toLocaleString()}</td>
-                  <td class="pr-2 py-2.5">
-                    <button
-                      class="text-stone-600 hover:text-stone-400 transition-colors"
-                      on:click={() => finalsExpanded = finalsExpanded === row.team_id ? null : row.team_id}
-                      aria-label="Expand service breakdown"
-                      aria-expanded={finalsExpanded === row.team_id}
-                    >
-                      <Icon icon={finalsExpanded === row.team_id ? 'mdi:chevron-up' : 'mdi:chevron-down'} class="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-                {#if finalsExpanded === row.team_id}
-                  <tr>
-                    <td colspan="9" class="bg-stone-900/60 px-4 py-2">
-                      <div class="overflow-x-auto">
-                        <table class="w-full text-xs">
-                          <thead>
-                            <tr class="text-stone-600">
-                              <th class="py-1 pr-3 text-left">Service</th>
-                              <th class="px-3 py-1 text-right text-[#e08a85]">STEAL</th>
-                              <th class="px-3 py-1 text-right text-[#9bcea8]">HOLD</th>
-                              <th class="px-3 py-1 text-right text-stone-500">UP</th>
-                            </tr>
-                          </thead>
-                          <tbody class="divide-y divide-stone-800/30">
-                            {#each row.services as svc}
-                              <tr>
-                                <td class="py-1 pr-3 text-stone-400">{svc.name}</td>
-                                <td class="px-3 py-1 text-right tabular-nums text-[#e08a85]">{svc.steal}</td>
-                                <td class="px-3 py-1 text-right tabular-nums text-[#9bcea8]">{svc.hold}</td>
-                                <td class="px-3 py-1 text-right tabular-nums text-stone-500">{svc.up}</td>
-                              </tr>
-                            {/each}
-                          </tbody>
-                        </table>
-                      </div>
-                    </td>
-                  </tr>
-                {/if}
-              {/each}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      <!-- KotH summary -->
-      <div class="mt-4">
-      <Card title="King of the Hill" bodyClass="p-0">
-        <div class="divide-y divide-stone-800/50">
-          {#each finalsKoth as h}
-            <div class="flex items-center gap-3 px-4 py-2.5 text-sm">
-              <Icon icon="mdi:crown" class="h-4 w-4 shrink-0 {h.team_name ? 'text-amber-400' : 'text-stone-700'}" />
-              <span class="text-stone-400 min-w-0 flex-1 truncate">{h.hill}</span>
-              {#if h.team_name}
-                <span class="font-medium text-stone-200">{h.team_name}</span>
-                <span class="tabular-nums text-stone-500 text-xs">{h.held_ticks} ticks</span>
-                <span class="tabular-nums text-amber-500 font-semibold">{h.score.toLocaleString()}</span>
-              {:else}
-                <span class="text-stone-600 italic text-xs">not released</span>
+      {#if !loaded.finals}
+        <Card hasHeader={false}>
+          {#if finalsError}
+            <EmptyState
+              icon="mdi:alert-circle-outline"
+              text={finalsError === 401
+                ? "Sign in to see the finals standings."
+                : finalsError === 404
+                  ? "Finals standings are not available yet."
+                  : "Finals standings are temporarily unavailable."}
+            >
+              {#if finalsError !== 404}
+                <button
+                  on:click={loadFinals}
+                  class="mt-3 text-xs text-amber-500 hover:text-amber-400"
+                  >Retry</button
+                >
               {/if}
+            </EmptyState>
+          {:else}
+            <div
+              class="flex items-center justify-center py-16"
+              role="status"
+              aria-label="Loading finals standings"
+            >
+              <Icon
+                icon="mdi:loading"
+                class="h-6 w-6 animate-spin text-stone-500"
+              />
             </div>
-          {/each}
+          {/if}
+        </Card>
+      {:else}
+        {#if finalsStale}
+          <div
+            role="status"
+            class="mb-4 rounded-md border border-warn/25 bg-warn/5 px-3 py-2 text-xs text-warn"
+          >
+            Finals update delayed; showing the last successful result.
+          </div>
+        {/if}
+        <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+          <span class="text-stone-500">AD 70% + KotH 30%, median-relative</span>
+          {#if frozen}
+            <span
+              class="rounded bg-amber-500/10 px-2 py-0.5 text-amber-400 border border-amber-500/30"
+              >FROZEN</span
+            >
+          {/if}
+          <div
+            class="ml-auto flex overflow-hidden rounded-md border border-stone-800"
+          >
+            <button
+              class="px-2.5 py-1.5 transition-colors {!finalsDefense
+                ? 'bg-stone-800 text-stone-200'
+                : 'text-stone-500 hover:text-stone-300'}"
+              on:click={() => (finalsDefense = false)}>Mirror</button
+            >
+            <button
+              class="border-l border-stone-800 px-2.5 py-1.5 transition-colors {finalsDefense
+                ? 'bg-stone-800 text-stone-200'
+                : 'text-stone-500 hover:text-stone-300'}"
+              on:click={() => (finalsDefense = true)}>Defense</button
+            >
+          </div>
         </div>
-      </Card>
-      </div>
 
+        <Card title="Finals standings" bodyClass="p-0">
+          <span slot="meta" class="metadata-label text-stone-500"
+            >{finalsRows.length} teams</span
+          >
+          {#if finalsRows.length === 0}
+            <EmptyState
+              icon="mdi:trophy-outline"
+              text="No finals standings yet."
+            />
+          {:else}
+            <div class="overflow-x-auto">
+              <table class="w-full text-sm">
+                <thead>
+                  <tr
+                    class="metadata-label border-b border-stone-800 text-stone-500 text-xs"
+                  >
+                    <th class="w-10 py-2.5 pl-3 pr-2 text-left">#</th>
+                    <th class="px-3 py-2.5 text-left">Team</th>
+                    {#if !finalsDefense}
+                      <th class="px-3 py-2.5 text-right text-[#e08a85]"
+                        >STEAL</th
+                      >
+                      <th class="px-3 py-2.5 text-right text-[#9bcea8]">HOLD</th
+                      >
+                      <th class="px-3 py-2.5 text-right text-stone-400">UP</th>
+                      <th class="hidden px-3 py-2.5 text-right sm:table-cell"
+                        >AD</th
+                      >
+                      <th
+                        class="hidden px-3 py-2.5 text-right text-amber-400 sm:table-cell"
+                        >KotH</th
+                      >
+                    {/if}
+                    {#if finalsDefense}
+                      <th class="px-3 py-2.5 text-right text-[#9bcea8]">HOLD</th
+                      >
+                      <th class="px-3 py-2.5 text-right text-stone-400">UP</th>
+                      <th class="hidden px-3 py-2.5 text-right sm:table-cell"
+                        >AD</th
+                      >
+                    {/if}
+                    <th
+                      class="px-3 py-2.5 text-right font-semibold text-stone-100"
+                      >TOTAL</th
+                    >
+                    <th class="w-8 py-2.5 pr-2"></th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-stone-800/50">
+                  {#each finalsRows as row (row.team_id)}
+                    <tr class="hover:bg-stone-800/30 transition-colors">
+                      <td
+                        class="py-2.5 pl-3 pr-2 tabular-nums text-stone-500 text-xs"
+                        >{row.rank}</td
+                      >
+                      <td
+                        class="px-3 py-2.5 font-medium text-stone-200 truncate max-w-[8rem]"
+                        >{row.team_name}</td
+                      >
+                      {#if !finalsDefense}
+                        <td
+                          class="px-3 py-2.5 text-right tabular-nums text-[#e08a85]"
+                          >{row.steal.toLocaleString()}</td
+                        >
+                        <td
+                          class="px-3 py-2.5 text-right tabular-nums text-[#9bcea8]"
+                          >{row.hold.toLocaleString()}</td
+                        >
+                        <td
+                          class="px-3 py-2.5 text-right tabular-nums text-stone-400"
+                          >{row.up.toLocaleString()}</td
+                        >
+                        <td
+                          class="hidden px-3 py-2.5 text-right tabular-nums text-stone-300 sm:table-cell"
+                          >{row.ad.toLocaleString()}</td
+                        >
+                        <td
+                          class="hidden px-3 py-2.5 text-right tabular-nums text-amber-400 sm:table-cell"
+                          >{row.koth.toLocaleString()}</td
+                        >
+                      {/if}
+                      {#if finalsDefense}
+                        <td
+                          class="px-3 py-2.5 text-right tabular-nums text-[#9bcea8]"
+                          >{row.hold.toLocaleString()}</td
+                        >
+                        <td
+                          class="px-3 py-2.5 text-right tabular-nums text-stone-400"
+                          >{row.up.toLocaleString()}</td
+                        >
+                        <td
+                          class="hidden px-3 py-2.5 text-right tabular-nums text-stone-300 sm:table-cell"
+                          >{row.ad.toLocaleString()}</td
+                        >
+                      {/if}
+                      <td
+                        class="px-3 py-2.5 text-right font-semibold tabular-nums text-amber-500"
+                        >{row.total.toLocaleString()}</td
+                      >
+                      <td class="pr-2 py-2.5">
+                        <button
+                          class="text-stone-600 hover:text-stone-400 transition-colors"
+                          on:click={() =>
+                            (finalsExpanded =
+                              finalsExpanded === row.team_id
+                                ? null
+                                : row.team_id)}
+                          aria-label="Expand service breakdown"
+                          aria-expanded={finalsExpanded === row.team_id}
+                        >
+                          <Icon
+                            icon={finalsExpanded === row.team_id
+                              ? "mdi:chevron-up"
+                              : "mdi:chevron-down"}
+                            class="h-4 w-4"
+                          />
+                        </button>
+                      </td>
+                    </tr>
+                    {#if finalsExpanded === row.team_id}
+                      <tr>
+                        <td colspan="9" class="bg-stone-900/60 px-4 py-2">
+                          <div class="overflow-x-auto">
+                            <table class="w-full text-xs">
+                              <thead>
+                                <tr class="text-stone-600">
+                                  <th class="py-1 pr-3 text-left">Service</th>
+                                  <th
+                                    class="px-3 py-1 text-right text-[#e08a85]"
+                                    >STEAL</th
+                                  >
+                                  <th
+                                    class="px-3 py-1 text-right text-[#9bcea8]"
+                                    >HOLD</th
+                                  >
+                                  <th
+                                    class="px-3 py-1 text-right text-stone-500"
+                                    >UP</th
+                                  >
+                                </tr>
+                              </thead>
+                              <tbody class="divide-y divide-stone-800/30">
+                                {#each row.services as svc}
+                                  <tr>
+                                    <td class="py-1 pr-3 text-stone-400"
+                                      >{svc.name}</td
+                                    >
+                                    <td
+                                      class="px-3 py-1 text-right tabular-nums text-[#e08a85]"
+                                      >{svc.steal}</td
+                                    >
+                                    <td
+                                      class="px-3 py-1 text-right tabular-nums text-[#9bcea8]"
+                                      >{svc.hold}</td
+                                    >
+                                    <td
+                                      class="px-3 py-1 text-right tabular-nums text-stone-500"
+                                      >{svc.up}</td
+                                    >
+                                  </tr>
+                                {/each}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    {/if}
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+          {/if}
+        </Card>
+
+        <div class="mt-4">
+          <Card title="King of the Hill" bodyClass="p-0">
+            {#if finalsKoth.length === 0}
+              <EmptyState
+                icon="mdi:crown-outline"
+                text="No hill standings yet."
+              />
+            {:else}
+              <div class="divide-y divide-stone-800/50">
+                {#each finalsKoth as h}
+                  <div class="flex items-center gap-3 px-4 py-2.5 text-sm">
+                    <Icon
+                      icon="mdi:crown"
+                      class="h-4 w-4 shrink-0 {h.team_name
+                        ? 'text-amber-400'
+                        : 'text-stone-700'}"
+                    />
+                    <span class="text-stone-400 min-w-0 flex-1 truncate"
+                      >{h.hill}</span
+                    >
+                    {#if h.team_name}
+                      <span class="font-medium text-stone-200"
+                        >{h.team_name}</span
+                      >
+                      <span class="tabular-nums text-stone-500 text-xs"
+                        >{h.held_ticks} ticks</span
+                      >
+                      <span class="tabular-nums text-amber-500 font-semibold"
+                        >{h.score.toLocaleString()}</span
+                      >
+                    {:else}
+                      <span class="text-stone-600 italic text-xs"
+                        >not released</span
+                      >
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </Card>
+        </div>
+      {/if}
     {:else if view === "matrix"}
       <Card title="Challenge matrix" bodyClass="p-0">
         <span slot="meta" class="metadata-label text-stone-500"
@@ -881,9 +1046,13 @@
         {/if}
       </Card>
     {:else}
-      <Card title={view === "standings" ? "Standings" : "Scoreboard"} bodyClass="p-0">
+      <Card
+        title={view === "standings" ? "Standings" : "Scoreboard"}
+        bodyClass="p-0"
+      >
         <span slot="meta" class="metadata-label text-stone-500"
-          >{scoreMatching.toLocaleString()} {noun}{scoreMatching === 1 ? "" : "s"}</span
+          >{scoreMatching.toLocaleString()}
+          {noun}{scoreMatching === 1 ? "" : "s"}</span
         >
         {#if !loaded.standings}
           <div
@@ -916,7 +1085,8 @@
                 <tr
                   class="metadata-label border-b border-stone-800 text-stone-500"
                 >
-                  <th class="w-[5.25rem] py-2.5 pl-3 pr-2 text-left sm:w-28 sm:pl-4"
+                  <th
+                    class="w-[5.25rem] py-2.5 pl-3 pr-2 text-left sm:w-28 sm:pl-4"
                     >Rank</th
                   >
                   <th class="px-2 py-2.5 text-left sm:px-4"
@@ -988,7 +1158,9 @@
                       </div>
                     </td>
                     <td class="whitespace-nowrap px-2 py-2.5 sm:px-4">
-                      <div class="flex min-w-0 items-center gap-2.5 leading-none">
+                      <div
+                        class="flex min-w-0 items-center gap-2.5 leading-none"
+                      >
                         <span
                           class="h-2 w-2 shrink-0 rounded-full"
                           style="background: {color};"
@@ -1024,7 +1196,9 @@
                     <td
                       class="hidden whitespace-nowrap px-4 py-2.5 text-right text-xs tabular-nums text-stone-500 lg:table-cell"
                       title={instantTitle(entry.last_solve_at)}
-                      >{entry.last_solve_at ? formatDate(entry.last_solve_at) : "-"}</td
+                      >{entry.last_solve_at
+                        ? formatDate(entry.last_solve_at)
+                        : "-"}</td
                     >
                     <td class="hidden px-3 py-1.5 text-right sm:table-cell">
                       <button
@@ -1033,14 +1207,19 @@
                         aria-label="Share {displayName(entry)} rank card"
                         class="inline-flex h-8 w-8 items-center justify-center text-stone-700 opacity-0 transition hover:text-amber-400 focus:opacity-100 group-hover:opacity-100"
                       >
-                        <Icon icon="mdi:share-variant-outline" class="h-4 w-4" />
+                        <Icon
+                          icon="mdi:share-variant-outline"
+                          class="h-4 w-4"
+                        />
                       </button>
                     </td>
                   </tr>
                 {/each}
                 {#if entries.length === 0}
                   <tr>
-                    <td colspan="7" class="px-4 py-10 text-center text-stone-500"
+                    <td
+                      colspan="7"
+                      class="px-4 py-10 text-center text-stone-500"
                       >{search.trim()
                         ? `No ${noun}s match “${search.trim()}”.`
                         : `No ${noun}s on this page.`}</td
@@ -1054,7 +1233,9 @@
             <div
               class="flex items-center justify-between border-t border-stone-800 px-4 py-3 text-xs text-stone-500"
             >
-              <span class="metadata-label">Page {scorePage} of {scorePages}</span>
+              <span class="metadata-label"
+                >Page {scorePage} of {scorePages}</span
+              >
               <div
                 class="inline-flex overflow-hidden rounded border border-stone-800"
               >

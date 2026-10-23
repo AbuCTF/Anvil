@@ -23,6 +23,11 @@ for script in preflight.sh backup.sh restore.sh test.sh; do
     bash -n "$script_dir/$script"
 done
 
+scoreboard="$repo_root/web/src/routes/scoreboard/+page.svelte"
+! grep -Eq 'MOCK_FINALS|MOCK_KOTH|keep mock|ByteBrigade' "$scoreboard"
+grep -Fq 'let finalsRows: FinalsRow[] = [];' "$scoreboard"
+grep -Fq 'Finals standings are temporarily unavailable.' "$scoreboard"
+
 for dockerfile in \
     "$repo_root/deployments/docker/Dockerfile.api" \
     "$repo_root/deployments/docker/Dockerfile.web"; do
