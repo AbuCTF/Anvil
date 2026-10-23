@@ -16,6 +16,8 @@ const (
 	tcpBanner      = "H7CTF Attack-Defense Flag Submission\nOne flag per line please\nEnter your flags\n\n"
 	tcpReadTimeout = 30 * time.Second
 	tcpMaxLineLen  = 512
+	// how stale a session's view of the game phase may get
+	tcpPhaseRecheck = time.Second
 )
 
 // TCPSubmitServer accepts flag submissions over a bare TCP connection.
@@ -95,6 +97,7 @@ func (s *TCPSubmitServer) handle(ctx context.Context, conn net.Conn) {
 		fmt.Fprintf(conn, "game ERR %s\n", "internal error")
 		return
 	}
+	phaseAt := time.Now()
 
 	// process flags pipelined
 	for sc.Scan() {
@@ -107,6 +110,14 @@ func (s *TCPSubmitServer) handle(ctx context.Context, conn net.Conn) {
 		if isNOP {
 			fmt.Fprintf(conn, "%s NOP %s\n", flag, "nop team")
 			continue
+		}
+		// a farm keeps one session open for hours: a pause or the end must reach it
+		if time.Since(phaseAt) >= tcpPhaseRecheck {
+			if phase, ok, err = FinalsPhase(ctx, s.db); err != nil {
+				fmt.Fprintf(conn, "%s ERR %s\n", flag, "internal error")
+				return
+			}
+			phaseAt = time.Now()
 		}
 		if !ok || phase != PhaseLive {
 			fmt.Fprintf(conn, "%s ERR %s\n", flag, "game not live")

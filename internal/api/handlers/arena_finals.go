@@ -158,6 +158,7 @@ func (h *GameHandler) KothScores(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	blinded := h.scoresBlinded(c)
 
 	rows, err := h.db.Pool.Query(ctx,
 		`SELECT h.id::text, h.name,
@@ -201,6 +202,10 @@ func (h *GameHandler) KothScores(c *gin.Context) {
 			return
 		}
 		e.TeamID = teamIDStr
+		if blinded {
+			// the king stays visible (the hill shows it), the points wait for the reveal
+			held, score = nil, nil
+		}
 		if held != nil {
 			e.HeldTicks = *held
 		}
@@ -214,7 +219,10 @@ func (h *GameHandler) KothScores(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"hills": hills})
+	if blinded {
+		c.Header("Cache-Control", "private, no-store")
+	}
+	c.JSON(http.StatusOK, gin.H{"hills": hills, "frozen": blinded})
 }
 
 // mapSLAStatus translates ENO engine statuses to the player-facing vocabulary.

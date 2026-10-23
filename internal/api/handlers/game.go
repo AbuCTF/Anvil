@@ -459,8 +459,27 @@ func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier, i
 	return series, nil
 }
 
+// scoresBlinded: during the freeze only an authenticated admin reads exact scores,
+// ranks or score history. a failed freeze read blinds rather than leaks.
+func (h *GameHandler) scoresBlinded(c *gin.Context) bool {
+	if c.GetString("role") == "admin" {
+		return false
+	}
+	frozen, err := game.IsFrozen(c.Request.Context(), h.db)
+	if err != nil {
+		h.logger.Error("freeze read", zap.Error(err))
+		return true
+	}
+	return frozen
+}
+
 func (h *GameHandler) History(c *gin.Context) {
 	if h.off(c) {
+		return
+	}
+	if h.scoresBlinded(c) {
+		c.Header("Cache-Control", "private, no-store")
+		c.JSON(http.StatusOK, gin.H{"series": []*historySeries{}, "frozen": true})
 		return
 	}
 	series, err := h.historyData(c.Request.Context(), h.db.Pool, false)
@@ -572,6 +591,11 @@ func (h *GameHandler) Services(c *gin.Context) {
 		return
 	}
 	services, rows, err := h.matrixData(c.Request.Context(), h.db.Pool, false)
+	if err == nil && h.scoresBlinded(c) {
+		for i := range rows {
+			rows[i].Rank = nil
+		}
+	}
 	if err != nil {
 		h.logger.Error("matrix query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
@@ -750,6 +774,20 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 	if err != nil {
 		return nil, "", fmt.Errorf("status: %w", err)
 	}
+	// the public snapshot is shared by every non-admin viewer: blind it at the freeze
+	frozen := false
+	if !includeHidden {
+		if err := tx.QueryRow(ctx, `SELECT COALESCE(NOW() >= NULLIF(
+			(SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.freeze_at'), '')::timestamptz, FALSE)`).Scan(&frozen); err != nil {
+			return nil, "", fmt.Errorf("freeze: %w", err)
+		}
+	}
+	if frozen {
+		standings, history = []gameStanding{}, []*historySeries{}
+		for i := range rows {
+			rows[i].Rank = nil
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, "", fmt.Errorf("commit snapshot: %w", err)
 	}
@@ -763,6 +801,7 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 		"rows":      rows,
 		"events":    events,
 		"history":   history,
+		"frozen":    frozen,
 	})
 }
 

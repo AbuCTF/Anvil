@@ -61,7 +61,7 @@ func (h *GameHandler) loadAttackInfo(ctx context.Context) ([]byte, error) {
 	// tick, so farms stop wasting their tick on it (enowars does the same)
 	teams, err := h.db.Pool.Query(ctx,
 		`SELECT host(t.vulnbox_ip) FROM game_teams t
-		 WHERE t.status = 'active' AND t.vulnbox_ip IS NOT NULL AND `+publicGameTeamSQL("t")+`
+		 WHERE t.status = 'active' AND t.vulnbox_ip IS NOT NULL AND (t.is_nop OR `+publicGameTeamSQL("t")+`)
 		   AND NOT EXISTS (
 		     SELECT 1 FROM game_sla_checks s
 		     WHERE s.team_id = t.id AND s.tick_number = (SELECT MAX(tick_number) FROM game_sla_checks)
@@ -89,7 +89,7 @@ func (h *GameHandler) loadAttackInfo(ctx context.Context) ([]byte, error) {
 		 JOIN game_teams t ON t.id = f.team_id
 		 JOIN game_services s ON s.id = f.service_id
 		 WHERE f.planted_at IS NOT NULL AND f.attack_info IS NOT NULL AND f.valid_until_tick >= $1
-		   AND t.status = 'active' AND t.vulnbox_ip IS NOT NULL AND `+publicGameTeamSQL("t")+`
+		   AND t.status = 'active' AND t.vulnbox_ip IS NOT NULL AND (t.is_nop OR `+publicGameTeamSQL("t")+`)
 		 ORDER BY s.slug, t.team_number NULLS LAST, f.tick_number, f.store_index`, current)
 	if err != nil {
 		return nil, err

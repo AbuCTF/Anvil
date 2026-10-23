@@ -95,6 +95,11 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	exec(`INSERT INTO game_services (id, name, slug, category, port, checker_ref, flag_stores)
 		VALUES ($1, 'Berth Board', 'berth', 'web', 8080, 'http://checker:9000', 2)`, svc)
 	exec(`INSERT INTO game_ticks (tick_number, status) VALUES (1, 'closed'), (2, 'closed'), (3, 'closed')`)
+	// the nop has no members, yet attackers must see it: it is the exploit test target
+	nopTeam := uuid.New()
+	exec(`INSERT INTO game_teams (id, name, slug, vulnbox_ip, team_number, is_nop) VALUES ($1, 'nop'||$2, 'nop'||$2, '10.60.16.2', 16, TRUE)`, nopTeam, sfx)
+	exec(`INSERT INTO game_flags (tick_number, team_id, service_id, store_index, flag, valid_from_tick, valid_until_tick, planted_at, attack_info) VALUES
+		(3, $1, $2, 0, 'H7CTF{NOP0}', 3, 8, NOW(), 'n0')`, nopTeam, svc)
 	exec(`INSERT INTO game_flags (tick_number, team_id, service_id, store_index, flag, valid_from_tick, valid_until_tick, planted_at, attack_info) VALUES
 		(3, $1, $3, 0, 'H7CTF{BRAVO0}', 3, 8, NOW(), '{"user":"u0"}'),
 		(3, $1, $3, 1, 'H7CTF{BRAVO1}', 3, 8, NOW(), NULL),
@@ -190,8 +195,11 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	if err := json.Unmarshal(raw, &info); err != nil {
 		t.Fatalf("decode attack-info: %v\n%s", err, raw)
 	}
-	if strings.Join(info.AvailableTeams, ",") != "10.60.1.2,10.60.2.2" {
-		t.Errorf("availableTeams = %v, want alpha and bravo (charlie all DOWN)", info.AvailableTeams)
+	if strings.Join(info.AvailableTeams, ",") != "10.60.1.2,10.60.2.2,10.60.16.2" {
+		t.Errorf("availableTeams = %v, want alpha, bravo and the nop (charlie all DOWN)", info.AvailableTeams)
+	}
+	if got := info.Services["berth"]["10.60.16.2"]["3"]["0"]; len(got) != 1 || got[0] != "n0" {
+		t.Errorf("nop tick 3 variant 0 = %v", got)
 	}
 	berth := info.Services["berth"]
 	if got := berth["10.60.2.2"]["3"]["0"]; len(got) != 1 || got[0] != `{"user":"u0"}` {
@@ -261,7 +269,25 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	if code, raw := call("GET", "/api/v1/arena/scoreboard", &admin, ""); code != http.StatusOK || !strings.Contains(string(raw), `"team_name":"alpha"`) {
 		t.Fatalf("frozen admin finals board = %d %s", code, raw)
 	}
+	// the side doors are blinded too: score history, koth points and matrix ranks
+	for _, viewer := range []*uuid.UUID{nil, &p1} {
+		if code, raw := call("GET", "/api/v1/arena/history", viewer, ""); code != http.StatusOK || !strings.Contains(string(raw), `"frozen":true`) || !strings.Contains(string(raw), `"series":[]`) {
+			t.Fatalf("frozen history = %d %s", code, raw)
+		}
+		if code, raw := call("GET", "/api/v1/arena/services", viewer, ""); code != http.StatusOK || strings.Contains(string(raw), `"rank"`) {
+			t.Fatalf("frozen services matrix = %d %s", code, raw)
+		}
+		if code, raw := call("GET", "/api/v1/arena/koth/scores", viewer, ""); code != http.StatusOK || !strings.Contains(string(raw), `"frozen":true`) {
+			t.Fatalf("frozen koth scores = %d %s", code, raw)
+		}
+	}
+	if code, raw := call("GET", "/api/v1/arena/services", &admin, ""); code != http.StatusOK || !strings.Contains(string(raw), `"rank":1`) {
+		t.Fatalf("frozen admin services matrix = %d %s", code, raw)
+	}
 	setting("event.freeze_at", `""`)
+	if code, raw := call("GET", "/api/v1/arena/services", &p1, ""); code != http.StatusOK || !strings.Contains(string(raw), `"rank":1`) {
+		t.Fatalf("live services matrix = %d %s", code, raw)
+	}
 
 	// The War Room is a full, delayed matrix. Tick 3 is current, so public view
 	// tick 1 is visible and the tick-3 advisory must remain hidden. Team markers
