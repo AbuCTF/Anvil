@@ -19,6 +19,7 @@
 	import MailWorkspace from '$lib/components/admin/MailWorkspace.svelte';
 	import RegistryCredentials from '$lib/components/admin/RegistryCredentials.svelte';
 	import RegistryBulkImport from '$lib/components/admin/RegistryBulkImport.svelte';
+	import ArenaOps from '$lib/components/admin/ArenaOps.svelte';
 
 	let activeTab = 'overview';
 	let loading = true;
@@ -1599,6 +1600,7 @@
 
 	const TABS = [
 		{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard-outline' },
+		{ id: 'arena', label: 'Arena ops', icon: 'mdi:sword-cross' },
 		{ id: 'event', label: 'Event', icon: 'mdi:calendar-star' },
 		{ id: 'data', label: 'Data', icon: 'mdi:database-export-outline' },
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
@@ -1725,7 +1727,9 @@
 				</div>
 			{/if}
 
-			{#if activeTab === 'event'}
+			{#if activeTab === 'arena'}
+				<ArenaOps />
+			{:else if activeTab === 'event'}
 				<EventSetup
 					settings={platformSettings}
 					{challenges}

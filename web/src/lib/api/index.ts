@@ -276,6 +276,82 @@ export interface ReadinessReport {
 	economy_checksum: string;
 }
 
+export interface ArenaTick {
+	tick: number;
+	started_at: string;
+	ends_at: string;
+	hold_from: string;
+	phase: string;
+}
+
+export interface ArenaTeam {
+	id: string;
+	name: string;
+	slug: string;
+	team_number?: number;
+	vulnbox_ip?: string;
+	is_nop: boolean;
+	status: string;
+	token_prefix?: string;
+	member_count?: number;
+}
+
+export interface ArenaService {
+	id: string;
+	name: string;
+	slug: string;
+	category: string;
+	tier: string;
+	port?: number;
+	checker_ref?: string;
+	enabled: boolean;
+	release_at?: string;
+	advisories?: Record<string, string>;
+	advisory_at?: string;
+	wave_exploits?: Record<string, number>;
+}
+
+export interface ArenaHillWindow {
+	opens_at: string;
+	closes_at: string;
+}
+
+export interface ArenaHill {
+	id: string;
+	name: string;
+	slug: string;
+	enabled: boolean;
+	protocol: string;
+	base_url?: string;
+	reset_seconds?: number;
+	windows?: ArenaHillWindow[];
+}
+
+export interface ArenaCheckerTask {
+	id: number;
+	tick_number: number;
+	related_tick: number;
+	team_id: string;
+	service_id: string;
+	method: string;
+	variant: number;
+	status?: string;
+	code?: string;
+	message?: string;
+	latency_ms?: number;
+}
+
+export interface ArenaSuspiciousSLA {
+	team_id: string;
+	team_name: string;
+	service_id: string;
+	service_name: string;
+	tick: number;
+	down_count: number;
+	total_in_tick: number;
+	down_rate: number;
+}
+
 export interface ReleaseCandidate {
 	id: string;
 	sequence: number;
@@ -937,6 +1013,73 @@ class ApiClient {
 			method: 'PUT',
 			body: JSON.stringify({ state })
 		});
+	}
+
+	async getArenaTick() {
+		return this.request<ArenaTick>('/arena/tick', { cache: 'no-store' }, false);
+	}
+
+	async getArenaTeams() {
+		return this.request<{ teams: ArenaTeam[] }>('/admin/arena/teams', { cache: 'no-store' });
+	}
+
+	async rotateArenaTeamToken(id: string) {
+		return this.request<{ token: string }>(`/admin/arena/teams/${encodeURIComponent(id)}/token`, { method: 'POST' });
+	}
+
+	async updateArenaTeamVulnboxIP(id: string, vulnboxIp: string) {
+		return this.request<{ ok: boolean }>(`/admin/arena/teams/${encodeURIComponent(id)}/vulnbox-ip`, {
+			method: 'PATCH', body: JSON.stringify({ vulnbox_ip: vulnboxIp })
+		});
+	}
+
+	async getArenaServices() {
+		return this.request<{ services: ArenaService[] }>('/admin/arena/services', { cache: 'no-store' });
+	}
+
+	async updateArenaService(id: string, data: { enabled?: boolean; release_at?: string }) {
+		return this.request<{ status: string }>(`/admin/arena/services/${encodeURIComponent(id)}`, {
+			method: 'PATCH', body: JSON.stringify(data)
+		});
+	}
+
+	async updateArenaOutbreak(id: string, data: { advisories: Record<string, string>; advisory_at: string; wave_exploits: Record<string, number> }) {
+		return this.request<{ status: string }>(`/admin/arena/services/${encodeURIComponent(id)}/outbreak`, {
+			method: 'PUT', body: JSON.stringify(data)
+		});
+	}
+
+	async getArenaHills() {
+		return this.request<{ hills: ArenaHill[] }>('/admin/arena/hills', { cache: 'no-store' });
+	}
+
+	async updateArenaHillWindows(id: string, windows: ArenaHillWindow[]) {
+		return this.request<{ status: string; windows: number }>(`/admin/arena/hills/${encodeURIComponent(id)}/windows`, {
+			method: 'PUT', body: JSON.stringify({ windows })
+		});
+	}
+
+	async extendArena(minutes: number) {
+		return this.request<{ status: string; minutes: number; end_at?: string; freeze_at?: string }>('/admin/arena/extend', {
+			method: 'POST', body: JSON.stringify({ minutes })
+		});
+	}
+
+	async createArenaCredit(data: { service: string; team_id: string; tick_from: number; tick_to: number; reason: string }) {
+		return this.request<{ id: number }>('/admin/arena/credits', { method: 'POST', body: JSON.stringify(data) });
+	}
+
+	async resettleArena() {
+		return this.request<{ status: string }>('/admin/arena/resettle', { method: 'POST' });
+	}
+
+	async getArenaCheckerLog(teamId: string, serviceId: string, tick: number) {
+		const query = new URLSearchParams({ team_id: teamId, service_id: serviceId, tick: String(tick) });
+		return this.request<{ tasks: ArenaCheckerTask[] }>(`/admin/arena/checker-log?${query}`, { cache: 'no-store' });
+	}
+
+	async getArenaSuspiciousSLA(sinceTick: number) {
+		return this.request<{ rows: ArenaSuspiciousSLA[] }>(`/admin/arena/sla-suspicious?since_tick=${sinceTick}&limit=100`, { cache: 'no-store' });
 	}
 
 	async getAdminAnnouncements() {
