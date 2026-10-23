@@ -278,8 +278,14 @@ func (h *ReadinessHandler) buildReport(ctx context.Context) (readinessReport, er
 		}
 		add("access.invites", "Access", "Active invitation", status(invites > 0, "blocker"), ternary(invites > 0, "At least one invite can be used.", "Create an active invite code."), invites)
 	}
-	add("content.categories", "Content", "Categories", status(content.Categories > 0, "blocker"), ternary(content.Categories > 0, "Challenge categories exist.", "Create at least one category."), content.Categories)
-	add("content.published", "Content", "Published challenges", status(content.Published > 0, "blocker"), ternary(content.Published > 0, "Published participant content exists.", "Publish at least one validated challenge."), content.Published)
+	// an attack-defense finals has no jeopardy board: its content is the six services and three hills checked above
+	if h.config.Game.Enabled && h.config.Game.Scoring.Formula == "mirror" {
+		add("content.categories", "Content", "Categories", "pass", "Not used by the Attack-Defense finals.", content.Categories)
+		add("content.published", "Content", "Published challenges", "pass", "Not used by the Attack-Defense finals.", content.Published)
+	} else {
+		add("content.categories", "Content", "Categories", status(content.Categories > 0, "blocker"), ternary(content.Categories > 0, "Challenge categories exist.", "Create at least one category."), content.Categories)
+		add("content.published", "Content", "Published challenges", status(content.Published > 0, "blocker"), ternary(content.Published > 0, "Published participant content exists.", "Publish at least one validated challenge."), content.Published)
+	}
 	add("content.flags", "Content", "Scoring path", status(content.MissingScoring == 0, "blocker"), ternary(content.MissingScoring == 0, "Every published challenge has a flag or grader.", "Published challenges are missing a flag or grader."), content.MissingScoring)
 	add("content.runtime", "Infrastructure", "Runnable challenge definitions", status(content.MissingRuntime == 0, "blocker"), ternary(content.MissingRuntime == 0, "Published runtime challenges have an image or VM definition.", "Published challenges have incomplete runtime configuration."), content.MissingRuntime)
 	backend := ""

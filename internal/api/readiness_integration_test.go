@@ -198,7 +198,8 @@ func TestReleaseReadinessAndImmutableCandidate(t *testing.T) {
 	}
 	seededFinals := request(http.MethodGet, "/api/v1/admin/readiness", adminToken, nil)
 	if seededFinals.Code != http.StatusOK || !strings.Contains(seededFinals.Body.String(), `"ready":true`) ||
-		strings.Contains(seededFinals.Body.String(), `"group":"Finals","status":"blocker"`) {
+		strings.Contains(seededFinals.Body.String(), `"group":"Finals","status":"blocker"`) ||
+		!strings.Contains(seededFinals.Body.String(), `"label":"Categories","status":"pass","detail":"Not used by the Attack-Defense finals."`) {
 		t.Fatalf("seeded finals readiness=%d body=%s", seededFinals.Code, seededFinals.Body.String())
 	}
 }
