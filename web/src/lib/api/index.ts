@@ -288,12 +288,12 @@ export interface ArenaTeam {
 	id: string;
 	name: string;
 	slug: string;
-	team_number?: number;
+	team_number: number | null;
 	vulnbox_ip?: string;
 	is_nop: boolean;
 	status: string;
-	token_prefix?: string;
-	member_count?: number;
+	token_prefix: string | null;
+	member_count: number;
 }
 
 export interface ArenaService {
@@ -305,10 +305,10 @@ export interface ArenaService {
 	port?: number;
 	checker_ref?: string;
 	enabled: boolean;
-	release_at?: string;
-	advisories?: Record<string, string>;
-	advisory_at?: string;
-	wave_exploits?: Record<string, number>;
+	release_at: string | null;
+	advisories: Record<string, string>;
+	advisory_at: string | null;
+	wave_exploits: Record<string, number>;
 }
 
 export interface ArenaHillWindow {
@@ -324,7 +324,7 @@ export interface ArenaHill {
 	protocol: string;
 	base_url?: string;
 	reset_seconds?: number;
-	windows?: ArenaHillWindow[];
+	windows: ArenaHillWindow[];
 }
 
 export interface ArenaCheckerTask {

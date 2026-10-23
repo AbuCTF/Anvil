@@ -8,6 +8,7 @@
 		api,
 		type ArenaCheckerTask,
 		type ArenaHill,
+		type ArenaHillWindow,
 		type ArenaService,
 		type ArenaSuspiciousSLA,
 		type ArenaTeam,
@@ -30,10 +31,12 @@
 	let hills: ArenaHill[] = [];
 	let teamIPs: Record<string, string> = {};
 	let serviceEnabled: Record<string, boolean> = {};
+	let serviceSchedules: Record<string, { releaseAt: string; advisoryAt: string; advisories: string; waveExploits: string }> = {};
+	let hillWindows: Record<string, ArenaHillWindow[]> = {};
 	let rotatedToken = '';
 	let rotatedTeam = '';
 	let extendMinutes = 15;
-	let extensionResult: { end_at?: string } | null = null;
+	let extensionResult: { end_at?: string; freeze_at?: string } | null = null;
 	let credit = { service: '', team_id: '', tick_from: 1, tick_to: 1, reason: '' };
 	let checker = { team_id: '', service_id: '', tick: 1 };
 	let checkerTasks: ArenaCheckerTask[] = [];
@@ -58,6 +61,24 @@
 		}).format(new Date(value)) + ' IST';
 	}
 
+	function toISTInput(value?: string | null) {
+		if (!value) return '';
+		return new Date(Date.parse(value) + 330 * 60_000).toISOString().slice(0, 16);
+	}
+
+	function toRFC3339(value: string) {
+		if (!value) return '';
+		const result = new Date(`${value}:00+05:30`);
+		if (Number.isNaN(result.getTime())) throw new Error('Enter a valid Asia/Kolkata date and time');
+		return result.toISOString();
+	}
+
+	function parseObject(value: string, label: string) {
+		const result: unknown = JSON.parse(value || '{}');
+		if (!result || Array.isArray(result) || typeof result !== 'object') throw new Error(`${label} must be a JSON object`);
+		return result as Record<string, unknown>;
+	}
+
 	function timeToNextTick() {
 		if (!tick || tick.tick === 0 || !tick.ends_at || tick.ends_at.startsWith('0001-')) return 'Waiting for first tick';
 		const seconds = Math.max(0, Math.ceil((Date.parse(tick.ends_at) - now) / 1000));
@@ -67,6 +88,15 @@
 	function hydrateDrafts() {
 		teamIPs = Object.fromEntries(teams.map((team) => [team.id, team.vulnbox_ip ?? '']));
 		serviceEnabled = Object.fromEntries(services.map((service) => [service.id, service.enabled]));
+		serviceSchedules = Object.fromEntries(services.map((service) => [service.id, {
+			releaseAt: toISTInput(service.release_at),
+			advisoryAt: toISTInput(service.advisory_at),
+			advisories: JSON.stringify(service.advisories ?? {}, null, 2),
+			waveExploits: JSON.stringify(service.wave_exploits ?? {}, null, 2)
+		}]));
+		hillWindows = Object.fromEntries(hills.map((hill) => [hill.id, (hill.windows ?? []).map((window) => ({
+			opens_at: toISTInput(window.opens_at), closes_at: toISTInput(window.closes_at)
+		}))]));
 		if (!credit.service && services[0]) credit.service = services[0].slug;
 		if (!checker.team_id && teams[0]) checker.team_id = teams[0].id;
 		if (!checker.service_id && services[0]) checker.service_id = services[0].id;
@@ -121,9 +151,8 @@
 		}))) return;
 		busy = 'extend';
 		try {
-			await api.extendArena(extendMinutes);
-			const info = await api.getPlatformInfo();
-			extensionResult = { end_at: info.event?.end_at };
+			const result = await api.extendArena(extendMinutes);
+			extensionResult = { end_at: result.end_at, freeze_at: result.freeze_at };
 			await refreshPlatformInfo();
 			await load();
 		} catch (e) {
@@ -204,6 +233,85 @@
 			await load();
 		} catch (e) {
 			await alertDialog({ title: 'Service unchanged', message: message(e, 'Failed to update service') });
+		} finally {
+			busy = '';
+		}
+	}
+
+	async function saveRelease(service: ArenaService) {
+		const value = serviceSchedules[service.id].releaseAt;
+		if (!(await confirmDialog({
+			title: 'Update service release',
+			message: value ? `Schedule ${service.name} for ${value} IST?` : `Clear the release schedule for ${service.name}?`,
+			confirmLabel: 'Update release'
+		}))) return;
+		busy = `service-release-${service.id}`;
+		try {
+			await api.updateArenaService(service.id, { release_at: toRFC3339(value) });
+			await load();
+		} catch (e) {
+			await alertDialog({ title: 'Release unchanged', message: message(e, 'Failed to update service release') });
+		} finally {
+			busy = '';
+		}
+	}
+
+	async function saveOutbreak(service: ArenaService) {
+		const draft = serviceSchedules[service.id];
+		if (!(await confirmDialog({
+			title: 'Replace outbreak plan', message: `Replace the full outbreak plan for ${service.name}?`,
+			confirmLabel: 'Replace plan'
+		}))) return;
+		busy = `service-outbreak-${service.id}`;
+		try {
+			const advisories = parseObject(draft.advisories, 'Advisories');
+			const waveExploits = parseObject(draft.waveExploits, 'Wave exploits');
+			if (!Object.values(advisories).every((value) => typeof value === 'string')) throw new Error('Every advisory value must be text');
+			if (!Object.values(waveExploits).every((value) => Number.isInteger(value) && Number(value) >= 0)) throw new Error('Every wave exploit value must be a non-negative integer');
+			await api.updateArenaOutbreak(service.id, {
+				advisories: advisories as Record<string, string>,
+				advisory_at: toRFC3339(draft.advisoryAt),
+				wave_exploits: waveExploits as Record<string, number>
+			});
+			await load();
+		} catch (e) {
+			await alertDialog({ title: 'Outbreak plan unchanged', message: message(e, 'Failed to update outbreak plan') });
+		} finally {
+			busy = '';
+		}
+	}
+
+	function addHillWindow(hill: ArenaHill) {
+		hillWindows = { ...hillWindows, [hill.id]: [...(hillWindows[hill.id] ?? []), { opens_at: '', closes_at: '' }] };
+	}
+
+	function updateHillWindow(hill: ArenaHill, index: number, fieldName: keyof ArenaHillWindow, value: string) {
+		const windows = [...(hillWindows[hill.id] ?? [])];
+		windows[index] = { ...windows[index], [fieldName]: value };
+		hillWindows = { ...hillWindows, [hill.id]: windows };
+	}
+
+	function removeHillWindow(hill: ArenaHill, index: number) {
+		hillWindows = { ...hillWindows, [hill.id]: (hillWindows[hill.id] ?? []).filter((_, current) => current !== index) };
+	}
+
+	async function saveHillWindows(hill: ArenaHill) {
+		const windows = hillWindows[hill.id] ?? [];
+		if (!(await confirmDialog({
+			title: 'Replace Hill schedule',
+			message: windows.length ? `Replace all schedule windows for ${hill.name}?` : `Hand ${hill.name} back to its manual open or closed state?`,
+			confirmLabel: 'Replace schedule'
+		}))) return;
+		busy = `hill-windows-${hill.id}`;
+		try {
+			const payload = windows.map((window) => ({ opens_at: toRFC3339(window.opens_at), closes_at: toRFC3339(window.closes_at) }));
+			if (payload.some((window) => !window.opens_at || !window.closes_at || Date.parse(window.closes_at) <= Date.parse(window.opens_at))) {
+				throw new Error('Every Hill window must close after it opens');
+			}
+			await api.updateArenaHillWindows(hill.id, payload);
+			await load();
+		} catch (e) {
+			await alertDialog({ title: 'Hill schedule unchanged', message: message(e, 'Failed to update Hill schedule') });
 		} finally {
 			busy = '';
 		}
@@ -344,7 +452,13 @@
 					<button class={primary} disabled={busy !== '' || extendMinutes < 1 || extendMinutes > 1440} on:click={extendGame}>Extend</button>
 				</div>
 				{#if extensionResult}
-					<div class="mt-4 rounded-md border border-up/20 bg-up/5 p-3 text-xs text-stone-400"><p>New end: {showIST(extensionResult.end_at)}</p><p class="mt-1 text-stone-600">Freeze time is not returned by the current admin API.</p></div>
+					<div class="mt-4 rounded-md border border-up/20 bg-up/5 p-3 text-xs text-stone-400">
+						{#if extensionResult.end_at || extensionResult.freeze_at}
+							<p>New end: {showIST(extensionResult.end_at)}</p><p class="mt-1">New freeze: {showIST(extensionResult.freeze_at)}</p>
+						{:else}
+							<p>The schedule was shifted, but the updated times were not returned. Do not retry the extension.</p>
+						{/if}
+					</div>
 				{/if}
 			</Card>
 		</section>
@@ -354,12 +468,15 @@
 				<div slot="header" class="flex items-center gap-2"><OpticalIcon icon="mdi:account-group-outline" size={15} box={16} className="text-stone-500" /><h3 id="arena-teams" class="text-sm font-semibold text-stone-200">Teams</h3></div>
 				<span slot="meta" class="text-xs tabular-nums text-stone-500">{teams.length} including NOP</span>
 				<div class="overflow-x-auto">
-					<table class="w-full min-w-[760px] text-sm">
-						<thead><tr class="metadata-label border-b border-stone-800 text-stone-500"><th class="px-4 py-2.5 text-left">Team</th><th class="px-4 py-2.5 text-left">Status</th><th class="px-4 py-2.5 text-left">Vulnbox IP</th><th class="px-4 py-2.5 text-right">Actions</th></tr></thead>
+					<table class="w-full min-w-[980px] text-sm">
+						<thead><tr class="metadata-label border-b border-stone-800 text-stone-500"><th class="px-4 py-2.5 text-left">No.</th><th class="px-4 py-2.5 text-left">Team</th><th class="px-4 py-2.5 text-right">Members</th><th class="px-4 py-2.5 text-left">Token prefix</th><th class="px-4 py-2.5 text-left">Status</th><th class="px-4 py-2.5 text-left">Vulnbox IP</th><th class="px-4 py-2.5 text-right">Actions</th></tr></thead>
 						<tbody>
 							{#each teams as team}
 								<tr class="border-b border-stone-800/60">
+									<td class="px-4 py-3 tabular-nums text-stone-500">{team.team_number ?? '-'}</td>
 									<td class="px-4 py-3"><p class="text-stone-200">{team.name}{#if team.is_nop}<span class="ml-2 rounded-full bg-indigo-400/10 px-2 py-0.5 text-[10px] text-indigo-300">NOP</span>{/if}</p><p class="mt-0.5 text-[11px] text-stone-600">{team.slug}</p></td>
+									<td class="px-4 py-3 text-right tabular-nums text-stone-500">{team.member_count}</td>
+									<td class="px-4 py-3 font-mono text-xs text-stone-400">{team.token_prefix ?? '-'}</td>
 									<td class="px-4 py-3"><span class={team.status === 'active' ? 'text-up' : 'text-down'}>{team.status}</span></td>
 									<td class="px-4 py-3"><input aria-label={`Vulnbox IP for ${team.name}`} class="w-40 {field} font-mono text-xs" value={teamIPs[team.id]} on:input={(event) => { teamIPs[team.id] = event.currentTarget.value; teamIPs = { ...teamIPs }; }} /></td>
 									<td class="px-4 py-3"><div class="flex justify-end gap-2"><button class={ghost} disabled={busy !== ''} on:click={() => saveTeamIP(team)}>Save IP</button><button class={destructive} disabled={busy !== ''} on:click={() => rotateToken(team)}>Rotate token</button></div></td>
@@ -368,7 +485,6 @@
 						</tbody>
 					</table>
 				</div>
-				<div class="border-t border-stone-800 bg-stone-950/40 px-4 py-3 text-xs text-stone-600">Team number, member count, and token prefix are not returned by the current admin teams API.</div>
 			</Card>
 		</section>
 
@@ -385,10 +501,23 @@
 								<label><span class="metadata-label mb-1.5 block text-stone-500">Enabled</span><select class="w-full {field}" value={String(serviceEnabled[service.id])} on:change={(event) => { serviceEnabled[service.id] = event.currentTarget.value === 'true'; serviceEnabled = { ...serviceEnabled }; }}><option value="true">Yes</option><option value="false">No</option></select></label>
 								<button class={primary} disabled={busy !== '' || serviceEnabled[service.id] === service.enabled} on:click={() => saveService(service)}>Save state</button>
 							</div>
+							<div class="mt-4 grid gap-3 border-t border-stone-800/70 pt-4 sm:grid-cols-[minmax(14rem,1fr)_auto] sm:items-end">
+								<label><span class="metadata-label mb-1.5 block text-stone-500">Release time, Asia/Kolkata</span><input aria-label={`Release time for ${service.name}`} class="w-full {field}" type="datetime-local" value={serviceSchedules[service.id]?.releaseAt ?? ''} on:input={(event) => { serviceSchedules[service.id].releaseAt = event.currentTarget.value; serviceSchedules = { ...serviceSchedules }; }} /></label>
+								<button class={ghost} disabled={busy !== ''} on:click={() => saveRelease(service)}>Save release</button>
+							</div>
+							<details class="mt-3 rounded-md border border-stone-800 bg-stone-950/40 p-3">
+								<summary class="cursor-pointer text-xs font-medium text-stone-400">Outbreak plan</summary>
+								<div class="mt-3 grid gap-3 lg:grid-cols-2">
+									<label><span class="metadata-label mb-1.5 block text-stone-500">Fallback advisory time, Asia/Kolkata</span><input aria-label={`Advisory time for ${service.name}`} class="w-full {field}" type="datetime-local" value={serviceSchedules[service.id]?.advisoryAt ?? ''} on:input={(event) => { serviceSchedules[service.id].advisoryAt = event.currentTarget.value; serviceSchedules = { ...serviceSchedules }; }} /></label>
+									<div class="hidden lg:block"></div>
+									<label><span class="metadata-label mb-1.5 block text-stone-500">Advisories JSON</span><textarea aria-label={`Advisories for ${service.name}`} class="min-h-28 w-full font-mono {field}" value={serviceSchedules[service.id]?.advisories ?? '{}'} on:input={(event) => { serviceSchedules[service.id].advisories = event.currentTarget.value; serviceSchedules = { ...serviceSchedules }; }}></textarea><span class="mt-1 block text-[11px] text-stone-600">Store index to advisory line.</span></label>
+									<label><span class="metadata-label mb-1.5 block text-stone-500">Wave exploits JSON</span><textarea aria-label={`Wave exploits for ${service.name}`} class="min-h-28 w-full font-mono {field}" value={serviceSchedules[service.id]?.waveExploits ?? '{}'} on:input={(event) => { serviceSchedules[service.id].waveExploits = event.currentTarget.value; serviceSchedules = { ...serviceSchedules }; }}></textarea><span class="mt-1 block text-[11px] text-stone-600">Store index to exploit variant.</span></label>
+								</div>
+								<div class="mt-3 flex justify-end"><button class={destructive} disabled={busy !== ''} on:click={() => saveOutbreak(service)}>Replace outbreak plan</button></div>
+							</details>
 						</div>
 					{/each}
 				</div>
-				<div class="border-t border-stone-800 bg-stone-950/40 px-4 py-3 text-xs text-stone-600">Release time and outbreak fields are not returned by the current admin services API, so those editors are withheld.</div>
 			</Card>
 		</section>
 
@@ -398,7 +527,20 @@
 				{#each hills as hill}
 					<Card bodyClass="p-4">
 						<div slot="header" class="min-w-0"><div class="flex items-center gap-2"><h4 class="truncate text-sm font-semibold text-stone-200">{hill.name}</h4><span class="shrink-0 rounded-full px-2 py-0.5 text-[10px] {hill.enabled ? 'bg-up/10 text-up' : 'bg-stone-800 text-stone-500'}">{hill.enabled ? 'Open' : 'Closed'}</span></div><p class="mt-1 text-[11px] text-stone-600">{hill.protocol}</p></div>
-						<div class="space-y-2 text-xs text-stone-500"><p>Controller: {hill.base_url ?? 'Not returned'}</p><p>Reset interval: {hill.reset_seconds ?? 0} seconds</p><p class="text-stone-600">Schedule windows are not returned by the current admin Hills API, so the replacement editor is withheld.</p></div>
+						<div class="space-y-2 text-xs text-stone-500"><p>Controller: {hill.base_url ?? 'Not returned'}</p><p>Reset interval: {hill.reset_seconds ?? 0} seconds</p></div>
+						<div class="mt-4 border-t border-stone-800 pt-4">
+							<div class="space-y-3">
+								{#each hillWindows[hill.id] ?? [] as window, index}
+									<div class="rounded-md border border-stone-800 p-3">
+										<label><span class="metadata-label mb-1.5 block text-stone-500">Opens, Asia/Kolkata</span><input aria-label={`Hill ${hill.name} window ${index + 1} opens`} class="w-full {field}" type="datetime-local" value={window.opens_at} on:input={(event) => updateHillWindow(hill, index, 'opens_at', event.currentTarget.value)} /></label>
+										<label class="mt-3 block"><span class="metadata-label mb-1.5 block text-stone-500">Closes, Asia/Kolkata</span><input aria-label={`Hill ${hill.name} window ${index + 1} closes`} class="w-full {field}" type="datetime-local" value={window.closes_at} on:input={(event) => updateHillWindow(hill, index, 'closes_at', event.currentTarget.value)} /></label>
+										<button class="mt-2 text-xs text-down" on:click={() => removeHillWindow(hill, index)}>Remove window</button>
+									</div>
+								{/each}
+							</div>
+							{#if (hillWindows[hill.id] ?? []).length === 0}<p class="text-xs text-stone-600">No schedule windows. The manual open or closed state applies.</p>{/if}
+							<div class="mt-3 flex flex-wrap gap-2"><button class={ghost} disabled={busy !== ''} on:click={() => addHillWindow(hill)}>Add window</button><button class={primary} disabled={busy !== ''} on:click={() => saveHillWindows(hill)}>Save windows</button></div>
+						</div>
 					</Card>
 				{/each}
 			</div>
