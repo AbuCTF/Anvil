@@ -153,7 +153,7 @@ chmod 700 "$test_dir/storage"
 bad_storage="$test_dir/bad-storage-owner"
 mkdir -m 700 "$bad_storage"
 bad_storage_owner_env="$test_dir/bad-storage-owner.env"
-sed "s|^ANVIL_STORAGE_HOST_PATH=.*|ANVIL_STORAGE_HOST_PATH=$bad_storage|" "$env_file" >"$bad_storage_owner_env"
+sed "s|^ANVIL_DATABASE_HOST_PATH=.*|ANVIL_DATABASE_HOST_PATH=$bad_storage|" "$env_file" >"$bad_storage_owner_env"
 expect_preflight_failure "$bad_storage_owner_env" "durable storage with the wrong numeric owner"
 
 linked_storage="$test_dir/linked-storage"
