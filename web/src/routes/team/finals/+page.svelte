@@ -134,7 +134,7 @@
 		return h;
 	}
 
-	async function liveFetch(url: string, init: RequestInit = {}): Promise<Response> {
+	async function liveFetch(url: string, init: Parameters<typeof fetch>[1] = {}): Promise<Response> {
 		const controller = new AbortController();
 		const timer = window.setTimeout(() => controller.abort(), 8000);
 		try {
