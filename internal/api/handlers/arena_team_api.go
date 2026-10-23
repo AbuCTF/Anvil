@@ -140,7 +140,7 @@ func (h *GameHandler) Me(c *gin.Context) {
 	info.Token = maskedToken
 	info.IsNOP = isNOP
 	err := h.db.Pool.QueryRow(c.Request.Context(),
-		`SELECT id::text, name, slug, team_number, vulnbox_ip FROM game_teams WHERE id = $1`, teamID,
+		`SELECT id::text, name, slug, team_number, host(vulnbox_ip) FROM game_teams WHERE id = $1`, teamID,
 	).Scan(&info.TeamID, &info.Name, &info.Slug, &info.TeamNumber, &info.VulnboxIP)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "team not found"})

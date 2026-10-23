@@ -354,7 +354,12 @@ func (h *GameAdminHandler) CreateTeam(c *gin.Context) {
 
 func (h *GameAdminHandler) ListTeams(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, name, slug, host(vulnbox_ip), is_nop, status FROM game_teams ORDER BY name`)
+		`SELECT t.id, t.name, t.slug, host(t.vulnbox_ip), t.is_nop, t.status, t.team_number,
+		        NULLIF(left(COALESCE(t.token, ''), 8), ''),
+		        (SELECT COUNT(*) FROM (
+		           SELECT u.id FROM users u WHERE u.team_id = t.id
+		           UNION SELECT m.user_id FROM game_team_members m WHERE m.team_id = t.id) members)::int
+		 FROM game_teams t ORDER BY t.team_number NULLS LAST, t.name`)
 	if err != nil {
 		h.fail(c, "list teams", err)
 		return
@@ -366,11 +371,16 @@ func (h *GameAdminHandler) ListTeams(c *gin.Context) {
 		var name, slug, status string
 		var ip *string
 		var isNOP bool
-		if err := rows.Scan(&id, &name, &slug, &ip, &isNOP, &status); err != nil {
+		var number *int
+		var tokenPrefix *string
+		var members int
+		if err := rows.Scan(&id, &name, &slug, &ip, &isNOP, &status, &number, &tokenPrefix, &members); err != nil {
 			h.fail(c, "scan team", err)
 			return
 		}
-		teams = append(teams, gin.H{"id": id, "name": name, "slug": slug, "vulnbox_ip": ip, "is_nop": isNOP, "status": status})
+		// only the first 8 characters of the token ever leave the database here
+		teams = append(teams, gin.H{"id": id, "name": name, "slug": slug, "vulnbox_ip": ip, "is_nop": isNOP, "status": status,
+			"team_number": number, "token_prefix": tokenPrefix, "member_count": members})
 	}
 	if err := rows.Err(); err != nil {
 		h.fail(c, "iterate teams", err)
@@ -566,7 +576,8 @@ func (h *GameAdminHandler) CreateService(c *gin.Context) {
 
 func (h *GameAdminHandler) ListServices(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(),
-		`SELECT id, name, slug, category, tier, port, checker_ref, enabled FROM game_services ORDER BY sort_order, name`)
+		`SELECT id, name, slug, category, tier, port, checker_ref, enabled, release_at, advisory_at, advisories, wave_exploits
+		 FROM game_services ORDER BY sort_order, name`)
 	if err != nil {
 		h.fail(c, "list services", err)
 		return
@@ -579,12 +590,16 @@ func (h *GameAdminHandler) ListServices(c *gin.Context) {
 		var port *int
 		var checker *string
 		var enabled bool
-		if err := rows.Scan(&id, &name, &slug, &category, &tier, &port, &checker, &enabled); err != nil {
+		var releaseAt, advisoryAt *time.Time
+		var advisories, waveExploits json.RawMessage
+		if err := rows.Scan(&id, &name, &slug, &category, &tier, &port, &checker, &enabled,
+			&releaseAt, &advisoryAt, &advisories, &waveExploits); err != nil {
 			h.fail(c, "scan service", err)
 			return
 		}
 		services = append(services, gin.H{"id": id, "name": name, "slug": slug, "category": category,
-			"tier": tier, "port": port, "checker_ref": checker, "enabled": enabled})
+			"tier": tier, "port": port, "checker_ref": checker, "enabled": enabled,
+			"release_at": releaseAt, "advisory_at": advisoryAt, "advisories": advisories, "wave_exploits": waveExploits})
 	}
 	if err := rows.Err(); err != nil {
 		h.fail(c, "iterate services", err)
@@ -805,7 +820,9 @@ func validateHillBaseURL(value string) (string, error) {
 func (h *GameAdminHandler) ListHills(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(),
 		`SELECT id, name, slug, host(host), port, checker_ref, reset_seconds, enabled,
-		        controller_protocol, base_url, challenge_id
+		        controller_protocol, base_url, challenge_id,
+		        COALESCE((SELECT json_agg(json_build_object('opens_at', w.opens_at, 'closes_at', w.closes_at) ORDER BY w.opens_at)
+		                  FROM game_koth_windows w WHERE w.hill_id = game_koth_hills.id), '[]'::json)
 		 FROM game_koth_hills ORDER BY sort_order, name`)
 	if err != nil {
 		h.fail(c, "list hills", err)
@@ -822,13 +839,14 @@ func (h *GameAdminHandler) ListHills(c *gin.Context) {
 		var protocol string
 		var baseURL *string
 		var challengeID *uuid.UUID
-		if err := rows.Scan(&id, &name, &slug, &host, &port, &checker, &reset, &enabled, &protocol, &baseURL, &challengeID); err != nil {
+		var windows json.RawMessage
+		if err := rows.Scan(&id, &name, &slug, &host, &port, &checker, &reset, &enabled, &protocol, &baseURL, &challengeID, &windows); err != nil {
 			h.fail(c, "scan hill", err)
 			return
 		}
 		hills = append(hills, gin.H{"id": id, "name": name, "slug": slug, "host": host, "port": port,
 			"checker_ref": checker, "reset_seconds": reset, "enabled": enabled, "protocol": protocol,
-			"base_url": baseURL, "challenge_id": challengeID})
+			"base_url": baseURL, "challenge_id": challengeID, "windows": windows})
 	}
 	if err := rows.Err(); err != nil {
 		h.fail(c, "iterate hills", err)

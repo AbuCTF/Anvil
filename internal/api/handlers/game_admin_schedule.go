@@ -100,7 +100,14 @@ func (h *GameAdminHandler) Extend(c *gin.Context) {
 		return
 	}
 	h.logger.Info("finals extended", zap.Int("minutes", req.Minutes), zap.String("by", adminID(c)))
-	c.JSON(http.StatusOK, gin.H{"status": "extended", "minutes": req.Minutes})
+	var endAt, freezeAt string
+	if err := h.db.Pool.QueryRow(c.Request.Context(), `SELECT
+		COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.end_at'), ''),
+		COALESCE((SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.freeze_at'), '')`).Scan(&endAt, &freezeAt); err != nil {
+		h.fail(c, "read extended schedule", err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "extended", "minutes": req.Minutes, "end_at": endAt, "freeze_at": freezeAt})
 }
 
 type hillWindow struct {

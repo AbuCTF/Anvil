@@ -77,6 +77,7 @@ func (h *GameInternalHandler) VPNPeers(c *gin.Context) {
 	rows, err := h.db.Pool.Query(c.Request.Context(), `
 		SELECT v.id, identity.team_id, identity.team_number, v.public_key, v.assigned_ip
 		FROM vpn_configs v
+		JOIN users u ON u.id = v.user_id AND u.status = 'active'
 		LEFT JOIN LATERAL (
 			SELECT team_id, team_number
 			FROM vpn_peer_history

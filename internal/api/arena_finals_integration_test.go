@@ -156,6 +156,11 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	}
 	setting("arena_enabled", "true")
 
+	// a team with a vulnbox address must read back its own identity (inet -> text)
+	if code, raw := call("GET", "/api/v1/arena/me", &p1, ""); code != http.StatusOK || !strings.Contains(string(raw), `"vulnbox_ip":"10.60.1.2"`) {
+		t.Fatalf("arena/me = %d %s", code, raw)
+	}
+
 	for _, endpoint := range []struct {
 		method string
 		path   string
