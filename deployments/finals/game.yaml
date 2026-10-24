@@ -51,7 +51,7 @@ game:
 
   koth:
     round_interval: 15m
-    night_round_interval: 30m
+    night_round_interval: 15m
     night_start: "00:00"
     night_end: "06:00"
     timezone: Asia/Kolkata
