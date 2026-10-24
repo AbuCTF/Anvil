@@ -14,7 +14,8 @@ import (
 //   HOLD  += A x (1 + 1/h)               per flag nobody stole and that read back every
 //                                        tick of its life while the service was green
 //   UP    += sqrt(N) x q per store-tick  q = 1 OK or ORG_FAULT, readable share if RECOVERING
-// then TOTAL = 1000 x (wAD x AD_rel + wK x KOTH_rel), each relative to its median team.
+// then TOTAL = 1000 x (wAD x AD_rel + wK x KOTH_rel + wJ x JEOPARDY_rel), each
+// relative to its median team. wJ = 0 leaves the jeopardy board out entirely.
 
 type slaKey struct {
 	team    uuid.UUID
@@ -73,14 +74,17 @@ type mirrorInput struct {
 	Attackers  map[storeTick]map[uuid.UUID]bool
 	Steal      map[teamStore]float64 // settled STEAL already summed in sql
 	Koth       map[uuid.UUID]float64
+	Jeopardy   map[uuid.UUID]float64 // jeopardy solve points; a missing team scores 0
 	MassFault  int
 	Bonus      float64 // attacker bonus w; 0 = off
 	WeightAD   float64
 	WeightKoth float64
+
+	WeightJeopardy float64
 }
 
 type mirrorScore struct {
-	Steal, Hold, Up, AD, Koth, Total float64
+	Steal, Hold, Up, AD, Koth, Jeopardy, Total float64
 }
 
 type mirrorBreakdown struct {
@@ -315,16 +319,21 @@ func scoreMirror(in *mirrorInput) mirrorResult {
 
 	ads := make([]float64, 0, len(res.Teams))
 	kos := make([]float64, 0, len(res.Teams))
+	jes := make([]float64, 0, len(res.Teams))
 	for id, s := range res.Teams {
 		s.AD = s.Steal + s.Hold + s.Up
 		s.Koth = in.Koth[id]
+		s.Jeopardy = in.Jeopardy[id]
 		ads = append(ads, s.AD)
 		kos = append(kos, s.Koth)
+		jes = append(jes, s.Jeopardy)
 	}
 	adMed, adTop := medianTop(ads)
 	koMed, koTop := medianTop(kos)
+	jeMed, jeTop := medianTop(jes)
 	for _, s := range res.Teams {
-		s.Total = 1000 * (in.WeightAD*relative(s.AD, adMed, adTop) + in.WeightKoth*relative(s.Koth, koMed, koTop))
+		s.Total = 1000 * (in.WeightAD*relative(s.AD, adMed, adTop) + in.WeightKoth*relative(s.Koth, koMed, koTop) +
+			in.WeightJeopardy*relative(s.Jeopardy, jeMed, jeTop))
 	}
 	return res
 }

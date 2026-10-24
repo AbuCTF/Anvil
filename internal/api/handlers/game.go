@@ -235,12 +235,25 @@ type gameStanding struct {
 	Defense float64 `json:"defense"`
 	SLA     float64 `json:"sla"`
 	Koth    float64 `json:"koth"`
-	Total   float64 `json:"total"`
+	// live jeopardy points, only while weight_jeopardy folds them into total
+	Jeopardy *float64 `json:"jeopardy,omitempty"`
+	Total    float64  `json:"total"`
+}
+
+// jeopardyColumn is a game team's jeopardy score as the teams board ranks it (the
+// mirror loads the same number), or NULL while weight_jeopardy is 0 so the field
+// stays out of the payload. live, so it can run a tick ahead of total.
+func (h *GameHandler) jeopardyColumn(alias string) string {
+	if h.config == nil || h.config.Game.Scoring.WeightJeopardy <= 0 {
+		return "NULL::float8"
+	}
+	return `COALESCE((SELECT rt.total_score FROM teams rt WHERE rt.id = ` + alias + `.id AND ` +
+		publicTeamSQL("rt") + `), 0)::float8`
 }
 
 func (h *GameHandler) standingsData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]gameStanding, error) {
 	rows, err := query.Query(ctx,
-		`SELECT t.id, t.name, s.attack, s.defense, s.sla, s.koth, s.total, s.rank
+		`SELECT t.id, t.name, s.attack, s.defense, s.sla, s.koth, `+h.jeopardyColumn("t")+`, s.total, s.rank
 		 FROM game_standings s JOIN game_teams t ON t.id = s.team_id
 		 WHERE t.is_nop = false AND t.status = 'active' AND `+gameTeamVisibilitySQL("t", includeHidden)+`
 		 ORDER BY s.rank ASC NULLS LAST, t.id`)
@@ -253,7 +266,7 @@ func (h *GameHandler) standingsData(ctx context.Context, query gameStateQuerier,
 	for rows.Next() {
 		var e gameStanding
 		var id uuid.UUID
-		if err := rows.Scan(&id, &e.Team, &e.Attack, &e.Defense, &e.SLA, &e.Koth, &e.Total, &e.Rank); err != nil {
+		if err := rows.Scan(&id, &e.Team, &e.Attack, &e.Defense, &e.SLA, &e.Koth, &e.Jeopardy, &e.Total, &e.Rank); err != nil {
 			return nil, err
 		}
 		e.TeamID = id.String()

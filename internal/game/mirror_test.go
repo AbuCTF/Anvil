@@ -294,3 +294,63 @@ func TestMirrorAttackerBonus(t *testing.T) {
 		t.Fatalf("hold with bonus weight %.3f, want 12", r.Teams[w.teams[10]].Hold)
 	}
 }
+
+func TestMirrorJeopardyThreeWayMerge(t *testing.T) {
+	w := newWorld(t)
+	w.in.WeightAD, w.in.WeightKoth, w.in.WeightJeopardy = 0.6, 0.25, 0.15
+	w.in.Jeopardy = map[uuid.UUID]float64{w.nop: 9999} // the nop never enters the board
+	for i, id := range w.teams {
+		w.in.Steal[teamStore{id, w.service, 0}] = float64(i * 10) // AD 0..140, median 70
+		w.in.Koth[id] = float64((14 - i) * 2)                     // koth 28..0, median 14
+		if i != 5 {
+			w.in.Jeopardy[id] = float64(i * 100) // team 5 never solved: missing scores 0
+		}
+	}
+	// jeopardy 0..1400 with team 5 at 0: sorted median (index 7) is 700, leader 1400
+	r := scoreMirror(w.in)
+	want := func(i int, ad, ko, je float64) {
+		t.Helper()
+		total := 1000 * (0.6*(ad-70)/70 + 0.25*(ko-14)/14 + 0.15*(je-700)/700)
+		if s := r.Teams[w.teams[i]]; !near(s.Total, total) || s.Jeopardy != je {
+			t.Fatalf("team %d total %.3f jeopardy %.0f, want %.3f and %.0f", i, s.Total, s.Jeopardy, total, je)
+		}
+	}
+	want(14, 140, 0, 1400) // AD and jeopardy leader, koth last: 600 - 250 + 150
+	want(0, 0, 28, 0)      // koth leader only
+	want(5, 50, 18, 0)     // missing from the jeopardy map
+	want(7, 70, 14, 700)   // median on all three boards: 0
+	if !near(r.Teams[w.teams[7]].Total, 0) {
+		t.Fatalf("median team total %.3f, want 0", r.Teams[w.teams[7]].Total)
+	}
+	if _, ok := r.Teams[w.nop]; ok {
+		t.Fatal("the nop team was scored")
+	}
+}
+
+func TestMirrorJeopardyWeightZeroIsUnchanged(t *testing.T) {
+	w := newWorld(t)
+	for i, id := range w.teams {
+		w.in.Steal[teamStore{id, w.service, 0}] = float64(i*13%7) + 0.1*float64(i)
+		w.in.Koth[id] = float64(i * i % 11)
+	}
+	before := scoreMirror(w.in)
+	ads, kos := []float64{}, []float64{}
+	for _, s := range before.Teams {
+		ads = append(ads, s.AD)
+		kos = append(kos, s.Koth)
+	}
+	adMed, adTop := medianTop(ads)
+	koMed, koTop := medianTop(kos)
+
+	// jeopardy points loaded but weighted 0, or not loaded at all: the old formula, bit for bit
+	for _, jeopardy := range []map[uuid.UUID]float64{nil, {w.teams[0]: 5000, w.teams[3]: 120}} {
+		w.in.Jeopardy = jeopardy
+		r := scoreMirror(w.in)
+		for id, s := range r.Teams {
+			old := 1000 * (0.7*relative(s.AD, adMed, adTop) + 0.3*relative(s.Koth, koMed, koTop))
+			if s.Total != old || s.Total != before.Teams[id].Total {
+				t.Fatalf("weight 0 total %v, want %v", s.Total, old)
+			}
+		}
+	}
+}

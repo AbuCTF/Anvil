@@ -415,6 +415,7 @@ type ScoringConfig struct {
 	Formula        string  `mapstructure:"formula"`   // legacy | mirror
 	WeightAD       float64 `mapstructure:"weight_ad"` // median-relative merge weights
 	WeightKoth     float64 `mapstructure:"weight_koth"`
+	WeightJeopardy float64 `mapstructure:"weight_jeopardy"`  // 0 = jeopardy board left out
 	AttackerBonus  float64 `mapstructure:"attacker_bonus"`   // 0 = off; the pre-freeze dial (1.5)
 	NTeams         int     `mapstructure:"n_teams"`          // 0 = count active non-nop teams
 	MassFaultTeams int     `mapstructure:"mass_fault_teams"` // teams failing with the nop canary => ORG_FAULT
@@ -681,6 +682,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("game.scoring.formula", "legacy")
 	v.SetDefault("game.scoring.weight_ad", 0.7)
 	v.SetDefault("game.scoring.weight_koth", 0.3)
+	v.SetDefault("game.scoring.weight_jeopardy", 0.0)
 	v.SetDefault("game.scoring.attacker_bonus", 0)
 	v.SetDefault("game.scoring.n_teams", 0)
 	v.SetDefault("game.scoring.mass_fault_teams", 3)

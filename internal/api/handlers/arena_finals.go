@@ -22,6 +22,7 @@ type finalsScoreRow struct {
 	Up       float64                  `json:"up"`
 	AD       float64                  `json:"ad"`
 	Koth     float64                  `json:"koth"`
+	Jeopardy *float64                 `json:"jeopardy,omitempty"`
 	Total    float64                  `json:"total"`
 	Services []finalsServiceBreakdown `json:"services"`
 }
@@ -80,7 +81,7 @@ func (h *GameHandler) finalsScoreboardRows(ctx context.Context) ([]finalsScoreRo
 	// standings query: attack=steal, defense=hold, sla=up, ad=total-ad, koth, total
 	sRows, err := h.db.Pool.Query(ctx,
 		`SELECT gs.rank, gt.id::text, gt.name,
-		        gs.attack, gs.defense, gs.sla, gs.ad, gs.koth, gs.total
+		        gs.attack, gs.defense, gs.sla, gs.ad, gs.koth, `+h.jeopardyColumn("gt")+`, gs.total
 		 FROM game_standings gs
 		 JOIN game_teams gt ON gt.id = gs.team_id
 		 WHERE gt.is_nop = false AND gt.status = 'active'
@@ -95,7 +96,7 @@ func (h *GameHandler) finalsScoreboardRows(ctx context.Context) ([]finalsScoreRo
 	for sRows.Next() {
 		var r finalsScoreRow
 		if err := sRows.Scan(&r.Rank, &r.TeamID, &r.TeamName,
-			&r.Steal, &r.Hold, &r.Up, &r.AD, &r.Koth, &r.Total); err != nil {
+			&r.Steal, &r.Hold, &r.Up, &r.AD, &r.Koth, &r.Jeopardy, &r.Total); err != nil {
 			return nil, err
 		}
 		r.Services = []finalsServiceBreakdown{}

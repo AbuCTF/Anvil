@@ -1234,6 +1234,69 @@ func TestIntegrationMirrorScoresThroughTicks(t *testing.T) {
 	}
 }
 
+// the mirror reads jeopardy points off the same teams board players see: game and
+// platform teams share an id, staff-only and zz- teams score nothing.
+func TestIntegrationMirrorLoadsJeopardyLikeTheBoard(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	seed := func(name string, score int, role string) uuid.UUID {
+		t.Helper()
+		id := uuid.New()
+		if _, err := db.Pool.Exec(ctx,
+			`INSERT INTO teams (id, name, join_code, total_score, koth_score) VALUES ($1, $2, $2, $3, 40)`,
+			id, name, score); err != nil {
+			t.Fatalf("seed platform team: %v", err)
+		}
+		if _, err := db.Pool.Exec(ctx,
+			`INSERT INTO game_teams (id, name, slug, status, is_nop, vulnbox_ip) VALUES ($1, $2, $2, 'active', false, '10.60.1.2')`,
+			id, name); err != nil {
+			t.Fatalf("seed game team: %v", err)
+		}
+		if _, err := db.Pool.Exec(ctx,
+			`INSERT INTO users (id, username, email, password_hash, role, status, team_id)
+			 VALUES ($1, $2, $3, 'x', $4, 'active', $5)`, uuid.New(), "u-"+name, name+"@example.com", role, id); err != nil {
+			t.Fatalf("seed user: %v", err)
+		}
+		return id
+	}
+	alpha := seed("alpha", 500, "user")
+	bravo := seed("bravo", 0, "user")
+	staff := seed("staff", 300, "admin")
+	qa := seed("zz-qa", 900, "user")
+	nosolve := seedTeam(t, db, "nosolve") // a game team with no platform team
+
+	load := func(weight float64) *mirrorInput {
+		t.Helper()
+		cfg := testController(db).cfg
+		cfg.Scoring.WeightJeopardy = weight
+		ctrl := NewController(cfg, db, zap.NewNop())
+		tx, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		in, err := ctrl.loadMirror(ctx, tx, 1, false)
+		if err != nil {
+			t.Fatalf("load mirror: %v", err)
+		}
+		return in
+	}
+	if in := load(0); in.Jeopardy != nil {
+		t.Fatalf("weight 0 loaded jeopardy points: %v", in.Jeopardy)
+	}
+	in := load(0.15)
+	if in.Jeopardy[alpha] != 500 || in.Jeopardy[bravo] != 0 {
+		t.Fatalf("jeopardy alpha %v bravo %v, want 500 (solve points, not koth_score) and 0", in.Jeopardy[alpha], in.Jeopardy[bravo])
+	}
+	for name, id := range map[string]uuid.UUID{"staff-only": staff, "zz-": qa, "no platform team": nosolve} {
+		if v, ok := in.Jeopardy[id]; ok {
+			t.Fatalf("%s team scored %v on the jeopardy board", name, v)
+		}
+	}
+}
+
 func TestIntegrationKothFinalsRoundsBountyAndCrowns(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)

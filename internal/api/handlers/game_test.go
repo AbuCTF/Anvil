@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -288,5 +289,27 @@ func TestLiveGameStateBoundsAndSurfacesStaleFallback(t *testing.T) {
 	unavailable := requestGameState(handler, "")
 	if unavailable.Code != http.StatusServiceUnavailable {
 		t.Fatalf("over-age stale response = %d, want 503", unavailable.Code)
+	}
+}
+
+func TestStandingsJeopardyOnlyWhileWeighted(t *testing.T) {
+	off := NewGameHandler(&config.Config{}, nil, zap.NewNop())
+	if col := off.jeopardyColumn("t"); col != "NULL::float8" {
+		t.Fatalf("weight 0 column = %q, want NULL", col)
+	}
+	raw, _ := json.Marshal(gameStanding{TeamID: "a", Total: 1})
+	if strings.Contains(string(raw), "jeopardy") {
+		t.Fatalf("weight 0 standing leaks a jeopardy field: %s", raw)
+	}
+
+	on := NewGameHandler(&config.Config{Game: config.GameConfig{Scoring: config.ScoringConfig{WeightJeopardy: 0.15}}}, nil, zap.NewNop())
+	col := on.jeopardyColumn("t")
+	if !strings.Contains(col, "rt.total_score") || !strings.Contains(col, "rt.id = t.id") || !strings.Contains(col, publicTeamSQL("rt")) {
+		t.Fatalf("weighted column does not read the public team board: %q", col)
+	}
+	zero := 0.0
+	raw, _ = json.Marshal(gameStanding{TeamID: "a", Jeopardy: &zero})
+	if !strings.Contains(string(raw), `"jeopardy":0`) {
+		t.Fatalf("weighted standing drops a zero jeopardy score: %s", raw)
 	}
 }
