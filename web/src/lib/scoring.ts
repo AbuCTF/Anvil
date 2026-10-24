@@ -12,16 +12,5 @@ export interface ScoreShare {
 	jeopardy?: number;
 }
 
-const pct = (w: number) => `${+(w * 100).toFixed(1)}%`;
-
 export const pts = (n: number | null | undefined) =>
 	typeof n === 'number' && Number.isFinite(n) ? n.toLocaleString(undefined, { maximumFractionDigits: 1 }) : '-';
-
-// the most a board can add: what its leader gets
-export const fullShare = (w: number) => Math.round(1000 * w);
-
-export function weightsLabel(w: ScoreWeights): string {
-	const parts = [`${pct(w.ad)} attack-defense`, `${pct(w.koth)} king of the hill`];
-	if (w.jeopardy > 0) parts.push(`${pct(w.jeopardy)} jeopardy`);
-	return `Score = ${parts.join(' + ')}, each relative to the field (leader = full share, median = 0)`;
-}
