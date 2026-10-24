@@ -1024,6 +1024,10 @@ class ApiClient {
 		return this.request<{ team_number: number | null }>('/arena/me', { cache: 'no-store' });
 	}
 
+	async getArenaToken() {
+		return this.request<{ token: string }>('/arena/me/token', { cache: 'no-store' });
+	}
+
 	async getArenaTeams() {
 		return this.request<{ teams: ArenaTeam[] }>('/admin/arena/teams', { cache: 'no-store' });
 	}

@@ -114,6 +114,19 @@
 	let latestTick = 0;
 
 	let now = Date.now();
+	let fullToken = '';
+	let tokenBusy = false;
+	async function revealToken() {
+		if (tokenBusy) return;
+		tokenBusy = true;
+		try {
+			fullToken = (await api.getArenaToken()).token;
+		} catch {
+			fullToken = '';
+		} finally {
+			tokenBusy = false;
+		}
+	}
 	let submitFlag = '';
 	let submitResult = '';
 	let submitBusy = false;
@@ -421,6 +434,7 @@
 		<a href="/arena" class="text-stone-400 hover:text-stone-200">Arena</a>
 		{#if $platformInfo?.vpn_enabled}<a href="/vpn" class="text-stone-400 hover:text-stone-200">VPN</a>{/if}
 		<a href="{API_BASE}/api/v1/arena/attack-info" target="_blank" rel="noreferrer" class="text-stone-400 hover:text-stone-200">Flag IDs</a>
+		<a href="/ad-kit.zip" download class="text-stone-400 hover:text-stone-200">Kit</a>
 		<span class="ml-auto text-stone-600">{refreshedAgo}</span>
 		<button type="button" on:click={refresh} disabled={refreshBusy} class="inline-flex items-center gap-1 rounded text-stone-400 hover:text-stone-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 disabled:opacity-50">
 			<Icon icon="mdi:refresh" class="h-3.5 w-3.5 {refreshBusy ? 'animate-spin' : ''}" />Refresh
@@ -543,9 +557,15 @@
 					{/if}
 				</form>
 				{#if me.token}
-					<p class="mt-3 flex items-center gap-1.5 text-[0.7rem] text-stone-600" title="Send as the X-Team-Token header from scripts">
-						Team token <span class="font-mono text-stone-500">{me.token}</span>
-					</p>
+					<div class="mt-3 flex min-w-0 items-center gap-1.5 text-[0.7rem] text-stone-600" title="Send as the X-Team-Token header from scripts">
+						Team token
+						{#if fullToken}
+							<CopyText text={fullToken} wrap className="min-w-0 font-mono text-stone-300" />
+						{:else}
+							<span class="font-mono text-stone-500">{me.token}</span>
+							<button type="button" on:click={revealToken} disabled={tokenBusy} class="text-stone-400 underline hover:text-stone-200 disabled:opacity-50">show</button>
+						{/if}
+					</div>
 				{/if}
 			</Card>
 

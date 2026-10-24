@@ -218,6 +218,7 @@ func (s *Server) setupRouter() {
 				arenaTeam.GET("/arena/me", teamAPIHandler.Me)
 				arenaTeam.GET("/arena/me/status", teamAPIHandler.MeStatus)
 				arenaTeam.GET("/arena/me/alerts", teamAPIHandler.MeAlerts)
+				arenaTeam.GET("/arena/me/token", teamAPIHandler.MeToken)
 			}
 		}
 
