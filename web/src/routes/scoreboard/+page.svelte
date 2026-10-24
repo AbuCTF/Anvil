@@ -13,6 +13,9 @@
   import EmptyState from "$lib/components/EmptyState.svelte";
   import OpticalIcon from "$lib/components/OpticalIcon.svelte";
   import ScoreboardMatrix from "$lib/components/ScoreboardMatrix.svelte";
+  import ArenaChart, {
+    type HistorySeries as ArenaHistory,
+  } from "$lib/components/ArenaChart.svelte";
   import { teamColor, rankAccent } from "$lib/rank";
   import { downloadRankCard } from "$lib/share";
   import type { Series } from "$lib/chart/path";
@@ -127,6 +130,8 @@
   let finalsBusy = false;
   let finalsError = 0;
   let finalsStale = false;
+  let finalsHistory: ArenaHistory[] = [];
+  let finalsKothHistory: ArenaHistory[] = [];
   let loadError = 0; // http status of a failed first load (-1 = network)
   let boardStale = false;
   let historyStale = false;
@@ -460,6 +465,20 @@
     if (!isFinalsMode) return;
     if (finalsBusy) return;
     finalsBusy = true;
+    // the chart rides on /arena/state; a miss keeps the last lines and never fails the board
+    const chart = fetch(`${API_BASE}/api/v1/arena/state`, {
+      headers: authHeaders(),
+      signal: requestController?.signal,
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((state) => {
+        if (!state) return;
+        finalsHistory = Array.isArray(state.history) ? state.history : [];
+        finalsKothHistory = Array.isArray(state.koth_history)
+          ? state.koth_history
+          : [];
+      })
+      .catch(() => {});
     try {
       const [rowsRes, kothRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/arena/scoreboard`, {
@@ -489,6 +508,7 @@
       if (loaded.finals) finalsStale = true;
       else finalsError = typeof caught === "number" ? caught : -1;
     } finally {
+      await chart;
       finalsBusy = false;
     }
   }
@@ -799,6 +819,14 @@
           >
             Finals update delayed; showing the last successful result.
           </div>
+        {/if}
+        {#if !frozen}
+          <ArenaChart
+            history={finalsHistory}
+            kothHistory={finalsKothHistory}
+            leader={finalsRows[0]?.team_name ?? null}
+            className="mb-4"
+          />
         {/if}
         <Card title="Finals standings" bodyClass="p-0">
           <span slot="meta" class="metadata-label text-stone-500"
