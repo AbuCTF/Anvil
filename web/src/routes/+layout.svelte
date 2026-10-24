@@ -80,8 +80,8 @@
 	}
 
 	type ThemePreference = 'system' | 'dark' | 'light';
-	const themeOptions: ThemePreference[] = ['system', 'light', 'dark'];
-	let themePreference: ThemePreference = 'system';
+	const themeOptions: ThemePreference[] = ['light', 'dark'];
+	let themePreference: ThemePreference = 'dark';
 	let theme: 'dark' | 'light' = 'dark';
 	let credits: number | null = null;
 	let notificationUnread = 0;
@@ -226,9 +226,9 @@
 		const systemTheme = window.matchMedia('(prefers-color-scheme: light)');
 		try {
 			const saved = localStorage.getItem('theme');
-			themePreference = saved === 'light' || saved === 'dark' ? saved : 'system';
+			themePreference = saved === 'light' ? 'light' : 'dark';
 		} catch {
-			themePreference = 'system';
+			themePreference = 'dark';
 		}
 		applyTheme(themePreference, systemTheme.matches);
 		const handleSystemThemeChange = (event: MediaQueryListEvent) => {

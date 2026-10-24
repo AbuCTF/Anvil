@@ -760,7 +760,7 @@
           </div>
         {/if}
         <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
-          <span class="text-stone-500">AD 70% + KotH 30%, median-relative</span>
+          <span class="text-stone-500">AD 60% + KotH 25% + Jeopardy 15%, median-relative</span>
           {#if frozen}
             <span
               class="rounded bg-amber-500/10 px-2 py-0.5 text-amber-400 border border-amber-500/30"
