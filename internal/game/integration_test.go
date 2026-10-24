@@ -660,6 +660,36 @@ func TestIntegrationReservedFlagIsNotSubmittable(t *testing.T) {
 	}
 }
 
+func TestIntegrationDisabledServiceFlagIsNotSubmittable(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+
+	attacker := seedTeam(t, db, "alpha")
+	victim := seedTeam(t, db, "bravo")
+	service := seedService(t, db, okChecker(t))
+	if _, err := db.Pool.Exec(ctx, `INSERT INTO game_ticks (tick_number, status) VALUES (1, 'running')`); err != nil {
+		t.Fatalf("seed tick: %v", err)
+	}
+	flags := []string{"H7CTF{ENABLED}", "H7CTF{DISABLED}"}
+	if _, err := db.Pool.Exec(ctx,
+		`INSERT INTO game_flags
+		   (tick_number, team_id, service_id, store_index, flag, valid_from_tick, valid_until_tick, planted_at)
+		 VALUES (1, $1, $2, 0, $3, 1, 10, NOW()), (1, $1, $2, 1, $4, 1, 10, NOW())`,
+		victim, service, flags[0], flags[1]); err != nil {
+		t.Fatalf("seed flags: %v", err)
+	}
+	assertOutcome(t, db, attacker, flags[0], SubmitAccepted)
+	if _, err := db.Pool.Exec(ctx, `UPDATE game_services SET enabled = FALSE WHERE id = $1`, service); err != nil {
+		t.Fatalf("disable service: %v", err)
+	}
+	assertOutcome(t, db, attacker, flags[1], SubmitInvalid)
+	assertOutcome(t, db, attacker, "H7CTF{UNKNOWN}", SubmitInvalid)
+	if n := count(t, db, `SELECT COUNT(*) FROM game_captures`); n != 1 {
+		t.Fatalf("disabled submission changed captures: got %d want 1", n)
+	}
+}
+
 func TestIntegrationRunningTickReusesReservedFlag(t *testing.T) {
 	ctx := context.Background()
 	db := testDB(t)

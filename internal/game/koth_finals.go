@@ -41,6 +41,12 @@ func atNight(k config.KothConfig, t time.Time) bool {
 	return ok
 }
 
+// ServiceReleaseWindow keeps public visibility on the dispatcher's Night Watch boundary.
+func ServiceReleaseWindow(k config.KothConfig, t time.Time) (time.Time, bool) {
+	start, _, night := nightBounds(k, t)
+	return start, night
+}
+
 func nightBounds(k config.KothConfig, t time.Time) (time.Time, time.Time, bool) {
 	loc, err := time.LoadLocation(k.Timezone)
 	if err != nil {

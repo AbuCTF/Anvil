@@ -122,6 +122,9 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	cfg.RateLimit.Enabled = false
 	cfg.VPN.Enabled = false
 	cfg.Game.Enabled = true
+	cfg.Game.Koth.NightStart = "00:00"
+	cfg.Game.Koth.NightEnd = "06:00"
+	cfg.Game.Koth.Timezone = "Asia/Kolkata"
 	containerSvc, err := container.NewService(cfg.Container, zap.NewNop())
 	if err != nil {
 		t.Skipf("docker unavailable: %v", err)
@@ -285,9 +288,27 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		t.Fatalf("frozen admin services matrix = %d %s", code, raw)
 	}
 	setting("event.freeze_at", `""`)
+	ist, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nightTick := time.Date(2026, 10, 25, 2, 40, 0, 0, ist)
+	afterNight := time.Date(2026, 10, 25, 6, 0, 0, 0, ist)
+	exec(`UPDATE game_ticks SET started_at = $1 WHERE tick_number = 3`, nightTick)
+	futureService := uuid.New()
+	exec(`INSERT INTO game_services (id, name, slug, category, port, checker_ref, release_at)
+		VALUES ($1, 'Future Service', 'future-service', 'web', 8081, 'http://future-checker:9000', $2)`,
+		futureService, time.Date(2026, 10, 25, 2, 29, 33, 0, ist))
 	if code, raw := call("GET", "/api/v1/arena/services", &p1, ""); code != http.StatusOK || !strings.Contains(string(raw), `"rank":1`) {
 		t.Fatalf("live services matrix = %d %s", code, raw)
+	} else if strings.Contains(string(raw), "Future Service") {
+		t.Fatalf("night services matrix exposed a deferred service: %s", raw)
 	}
+	exec(`UPDATE game_ticks SET started_at = $1 WHERE tick_number = 3`, afterNight)
+	if code, raw := call("GET", "/api/v1/arena/services", &p1, ""); code != http.StatusOK || !strings.Contains(string(raw), "Future Service") {
+		t.Fatalf("post-night services matrix = %d %s", code, raw)
+	}
+	exec(`UPDATE game_ticks SET started_at = $1 WHERE tick_number = 3`, nightTick)
 
 	// The War Room is a full, delayed matrix. Tick 3 is current, so public view
 	// tick 1 is visible and the tick-3 advisory must remain hidden. Team markers
@@ -425,6 +446,9 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 	}
 	foundIdle := false
 	for _, service := range status.Services {
+		if service.Slug == "future-service" {
+			t.Fatal("team status exposed a Night Watch-deferred service")
+		}
 		if service.Slug != "waiting-room" {
 			continue
 		}

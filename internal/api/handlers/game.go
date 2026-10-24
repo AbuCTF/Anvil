@@ -511,8 +511,17 @@ type matrixRow struct {
 }
 
 func (h *GameHandler) matrixData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]matrixService, []matrixRow, error) {
+	var at time.Time
+	if err := query.QueryRow(ctx,
+		`SELECT COALESCE((SELECT started_at FROM game_ticks ORDER BY tick_number DESC LIMIT 1), NOW())`).Scan(&at); err != nil {
+		return nil, nil, err
+	}
+	nightStart, night := game.ServiceReleaseWindow(h.config.Game.Koth, at)
 	svcRows, err := query.Query(ctx,
-		`SELECT id, name, category, tier FROM game_services WHERE enabled = true ORDER BY sort_order, name, id`)
+		`SELECT id, name, category, tier FROM game_services
+		 WHERE enabled = true AND (release_at IS NULL OR
+		   (release_at <= $1 AND (NOT $2 OR release_at < $3)))
+		 ORDER BY sort_order, name, id`, at, night, nightStart)
 	if err != nil {
 		return nil, nil, err
 	}

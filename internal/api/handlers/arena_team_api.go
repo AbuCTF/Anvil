@@ -255,7 +255,15 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 		return
 	}
 
-	// Load all enabled services so the release inventory is visible before the first tick.
+	var at time.Time
+	if err := h.db.Pool.QueryRow(ctx,
+		`SELECT COALESCE((SELECT started_at FROM game_ticks ORDER BY tick_number DESC LIMIT 1), NOW())`).Scan(&at); err != nil {
+		h.logger.Error("arena/me/status: tick time", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
+	}
+	nightStart, night := game.ServiceReleaseWindow(h.config.Game.Koth, at)
+
 	type svcMeta struct {
 		id         uuid.UUID
 		slug, name string
@@ -266,7 +274,10 @@ func (h *GameHandler) MeStatus(c *gin.Context) {
 	var svcOrder []uuid.UUID
 	mRows, err := h.db.Pool.Query(ctx,
 		`SELECT id, name, slug, port, flag_stores
-		 FROM game_services WHERE enabled = true ORDER BY sort_order, name, id`)
+		 FROM game_services
+		 WHERE enabled = true AND (release_at IS NULL OR
+		   (release_at <= $1 AND (NOT $2 OR release_at < $3)))
+		 ORDER BY sort_order, name, id`, at, night, nightStart)
 	if err != nil {
 		h.logger.Error("arena/me/status: service meta", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})

@@ -427,7 +427,7 @@ func (d *Dispatcher) completedJobs(ctx context.Context, tick int) (map[jobKey]bo
 }
 
 func (d *Dispatcher) releasedServices(ctx context.Context, at time.Time) ([]serviceTarget, error) {
-	nightStart, _, night := nightBounds(d.koth, at)
+	nightStart, night := ServiceReleaseWindow(d.koth, at)
 	rows, err := d.db.Pool.Query(ctx,
 		`SELECT id, port, checker_ref, GREATEST(flag_stores, 1), noise_variants, havoc_variants
 		 FROM game_services

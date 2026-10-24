@@ -58,7 +58,9 @@ func SubmitFlag(ctx context.Context, db *database.DB, attacker uuid.UUID, flag s
 	)
 	err := db.Pool.QueryRow(ctx,
 		`SELECT f.id, f.team_id, f.service_id, f.valid_until_tick, t.is_nop
-		 FROM game_flags f JOIN game_teams t ON t.id = f.team_id
+		 FROM game_flags f
+		 JOIN game_teams t ON t.id = f.team_id
+		 JOIN game_services s ON s.id = f.service_id AND s.enabled = TRUE
 		 WHERE f.flag = $1 AND f.planted_at IS NOT NULL`, flag).
 		Scan(&flagID, &owner, &service, &validUntil, &ownerNop)
 	if errors.Is(err, pgx.ErrNoRows) {

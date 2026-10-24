@@ -206,9 +206,13 @@ func (h *GameHandler) loadWarRoom(ctx context.Context) (*warRoom, error) {
 	room := &warRoom{Teams: []warTeam{}, Services: []warService{}, Grid: []warCell{}, Hills: []warHill{}, Events: []warRoomEvent{}}
 	pool := h.db.Pool
 
-	if err := pool.QueryRow(ctx, `SELECT COALESCE(MAX(tick_number), 0) FROM game_ticks`).Scan(&room.Tick); err != nil {
+	var at time.Time
+	if err := pool.QueryRow(ctx, `SELECT COALESCE(MAX(tick_number), 0),
+		COALESCE((SELECT started_at FROM game_ticks ORDER BY tick_number DESC LIMIT 1), NOW())
+		FROM game_ticks`).Scan(&room.Tick, &at); err != nil {
 		return nil, err
 	}
+	nightStart, night := game.ServiceReleaseWindow(h.config.Game.Koth, at)
 	view, _, err := game.PublicViewTick(ctx, h.db)
 	if err != nil {
 		return nil, err
@@ -251,8 +255,9 @@ func (h *GameHandler) loadWarRoom(ctx context.Context) (*warRoom, error) {
 
 	rows, err = pool.Query(ctx,
 		`SELECT slug, name, COALESCE(port, 0) FROM game_services
-		 WHERE enabled = true AND (release_at IS NULL OR release_at <= NOW())
-		 ORDER BY sort_order, name`)
+		 WHERE enabled = true AND (release_at IS NULL OR
+		   (release_at <= $1 AND (NOT $2 OR release_at < $3)))
+		 ORDER BY sort_order, name`, at, night, nightStart)
 	if err != nil {
 		return nil, err
 	}
@@ -286,8 +291,10 @@ func (h *GameHandler) loadWarRoom(ctx context.Context) (*warRoom, error) {
 		 LEFT JOIN game_sla_checks sc
 		   ON sc.team_id = gt.id AND sc.service_id = gs.id AND sc.tick_number = $1
 		 WHERE gt.status = 'active' AND `+publicGameTeamSQL("gt")+`
-		   AND gs.enabled = true AND (gs.release_at IS NULL OR gs.release_at <= NOW())
-		 ORDER BY gt.is_nop, gt.team_number NULLS LAST, gt.name, gs.sort_order, gs.name`, view)
+		   AND gs.enabled = true AND (gs.release_at IS NULL OR
+		     (gs.release_at <= $2 AND (NOT $3 OR gs.release_at < $4)))
+		 ORDER BY gt.is_nop, gt.team_number NULLS LAST, gt.name, gs.sort_order, gs.name`,
+		view, at, night, nightStart)
 	if err != nil {
 		return nil, err
 	}
