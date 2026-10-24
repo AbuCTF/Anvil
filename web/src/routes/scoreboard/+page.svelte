@@ -580,19 +580,6 @@
       <div
         class="flex overflow-hidden rounded-md border border-stone-800 text-xs"
       >
-        {#if isFinalsMode}
-          <button
-            class="inline-flex items-center gap-1.5 border-r border-stone-800 px-2.5 py-1.5 transition-colors {view ===
-            'finals'
-              ? 'bg-stone-800 text-stone-200'
-              : 'text-stone-500 hover:text-stone-300'}"
-            on:click={() => setView("finals")}
-            aria-pressed={view === "finals"}
-          >
-            <OpticalIcon icon="mdi:sword-cross" size={12} box={12} />
-            <span class="optical-label">Overall</span>
-          </button>
-        {/if}
         <button
           class="inline-flex items-center gap-1.5 px-2.5 py-1.5 transition-colors {view ===
           'standings'
@@ -602,7 +589,7 @@
           aria-pressed={view === "standings"}
         >
           <OpticalIcon icon="mdi:format-list-numbered" size={12} box={12} />
-          <span class="optical-label">{isFinalsMode ? "Jeopardy" : "Standings"}</span>
+          <span class="optical-label">Standings</span>
         </button>
         <button
           class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view ===
@@ -615,6 +602,19 @@
           <OpticalIcon icon="mdi:view-grid-outline" size={12} box={12} />
           <span class="optical-label">Matrix</span>
         </button>
+        {#if isFinalsMode}
+          <button
+            class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view ===
+            'finals'
+              ? 'bg-stone-800 text-stone-200'
+              : 'text-stone-500 hover:text-stone-300'}"
+            on:click={() => setView("finals")}
+            aria-pressed={view === "finals"}
+          >
+            <OpticalIcon icon="mdi:sword-cross" size={12} box={12} />
+            <span class="optical-label">Finals</span>
+          </button>
+        {/if}
       </div>
 
       {#if view === "matrix" && matrixCategories.length > 1}
@@ -692,11 +692,7 @@
     </Card>
   {:else if view !== "finals" && total === 0}
     <Card
-      title={view === "matrix"
-        ? "Challenge matrix"
-        : isFinalsMode
-          ? "Jeopardy"
-          : "Standings"}
+      title={view === "matrix" ? "Challenge matrix" : "Standings"}
     >
       <EmptyState icon="mdi:trophy-outline" text="No solves yet." />
     </Card>
@@ -804,7 +800,7 @@
             Finals update delayed; showing the last successful result.
           </div>
         {/if}
-        <Card title="Overall standings" bodyClass="p-0">
+        <Card title="Finals standings" bodyClass="p-0">
           <span slot="meta" class="metadata-label text-stone-500"
             >{finalsRows.length} teams</span
           >
@@ -1040,7 +1036,7 @@
         {/if}
       </Card>
     {:else}
-      <Card title={isFinalsMode ? "Jeopardy" : "Standings"} bodyClass="p-0">
+      <Card title="Standings" bodyClass="p-0">
         <span slot="meta" class="metadata-label text-stone-500"
           >{scoreMatching.toLocaleString()}
           {noun}{scoreMatching === 1 ? "" : "s"}</span
