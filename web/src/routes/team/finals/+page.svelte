@@ -558,7 +558,7 @@
 				</form>
 				{#if me.token}
 					<div class="mt-3 flex min-w-0 items-center gap-1.5 text-[0.7rem] text-stone-600" title="Send as the X-Team-Token header from scripts">
-						Team token
+						<span class="shrink-0">Team token</span>
 						{#if fullToken}
 							<CopyText text={fullToken} wrap className="min-w-0 font-mono text-stone-300" />
 						{:else}
