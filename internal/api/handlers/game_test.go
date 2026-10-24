@@ -326,15 +326,15 @@ func TestScoreWeightsOnlyForMirror(t *testing.T) {
 	if string(raw) != `{"ad":0.7,"koth":0.3,"jeopardy":0}` {
 		t.Fatalf("weights = %s", raw)
 	}
-	// ad 0/50/100 median 50, koth 10/0/0 median 0: leader takes the full share
-	shares := mirror.shares([]float64{0, 50, 100}, []float64{10, 0, 0}, []float64{-400, 0, 700})
-	if shares[2].AD != 700 || shares[0].Koth != 300 || shares[0].AD != -700 || shares[0].Jeopardy != nil {
+	// ad 0/50/100, koth 10/0/0: leader takes the full share, last team 0
+	shares := mirror.shares([]float64{0, 50, 100}, []float64{10, 0, 0}, []float64{300, 350, 700})
+	if shares[2].AD != 700 || shares[0].Koth != 300 || shares[0].AD != 0 || shares[1].AD != 350 || shares[0].Jeopardy != nil {
 		t.Fatalf("shares = %+v", shares)
 	}
 
 	sc.WeightJeopardy = 0.05
 	withJ := NewGameHandler(&config.Config{Game: config.GameConfig{Scoring: sc}}, nil, zap.NewNop())
-	if s := withJ.shares([]float64{0, 50, 100}, []float64{10, 0, 0}, []float64{-350, 0, 700}); s[0].Jeopardy == nil || *s[0].Jeopardy != 50 {
+	if s := withJ.shares([]float64{0, 50, 100}, []float64{10, 0, 0}, []float64{350, 350, 700}); s[0].Jeopardy == nil || *s[0].Jeopardy != 50 {
 		t.Fatalf("jeopardy share = %+v", s[0])
 	}
 }

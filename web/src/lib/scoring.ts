@@ -1,4 +1,4 @@
-// finals blend: score = 1000 x sum(weight x relative), each board median 0 to leader 1
+// finals blend: score = 1000 x sum(weight x relative), each board last team 0 to leader 1
 export interface ScoreWeights {
 	ad: number;
 	koth: number;

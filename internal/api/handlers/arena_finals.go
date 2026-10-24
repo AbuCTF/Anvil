@@ -52,7 +52,7 @@ func (h *GameHandler) scoreWeights() *scoreWeights {
 }
 
 // shares splits totals over one field, which must be the mirror's own (every active
-// non-nop standing) or the medians drift from the ones the total was built on
+// non-nop standing) or the floors drift from the ones the total was built on
 func (h *GameHandler) shares(ad, koth, total []float64) []scoreShare {
 	w := h.scoreWeights()
 	if w == nil {

@@ -2,7 +2,6 @@ package game
 
 import (
 	"math"
-	"sort"
 
 	"github.com/anvil-lab/anvil/internal/models"
 	"github.com/google/uuid"
@@ -15,7 +14,7 @@ import (
 //                                        tick of its life while the service was green
 //   UP    += sqrt(N) x q per store-tick  q = 1 OK or ORG_FAULT, readable share if RECOVERING
 // then TOTAL = 1000 x (wAD x AD_rel + wK x KOTH_rel + wJ x JEOPARDY_rel), each
-// relative to its median team. wJ = 0 leaves the jeopardy board out entirely.
+// relative to the field, last team 0 and leader 1. wJ = 0 leaves the jeopardy board out entirely.
 
 type slaKey struct {
 	team    uuid.UUID
@@ -328,48 +327,48 @@ func scoreMirror(in *mirrorInput) mirrorResult {
 		kos = append(kos, s.Koth)
 		jes = append(jes, s.Jeopardy)
 	}
-	adMed, adTop := medianTop(ads)
-	koMed, koTop := medianTop(kos)
-	jeMed, jeTop := medianTop(jes)
+	adLow, adTop := lowTop(ads)
+	koLow, koTop := lowTop(kos)
+	jeLow, jeTop := lowTop(jes)
 	for _, s := range res.Teams {
-		s.Total = 1000 * (in.WeightAD*relative(s.AD, adMed, adTop) + in.WeightKoth*relative(s.Koth, koMed, koTop) +
-			in.WeightJeopardy*relative(s.Jeopardy, jeMed, jeTop))
+		s.Total = 1000 * (in.WeightAD*relative(s.AD, adLow, adTop) + in.WeightKoth*relative(s.Koth, koLow, koTop) +
+			in.WeightJeopardy*relative(s.Jeopardy, jeLow, jeTop))
 	}
 	return res
 }
 
-func medianTop(xs []float64) (float64, float64) {
+// lowTop is a board's last and leading value; relative runs from one to the other
+func lowTop(xs []float64) (float64, float64) {
 	if len(xs) == 0 {
 		return 0, 0
 	}
-	s := append([]float64(nil), xs...)
-	sort.Float64s(s)
-	mid := len(s) / 2
-	med := s[mid]
-	if len(s)%2 == 0 {
-		med = (s[mid-1] + s[mid]) / 2
+	low, top := xs[0], xs[0]
+	for _, x := range xs[1:] {
+		low = math.Min(low, x)
+		top = math.Max(top, x)
 	}
-	return med, s[len(s)-1]
+	return low, top
 }
 
-// relative scales a board from its median team (0) to its leader (1)
-func relative(x, med, top float64) float64 {
-	return (x - med) / math.Max(top-med, 1)
+// relative scales a board from its last team (0) to its leader (1), so no share
+// goes negative
+func relative(x, low, top float64) float64 {
+	return (x - low) / math.Max(top-low, 1)
 }
 
 // Shares cuts finals totals into what each board earned, 1000 x weight x relative
 // over one field. jeopardy is the rest, so the three parts always add up to total.
 func Shares(wAD, wKoth float64, ad, koth, total []float64) (adShare, kothShare, jeShare []float64) {
-	adMed, adTop := medianTop(ad)
-	koMed, koTop := medianTop(koth)
+	adLow, adTop := lowTop(ad)
+	koLow, koTop := lowTop(koth)
 	adShare = make([]float64, len(ad))
 	kothShare = make([]float64, len(ad))
 	jeShare = make([]float64, len(ad))
 	for i := range ad {
-		adShare[i] = 1000 * wAD * relative(ad[i], adMed, adTop)
-		kothShare[i] = 1000 * wKoth * relative(koth[i], koMed, koTop)
+		adShare[i] = 1000 * wAD * relative(ad[i], adLow, adTop)
+		kothShare[i] = 1000 * wKoth * relative(koth[i], koLow, koTop)
 		jeShare[i] = total[i] - adShare[i] - kothShare[i]
-		// total is stored to 3 decimals: a team on the jeopardy median reads 0, not +-0.0004
+		// total is stored to 3 decimals: a team at the jeopardy floor reads 0, not +-0.0004
 		if math.Abs(jeShare[i]) < 1e-3 {
 			jeShare[i] = 0
 		}

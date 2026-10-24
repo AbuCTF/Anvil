@@ -258,10 +258,10 @@ func TestMirrorUpAndRecovering(t *testing.T) {
 	}
 }
 
-func TestMirrorMedianMerge(t *testing.T) {
+func TestMirrorRelativeMerge(t *testing.T) {
 	w := newWorld(t)
 	for i, id := range w.teams {
-		w.in.Steal[teamStore{id, w.service, 0}] = float64(i * 10) // AD 0..140, median 70
+		w.in.Steal[teamStore{id, w.service, 0}] = float64(i * 10) // AD 0..140
 		w.in.Koth[id] = 0
 	}
 	w.in.Koth[w.teams[3]] = 50
@@ -269,10 +269,10 @@ func TestMirrorMedianMerge(t *testing.T) {
 	if !near(r.Teams[w.teams[14]].Total, 700) {
 		t.Fatalf("AD leader total %.3f, want 700 from the AD board", r.Teams[w.teams[14]].Total)
 	}
-	if !near(r.Teams[w.teams[7]].Total, 0) {
-		t.Fatalf("median team total %.3f, want 0", r.Teams[w.teams[7]].Total)
+	if !near(r.Teams[w.teams[0]].Total, 0) {
+		t.Fatalf("last team total %.3f, want 0", r.Teams[w.teams[0]].Total)
 	}
-	if !near(r.Teams[w.teams[3]].Total, 1000*(0.7*(30.0-70)/70+0.3*1)) {
+	if !near(r.Teams[w.teams[3]].Total, 1000*(0.7*30.0/140+0.3*1)) {
 		t.Fatalf("koth leader total %.3f", r.Teams[w.teams[3]].Total)
 	}
 	if _, ok := r.Teams[w.nop]; ok {
@@ -300,27 +300,29 @@ func TestMirrorJeopardyThreeWayMerge(t *testing.T) {
 	w.in.WeightAD, w.in.WeightKoth, w.in.WeightJeopardy = 0.6, 0.25, 0.15
 	w.in.Jeopardy = map[uuid.UUID]float64{w.nop: 9999} // the nop never enters the board
 	for i, id := range w.teams {
-		w.in.Steal[teamStore{id, w.service, 0}] = float64(i * 10) // AD 0..140, median 70
-		w.in.Koth[id] = float64((14 - i) * 2)                     // koth 28..0, median 14
+		w.in.Steal[teamStore{id, w.service, 0}] = float64(i * 10) // AD 0..140
+		w.in.Koth[id] = float64((14 - i) * 2)                     // koth 28..0
 		if i != 5 {
 			w.in.Jeopardy[id] = float64(i * 100) // team 5 never solved: missing scores 0
 		}
 	}
-	// jeopardy 0..1400 with team 5 at 0: sorted median (index 7) is 700, leader 1400
+	// jeopardy 0..1400 with team 5 at 0: last team 0, leader 1400
 	r := scoreMirror(w.in)
 	want := func(i int, ad, ko, je float64) {
 		t.Helper()
-		total := 1000 * (0.6*(ad-70)/70 + 0.25*(ko-14)/14 + 0.15*(je-700)/700)
+		total := 1000 * (0.6*ad/140 + 0.25*ko/28 + 0.15*je/1400)
 		if s := r.Teams[w.teams[i]]; !near(s.Total, total) || s.Jeopardy != je {
 			t.Fatalf("team %d total %.3f jeopardy %.0f, want %.3f and %.0f", i, s.Total, s.Jeopardy, total, je)
 		}
 	}
-	want(14, 140, 0, 1400) // AD and jeopardy leader, koth last: 600 - 250 + 150
+	want(14, 140, 0, 1400) // AD and jeopardy leader, koth last: 600 + 0 + 150
 	want(0, 0, 28, 0)      // koth leader only
 	want(5, 50, 18, 0)     // missing from the jeopardy map
-	want(7, 70, 14, 700)   // median on all three boards: 0
-	if !near(r.Teams[w.teams[7]].Total, 0) {
-		t.Fatalf("median team total %.3f, want 0", r.Teams[w.teams[7]].Total)
+	want(7, 70, 14, 700)   // halfway on all three boards: 500
+	for _, s := range r.Teams {
+		if s.Total < 0 {
+			t.Fatalf("negative total %.3f", s.Total)
+		}
 	}
 	if _, ok := r.Teams[w.nop]; ok {
 		t.Fatal("the nop team was scored")
@@ -339,15 +341,15 @@ func TestMirrorJeopardyWeightZeroIsUnchanged(t *testing.T) {
 		ads = append(ads, s.AD)
 		kos = append(kos, s.Koth)
 	}
-	adMed, adTop := medianTop(ads)
-	koMed, koTop := medianTop(kos)
+	adLow, adTop := lowTop(ads)
+	koLow, koTop := lowTop(kos)
 
 	// jeopardy points loaded but weighted 0, or not loaded at all: the old formula, bit for bit
 	for _, jeopardy := range []map[uuid.UUID]float64{nil, {w.teams[0]: 5000, w.teams[3]: 120}} {
 		w.in.Jeopardy = jeopardy
 		r := scoreMirror(w.in)
 		for id, s := range r.Teams {
-			old := 1000 * (0.7*relative(s.AD, adMed, adTop) + 0.3*relative(s.Koth, koMed, koTop))
+			old := 1000 * (0.7*relative(s.AD, adLow, adTop) + 0.3*relative(s.Koth, koLow, koTop))
 			if s.Total != old || s.Total != before.Teams[id].Total {
 				t.Fatalf("weight 0 total %v, want %v", s.Total, old)
 			}
@@ -374,7 +376,7 @@ func TestSharesAddUpToTotal(t *testing.T) {
 	adS, koS, jeS := Shares(0.6, 0.25, ad, ko, total)
 	for i, id := range ids {
 		s := r.Teams[id]
-		if !near(adS[i], 600*(s.AD-70)/70) || !near(koS[i], 250*(s.Koth-14)/14) || !near(jeS[i], 150*(s.Jeopardy-700)/700) {
+		if !near(adS[i], 600*s.AD/140) || !near(koS[i], 250*s.Koth/28) || !near(jeS[i], 150*s.Jeopardy/1400) {
 			t.Fatalf("shares %.3f %.3f %.3f for ad %.0f koth %.0f jeopardy %.0f", adS[i], koS[i], jeS[i], s.AD, s.Koth, s.Jeopardy)
 		}
 		if !near(adS[i]+koS[i]+jeS[i], s.Total) {
@@ -386,7 +388,7 @@ func TestSharesAddUpToTotal(t *testing.T) {
 func TestSharesJeopardyRemainderIgnoresStoredRounding(t *testing.T) {
 	ad, koth := []float64{0, 50, 100}, []float64{0, 0, 10}
 	for _, d := range []float64{0.0004, -0.0004} {
-		_, _, je := Shares(0.65, 0.3, ad, koth, []float64{-650 + d, d, 950 + d})
+		_, _, je := Shares(0.65, 0.3, ad, koth, []float64{d, 325 + d, 950 + d})
 		for i, v := range je {
 			if v != 0 || math.Signbit(v) {
 				t.Fatalf("residue %v: jeopardy share[%d] = %v, want 0", d, i, v)
