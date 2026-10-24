@@ -279,7 +279,12 @@
     searchDebounce = setTimeout(reloadBoard, 250);
   }
 
-  function setView(next: View) {
+  // finals events land on the finals board until someone picks another tab
+  let viewPicked = false;
+  $: if (!viewPicked && isFinalsMode && view !== "finals") setView("finals", false);
+
+  function setView(next: View, picked = true) {
+    if (picked) viewPicked = true;
     if (view === next) return;
     view = next;
     boardStale = false;
