@@ -7,7 +7,7 @@
 	import HelpTip from '$lib/components/HelpTip.svelte';
 	import CopyText from '$lib/components/CopyText.svelte';
 	import {
-		PUBLIC_HOST, SERVICES, TCP_SERVICE, HILLS, BOX_COUNT, NOP_BOX,
+		PUBLIC_ACCESS, PUBLIC_HOST, SERVICES, TCP_SERVICE, HILLS, BOX_COUNT, NOP_BOX,
 		pad2, sshCommand, serviceAddr, servicePort, hillUrl, vpnHillAddr
 	} from '$lib/finals-access';
 	import { API_BASE } from '$lib/config';
@@ -471,14 +471,14 @@
 							</li>
 						{/each}
 					</ul>
-					<p class="mt-4 font-mono text-[0.7rem] text-stone-600">via VPN: {me.vulnbox_ip ?? `10.60.${tt}.2`} ports 7001-7006</p>
+					{#if PUBLIC_ACCESS}<p class="mt-4 font-mono text-[0.7rem] text-stone-600">via VPN: {me.vulnbox_ip ?? `10.60.${tt}.2`} ports 7001-7006</p>{:else}<p class="mt-4 text-xs text-stone-600">VPN required</p>{/if}
 				{:else}
 					<p class="text-sm text-stone-500">No team number yet. Ask an organizer.</p>
 				{/if}
 			</Card>
 
 			<Card title="Targets">
-				<span slot="meta" class="flex items-center gap-1.5 text-xs text-stone-500">host <CopyText text={PUBLIC_HOST} className="text-stone-300" /></span>
+				<span slot="meta" class="flex items-center gap-1.5 text-xs text-stone-500">{#if PUBLIC_ACCESS}host <CopyText text={PUBLIC_HOST} className="text-stone-300" />{:else}box NN = 10.60.NN.2{/if}</span>
 				<div class="-mx-1 overflow-x-auto">
 					<table class="w-full text-xs">
 						<thead>
@@ -550,8 +550,10 @@
 							</li>
 						{/each}
 					</ul>
-					<p class="mt-3 text-xs text-stone-500">These ports are your team's own. Use only these.</p>
-					<p class="mt-2 font-mono text-[0.7rem] text-stone-600">via VPN: {HILLS.map((_, i) => vpnHillAddr(i + 1)).join(' · ')}</p>
+					{#if PUBLIC_ACCESS}
+						<p class="mt-3 text-xs text-stone-500">These ports are your team's own. Use only these.</p>
+						<p class="mt-2 font-mono text-[0.7rem] text-stone-600">via VPN: {HILLS.map((_, i) => vpnHillAddr(i + 1)).join(' · ')}</p>
+					{/if}
 				{:else}
 					<p class="text-sm text-stone-500">No team number yet. Ask an organizer.</p>
 				{/if}
