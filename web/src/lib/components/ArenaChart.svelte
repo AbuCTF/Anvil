@@ -7,7 +7,7 @@
 </script>
 
 <script lang="ts">
-	// koth points / score over time card, fed by /arena/state history + koth_history
+	// game timeline card: score or koth points over time, fed by /arena/state history + koth_history
 	import LineChart from '$lib/components/LineChart.svelte';
 	import { teamColor } from '$lib/rank';
 	import type { Series } from '$lib/chart/path';
@@ -18,7 +18,7 @@
 	export let leader: string | null = null;
 	export let className = 'mb-6';
 
-	let chartMode: 'koth' | 'score' = 'koth';
+	let chartMode: 'score' | 'koth' = 'score';
 
 	const toSeries = (h: HistorySeries): Series => ({ label: h.team, color: teamColor(h.team_id), points: h.points });
 	$: raceSeries = history.map(toSeries);
@@ -41,11 +41,9 @@
 {#if raceSeries.length || kothSeries.length}
 	<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden {className}">
 		<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between gap-3">
-			<h2 class="min-w-0 truncate text-[0.95rem] font-semibold text-stone-200">
-				{#if chartKoth}<span class="sm:hidden">KotH points</span><span class="hidden sm:inline">King of the Hill points</span>{:else}Score over time{/if}
-			</h2>
+			<h2 class="min-w-0 truncate text-[0.95rem] font-semibold text-stone-200">Timeline</h2>
 			<div class="flex overflow-hidden rounded-md border border-stone-800 text-xs shrink-0">
-				{#each [['koth', 'KotH points'], ['score', 'Score']] as [mode, label], i}
+				{#each [['score', 'Score'], ['koth', 'KotH']] as [mode, label], i}
 					<button
 						type="button"
 						class="px-2.5 py-1 transition-colors {i ? 'border-l border-stone-800' : ''} {chartMode === mode
@@ -66,7 +64,7 @@
 					height={280}
 					curve="step"
 					emphasize={chartKoth ? kothLeadIdx : leaderIdx}
-					ariaLabel={chartKoth ? 'King of the Hill points' : 'Score over time'}
+					ariaLabel={chartKoth ? 'KotH timeline' : 'Score timeline'}
 					xFormat={(x) => (chartKoth ? 'r' : 't') + Math.round(x)}
 					integerX
 				/>
