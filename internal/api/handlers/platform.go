@@ -40,6 +40,7 @@ type platformInfoResponse struct {
 	ScoringEnabled     bool                            `json:"scoring_enabled"`
 	ScoreboardEnabled  bool                            `json:"scoreboard_enabled"`
 	ArenaEnabled       bool                            `json:"arena_enabled"`
+	OperationsEnabled  bool                            `json:"operations_enabled"`
 	EconomyEnabled     bool                            `json:"economy_enabled"`
 	MarketPulseEnabled bool                            `json:"market_pulse_enabled"`
 	NotificationSound  bool                            `json:"notification_sound_allowed"`
@@ -65,6 +66,10 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	arena, err := boolSettingOrDefault(ctx, h.db, "arena_enabled", false)
 	if err != nil {
 		h.logger.Warn("failed to read arena_enabled", zap.Error(err))
+	}
+	operations, err := boolSettingOrDefault(ctx, h.db, "finals.operations_enabled", false)
+	if err != nil {
+		h.logger.Warn("failed to read finals.operations_enabled", zap.Error(err))
 	}
 	teams, err := isTeamsMode(ctx, h.db)
 	if err != nil {
@@ -129,6 +134,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		ScoringEnabled:     scoring,
 		ScoreboardEnabled:  scoreboard,
 		ArenaEnabled:       arena,
+		OperationsEnabled:  operations,
 		EconomyEnabled:     economy,
 		MarketPulseEnabled: pulse,
 		NotificationSound:  notificationSound,

@@ -289,9 +289,14 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		t.Fatalf("live services matrix = %d %s", code, raw)
 	}
 
-	// The War Room is a full, delayed matrix. Tick 3 is current, so public view
-	// tick 1 is visible and the tick-3 advisory must remain hidden. Team markers
-	// are personalized after the shared cache is loaded.
+	// The War Room is staff-only: players and anonymous viewers get a plain 404.
+	// For staff it is a full, delayed matrix. Tick 3 is current, so public view
+	// tick 1 is visible and the tick-3 advisory must remain hidden.
+	for _, viewer := range []*uuid.UUID{nil, &p1, &p2} {
+		if code, raw := call("GET", "/api/v1/arena/war-room", viewer, ""); code != http.StatusNotFound || !strings.Contains(string(raw), `"not found"`) {
+			t.Fatalf("player war room = %d %s, want 404", code, raw)
+		}
+	}
 	type warCell struct {
 		TeamID string `json:"team_id"`
 		Status string `json:"status"`
@@ -321,39 +326,32 @@ func TestFinalsArenaAttackInfoAndSubmitGate(t *testing.T) {
 		}
 		return w.Code, w.Header(), payload
 	}
-	code, headers, alphaWar := warCall(p1)
+	code, headers, adminWar := warCall(admin)
 	if code != http.StatusOK || headers.Get("Cache-Control") != "private, no-store" || headers.Get("X-Anvil-Cache") != "MISS" {
-		t.Fatalf("alpha war room = %d cache=%q/%q", code, headers.Get("Cache-Control"), headers.Get("X-Anvil-Cache"))
+		t.Fatalf("admin war room = %d cache=%q/%q", code, headers.Get("Cache-Control"), headers.Get("X-Anvil-Cache"))
 	}
-	if alphaWar.Tick != 3 || alphaWar.ViewTick != 1 || len(alphaWar.Teams) != 2 || len(alphaWar.Services) != 1 || len(alphaWar.Grid) != 2 {
-		t.Fatalf("alpha war room shape = %#v", alphaWar)
+	if adminWar.Tick != 3 || adminWar.ViewTick != 1 || len(adminWar.Teams) != 3 || len(adminWar.Services) != 1 || len(adminWar.Grid) != 3 {
+		t.Fatalf("admin war room shape = %#v", adminWar)
 	}
-	if len(alphaWar.Events) != 1 || alphaWar.Events[0].Tick != 1 || alphaWar.Events[0].Text != "delayed-one" {
-		t.Fatalf("delayed war room events = %#v", alphaWar.Events)
+	if len(adminWar.Events) != 1 || adminWar.Events[0].Tick != 1 || adminWar.Events[0].Text != "delayed-one" {
+		t.Fatalf("delayed war room events = %#v", adminWar.Events)
 	}
-	alphaOwn := 0
-	for _, cell := range alphaWar.Grid {
-		if cell.TeamID == teamA.String() && (cell.Status != "up" || !cell.IsOwn) {
-			t.Errorf("alpha cell = %#v, want own/up", cell)
-		}
-		if cell.TeamID == teamB.String() && (cell.Status != "mumble" || cell.IsOwn) {
-			t.Errorf("bravo cell in alpha view = %#v, want other/mumble", cell)
-		}
+	for _, cell := range adminWar.Grid {
 		if cell.IsOwn {
-			alphaOwn++
+			t.Errorf("admin cell = %#v, staff own nothing", cell)
+		}
+		if cell.TeamID == teamA.String() && cell.Status != "up" {
+			t.Errorf("alpha cell = %#v, want up", cell)
+		}
+		if cell.TeamID == teamB.String() && cell.Status != "mumble" {
+			t.Errorf("bravo cell = %#v, want mumble", cell)
+		}
+		if cell.TeamID == teamC.String() && cell.Status != "down" {
+			t.Errorf("nop cell = %#v, want down", cell)
 		}
 	}
-	if alphaOwn != 1 {
-		t.Fatalf("alpha own cells = %d, want 1", alphaOwn)
-	}
-	code, headers, bravoWar := warCall(p2)
-	if code != http.StatusOK || headers.Get("X-Anvil-Cache") != "HIT" {
-		t.Fatalf("bravo war room = %d cache=%q", code, headers.Get("X-Anvil-Cache"))
-	}
-	for _, cell := range bravoWar.Grid {
-		if cell.IsOwn != (cell.TeamID == teamB.String()) {
-			t.Errorf("bravo personalized cell = %#v", cell)
-		}
+	if code, headers, _ = warCall(admin); code != http.StatusOK || headers.Get("X-Anvil-Cache") != "HIT" {
+		t.Fatalf("admin war room repeat = %d cache=%q", code, headers.Get("X-Anvil-Cache"))
 	}
 
 	setting("event.end_at", `"`+time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)+`"`)

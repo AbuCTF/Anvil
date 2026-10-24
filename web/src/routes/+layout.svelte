@@ -31,7 +31,7 @@
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		...($platformInfo?.economy_enabled && $platformInfo?.market_pulse_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Pulse', href: '/pulse', icon: 'mdi:pulse' }] : []),
 		...($platformInfo?.scoreboard_enabled !== false ? [{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' }] : []),
-		...($platformInfo?.arena_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Operations', href: '/team/finals', icon: 'mdi:shield-sword-outline' }] : []),
+		...($platformInfo?.arena_enabled && $platformInfo?.operations_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Operations', href: '/team/finals', icon: 'mdi:shield-sword-outline' }] : []),
 		...(($platformInfo?.arena_enabled || isAdmin) ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
@@ -50,9 +50,10 @@
 	// before isAdmin resolves.
 	$: if (browser && authReady && $platformInfo && !$auth.isLoading) {
 		const p = $page.url.pathname;
-		if (p.startsWith('/team/finals') && !$platformInfo.arena_enabled) goto('/team');
+		if (p.startsWith('/team/finals') && (!$platformInfo.arena_enabled || !$platformInfo.operations_enabled)) goto('/team');
 		const blocked =
 			(p.startsWith('/arena/reveal') && !isAdmin) ||
+			(p.startsWith('/arena/war-room') && !isAdmin) ||
 			(p.startsWith('/arena') && !$platformInfo.arena_enabled && !isAdmin) ||
 			(p.startsWith('/pulse') && (!$platformInfo.economy_enabled || !$platformInfo.market_pulse_enabled)) ||
 			(p.startsWith('/team') && p !== '/team/finals' && !$platformInfo.teams_mode) ||

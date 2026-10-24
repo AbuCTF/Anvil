@@ -339,15 +339,6 @@
 	{:else}
 		<PageHeader title="Arena" compact>
 			<div slot="actions" class="flex items-center gap-2 text-sm leading-none">
-				{#if $platformInfo?.game_state}
-					<a
-						href="/arena/war-room"
-						class="inline-flex items-center gap-1.5 rounded-md border border-stone-800 bg-stone-900/60 px-3 py-1.5 text-xs text-stone-400 transition-colors hover:bg-stone-800/40 hover:text-stone-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500/60"
-					>
-						<OpticalIcon icon="mdi:shield-sword-outline" size={13} box={13} />
-						<span class="optical-label">War Room</span>
-					</a>
-				{/if}
 				{#if active}
 					<div class="flex items-center gap-2 bg-stone-900/60 border border-stone-800 rounded-md px-3 py-1.5">
 						<span class="optical-label metadata-label text-stone-500">Tick</span>
