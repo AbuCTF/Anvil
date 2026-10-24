@@ -40,8 +40,9 @@ game:
 
   scoring:
     formula: mirror
-    weight_ad: 0.7
-    weight_koth: 0.3
+    weight_ad: 0.65
+    weight_koth: 0.30
+    weight_jeopardy: 0.05 # jeopardy solve points, median-relative like the other two
     attacker_bonus: 0 # the pre-freeze dial; 1.5 if abu turns it
     n_teams: 15 # 16 if a 16th team plays; every team-number bound follows this
     mass_fault_teams: 3
@@ -50,7 +51,7 @@ game:
 
   koth:
     round_interval: 15m
-    night_round_interval: 30m
+    night_round_interval: 15m
     night_start: "00:00"
     night_end: "06:00"
     timezone: Asia/Kolkata

@@ -4,6 +4,12 @@
 	import { platformInfo } from '$lib/stores/platform';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Card from '$lib/components/Card.svelte';
+	import HelpTip from '$lib/components/HelpTip.svelte';
+	import CopyText from '$lib/components/CopyText.svelte';
+	import {
+		PUBLIC_ACCESS, PUBLIC_HOST, SERVICES, TCP_SERVICE, HILLS, BOX_COUNT, NOP_BOX,
+		pad2, sshCommand, serviceAddr, servicePort, hillUrl, vpnHillAddr
+	} from '$lib/finals-access';
 	import { API_BASE } from '$lib/config';
 	import { api, ApiError } from '$api';
 
@@ -108,6 +114,19 @@
 	let latestTick = 0;
 
 	let now = Date.now();
+	let fullToken = '';
+	let tokenBusy = false;
+	async function revealToken() {
+		if (tokenBusy) return;
+		tokenBusy = true;
+		try {
+			fullToken = (await api.getArenaToken()).token;
+		} catch {
+			fullToken = '';
+		} finally {
+			tokenBusy = false;
+		}
+	}
 	let submitFlag = '';
 	let submitResult = '';
 	let submitBusy = false;
@@ -118,7 +137,14 @@
 	let clockInterval: ReturnType<typeof setInterval>;
 	let pollInterval: ReturnType<typeof setInterval>;
 
-	$: isFinalsMode = $platformInfo?.arena_enabled === true;
+	$: isFinalsMode = $platformInfo?.arena_enabled === true && $platformInfo?.operations_enabled === true;
+	// first load waits for platform info, not the 30s poll
+	let mounted = false;
+	let primed = false;
+	$: if (mounted && isFinalsMode && !primed) {
+		primed = true;
+		refresh();
+	}
 	$: tickEndsIn = Math.max(0, Math.round((Date.parse(tickInfo.ends_at) - now) / 1000));
 	$: fmtCountdown = `${String(Math.floor(tickEndsIn / 60)).padStart(2, '0')}:${String(tickEndsIn % 60).padStart(2, '0')}`;
 	$: refreshedAgo = lastUpdatedAt === null ? 'waiting for live data' : `updated ${Math.max(0, Math.round((now - lastUpdatedAt) / 1000))}s ago`;
@@ -126,6 +152,13 @@
 
 	// service name lookup for alerts
 	$: svcNames = new Map(services.map(s => [s.service_id, s.name]));
+	$: tt = me.team_number;
+	const boxes = Array.from({ length: BOX_COUNT }, (_, i) => i + 1);
+	const legend: Array<[string, string]> = [
+		['Up', 'bg-[#4b7355]'], ['Recovering', 'bg-[#3f6a86]'], ['Faulty', 'bg-[#9c7a30]'],
+		['Down', 'bg-[#b0453a]'], ['Flag lost', 'bg-[#7a4a86]'], ['Our fault', 'bg-stone-700']
+	];
+	const legendHelp = 'Each square is one tick, newest on the right. Dot: flag safe. xN: stolen by about N teams. T: taken only by the NOP. ?: flag unreadable. Amber corner: credited. Our fault ticks count as up and cost nothing.';
 
 	function authHeaders(): Record<string, string> {
 		const token = typeof localStorage !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -217,7 +250,7 @@
 		try {
 			const results = await Promise.allSettled([loadTick(), loadMe(), loadStatus(), loadAlerts()]);
 			const failed = results.filter(r => r.status === 'rejected').length;
-			refreshError = failed ? `${failed} live data source${failed === 1 ? '' : 's'} unavailable; showing the last confirmed state.` : '';
+			refreshError = failed ? 'Some live data failed to load. Showing the last known state.' : '';
 		} finally {
 			initialLoading = false;
 			refreshBusy = false;
@@ -247,7 +280,9 @@
 					throw error;
 				}
 			}
-			submitResult = results.map((r, index) => `Flag ${index + 1}: ${r.status} (${r.message})`).join('\n');
+			submitResult = results
+				.map((r, index) => `Flag ${index + 1}: ${r.status}${r.message && r.message.toLowerCase() !== r.status.toLowerCase() ? ` (${r.message})` : ''}`)
+				.join('\n');
 			if (results.every(r => r.status === 'accepted' || r.status === 'duplicate')) submitFlag = '';
 		} catch (e: any) {
 			submitResult = e?.message ?? 'submit failed';
@@ -276,13 +311,14 @@
 
 	function statusLabel(s: SlaStatus): string {
 		switch (s) {
-			case 'OK': return 'OK';
-			case 'RECOVERING': return 'RECOVERING';
-			case 'MUMBLE': case 'FAULTY': return 'MUMBLE';
-			case 'OFFLINE': case 'DOWN': return 'OFFLINE';
-			case 'FLAG_NOT_FOUND': return 'FLAG NOT FOUND';
-			case 'ORG_FAULT': return 'ORG FAULT (credited)';
-			default: return s;
+			case 'OK': return 'Up';
+			case 'RECOVERING': return 'Recovering';
+			case 'MUMBLE': case 'FAULTY': return 'Faulty';
+			case 'OFFLINE': case 'DOWN': return 'Down';
+			case 'FLAG_NOT_FOUND': return 'Flag lost';
+			case 'ORG_FAULT': return 'Our fault';
+			case 'UNKNOWN': return 'Waiting';
+			default: return 'Error';
 		}
 	}
 
@@ -298,15 +334,15 @@
 		}
 	}
 
-	function fateGlyph(fate: FlagFate | undefined): { text: string; cls: string } {
-		if (!fate) return { text: '', cls: '' };
-		if (fate === 'held') return { text: '●', cls: 'text-[#9bcea8]' };
-		if (fate === 'tide') return { text: 'T', cls: 'text-amber-400' };
-		if (fate === 'unreadable') return { text: '?', cls: 'text-stone-500' };
-		if (fate === 'stolen_1') return { text: 'x1', cls: 'text-[#e08a85]' };
-		if (fate === 'stolen_2_3') return { text: 'x2', cls: 'text-[#e08a85]' };
-		if (fate === 'stolen_4_7') return { text: 'x5', cls: 'text-[#e08a85]' };
-		return { text: 'x8', cls: 'text-[#e08a85]' };
+	function fateGlyph(fate: FlagFate | undefined): { text: string; cls: string; tip: string } {
+		if (!fate) return { text: '', cls: '', tip: '' };
+		if (fate === 'held') return { text: '●', cls: 'text-[#9bcea8]', tip: 'Flag safe' };
+		if (fate === 'tide') return { text: 'T', cls: 'text-amber-400', tip: 'Taken only by the NOP' };
+		if (fate === 'unreadable') return { text: '?', cls: 'text-stone-500', tip: 'Flag unreadable' };
+		if (fate === 'stolen_1') return { text: 'x1', cls: 'text-[#e08a85]', tip: 'Stolen by 1 team' };
+		if (fate === 'stolen_2_3') return { text: 'x2', cls: 'text-[#e08a85]', tip: 'Stolen by 2-3 teams' };
+		if (fate === 'stolen_4_7') return { text: 'x5', cls: 'text-[#e08a85]', tip: 'Stolen by 4-7 teams' };
+		return { text: 'x8', cls: 'text-[#e08a85]', tip: 'Stolen by 8+ teams' };
 	}
 
 	function bucketLabel(bucket: number | null): string {
@@ -340,8 +376,8 @@
 
 	function deploymentLabel(state: ServiceStatus['deployment_history'][number]['state']): string {
 		return ({
-			queued: 'Queued', building: 'Building', gating: 'Gating',
-			waiting_quiet_window: 'Waiting', promoted: 'Promoted',
+			queued: 'Queued', building: 'Building', gating: 'Testing',
+			waiting_quiet_window: 'Waiting', promoted: 'Live',
 			rolled_back: 'Rolled back', failed: 'Failed'
 		})[state];
 	}
@@ -356,7 +392,7 @@
 	onMount(() => {
 		clockInterval = setInterval(() => { now = Date.now(); }, 1000);
 		pollInterval = setInterval(refresh, 30000);
-		refresh();
+		mounted = true;
 	});
 	onDestroy(() => {
 		clearInterval(clockInterval);
@@ -366,251 +402,271 @@
 
 <svelte:head><title>Operations - Anvil</title></svelte:head>
 
-{#if !isFinalsMode}
-	<script>window.location.replace('/team');</script>
-{:else}
+<!-- the layout guard bounces this page while operations is off -->
+{#if isFinalsMode}
 
 <div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-6">
-	<!-- tick clock header -->
-	<div class="mb-5 flex flex-wrap items-center gap-3">
-		<PageHeader title="Operations" compact />
-		<div class="ml-auto flex flex-wrap items-center gap-2">
-			{#if me.team_number}
-				<span class="rounded-md border border-stone-800 bg-stone-900/60 px-2.5 py-1.5 text-xs text-stone-400">
-					Team #{me.team_number} &mdash; {me.vulnbox_ip ?? 'no vulnbox'}
-				</span>
-			{/if}
-			<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/60 px-3 py-1.5 text-sm">
+	<PageHeader title={me.name || 'Operations'} subtitle={tt ? `Team ${pad2(tt)}` : 'Team number not assigned yet'} compact>
+		<div slot="actions" class="flex flex-wrap items-center gap-2 text-sm">
+			<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/60 px-3 py-1.5">
 				<span class="metadata-label text-stone-500">Tick</span>
 				<span class="font-semibold tabular-nums text-stone-100">{tickInfo.tick}</span>
 			</div>
-			<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/60 px-3 py-1.5 text-sm">
-				<span class="metadata-label text-stone-500">Ends in</span>
+			<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-900/60 px-3 py-1.5">
+				<span class="metadata-label text-stone-500">Next in</span>
 				<span class="font-mono tabular-nums text-stone-100">{fmtCountdown}</span>
 			</div>
 			{#if tickInfo.phase === 'paused'}
-				<div class="flex items-center gap-1.5 rounded-md border border-[#9c7a30]/40 bg-[#9c7a30]/10 px-3 py-1.5 text-sm text-[#e0be72]">
+				<div class="flex items-center gap-1.5 rounded-md border border-[#9c7a30]/40 bg-[#9c7a30]/10 px-3 py-1.5 text-[#e0be72]">
 					<Icon icon="mdi:pause-circle-outline" class="h-4 w-4" />
-					<span class="font-medium">PAUSED</span>
+					<span class="font-medium">Paused</span>
 				</div>
 			{:else if tickInfo.phase === 'over'}
-				<div class="flex items-center gap-1.5 rounded-md border border-stone-700 bg-stone-900 px-3 py-1.5 text-sm text-stone-500">
+				<div class="flex items-center gap-1.5 rounded-md border border-stone-700 bg-stone-900 px-3 py-1.5 text-stone-500">
 					<Icon icon="mdi:flag-checkered" class="h-4 w-4" />
-					<span>EVENT OVER</span>
+					<span>Over</span>
 				</div>
 			{/if}
 		</div>
-	</div>
+	</PageHeader>
 
-	<div class="mb-5 grid gap-2 rounded-lg border border-stone-800 bg-stone-900/40 p-4 text-xs text-stone-400 sm:grid-cols-3" aria-label="Attack and Defense workflow">
-		<p><span class="mr-2 font-semibold text-stone-200">1</span>Patch services in your workbench and push to the team repository.</p>
-		<p><span class="mr-2 font-semibold text-stone-200">2</span>The Deployment Gate builds, stages and promotes; failed health checks roll back.</p>
-		<p><span class="mr-2 font-semibold text-stone-200">3</span>Attack rival service targets over the VPN and submit captured flags here.</p>
-		<p class="sm:col-span-3 text-stone-600">Production is pipeline-managed. Direct production shell access is not part of normal play.</p>
-	</div>
-
-	<div class="mb-5 flex flex-wrap items-center gap-2 text-xs">
-		<a href="/arena" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">Open Arena</a>
-		{#if $platformInfo?.vpn_enabled}<a href="/vpn" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">VPN access</a>{/if}
-		<a href="{API_BASE}/api/v1/arena/attack-info" target="_blank" rel="noreferrer" class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">Attack info</a>
-		<button type="button" on:click={refresh} disabled={refreshBusy} class="rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-stone-300 hover:bg-stone-800/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 disabled:opacity-50">{refreshBusy ? 'Refreshing…' : 'Refresh'}</button>
+	<div class="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+		<a href="/arena" class="text-stone-400 hover:text-stone-200">Arena</a>
+		{#if $platformInfo?.vpn_enabled}<a href="/vpn" class="text-stone-400 hover:text-stone-200">VPN</a>{/if}
+		<a href="{API_BASE}/api/v1/arena/attack-info" target="_blank" rel="noreferrer" class="text-stone-400 hover:text-stone-200">Flag IDs</a>
+		<a href="/ad-kit.zip" download class="text-stone-400 hover:text-stone-200">Kit</a>
 		<span class="ml-auto text-stone-600">{refreshedAgo}</span>
+		<button type="button" on:click={refresh} disabled={refreshBusy} class="inline-flex items-center gap-1 rounded text-stone-400 hover:text-stone-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 disabled:opacity-50">
+			<Icon icon="mdi:refresh" class="h-3.5 w-3.5 {refreshBusy ? 'animate-spin' : ''}" />Refresh
+		</button>
 	</div>
 
 	{#if refreshError}
-		<div class="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300" role="alert">{refreshError}</div>
+		<div class="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-300" role="alert">{refreshError}</div>
 	{:else if statusStale}
-		<div class="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300" role="status">Service status is stale. Confirm the live state before deploying or attacking.</div>
+		<div class="mb-5 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-300" role="status">Status is out of date. Refresh to check.</div>
 	{/if}
 
-	<!-- exploitation alerts -->
 	{#if alerts.length}
-		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden">
-			<div class="px-4 py-2.5 border-b border-stone-800 flex items-center gap-2">
-				<Icon icon="mdi:bell-ring-outline" class="h-4 w-4 text-stone-500" />
-				<span class="text-sm font-medium text-stone-300">Alerts</span>
-				<span class="ml-auto metadata-label text-stone-600">1 tick late, bucketed</span>
-			</div>
+		<Card title="Alerts" bodyClass="p-0" className="mb-5">
+			<span slot="meta" class="text-xs text-stone-600">1 tick behind</span>
 			<ul class="divide-y divide-stone-800/60">
 				{#each alerts.slice(0, 10) as a}
 					{@const svcName = svcNames.get(a.service_id) ?? a.service_id}
-					<li class="flex items-center gap-3 px-4 py-2.5 text-sm">
+					<li class="flex items-center gap-3 px-4 py-2 text-xs">
 						{#if a.kind === 'shield_up'}
 							<Icon icon="mdi:shield-check" class="h-3.5 w-3.5 shrink-0 text-[#9bcea8]" />
-							<span class="text-[#9bcea8] font-medium text-xs">SHIELD UP</span>
+							<span class="w-20 whitespace-nowrap font-medium text-[#9bcea8]">Shield up</span>
 						{:else if a.kind === 'holding'}
 							<Icon icon="mdi:lock-check-outline" class="h-3.5 w-3.5 shrink-0 text-stone-400" />
-							<span class="text-stone-400 font-medium text-xs">HOLDING</span>
+							<span class="w-20 whitespace-nowrap font-medium text-stone-400">Holding</span>
 						{:else}
-							<span class="w-1.5 h-1.5 rounded-full shrink-0 bg-[#b0453a]"></span>
-							<span class="text-[#e08a85] font-medium text-xs">EXPLOIT</span>
+							<Icon icon="mdi:alert-circle-outline" class="h-3.5 w-3.5 shrink-0 text-[#e08a85]" />
+							<span class="w-20 whitespace-nowrap font-medium text-[#e08a85]">Stolen</span>
 						{/if}
-						<span class="text-stone-400 min-w-0 flex-1 truncate text-xs">{svcName}</span>
-						{#if a.bucket !== null}
-							<span class="text-xs text-stone-500">{bucketLabel(a.bucket)}</span>
-						{/if}
-						<span class="text-xs text-stone-600 tabular-nums">t{a.tick}</span>
-						<span class="text-xs text-stone-700">{alertAge(a.created_at)}</span>
+						<span class="min-w-0 flex-1 truncate text-stone-400">{svcName}</span>
+						{#if a.bucket !== null}<span class="text-stone-500">{bucketLabel(a.bucket)}</span>{/if}
+						<span class="tabular-nums text-stone-600">t{a.tick}</span>
+						<span class="w-8 text-right text-stone-700">{alertAge(a.created_at)}</span>
 					</li>
 				{/each}
 			</ul>
-		</div>
+		</Card>
 	{/if}
 
-	<!-- service timelines: services[]{stores[]{ticks[]}} -->
-	{#each services as svc (svc.service_id)}
-		{@const latestT = svcLatestTick(svc)}
-		{@const svcStatus = latestT?.status ?? 'UNKNOWN'}
-		{@const deployment = svc.deployment_history?.[0]}
-		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 overflow-hidden">
-			<div class="flex flex-wrap items-center gap-3 px-4 py-3 border-b border-stone-800">
-				<span class="text-[0.95rem] font-semibold text-stone-200">{svc.name}</span>
-				<span class="rounded px-1.5 py-0.5 text-xs font-medium {statusChipKey(svcStatus)}">{statusLabel(svcStatus)}</span>
-				<span class="text-xs text-stone-600">{latestT ? `${(svcUptime(svc) * 100).toFixed(1)}% up` : 'awaiting first check'}</span>
-				{#if svc.port}<span class="text-xs font-mono text-stone-600">TCP {svc.port}</span>{/if}
-				<span class="text-xs text-stone-600">{svc.active_attackers} active attacker{svc.active_attackers === 1 ? '' : 's'}</span>
-				{#if deployment}
-					<span class="rounded px-1.5 py-0.5 text-xs font-medium {deploymentClass(deployment.state)}">{deploymentLabel(deployment.state)}</span>
-					<span class="max-w-sm truncate text-xs text-stone-500" title={deployment.message}>{deployment.message}</span>
-				{:else if svc.last_deployment}
-					<span class="text-xs text-stone-600" title={svc.last_deployment.deployed_at}>{svc.last_deployment.kind} at {fmtTime(svc.last_deployment.deployed_at)}</span>
+	<div class="grid gap-4 lg:grid-cols-3">
+		<div class="min-w-0 space-y-4 lg:col-span-2">
+			<Card title="Your box">
+				{#if tt}
+					<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-950/60 px-3 py-2 text-sm">
+						<span class="select-none font-mono text-stone-600">$</span>
+						<CopyText text={sshCommand(tt)} wrap className="min-w-0 text-stone-200" />
+					</div>
+					<p class="mt-2 text-xs text-stone-500">Uses your team's registered ed25519 key.</p>
+					<ul class="mt-4 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+						{#each SERVICES as name, i}
+							<li class="flex items-center justify-between gap-3">
+								<span class="min-w-0 truncate text-stone-400">
+									<span class="mr-1.5 tabular-nums text-stone-600">{i + 1}</span>{name}
+									{#if i + 1 === TCP_SERVICE}<span class="ml-1 text-[0.65rem] uppercase text-stone-600">tcp</span>{/if}
+								</span>
+								<CopyText text={serviceAddr(tt, i + 1)} className="shrink-0 text-xs text-stone-300 hover:text-stone-100" />
+							</li>
+						{/each}
+					</ul>
+					{#if PUBLIC_ACCESS}<p class="mt-4 font-mono text-[0.7rem] text-stone-600">via VPN: {me.vulnbox_ip ?? `10.60.${tt}.2`} ports 7001-7006</p>{:else}<p class="mt-4 text-xs text-stone-600">VPN required</p>{/if}
+				{:else}
+					<p class="text-sm text-stone-500">No team number yet. Ask an organizer.</p>
 				{/if}
-				{#if latestT?.message}
-					<span class="text-xs text-stone-500 truncate max-w-xs" title={latestT.message}>{latestT.message}</span>
-				{/if}
-			</div>
-			<div class="px-4 py-3">
-				{#if deployment}
-					<div class="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-stone-800/70 pb-3 text-xs text-stone-500">
-						<span class="font-medium text-stone-300">Deployment pipeline</span>
-						<span>{deploymentLabel(deployment.state)} at {fmtTime(deployment.recorded_at)}</span>
-						{#if svc.deployment_history.length > 1}
-							<details class="w-full">
-								<summary class="mt-1 w-fit cursor-pointer rounded text-stone-400 hover:text-stone-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">Recent activity</summary>
-								<ol class="mt-2 space-y-1 border-l border-stone-800 pl-3">
-									{#each svc.deployment_history as event}
-										<li><span class="text-stone-300">{deploymentLabel(event.state)}</span> · {event.message} · {fmtTime(event.recorded_at)}</li>
+			</Card>
+
+			<Card title="Targets">
+				<span slot="meta" class="flex items-center gap-1.5 text-xs text-stone-500">{#if PUBLIC_ACCESS}host <CopyText text={PUBLIC_HOST} className="text-stone-300" />{:else}box NN = 10.60.NN.2{/if}</span>
+				<div class="-mx-1 overflow-x-auto">
+					<table class="w-full text-xs">
+						<thead>
+							<tr class="text-left align-bottom text-stone-500">
+								<th class="px-1.5 pb-2 font-medium">Box</th>
+								{#each SERVICES as name, i}
+									<th class="min-w-[4.5rem] px-1.5 pb-2 font-medium leading-tight"><span class="text-stone-600">{i + 1}</span> {name}</th>
+								{/each}
+							</tr>
+						</thead>
+						<tbody>
+							{#each boxes as bb}
+								<tr class="border-t border-stone-800/60 {bb === tt ? 'bg-stone-800/50' : ''}">
+									<td class="whitespace-nowrap px-1.5 py-1.5 font-mono text-stone-300">
+										{pad2(bb)}
+										{#if bb === tt}<span class="ml-1 rounded bg-stone-700 px-1 font-sans text-[0.65rem] text-stone-200">you</span>{/if}
+										{#if bb === NOP_BOX}<span class="ml-1 rounded bg-amber-500/15 px-1 font-sans text-[0.65rem] text-amber-300">NOP</span>{/if}
+									</td>
+									{#each SERVICES as name, i}
+										<td class="px-1.5 py-1" title={`${name} target`}>
+											<CopyText text={serviceAddr(bb, i + 1)} label={String(servicePort(bb, i + 1))} quiet className="tabular-nums text-stone-400 hover:text-stone-100" />
+										</td>
 									{/each}
-								</ol>
-							</details>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+				<p class="mt-3 text-xs text-stone-600">Click a port to copy host:port. Box {NOP_BOX} is the NOP, a practice target.</p>
+			</Card>
+		</div>
+
+		<div class="min-w-0 space-y-4">
+			<Card title="Submit flags">
+				<form on:submit|preventDefault={submitFlags} class="flex flex-col gap-2">
+					<textarea
+						bind:value={submitFlag}
+						aria-label="Captured flags"
+						rows="4"
+						placeholder="H7CTF&#123;...&#125; one per line"
+						class="w-full resize-none rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-sm font-mono text-stone-200 placeholder-stone-600 focus:border-stone-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 transition-colors"
+						autocomplete="off" spellcheck="false"
+					></textarea>
+					<button
+						type="submit"
+						disabled={submitBusy || !submitFlag.trim() || tickInfo.phase !== 'live'}
+						class="rounded-md bg-stone-100 text-stone-950 font-medium py-2 text-sm hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+					>
+						{submitBusy ? 'Submitting...' : tickInfo.phase !== 'live' ? 'Game not live' : 'Submit'}
+					</button>
+					{#if submitResult}
+						<pre class="text-xs font-mono text-stone-400 whitespace-pre-wrap break-all" role="status" aria-live="polite">{submitResult}</pre>
+					{/if}
+				</form>
+				{#if me.token}
+					<div class="mt-3 flex min-w-0 items-center gap-1.5 text-[0.7rem] text-stone-600" title="Send as the X-Team-Token header from scripts">
+						<span class="shrink-0">Team token</span>
+						{#if fullToken}
+							<CopyText text={fullToken} wrap className="min-w-0 font-mono text-stone-300" />
+						{:else}
+							<span class="font-mono text-stone-500">{me.token}</span>
+							<button type="button" on:click={revealToken} disabled={tokenBusy} class="text-stone-400 underline hover:text-stone-200 disabled:opacity-50">show</button>
 						{/if}
 					</div>
 				{/if}
-				{#each svc.stores as store (store.store_index)}
-					{@const fate = store.ticks.at(-1)?.flag_fate}
-					{@const g = fateGlyph(fate)}
-					<div class="mb-2 flex items-center gap-2">
-						<span class="metadata-label text-stone-500 text-xs w-20 shrink-0 truncate" title={store.store_name}>{store.store_name}</span>
-						<div class="flex gap-px overflow-x-auto pb-0.5">
-							{#each store.ticks as t}
-								{@const credited = !!t.credited_reason}
-								<div
-									class="relative h-5 w-5 shrink-0 rounded-sm {statusColorKey(t.status)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
-									title="{statusLabel(t.status)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
-								role="img"
-								aria-label="{statusLabel(t.status)} at tick {t.tick}{t.credited_reason ? ', credited: ' + t.credited_reason : ''}"
-								>
-									{#if credited}
-										<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
-									{/if}
-								</div>
-							{/each}
-							{#if store.ticks.length === 0}
-								<span class="text-xs text-stone-600 italic">no data yet</span>
-							{/if}
-						</div>
-						{#if g.text}
-							<span class="text-[0.8rem] {g.cls} shrink-0" title={fate ?? ''}>{g.text}</span>
-						{/if}
-						<span class="text-xs tabular-nums text-[#9bcea8] shrink-0">+{fmt1(store.hold)} HOLD</span>
-					</div>
+			</Card>
+
+			<Card title="King of the Hill">
+				{#if tt}
+					<ul class="space-y-2.5 text-sm">
+						{#each HILLS as name, i}
+							<li class="flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5">
+								<span class="text-stone-400"><span class="mr-1.5 tabular-nums text-stone-600">{i + 1}</span>{name}</span>
+								<CopyText text={hillUrl(tt, i + 1)} className="text-xs text-stone-300 hover:text-stone-100" />
+							</li>
+						{/each}
+					</ul>
+					{#if PUBLIC_ACCESS}
+						<p class="mt-3 text-xs text-stone-500">These ports are your team's own. Use only these.</p>
+						<p class="mt-2 font-mono text-[0.7rem] text-stone-600">via VPN: {HILLS.map((_, i) => vpnHillAddr(i + 1)).join(' · ')}</p>
+					{/if}
+				{:else}
+					<p class="text-sm text-stone-500">No team number yet. Ask an organizer.</p>
+				{/if}
+			</Card>
+		</div>
+	</div>
+
+	<Card title="Service status" bodyClass="p-0" className="mt-4">
+		<svelte:fragment slot="meta">
+			<div class="hidden flex-wrap items-center gap-x-3 text-[0.7rem] text-stone-500 md:flex">
+				{#each legend as [lbl, cls]}
+					<span class="inline-flex items-center gap-1"><span class="h-2 w-2 rounded-sm {cls}"></span>{lbl}</span>
 				{/each}
 			</div>
-		</div>
-	{/each}
-	{#if initialLoading}
-		<div class="mb-5 flex items-center justify-center gap-2 rounded-lg border border-stone-800 bg-stone-900/40 px-4 py-8 text-sm text-stone-500" role="status"><Icon icon="mdi:loading" class="h-4 w-4 animate-spin" />Loading live operations…</div>
-	{:else if services.length === 0}
-		<div class="mb-5 rounded-lg border border-stone-800 bg-stone-900/40 px-4 py-8 text-center text-sm text-stone-500">No service inventory is available. Refresh once, then contact an organizer if this persists.</div>
-	{/if}
-
-	<!-- legend -->
-	<div class="mb-5 flex flex-wrap gap-x-4 gap-y-1.5 text-[0.7rem] text-stone-600">
-		{#each [['OK','bg-[#4b7355]'],['RECOVERING','bg-[#3f6a86]'],['MUMBLE','bg-[#9c7a30]'],['OFFLINE','bg-[#b0453a]'],['FLAG NOT FOUND','bg-[#7a4a86]'],['ORG FAULT','bg-stone-700']] as [lbl, cls]}
-			<span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-sm {cls}"></span>{lbl}</span>
-		{/each}
-		<span class="ml-4 inline-flex items-center gap-1 text-[#9bcea8]">● held</span>
-		<span class="inline-flex items-center gap-1 text-[#e08a85]">x2 stolen</span>
-		<span class="inline-flex items-center gap-1 text-amber-400">T tide</span>
-		<span class="inline-flex items-center gap-1 text-stone-500">? unreadable</span>
-		<span class="ml-4 inline-flex items-center gap-1">
-			<span class="relative h-2.5 w-2.5 rounded-sm bg-stone-700"><span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span></span>
-			<span class="text-amber-400/70">credited</span>
-		</span>
-	</div>
-
-	<div class="grid gap-4 sm:grid-cols-2">
-		<!-- flag submission -->
-		<Card title="Submit flags">
-			<form on:submit|preventDefault={submitFlags} class="flex flex-col gap-2">
-				<textarea
-					bind:value={submitFlag}
-					aria-label="Captured flags"
-					rows="3"
-					placeholder="H7CTF&#123;...&#125; one per line"
-					class="w-full resize-none rounded-md border border-stone-800 bg-stone-900/60 px-3 py-2 text-sm font-mono text-stone-200 placeholder-stone-600 focus:border-stone-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 transition-colors"
-					autocomplete="off" spellcheck="false"
-				></textarea>
-				<button
-					type="submit"
-					disabled={submitBusy || !submitFlag.trim() || tickInfo.phase !== 'live'}
-					class="rounded-md bg-stone-100 text-stone-950 font-medium py-2 text-sm hover:bg-stone-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-				>
-					{submitBusy ? 'Submitting...' : tickInfo.phase !== 'live' ? 'Game not live' : 'Submit'}
-				</button>
-				{#if submitResult}
-					<pre class="text-xs font-mono text-stone-400 whitespace-pre-wrap break-all" role="status" aria-live="polite">{submitResult}</pre>
-				{/if}
-			</form>
-		</Card>
-
-		<!-- team info -->
-		<Card title="Service network">
-			<div class="space-y-3 text-sm">
-				<div class="flex justify-between text-stone-500">
-					<span>Vulnbox</span>
-					<span class="font-mono text-stone-200">{me.vulnbox_ip ?? 'not assigned'}</span>
-				</div>
-				<div class="flex justify-between text-stone-500">
-					<span>Team #</span>
-					<span class="text-stone-200">{me.team_number ?? '-'}</span>
-				</div>
-				<div class="flex justify-between text-stone-500">
-					<span>Submit token</span>
-					<span class="font-mono text-stone-500 text-xs">{me.token}</span>
-				</div>
-				<p class="text-xs leading-relaxed text-stone-600">This address is your production service target. Deploy and recovery operations run through the team repository and Deployment Gate.</p>
-			</div>
-		</Card>
-	</div>
-
-	<!-- ORG_FAULT rule -->
-	<details class="mt-5 rounded-lg border border-stone-800 bg-stone-900/30 overflow-hidden">
-		<summary class="flex cursor-pointer items-center gap-2 px-4 py-3 text-sm text-stone-400 hover:text-stone-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-stone-500 transition-colors select-none">
-			<Icon icon="mdi:information-outline" class="h-4 w-4 shrink-0 text-stone-600" />
-			<span class="font-medium">Our faults rule</span>
-		</summary>
-		<div class="border-t border-stone-800 px-4 py-3 text-xs text-stone-400 leading-relaxed space-y-2">
-			<p>Our faults are credited, never charged. A tick counts as ORG_FAULT and scores as up, for UP and for the hold life rule, when:</p>
-			<ul class="ml-4 space-y-1 list-disc list-outside text-stone-500">
-				<li>our checker itself fails;</li>
-				<li>the untouched NOP box fails the same check step as 3 or more teams in the same tick;</li>
-				<li>the Outbreak wave crashes your service; or</li>
-				<li>organizers re-credit it after review.</li>
-			</ul>
-			<p>Every credited tick shows on your status page with a credited mark and its reason.</p>
-		</div>
-	</details>
+			<HelpTip text={legendHelp} label="Status key" align="right" />
+		</svelte:fragment>
+		{#if initialLoading}
+			<div class="flex items-center justify-center gap-2 px-4 py-8 text-sm text-stone-500" role="status"><Icon icon="mdi:loading" class="h-4 w-4 animate-spin" />Loading...</div>
+		{:else if services.length === 0}
+			<div class="px-4 py-8 text-center text-sm text-stone-500">No services yet. Refresh, or ask an organizer if this stays empty.</div>
+		{/if}
+		<ul class="divide-y divide-stone-800/60">
+			{#each services as svc (svc.service_id)}
+				{@const latestT = svcLatestTick(svc)}
+				{@const svcStatus = latestT?.status ?? 'UNKNOWN'}
+				{@const deployment = svc.deployment_history?.[0]}
+				<li class="px-4 py-3">
+					<div class="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+						<span class="text-sm font-medium text-stone-200">{svc.name}</span>
+						<span class="rounded px-1.5 py-0.5 text-xs font-medium {statusChipKey(svcStatus)}">{statusLabel(svcStatus)}</span>
+						{#if latestT}<span class="text-xs text-stone-500">{(svcUptime(svc) * 100).toFixed(1)}% up</span>{/if}
+						{#if svc.active_attackers}<span class="text-xs text-stone-500">{svc.active_attackers} attacking</span>{/if}
+						{#if deployment}
+							<span class="rounded px-1.5 py-0.5 text-xs font-medium {deploymentClass(deployment.state)}" title="{deployment.message} ({fmtTime(deployment.recorded_at)})">{deploymentLabel(deployment.state)}</span>
+						{:else if svc.last_deployment}
+							<span class="text-xs text-stone-600" title={svc.last_deployment.deployed_at}>{svc.last_deployment.kind} at {fmtTime(svc.last_deployment.deployed_at)}</span>
+						{/if}
+						{#if latestT?.message}
+							<span class="max-w-xs truncate text-xs text-stone-600" title={latestT.message}>{latestT.message}</span>
+						{/if}
+					</div>
+					{#each svc.stores as store (store.store_index)}
+						{@const fate = store.ticks.at(-1)?.flag_fate}
+						{@const g = fateGlyph(fate)}
+						<div class="mb-1 flex items-center gap-2">
+							<span class="w-20 shrink-0 truncate text-xs text-stone-500" title={store.store_name}>{store.store_name}</span>
+							<div class="flex gap-px overflow-x-auto pb-0.5">
+								{#each store.ticks as t}
+									{@const credited = !!t.credited_reason}
+									<div
+										class="relative h-4 w-4 shrink-0 rounded-sm {statusColorKey(t.status)} {credited ? 'ring-1 ring-amber-400/50' : ''}"
+										title="{statusLabel(t.status)} t{t.tick}{t.credited_reason ? ' (credited: ' + t.credited_reason + ')' : ''}{t.message ? ' - ' + t.message : ''}"
+										role="img"
+										aria-label="{statusLabel(t.status)} at tick {t.tick}{t.credited_reason ? ', credited: ' + t.credited_reason : ''}"
+									>
+										{#if credited}
+											<span class="absolute top-0 right-0 h-1 w-1 rounded-full bg-amber-400"></span>
+										{/if}
+									</div>
+								{/each}
+								{#if store.ticks.length === 0}
+									<span class="text-xs italic text-stone-600">no data yet</span>
+								{/if}
+							</div>
+							{#if g.text}
+								<span class="shrink-0 text-[0.8rem] {g.cls}" title={g.tip}>{g.text}</span>
+							{/if}
+							<span class="ml-auto shrink-0 text-xs tabular-nums text-[#9bcea8]">+{fmt1(store.hold)} hold</span>
+						</div>
+					{/each}
+					{#if svc.deployment_history?.length > 1}
+						<details class="mt-1 text-xs text-stone-500">
+							<summary class="w-fit cursor-pointer rounded text-stone-500 hover:text-stone-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500">Deploy history</summary>
+							<ol class="mt-2 space-y-1 border-l border-stone-800 pl-3">
+								{#each svc.deployment_history as event}
+									<li><span class="text-stone-300">{deploymentLabel(event.state)}</span> · {event.message} · {fmtTime(event.recorded_at)}</li>
+								{/each}
+							</ol>
+						</details>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	</Card>
 </div>
 
 {/if}

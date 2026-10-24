@@ -245,9 +245,9 @@ func (h *ReadinessHandler) buildReport(ctx context.Context) (readinessReport, er
 
 		nightReady := h.config.Game.Koth.Timezone == "Asia/Kolkata" && h.config.Game.Koth.NightStart == "00:00" &&
 			h.config.Game.Koth.NightEnd == "06:00" && h.config.Game.Koth.RoundInterval == 15*time.Minute &&
-			h.config.Game.Koth.NightRoundInterval == 30*time.Minute
+			(h.config.Game.Koth.NightRoundInterval == 30*time.Minute || h.config.Game.Koth.NightRoundInterval == 15*time.Minute)
 		add("finals.night_watch", "Finals", "Night Watch", status(nightReady, "blocker"),
-			ternary(nightReady, "Night Watch and the 06:00 cadence boundary match the frozen contract.", "Use Asia/Kolkata, 00:00-06:00, 30-minute night rounds and 15-minute normal rounds."), nil)
+			ternary(nightReady, "Night Watch and the 06:00 cadence boundary match the contract.", "Use Asia/Kolkata, 00:00-06:00, 15 or 30-minute night rounds and 15-minute normal rounds."), nil)
 
 		var serviceSixAt, hillThreeAt *time.Time
 		if err := h.db.Pool.QueryRow(ctx, `SELECT release_at FROM game_services

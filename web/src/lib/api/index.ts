@@ -41,6 +41,7 @@ export interface PlatformInfoResponse {
 	scoring_enabled: boolean;
 	scoreboard_enabled: boolean;
 	arena_enabled: boolean;
+	operations_enabled: boolean;
 	economy_enabled: boolean;
 	market_pulse_enabled: boolean;
 	notification_sound_allowed: boolean;
@@ -1017,6 +1018,14 @@ class ApiClient {
 
 	async getArenaTick() {
 		return this.request<ArenaTick>('/arena/tick', { cache: 'no-store' }, false);
+	}
+
+	async getArenaMe() {
+		return this.request<{ team_number: number | null }>('/arena/me', { cache: 'no-store' });
+	}
+
+	async getArenaToken() {
+		return this.request<{ token: string }>('/arena/me/token', { cache: 'no-store' });
 	}
 
 	async getArenaTeams() {

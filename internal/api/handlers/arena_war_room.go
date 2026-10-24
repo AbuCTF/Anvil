@@ -69,6 +69,11 @@ const warRoomEvents = 40
 
 // WarRoom serves GET /api/v1/arena/war-room.
 func (h *GameHandler) WarRoom(c *gin.Context) {
+	// staff-only for now; players get a plain 404
+	if c.GetString("role") != "admin" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
 	if h.off(c) {
 		return
 	}

@@ -210,7 +210,7 @@ func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.T
 		    FROM game_captures gc
 		    JOIN game_flags gf ON gf.id = gc.flag_id
 		    WHERE gf.service_id = gs.id AND gf.store_index = s.store_index
-		    HAVING COUNT(DISTINCT gc.victim_team_id) >= $2
+		    HAVING COUNT(DISTINCT gc.victim_team_id) >= $1
 		) fb ON TRUE
 		LEFT JOIN LATERAL (
 		    SELECT ge.tick_number AS advisory_tick
@@ -221,7 +221,7 @@ func (b *outbreakBot) orangeStores(ctx context.Context, tick int, started time.T
 		LEFT JOIN game_ticks gt ON gt.tick_number = adv.advisory_tick
 		WHERE gs.enabled = true AND gs.checker_ref IS NOT NULL AND gs.checker_ref <> ''
 		  AND gs.port BETWEEN 1 AND 65535
-	`, tick, firstBloodThreshold)
+	`, firstBloodThreshold)
 	if err != nil {
 		return nil, fmt.Errorf("orange stores: %w", err)
 	}

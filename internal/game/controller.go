@@ -413,11 +413,21 @@ func (c *Controller) runningTick(ctx context.Context) (int, bool, error) {
 	return tick, true, nil
 }
 
+// tickGateSlack keeps the cadence gate under one interval, see openTick.
+const tickGateSlack = 5 * time.Second
+
 func (c *Controller) openTick(ctx context.Context, tick int) (time.Time, bool, error) {
 	// cadence gate: every api replica runs a controller, so without this a new tick
 	// opens as fast as any replica's ticker fires (N replicas => N x speed). Only open
 	// a new tick when none has STARTED within the interval; an existing tick (resume, or
 	// a peer that just opened it) falls through to the status check below.
+	// the window is a few seconds short of the interval: the ticker fires every
+	// interval but NOW() lands a variable few ms after it, so an exact window
+	// refused about half the fires and ticks ran at 2 or 4 minutes.
+	gate := c.cfg.TickInterval - tickGateSlack
+	if gate < c.cfg.TickInterval/2 {
+		gate = c.cfg.TickInterval / 2
+	}
 	var started time.Time
 	err := c.db.Pool.QueryRow(ctx,
 		`INSERT INTO game_ticks (tick_number, started_at, status)
@@ -425,7 +435,7 @@ func (c *Controller) openTick(ctx context.Context, tick int) (time.Time, bool, e
 		 WHERE NOT EXISTS (
 		   SELECT 1 FROM game_ticks WHERE started_at > NOW() - make_interval(secs => $2))
 		 ON CONFLICT (tick_number) DO NOTHING
-		 RETURNING started_at`, tick, c.cfg.TickInterval.Seconds()).Scan(&started)
+		 RETURNING started_at`, tick, gate.Seconds()).Scan(&started)
 	if err == nil {
 		return started, true, nil
 	}

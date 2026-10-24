@@ -40,6 +40,7 @@ type platformInfoResponse struct {
 	ScoringEnabled     bool                            `json:"scoring_enabled"`
 	ScoreboardEnabled  bool                            `json:"scoreboard_enabled"`
 	ArenaEnabled       bool                            `json:"arena_enabled"`
+	OperationsEnabled  bool                            `json:"operations_enabled"`
 	EconomyEnabled     bool                            `json:"economy_enabled"`
 	MarketPulseEnabled bool                            `json:"market_pulse_enabled"`
 	NotificationSound  bool                            `json:"notification_sound_allowed"`
@@ -65,6 +66,10 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 	arena, err := boolSettingOrDefault(ctx, h.db, "arena_enabled", false)
 	if err != nil {
 		h.logger.Warn("failed to read arena_enabled", zap.Error(err))
+	}
+	operations, err := boolSettingOrDefault(ctx, h.db, "finals.operations_enabled", false)
+	if err != nil {
+		h.logger.Warn("failed to read finals.operations_enabled", zap.Error(err))
 	}
 	teams, err := isTeamsMode(ctx, h.db)
 	if err != nil {
@@ -129,6 +134,7 @@ func (h *PlatformHandler) GetInfo(c *gin.Context) {
 		ScoringEnabled:     scoring,
 		ScoreboardEnabled:  scoreboard,
 		ArenaEnabled:       arena,
+		OperationsEnabled:  operations,
 		EconomyEnabled:     economy,
 		MarketPulseEnabled: pulse,
 		NotificationSound:  notificationSound,
@@ -297,13 +303,13 @@ func challengeReleaseGate(load eventWindowLoader, logger *zap.Logger) gin.Handle
 			if err != nil {
 				logger.Error("challenge release gate: event window", zap.Error(err))
 			}
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "challenge catalog unavailable"})
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "the event schedule is not published yet"})
 			return
 		}
 		if status == http.StatusUnauthorized {
 			c.AbortWithStatusJSON(status, gin.H{"error": "authentication required"})
 		} else {
-			c.AbortWithStatusJSON(status, gin.H{"error": "challenge catalog has not been released"})
+			c.AbortWithStatusJSON(status, gin.H{"error": "the event has not started yet"})
 		}
 	}
 }

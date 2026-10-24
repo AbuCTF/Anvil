@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -288,5 +289,52 @@ func TestLiveGameStateBoundsAndSurfacesStaleFallback(t *testing.T) {
 	unavailable := requestGameState(handler, "")
 	if unavailable.Code != http.StatusServiceUnavailable {
 		t.Fatalf("over-age stale response = %d, want 503", unavailable.Code)
+	}
+}
+
+func TestStandingsJeopardyOnlyWhileWeighted(t *testing.T) {
+	off := NewGameHandler(&config.Config{}, nil, zap.NewNop())
+	if col := off.jeopardyColumn("t"); col != "NULL::float8" {
+		t.Fatalf("weight 0 column = %q, want NULL", col)
+	}
+	raw, _ := json.Marshal(gameStanding{TeamID: "a", Total: 1})
+	if strings.Contains(string(raw), "jeopardy") {
+		t.Fatalf("weight 0 standing leaks a jeopardy field: %s", raw)
+	}
+
+	on := NewGameHandler(&config.Config{Game: config.GameConfig{Scoring: config.ScoringConfig{WeightJeopardy: 0.15}}}, nil, zap.NewNop())
+	col := on.jeopardyColumn("t")
+	if !strings.Contains(col, "rt.total_score") || !strings.Contains(col, "rt.id = t.id") || !strings.Contains(col, publicTeamSQL("rt")) {
+		t.Fatalf("weighted column does not read the public team board: %q", col)
+	}
+	zero := 0.0
+	raw, _ = json.Marshal(gameStanding{TeamID: "a", Jeopardy: &zero})
+	if !strings.Contains(string(raw), `"jeopardy":0`) {
+		t.Fatalf("weighted standing drops a zero jeopardy score: %s", raw)
+	}
+}
+
+func TestScoreWeightsOnlyForMirror(t *testing.T) {
+	legacy := NewGameHandler(&config.Config{}, nil, zap.NewNop())
+	if w := legacy.scoreWeights(); w != nil || legacy.shares([]float64{1}, []float64{1}, []float64{1}) != nil {
+		t.Fatalf("legacy formula serves weights %+v", w)
+	}
+
+	sc := config.ScoringConfig{Formula: "mirror", WeightAD: 0.7, WeightKoth: 0.3}
+	mirror := NewGameHandler(&config.Config{Game: config.GameConfig{Scoring: sc}}, nil, zap.NewNop())
+	raw, _ := json.Marshal(mirror.scoreWeights())
+	if string(raw) != `{"ad":0.7,"koth":0.3,"jeopardy":0}` {
+		t.Fatalf("weights = %s", raw)
+	}
+	// ad 0/50/100, koth 10/0/0: leader takes the full share, last team 0
+	shares := mirror.shares([]float64{0, 50, 100}, []float64{10, 0, 0}, []float64{300, 350, 700})
+	if shares[2].AD != 700 || shares[0].Koth != 300 || shares[0].AD != 0 || shares[1].AD != 350 || shares[0].Jeopardy != nil {
+		t.Fatalf("shares = %+v", shares)
+	}
+
+	sc.WeightJeopardy = 0.05
+	withJ := NewGameHandler(&config.Config{Game: config.GameConfig{Scoring: sc}}, nil, zap.NewNop())
+	if s := withJ.shares([]float64{0, 50, 100}, []float64{10, 0, 0}, []float64{350, 350, 700}); s[0].Jeopardy == nil || *s[0].Jeopardy != 50 {
+		t.Fatalf("jeopardy share = %+v", s[0])
 	}
 }

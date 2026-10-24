@@ -235,12 +235,26 @@ type gameStanding struct {
 	Defense float64 `json:"defense"`
 	SLA     float64 `json:"sla"`
 	Koth    float64 `json:"koth"`
-	Total   float64 `json:"total"`
+	// live jeopardy points, only while weight_jeopardy folds them into total
+	Jeopardy *float64    `json:"jeopardy,omitempty"`
+	Total    float64     `json:"total"`
+	Share    *scoreShare `json:"share,omitempty"`
+}
+
+// jeopardyColumn is a game team's jeopardy score as the teams board ranks it (the
+// mirror loads the same number), or NULL while weight_jeopardy is 0 so the field
+// stays out of the payload. live, so it can run a tick ahead of total.
+func (h *GameHandler) jeopardyColumn(alias string) string {
+	if h.config == nil || h.config.Game.Scoring.WeightJeopardy <= 0 {
+		return "NULL::float8"
+	}
+	return `COALESCE((SELECT rt.total_score FROM teams rt WHERE rt.id = ` + alias + `.id AND ` +
+		publicTeamSQL("rt") + `), 0)::float8`
 }
 
 func (h *GameHandler) standingsData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]gameStanding, error) {
 	rows, err := query.Query(ctx,
-		`SELECT t.id, t.name, s.attack, s.defense, s.sla, s.koth, s.total, s.rank
+		`SELECT t.id, t.name, s.attack, s.defense, s.sla, s.koth, `+h.jeopardyColumn("t")+`, s.total, s.rank
 		 FROM game_standings s JOIN game_teams t ON t.id = s.team_id
 		 WHERE t.is_nop = false AND t.status = 'active' AND `+gameTeamVisibilitySQL("t", includeHidden)+`
 		 ORDER BY s.rank ASC NULLS LAST, t.id`)
@@ -253,7 +267,7 @@ func (h *GameHandler) standingsData(ctx context.Context, query gameStateQuerier,
 	for rows.Next() {
 		var e gameStanding
 		var id uuid.UUID
-		if err := rows.Scan(&id, &e.Team, &e.Attack, &e.Defense, &e.SLA, &e.Koth, &e.Total, &e.Rank); err != nil {
+		if err := rows.Scan(&id, &e.Team, &e.Attack, &e.Defense, &e.SLA, &e.Koth, &e.Jeopardy, &e.Total, &e.Rank); err != nil {
 			return nil, err
 		}
 		e.TeamID = id.String()
@@ -414,15 +428,11 @@ type historySeries struct {
 
 func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]*historySeries, error) {
 	rows, err := query.Query(ctx,
-		// Only chart teams that actually scored: a KotH field is mostly teams that never
-		// touched a hill, and 100+ dead-flat zero lines bury the handful that raced. Fallback
-		// to everyone while nobody has scored yet, so a live arena isn't a blank graph at t0.
+		// every team, so mirror totals below zero still get a line
 		`SELECT t.id, t.name, s.tick_number, s.total
 		 FROM game_score_snapshots s JOIN game_teams t ON t.id = s.team_id
 		 WHERE t.is_nop = false AND t.status = 'active' AND `+gameTeamVisibilitySQL("t", includeHidden)+`
 		   AND s.tick_number > (SELECT COALESCE(MAX(tick_number), 0) - $1 FROM game_score_snapshots)
-		   AND (t.id IN (SELECT team_id FROM game_score_snapshots WHERE total > 0)
-		        OR NOT EXISTS (SELECT 1 FROM game_score_snapshots WHERE total > 0))
 		 ORDER BY t.name, t.id, s.tick_number`, arenaHistoryTickLimit)
 	if err != nil {
 		return nil, err
@@ -457,6 +467,56 @@ func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier, i
 		return nil, err
 	}
 	return series, nil
+}
+
+// kothHistoryData is each team's cumulative koth points after every closed round
+// (x = round, y = total). per round it adds points + bounty + koth_hold * held_ticks,
+// the same terms accumulateKoth sums into game_standings.koth (round events are
+// points + bounty, hold is koth_hold per controlled tick). uncapped like that column.
+func (h *GameHandler) kothHistoryData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]*historySeries, error) {
+	hold := 0.0
+	if h.config != nil {
+		hold = h.config.Game.Scoring.KothHold
+	}
+	rows, err := query.Query(ctx,
+		`WITH rounds AS (
+		   SELECT round_number FROM game_koth_rounds WHERE status = 'closed'
+		 ), per AS (
+		   SELECT k.team_id, k.round_number, SUM(k.points + k.bounty + $1::numeric * k.held_ticks) AS pts
+		   FROM game_koth_results k JOIN rounds r ON r.round_number = k.round_number
+		   GROUP BY k.team_id, k.round_number
+		 )
+		 SELECT t.id, t.name, r.round_number,
+		        (SUM(COALESCE(p.pts, 0)) OVER (PARTITION BY t.id ORDER BY r.round_number))::float8
+		 FROM game_teams t
+		 LEFT JOIN rounds r ON TRUE
+		 LEFT JOIN per p ON p.team_id = t.id AND p.round_number = r.round_number
+		 WHERE t.is_nop = false AND t.status = 'active' AND `+gameTeamVisibilitySQL("t", includeHidden)+`
+		 ORDER BY t.name, t.id, r.round_number`, hold)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	series := []*historySeries{}
+	var cur *historySeries
+	for rows.Next() {
+		var id uuid.UUID
+		var name string
+		var round *int
+		var total *float64
+		if err := rows.Scan(&id, &name, &round, &total); err != nil {
+			return nil, err
+		}
+		if cur == nil || cur.TeamID != id.String() {
+			cur = &historySeries{TeamID: id.String(), Team: name, Points: []historyPoint{}}
+			series = append(series, cur)
+		}
+		if round != nil && total != nil {
+			cur.Points = append(cur.Points, historyPoint{Tick: *round, Total: *total})
+		}
+	}
+	return series, rows.Err()
 }
 
 // scoresBlinded: during the freeze only an authenticated admin reads exact scores,
@@ -763,6 +823,9 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 	if err != nil {
 		return nil, "", fmt.Errorf("standings: %w", err)
 	}
+	if err := h.attachShares(ctx, tx, standings); err != nil {
+		return nil, "", fmt.Errorf("shares: %w", err)
+	}
 	hills, err := h.hillsData(ctx, tx, includeHidden)
 	if err != nil {
 		return nil, "", fmt.Errorf("hills: %w", err)
@@ -770,6 +833,10 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 	history, err := h.historyData(ctx, tx, includeHidden)
 	if err != nil {
 		return nil, "", fmt.Errorf("history: %w", err)
+	}
+	kothHistory, err := h.kothHistoryData(ctx, tx, includeHidden)
+	if err != nil {
+		return nil, "", fmt.Errorf("koth history: %w", err)
 	}
 	services, rows, err := h.matrixData(ctx, tx, includeHidden)
 	if err != nil {
@@ -792,7 +859,7 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 		}
 	}
 	if frozen {
-		standings, history = []gameStanding{}, []*historySeries{}
+		standings, history, kothHistory = []gameStanding{}, []*historySeries{}, []*historySeries{}
 		for i := range rows {
 			rows[i].Rank = nil
 		}
@@ -801,17 +868,22 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 		return nil, "", fmt.Errorf("commit snapshot: %w", err)
 	}
 
-	return encodeGameState(gin.H{
-		"active":    true,
-		"status":    status,
-		"hills":     hills,
-		"standings": standings,
-		"services":  services,
-		"rows":      rows,
-		"events":    events,
-		"history":   history,
-		"frozen":    frozen,
-	})
+	payload := gin.H{
+		"active":       true,
+		"status":       status,
+		"hills":        hills,
+		"standings":    standings,
+		"services":     services,
+		"rows":         rows,
+		"events":       events,
+		"history":      history,
+		"koth_history": kothHistory,
+		"frozen":       frozen,
+	}
+	if w := h.scoreWeights(); w != nil {
+		payload["weights"] = w
+	}
+	return encodeGameState(payload)
 }
 
 // returns the whole arena snapshot in one response, so each viewer polls
@@ -824,14 +896,15 @@ func (h *GameHandler) State(c *gin.Context) {
 	arenaOpen = arenaOpen || staffPreview
 	if !h.config.Game.Enabled || !arenaOpen {
 		body, etag, err := encodeGameState(gin.H{
-			"active":    false,
-			"status":    gin.H{"tick": 0, "round": 0, "tick_interval_seconds": int(h.config.Game.TickInterval.Seconds())},
-			"hills":     []gameHill{},
-			"standings": []gameStanding{},
-			"services":  []matrixService{},
-			"rows":      []matrixRow{},
-			"events":    []gameEvent{},
-			"history":   []*historySeries{},
+			"active":       false,
+			"status":       gin.H{"tick": 0, "round": 0, "tick_interval_seconds": int(h.config.Game.TickInterval.Seconds())},
+			"hills":        []gameHill{},
+			"standings":    []gameStanding{},
+			"services":     []matrixService{},
+			"rows":         []matrixRow{},
+			"events":       []gameEvent{},
+			"history":      []*historySeries{},
+			"koth_history": []*historySeries{},
 		})
 		if err != nil {
 			h.logger.Error("encode inactive game state", zap.Error(err))

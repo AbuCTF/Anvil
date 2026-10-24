@@ -22,8 +22,89 @@ type finalsScoreRow struct {
 	Up       float64                  `json:"up"`
 	AD       float64                  `json:"ad"`
 	Koth     float64                  `json:"koth"`
+	Jeopardy *float64                 `json:"jeopardy,omitempty"`
 	Total    float64                  `json:"total"`
+	Share    *scoreShare              `json:"share,omitempty"`
 	Services []finalsServiceBreakdown `json:"services"`
+}
+
+// scoreWeights is the live finals blend, served so boards label it from config
+type scoreWeights struct {
+	AD       float64 `json:"ad"`
+	Koth     float64 `json:"koth"`
+	Jeopardy float64 `json:"jeopardy"`
+}
+
+// scoreShare is a team's total cut into what each board earned; the parts add up to total
+type scoreShare struct {
+	AD       float64  `json:"ad"`
+	Koth     float64  `json:"koth"`
+	Jeopardy *float64 `json:"jeopardy,omitempty"`
+}
+
+// scoreWeights is nil outside the mirror formula: legacy totals are plain sums, not blends
+func (h *GameHandler) scoreWeights() *scoreWeights {
+	if h.config == nil || h.config.Game.Scoring.Formula != "mirror" {
+		return nil
+	}
+	sc := h.config.Game.Scoring
+	return &scoreWeights{AD: sc.WeightAD, Koth: sc.WeightKoth, Jeopardy: sc.WeightJeopardy}
+}
+
+// shares splits totals over one field, which must be the mirror's own (every active
+// non-nop standing) or the floors drift from the ones the total was built on
+func (h *GameHandler) shares(ad, koth, total []float64) []scoreShare {
+	w := h.scoreWeights()
+	if w == nil {
+		return nil
+	}
+	adS, koS, jeS := game.Shares(w.AD, w.Koth, ad, koth, total)
+	out := make([]scoreShare, len(ad))
+	for i := range out {
+		out[i] = scoreShare{AD: adS[i], Koth: koS[i]}
+		if w.Jeopardy > 0 {
+			out[i].Jeopardy = &jeS[i]
+		}
+	}
+	return out
+}
+
+// attachShares fills the share on a (possibly filtered) standings list from the full field
+func (h *GameHandler) attachShares(ctx context.Context, query gameStateQuerier, standings []gameStanding) error {
+	if h.scoreWeights() == nil || len(standings) == 0 {
+		return nil
+	}
+	rows, err := query.Query(ctx,
+		`SELECT s.team_id::text, s.ad, s.koth, s.total
+		 FROM game_standings s JOIN game_teams t ON t.id = s.team_id
+		 WHERE t.is_nop = false AND t.status = 'active'`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ids []string
+	var ad, koth, total []float64
+	for rows.Next() {
+		var id string
+		var a, k, tot float64
+		if err := rows.Scan(&id, &a, &k, &tot); err != nil {
+			return err
+		}
+		ids, ad, koth, total = append(ids, id), append(ad, a), append(koth, k), append(total, tot)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	byTeam := make(map[string]scoreShare, len(ids))
+	for i, s := range h.shares(ad, koth, total) {
+		byTeam[ids[i]] = s
+	}
+	for i := range standings {
+		if s, ok := byTeam[standings[i].TeamID]; ok {
+			standings[i].Share = &s
+		}
+	}
+	return nil
 }
 
 type finalsServiceBreakdown struct {
@@ -54,8 +135,9 @@ func (h *GameHandler) FinalsScoreboard(c *gin.Context) {
 	if frozen && c.GetString("role") != "admin" {
 		c.Header("Cache-Control", "private, no-store")
 		c.JSON(http.StatusOK, gin.H{
-			"frozen": true,
-			"rows":   []finalsScoreRow{},
+			"frozen":  true,
+			"rows":    []finalsScoreRow{},
+			"weights": h.scoreWeights(),
 		})
 		return
 	}
@@ -71,8 +153,9 @@ func (h *GameHandler) FinalsScoreboard(c *gin.Context) {
 		c.Header("Cache-Control", "private, no-store")
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"frozen": frozen,
-		"rows":   rows,
+		"frozen":  frozen,
+		"rows":    rows,
+		"weights": h.scoreWeights(),
 	})
 }
 
@@ -80,7 +163,7 @@ func (h *GameHandler) finalsScoreboardRows(ctx context.Context) ([]finalsScoreRo
 	// standings query: attack=steal, defense=hold, sla=up, ad=total-ad, koth, total
 	sRows, err := h.db.Pool.Query(ctx,
 		`SELECT gs.rank, gt.id::text, gt.name,
-		        gs.attack, gs.defense, gs.sla, gs.ad, gs.koth, gs.total
+		        gs.attack, gs.defense, gs.sla, gs.ad, gs.koth, `+h.jeopardyColumn("gt")+`, gs.total
 		 FROM game_standings gs
 		 JOIN game_teams gt ON gt.id = gs.team_id
 		 WHERE gt.is_nop = false AND gt.status = 'active'
@@ -95,7 +178,7 @@ func (h *GameHandler) finalsScoreboardRows(ctx context.Context) ([]finalsScoreRo
 	for sRows.Next() {
 		var r finalsScoreRow
 		if err := sRows.Scan(&r.Rank, &r.TeamID, &r.TeamName,
-			&r.Steal, &r.Hold, &r.Up, &r.AD, &r.Koth, &r.Total); err != nil {
+			&r.Steal, &r.Hold, &r.Up, &r.AD, &r.Koth, &r.Jeopardy, &r.Total); err != nil {
 			return nil, err
 		}
 		r.Services = []finalsServiceBreakdown{}
@@ -134,8 +217,15 @@ func (h *GameHandler) finalsScoreboardRows(ctx context.Context) ([]finalsScoreRo
 	}
 
 	result := make([]finalsScoreRow, 0, len(ordered))
+	ad, koth, total := make([]float64, 0, len(ordered)), make([]float64, 0, len(ordered)), make([]float64, 0, len(ordered))
 	for _, id := range ordered {
-		result = append(result, *rowMap[id])
+		r := rowMap[id]
+		result = append(result, *r)
+		ad, koth, total = append(ad, r.AD), append(koth, r.Koth), append(total, r.Total)
+	}
+	// every active non-nop standing is here, the same field the mirror ranked
+	for i, s := range h.shares(ad, koth, total) {
+		result[i].Share = &s
 	}
 	return result, nil
 }

@@ -53,6 +53,8 @@ func (c *Controller) loadMirror(ctx context.Context, tx pgx.Tx, current int, fin
 		Bonus:      sc.AttackerBonus,
 		WeightAD:   sc.WeightAD,
 		WeightKoth: sc.WeightKoth,
+
+		WeightJeopardy: sc.WeightJeopardy,
 	}
 
 	scan := func(what, q string, args []any, each func(pgx.Rows) error) error {
@@ -254,8 +256,33 @@ func (c *Controller) loadMirror(ctx context.Context, tx pgx.Tx, current int, fin
 	for id, s := range acc {
 		in.Koth[id] = s.koth
 	}
+
+	if in.WeightJeopardy > 0 {
+		in.Jeopardy = map[uuid.UUID]float64{}
+		if err := scan("jeopardy", jeopardyPoints, nil, func(r pgx.Rows) error {
+			var id uuid.UUID
+			var pts float64
+			if err := r.Scan(&id, &pts); err != nil {
+				return err
+			}
+			in.Jeopardy[id] = pts
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
 	return in, nil
 }
+
+// jeopardyPoints is each game team's jeopardy score as the teams board ranks it
+// (teamRankedCTE + publicTeamSQL in handlers): teams.total_score, so dynamic decay
+// and graded points match, without koth_score, which is the koth board here. a game
+// team shares its id with its platform team; staff-only and zz- teams score 0.
+const jeopardyPoints = `SELECT t.id, t.total_score::float8
+	FROM teams t JOIN game_teams g ON g.id = t.id
+	WHERE EXISTS (SELECT 1 FROM users pm WHERE pm.team_id = t.id
+	              AND pm.status = 'active' AND pm.role NOT IN ('admin', 'author'))
+	  AND t.name NOT LIKE 'zz-%'`
 
 func loadCredits(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)

@@ -11,7 +11,7 @@
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
 
-	$: if (browser && $platformInfo?.arena_enabled) goto('/team/finals');
+	$: if (browser && $platformInfo?.arena_enabled && $platformInfo?.operations_enabled) goto('/team/finals');
 
 	let loading = true;
 	let teamsDisabled = false;

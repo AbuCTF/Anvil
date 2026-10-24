@@ -54,6 +54,29 @@ func (h *GameHandler) teamIdentity(c *gin.Context) (teamID uuid.UUID, maskedToke
 	return id, mask, false, true
 }
 
+// MeToken serves GET /api/v1/arena/me/token: the full submit token, for a signed-in
+// member of the team only (never via X-Team-Token), so teams fetch it themselves.
+func (h *GameHandler) MeToken(c *gin.Context) {
+	uid := middleware.GetUserID(c)
+	if uid == nil || c.GetHeader("X-Team-Token") != "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "sign in as a team member"})
+		return
+	}
+	id, found, err := game.TeamForUser(c.Request.Context(), h.db, *uid)
+	if err != nil || !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no team"})
+		return
+	}
+	var tok *string
+	if err := h.db.Pool.QueryRow(c.Request.Context(),
+		`SELECT token FROM game_teams WHERE id = $1`, id).Scan(&tok); err != nil || tok == nil || *tok == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no token issued yet"})
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusOK, gin.H{"token": *tok})
+}
+
 // Tick serves GET /api/v1/arena/tick.
 // Returns the current tick number, its start/end/hold timestamps, and the game phase.
 // No auth required (public; used by the status page clock and h7 deploy).

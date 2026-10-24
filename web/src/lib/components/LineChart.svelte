@@ -10,6 +10,8 @@
   // index of the series to emphasise (leader); others are drawn dimmer.
   export let emphasize = -1;
   export let ariaLabel = "Score over time";
+  // x labels on whole data values (rounds, ticks) instead of even fractions
+  export let integerX = false;
 
   let width = 800;
   const padL = 40;
@@ -24,9 +26,14 @@
   $: allY = series.flatMap((s) => s.points.map((p) => p.y));
   $: xMin = allX.length ? Math.min(...allX) : 0;
   $: xMax = allX.length ? Math.max(...allX) : 1;
-  $: yMax = niceMax(allY.length ? Math.max(...allY) : 1);
+  // the axis always holds 0; below zero it grows down in the same step
+  $: lo = Math.min(0, ...allY);
+  $: hi = Math.max(0, ...allY);
+  $: step = niceMax(Math.max(hi, -lo)) / 4;
+  $: yMin = Math.floor(lo / step) * step;
+  $: yMax = lo < 0 ? Math.max(step, Math.ceil(hi / step) * step) : step * 4;
   $: sx = linear(xMin, xMax === xMin ? xMin + 1 : xMax, padL, width - padR);
-  $: sy = linear(0, yMax, height - padB, padT);
+  $: sy = linear(yMin, yMax, height - padB, padT);
   $: paths = series.map((s, i) => ({
     color: s.color,
     label: s.label,
@@ -34,15 +41,46 @@
     dim: emphasize >= 0 && i !== emphasize,
   }));
   $: yTicks = [
-    ...new Set([0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(f * yMax))),
+    ...new Set(
+      Array.from({ length: Math.round((yMax - yMin) / step) + 1 }, (_, i) =>
+        Math.round(yMin + i * step),
+      ),
+    ),
   ];
   $: tickCount = width < 480 ? 3 : 4;
-  $: xTicks = xFormat
-    ? Array.from(
-        { length: tickCount + 1 },
-        (_, index) => xMin + (index / tickCount) * (xMax - xMin),
-      )
-    : [];
+  $: xTicks = !xFormat
+    ? []
+    : integerX
+      ? intTicks(xMin, xMax, Math.max(2, Math.floor((width - padL - padR) / 56)))
+      : Array.from(
+          { length: tickCount + 1 },
+          (_, index) => xMin + (index / tickCount) * (xMax - xMin),
+        );
+
+  // smallest 1/2/5 step that fits, labels on its multiples
+  function intTicks(a: number, b: number, max: number): number[] {
+    const lo = Math.ceil(a);
+    const hi = Math.floor(b);
+    if (hi < lo) return [];
+    let step = 1;
+    for (let mag = 1; ; mag *= 10) {
+      const fit = [1, 2, 5].find((m) => Math.floor((hi - lo) / (m * mag)) + 1 <= max);
+      if (fit) {
+        step = fit * mag;
+        break;
+      }
+    }
+    const out: number[] = [];
+    for (let t = Math.ceil(lo / step) * step; t <= hi; t += step) out.push(t);
+    return out;
+  }
+  $: anchor = (t: number, index: number) => {
+    if (integerX) {
+      const x = sx(t);
+      return x - padL < 14 ? "start" : width - padR - x < 14 ? "end" : "middle";
+    }
+    return index === 0 ? "start" : index === xTicks.length - 1 ? "end" : "middle";
+  };
 
   // hover crosshair: read each series' value at the cursor's time.
   let hoverX: number | null = null;
@@ -111,11 +149,7 @@
       <text
         x={sx(t)}
         y={height - 6}
-        text-anchor={index === 0
-          ? "start"
-          : index === xTicks.length - 1
-            ? "end"
-            : "middle"}
+        text-anchor={anchor(t, index)}
         class="fill-stone-600 text-[10px] tabular-nums"
       >
         {xFormat ? xFormat(t) : ""}

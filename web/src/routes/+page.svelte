@@ -12,21 +12,14 @@
 	let statsError = '';
 
 	onMount(async () => {
-		const [challengesResult, statsResult] = await Promise.allSettled([
-			api.getChallenges(),
-			api.getStats()
-		]);
+		const [statsResult] = await Promise.allSettled([api.getStats()]);
 
 		stats = {
-			challenges: challengesResult.status === 'fulfilled'
-				? challengesResult.value.challenges?.length ?? 0
-				: null,
+			challenges: statsResult.status === 'fulfilled' ? statsResult.value.published_challenges ?? 0 : null,
 			users: statsResult.status === 'fulfilled' ? statsResult.value.total_users ?? 0 : null,
 			solves: statsResult.status === 'fulfilled' ? statsResult.value.total_solves ?? 0 : null
 		};
-		statsError = challengesResult.status === 'rejected' || statsResult.status === 'rejected'
-			? 'Some live totals are unavailable.'
-			: '';
+		statsError = statsResult.status === 'rejected' ? 'Some live totals are unavailable.' : '';
 	});
 </script>
 

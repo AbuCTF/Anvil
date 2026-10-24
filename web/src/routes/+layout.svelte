@@ -31,7 +31,7 @@
 		{ name: 'Challenges', href: '/challenges', icon: 'mdi:flag' },
 		...($platformInfo?.economy_enabled && $platformInfo?.market_pulse_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Pulse', href: '/pulse', icon: 'mdi:pulse' }] : []),
 		...($platformInfo?.scoreboard_enabled !== false ? [{ name: 'Scoreboard', href: '/scoreboard', icon: 'mdi:trophy' }] : []),
-		...($platformInfo?.arena_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Operations', href: '/team/finals', icon: 'mdi:shield-sword-outline' }] : []),
+		...($platformInfo?.arena_enabled && $platformInfo?.operations_enabled && $auth.isAuthenticated && $hasTeam ? [{ name: 'Operations', href: '/team/finals', icon: 'mdi:shield-sword-outline' }] : []),
 		...(($platformInfo?.arena_enabled || isAdmin) ? [{ name: 'Arena', href: '/arena', icon: 'mdi:sword-cross' }] : []),
 		{ name: 'Instances', href: '/instances', icon: 'mdi:server' }
 	];
@@ -50,9 +50,10 @@
 	// before isAdmin resolves.
 	$: if (browser && authReady && $platformInfo && !$auth.isLoading) {
 		const p = $page.url.pathname;
-		if (p.startsWith('/team/finals') && !$platformInfo.arena_enabled) goto('/team');
+		if (p.startsWith('/team/finals') && (!$platformInfo.arena_enabled || !$platformInfo.operations_enabled)) goto('/team');
 		const blocked =
 			(p.startsWith('/arena/reveal') && !isAdmin) ||
+			(p.startsWith('/arena/war-room') && !isAdmin) ||
 			(p.startsWith('/arena') && !$platformInfo.arena_enabled && !isAdmin) ||
 			(p.startsWith('/pulse') && (!$platformInfo.economy_enabled || !$platformInfo.market_pulse_enabled)) ||
 			(p.startsWith('/team') && p !== '/team/finals' && !$platformInfo.teams_mode) ||
@@ -80,8 +81,8 @@
 	}
 
 	type ThemePreference = 'system' | 'dark' | 'light';
-	const themeOptions: ThemePreference[] = ['system', 'light', 'dark'];
-	let themePreference: ThemePreference = 'system';
+	const themeOptions: ThemePreference[] = ['light', 'dark'];
+	let themePreference: ThemePreference = 'dark';
 	let theme: 'dark' | 'light' = 'dark';
 	let credits: number | null = null;
 	let notificationUnread = 0;
@@ -226,9 +227,9 @@
 		const systemTheme = window.matchMedia('(prefers-color-scheme: light)');
 		try {
 			const saved = localStorage.getItem('theme');
-			themePreference = saved === 'light' || saved === 'dark' ? saved : 'system';
+			themePreference = saved === 'light' ? 'light' : 'dark';
 		} catch {
-			themePreference = 'system';
+			themePreference = 'dark';
 		}
 		applyTheme(themePreference, systemTheme.matches);
 		const handleSystemThemeChange = (event: MediaQueryListEvent) => {
@@ -407,7 +408,7 @@
 									{/each}
 									<div class="border-t border-stone-800 px-4 py-3">
 										<p class="metadata-label mb-2 text-stone-600">Appearance</p>
-										<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+										<div class="grid grid-cols-2 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
 											{#each themeOptions as option}
 												<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
 											{/each}
@@ -494,7 +495,7 @@
 							{/each}
 							<div class="mx-3 my-2 border-y border-stone-800 py-3">
 								<p class="metadata-label mb-2 text-stone-600">Appearance</p>
-								<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+								<div class="grid grid-cols-2 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
 									{#each themeOptions as option}
 										<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
 									{/each}
@@ -512,7 +513,7 @@
 						<div class="mt-3 border-t border-stone-800 pt-3">
 							<div class="mb-3">
 								<p class="metadata-label mb-2 text-stone-600">Appearance</p>
-								<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+								<div class="grid grid-cols-2 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
 									{#each themeOptions as option}
 										<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
 									{/each}

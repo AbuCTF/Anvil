@@ -13,6 +13,7 @@
 	import { confirmDialog, alertDialog } from '$lib/stores/dialog';
 	import { eventClock, kickoffDelay, platformInfo } from '$lib/stores/platform';
 	import KickoffCountdown from '$lib/components/KickoffCountdown.svelte';
+	import CopyText from '$lib/components/CopyText.svelte';
 
 	let challenge: any = null;
 	let instance: any = null;
@@ -1579,13 +1580,15 @@
 					{#if isKoth && $auth.isAuthenticated}
 						<Card title="King of the Hill Arena">
 							<div class="space-y-3">
-								<p class="text-sm text-stone-400 leading-relaxed">One shared target the whole field contests. Enter the arena, claim control through the public challenge workflow, and score for every tick you hold it.</p>
 								{#if kothToken}
 									<div class="space-y-3">
 										<div>
 											<p class="metadata-label text-stone-500 mb-1.5">Target</p>
 											{#if kothConnectUrl}
-												<code class="block w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-stone-200 text-sm font-mono break-all">{kothConnectUrl}</code>
+												<div class="w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm">
+													<CopyText text={kothConnectUrl} className="text-stone-200" />
+												</div>
+												<p class="mt-1.5 text-xs text-stone-600">VPN required</p>
 											{:else}
 												<p class="text-xs text-stone-500">The arena is not open yet. Check back once it goes live.</p>
 											{/if}
@@ -1594,15 +1597,15 @@
 											<p class="metadata-label text-stone-500 mb-1.5">{kothProtocol === 'hill-v2-http' ? 'Bearer credential' : 'Your arena token'}</p>
 											<code class="block w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-amber-500 text-sm font-mono break-all">{kothToken}</code>
 										</div>
-										{#if kothHolder}<p class="text-xs text-stone-500">Your scoring identity is <code class="text-stone-300">{kothHolder}</code>.</p>{/if}
+										{#if kothHolder}<p class="text-xs text-stone-500">You show up on the hill as <code class="text-stone-300">{kothHolder}</code>.</p>{/if}
 										{#if kothSecret}
 											<div>
 												<p class="metadata-label text-stone-500 mb-1.5">Request secret</p>
 												<code class="block w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-amber-500 text-sm font-mono break-all">{kothSecret}</code>
-												<p class="text-xs text-stone-500 mt-1.5">Keep this private. Send it with your requests as the challenge describes; your public token alone cannot act.</p>
+												<p class="text-xs text-stone-500 mt-1.5">Keep this private. Send it with your requests.</p>
 											</div>
 										{/if}
-										<p class="text-xs text-stone-500">Follow the challenge protocol with this credential to claim the hill. Track standings on the <a href="/arena" class="text-stone-300 hover:text-stone-100 underline">Arena</a>.</p>
+										<p class="text-xs text-stone-500">Live standings on the <a href="/arena" class="text-stone-300 hover:text-stone-100 underline">Arena</a>.</p>
 									</div>
 								{:else}
 									<button on:click={enterArena} disabled={kothEntering} class="w-full py-2.5 bg-amber-500/90 text-stone-950 text-sm font-medium rounded-md hover:bg-amber-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
