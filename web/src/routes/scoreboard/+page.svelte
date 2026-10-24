@@ -16,13 +16,7 @@
   import { teamColor, rankAccent } from "$lib/rank";
   import { downloadRankCard } from "$lib/share";
   import type { Series } from "$lib/chart/path";
-  import {
-    fullShare,
-    pts,
-    weightsLabel,
-    type ScoreShare,
-    type ScoreWeights,
-  } from "$lib/scoring";
+  import { pts, type ScoreShare, type ScoreWeights } from "$lib/scoring";
 
   interface Entry {
     rank: number;
@@ -62,9 +56,18 @@
     cells: { s: number; b: number; p?: number }[];
   }
 
+  // finals is the overall board, standings the jeopardy one
   type View = "standings" | "matrix" | "finals";
+  // ?view= picks the tab; old and new names both work
+  const VIEW_PARAM: Record<string, View> = {
+    overall: "finals",
+    finals: "finals",
+    jeopardy: "standings",
+    standings: "standings",
+    matrix: "matrix",
+  };
 
-  // finals mirror scoring types
+  // finals board types
   interface FinalsServiceBreakdown {
     slug: string;
     name: string;
@@ -338,6 +341,12 @@
 
   onMount(() => {
     requestController = new AbortController();
+    const asked = VIEW_PARAM[new URLSearchParams(location.search).get("view") ?? ""];
+    // overall is already the finals default, and means nothing outside finals
+    if (asked && asked !== "finals") {
+      view = asked;
+      viewPicked = true;
+    }
     void loadBoard(true);
     void loadHistory();
     scheduleBoard();
@@ -566,6 +575,19 @@
       <div
         class="flex overflow-hidden rounded-md border border-stone-800 text-xs"
       >
+        {#if isFinalsMode}
+          <button
+            class="inline-flex items-center gap-1.5 border-r border-stone-800 px-2.5 py-1.5 transition-colors {view ===
+            'finals'
+              ? 'bg-stone-800 text-stone-200'
+              : 'text-stone-500 hover:text-stone-300'}"
+            on:click={() => setView("finals")}
+            aria-pressed={view === "finals"}
+          >
+            <OpticalIcon icon="mdi:sword-cross" size={12} box={12} />
+            <span class="optical-label">Overall</span>
+          </button>
+        {/if}
         <button
           class="inline-flex items-center gap-1.5 px-2.5 py-1.5 transition-colors {view ===
           'standings'
@@ -575,7 +597,7 @@
           aria-pressed={view === "standings"}
         >
           <OpticalIcon icon="mdi:format-list-numbered" size={12} box={12} />
-          <span class="optical-label">Standings</span>
+          <span class="optical-label">{isFinalsMode ? "Jeopardy" : "Standings"}</span>
         </button>
         <button
           class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view ===
@@ -588,19 +610,6 @@
           <OpticalIcon icon="mdi:view-grid-outline" size={12} box={12} />
           <span class="optical-label">Matrix</span>
         </button>
-        {#if isFinalsMode}
-          <button
-            class="inline-flex items-center gap-1.5 border-l border-stone-800 px-2.5 py-1.5 transition-colors {view ===
-            'finals'
-              ? 'bg-stone-800 text-stone-200'
-              : 'text-stone-500 hover:text-stone-300'}"
-            on:click={() => setView("finals")}
-            aria-pressed={view === "finals"}
-          >
-            <OpticalIcon icon="mdi:sword-cross" size={12} box={12} />
-            <span class="optical-label">Finals</span>
-          </button>
-        {/if}
       </div>
 
       {#if view === "matrix" && matrixCategories.length > 1}
@@ -677,7 +686,13 @@
       </EmptyState>
     </Card>
   {:else if view !== "finals" && total === 0}
-    <Card title={view === "matrix" ? "Challenge matrix" : "Standings"}>
+    <Card
+      title={view === "matrix"
+        ? "Challenge matrix"
+        : isFinalsMode
+          ? "Jeopardy"
+          : "Standings"}
+    >
       <EmptyState icon="mdi:trophy-outline" text="No solves yet." />
     </Card>
   {:else}
@@ -784,19 +799,7 @@
             Finals update delayed; showing the last successful result.
           </div>
         {/if}
-        <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
-          {#if finalsWeights}
-            <span class="text-stone-500">{weightsLabel(finalsWeights)}</span>
-          {/if}
-          {#if frozen}
-            <span
-              class="rounded bg-amber-500/10 px-2 py-0.5 text-amber-400 border border-amber-500/30"
-              >FROZEN</span
-            >
-          {/if}
-        </div>
-
-        <Card title="Finals standings" bodyClass="p-0">
+        <Card title="Overall standings" bodyClass="p-0">
           <span slot="meta" class="metadata-label text-stone-500"
             >{finalsRows.length} teams</span
           >
@@ -820,14 +823,8 @@
                     >
                     {#each finalsParts as part (part.key)}
                       <th class="px-3 py-2.5 text-right whitespace-nowrap {part.color}"
-                        >{part.label}
-                        {#if finalsWeights}
-                          <span
-                            class="mt-1 block font-normal normal-case tracking-normal text-stone-600"
-                            >max {fullShare(finalsWeights[part.key])}</span
-                          >
-                        {/if}
-                      </th>
+                        >{part.label}</th
+                      >
                     {/each}
                     <th class="w-8 py-2.5 pr-2"></th>
                   </tr>
@@ -851,7 +848,7 @@
                         <td
                           class="px-3 py-2.5 text-right tabular-nums whitespace-nowrap"
                           title={part.key === "ad"
-                            ? `Steal ${pts(row.steal)} + hold ${pts(row.hold)} + up ${pts(row.up)}`
+                            ? `Attack ${pts(row.steal)}, defense ${pts(row.hold)}, uptime ${pts(row.up)}`
                             : undefined}
                         >
                           <span class="text-stone-300"
@@ -889,13 +886,15 @@
                           class="bg-stone-900/60 px-4 py-2"
                         >
                           <p class="py-1 text-xs text-stone-500">
-                            AD {pts(row.ad)} pts = <span class="text-[#e08a85]"
-                              >steal {pts(row.steal)}</span
+                            <span class="text-[#e08a85]"
+                              >attack {pts(row.steal)}</span
                             >
-                            + <span class="text-[#9bcea8]"
-                              >hold {pts(row.hold)}</span
+                            · <span class="text-[#9bcea8]"
+                              >defense {pts(row.hold)}</span
                             >
-                            + <span class="text-stone-400">up {pts(row.up)}</span>
+                            · <span class="text-stone-400"
+                              >uptime {pts(row.up)}</span
+                            >
                           </p>
                           {#if row.services.length}
                             <div class="overflow-x-auto">
@@ -905,15 +904,15 @@
                                     <th class="py-1 pr-3 text-left">Service</th>
                                     <th
                                       class="px-3 py-1 text-right text-[#e08a85]"
-                                      >Steal</th
+                                      >Attack</th
                                     >
                                     <th
                                       class="px-3 py-1 text-right text-[#9bcea8]"
-                                      >Hold</th
+                                      >Defense</th
                                     >
                                     <th
                                       class="px-3 py-1 text-right text-stone-500"
-                                      >Up</th
+                                      >Uptime</th
                                     >
                                   </tr>
                                 </thead>
@@ -975,15 +974,13 @@
                       <span class="font-medium text-stone-200"
                         >{h.team_name}</span
                       >
-                      <span class="tabular-nums text-stone-500 text-xs"
-                        >{h.held_ticks} ticks</span
-                      >
-                      <span class="tabular-nums text-stone-400"
-                        >{pts(h.score)} pts</span
+                      <span
+                        class="tabular-nums text-stone-400"
+                        title="held {h.held_ticks} ticks">{pts(h.score)} pts</span
                       >
                     {:else}
                       <span class="text-stone-600 italic text-xs"
-                        >not released</span
+                        >no king yet</span
                       >
                     {/if}
                   </div>
@@ -1038,10 +1035,7 @@
         {/if}
       </Card>
     {:else}
-      <Card
-        title={view === "standings" ? "Standings" : "Scoreboard"}
-        bodyClass="p-0"
-      >
+      <Card title={isFinalsMode ? "Jeopardy" : "Standings"} bodyClass="p-0">
         <span slot="meta" class="metadata-label text-stone-500"
           >{scoreMatching.toLocaleString()}
           {noun}{scoreMatching === 1 ? "" : "s"}</span

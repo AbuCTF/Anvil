@@ -6,10 +6,12 @@
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import OpticalIcon from '$lib/components/OpticalIcon.svelte';
+	import CopyText from '$lib/components/CopyText.svelte';
+	import { vpnBoxAddr } from '$lib/finals-access';
 	import { teamColor as seriesColor } from '$lib/rank';
 	import { platformInfo } from '$lib/stores/platform';
 	import type { Series } from '$lib/chart/path';
-	import { fullShare, pts, weightsLabel, type ScoreShare, type ScoreWeights } from '$lib/scoring';
+	import { pts, type ScoreShare, type ScoreWeights } from '$lib/scoring';
 
 	interface Standing {
 		rank: number | null;
@@ -74,6 +76,17 @@
 		weights?: ScoreWeights;
 	}
 
+	// /arena/me + /arena/me/status, signed-in team only
+	interface MyTeam {
+		team_number: number | null;
+		vulnbox_ip: string | null;
+	}
+	interface MyService {
+		service_id: string;
+		name: string;
+		port: number | null;
+	}
+
 	const POLL_MS = 5000;
 	const IDLE_POLL_MS = 30000;
 	const REQUEST_TIMEOUT_MS = 10000;
@@ -86,6 +99,9 @@
 	let matrixServices: MatrixService[] = [];
 	let matrixRows: MatrixRow[] = [];
 	let events: GameEvent[] = [];
+	let myTeam: MyTeam | null = null;
+	let myServices: MyService[] = [];
+	let myTried = false;
 	let now = Date.now();
 
 	let loading = true;
@@ -220,6 +236,25 @@
 		initialized = true;
 		error = '';
 		refreshError = '';
+		if (!myTried && matrixServices.length) void loadMyBox();
+	}
+
+	// own box + service ports; a network blip retries on the next poll, a 401 (no team) stops
+	async function loadMyBox() {
+		myTried = true;
+		const token = localStorage.getItem('accessToken');
+		if (!token) return;
+		const headers = { Authorization: `Bearer ${token}` };
+		try {
+			const me = await fetch(`${API_BASE}/api/v1/arena/me`, { headers });
+			if (!me.ok) return;
+			myTeam = await me.json();
+			// since = next tick keeps the tick history out, services and ports still come back
+			const st = await fetch(`${API_BASE}/api/v1/arena/me/status?since=${(status?.tick ?? 0) + 1}`, { headers });
+			if (st.ok) myServices = (await st.json()).services ?? [];
+		} catch {
+			myTried = false;
+		}
 	}
 
 	function applyHills(next: Hill[]) {
@@ -337,6 +372,7 @@
 	const raw = (t: Standing, key: keyof ScoreWeights) =>
 		key === 'ad' ? t.attack + t.defense + t.sla : key === 'koth' ? t.koth : t.jeopardy;
 	const signed = (n: number | undefined) => (typeof n === 'number' && n > 0 ? `+${pts(n)}` : pts(n));
+	$: myBox = myTeam?.vulnbox_ip ?? (myTeam?.team_number ? vpnBoxAddr(myTeam.team_number) : null);
 </script>
 
 <svelte:head>
@@ -418,11 +454,50 @@
 		{/if}
 
 		{#if hasAD}
+		{#if myBox}
+			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden mb-6">
+				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
+					<h2 class="text-[0.95rem] font-semibold text-stone-200">Your box</h2>
+					<span class="text-stone-600 text-xs ml-auto">VPN required</span>
+				</div>
+				<div class="p-4 grid gap-5 lg:grid-cols-3">
+					<div class="min-w-0 space-y-3">
+						<div>
+							<p class="metadata-label text-stone-500 mb-1.5">Address</p>
+							<div class="rounded-md border border-stone-800 bg-stone-950/60 px-3 py-2 text-sm">
+								<CopyText text={myBox} className="text-stone-200" />
+							</div>
+						</div>
+						<div>
+							<p class="metadata-label text-stone-500 mb-1.5">SSH</p>
+							<div class="flex items-center gap-2 rounded-md border border-stone-800 bg-stone-950/60 px-3 py-2 text-sm">
+								<span class="select-none font-mono text-stone-600">$</span>
+								<CopyText text="ssh ubuntu@{myBox}" wrap className="min-w-0 text-stone-200" />
+							</div>
+						</div>
+					</div>
+					{#if myServices.length}
+						<div class="min-w-0 lg:col-span-2">
+							<p class="metadata-label text-stone-500 mb-1.5">Services</p>
+							<ul class="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+								{#each myServices as svc (svc.service_id)}
+									<li class="flex items-center justify-between gap-3 rounded-md border border-stone-800/60 px-3 py-2">
+										<span class="min-w-0 truncate text-stone-300">{svc.name}</span>
+										{#if svc.port}
+											<CopyText text="{myBox}:{svc.port}" className="shrink-0 text-xs tabular-nums text-stone-400 hover:text-stone-100" />
+										{/if}
+									</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+				</div>
+			</div>
+		{/if}
 		<div class="grid lg:grid-cols-3 gap-6 mb-6">
 			<div class="lg:col-span-2 bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
 					<h2 class="text-[0.95rem] font-semibold text-stone-200">Service status</h2>
-					<span class="metadata-label text-stone-600 ml-auto">latest tick</span>
 				</div>
 				<div class="overflow-x-auto">
 					{#if matrixRows.length === 0}
@@ -501,8 +576,7 @@
 										? 'bg-amber-500/5'
 										: ''}"
 								>
-									<span class="text-[0.6rem] tabular-nums text-stone-700 w-7 shrink-0">t{e.tick}</span>
-									<div class="min-w-0 flex-1 truncate">
+									<div class="min-w-0 flex-1 truncate" title="tick {e.tick}">
 										<span style="color: {ac.text};">{e.attacker}</span>
 										<span class="text-stone-700 px-0.5">→</span>
 										<span class="text-stone-500">{e.victim}</span>
@@ -532,9 +606,6 @@
 		<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 			<div class="px-4 py-3 border-b border-stone-800">
 				<h2 class="text-[0.95rem] font-semibold text-stone-200">Standings</h2>
-				{#if weights}
-					<p class="mt-1 text-xs text-stone-500">{weightsLabel(weights)}</p>
-				{/if}
 			</div>
 			<div class="overflow-x-auto">
 				<table class="w-full min-w-[720px] text-sm">
@@ -545,14 +616,14 @@
 							{#if weights}
 							<th class="px-4 py-2.5 text-right text-stone-200">Score</th>
 							{#each parts as part (part.key)}
-							<th class="px-4 py-2.5 text-right whitespace-nowrap">{part.label}<span class="mt-1 block font-normal normal-case tracking-normal text-stone-600">max {fullShare(weights[part.key])}</span></th>
+							<th class="px-4 py-2.5 text-right whitespace-nowrap">{part.label}</th>
 							{/each}
 							{:else}
 							{#if hasAD}
 							<th class="px-4 py-2.5 text-left hidden lg:table-cell w-36">Breakdown</th>
-							<th class="px-4 py-2.5 text-right">Atk</th>
-							<th class="px-4 py-2.5 text-right">Def</th>
-							<th class="px-4 py-2.5 text-right">SLA</th>
+							<th class="px-4 py-2.5 text-right">Attack</th>
+							<th class="px-4 py-2.5 text-right">Defense</th>
+							<th class="px-4 py-2.5 text-right">Uptime</th>
 							{/if}
 							<th class="px-4 py-2.5 text-right">KotH</th>
 							<th class="px-4 py-2.5 text-right">Total</th>
@@ -576,7 +647,7 @@
 								{#each parts as part (part.key)}
 								<td
 									class="px-4 py-2.5 whitespace-nowrap text-right tabular-nums"
-									title={part.key === 'ad' ? `Steal ${pts(team.attack)} + hold ${pts(team.defense)} + up ${pts(team.sla)}` : undefined}
+									title={part.key === 'ad' ? `Attack ${pts(team.attack)}, defense ${pts(team.defense)}, uptime ${pts(team.sla)}` : undefined}
 								>
 									<span class="text-stone-300">{signed(team.share?.[part.key])}</span>
 									<span class="block text-[11px] text-stone-500">{part.short} {pts(raw(team, part.key))} pts</span>
@@ -588,7 +659,7 @@
 									<div class="flex h-1.5 w-32 overflow-hidden rounded-full bg-stone-800/80">
 										<div style="width: {(team.attack / sum) * 100}%; background: {bd.attack};" title="Attack {fmt(team.attack)}"></div>
 										<div style="width: {(team.defense / sum) * 100}%; background: {bd.defense};" title="Defense {fmt(team.defense)}"></div>
-										<div style="width: {(team.sla / sum) * 100}%; background: {bd.sla};" title="SLA {fmt(team.sla)}"></div>
+										<div style="width: {(team.sla / sum) * 100}%; background: {bd.sla};" title="Uptime {fmt(team.sla)}"></div>
 										<div style="width: {(team.koth / sum) * 100}%; background: {bd.koth};" title="KotH {fmt(team.koth)}"></div>
 									</div>
 								</td>

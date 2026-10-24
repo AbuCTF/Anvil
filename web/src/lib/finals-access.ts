@@ -15,6 +15,9 @@ export const sshCommand = (tt: number) => `ssh -p ${sshPort(tt)} ubuntu@${PUBLIC
 export const serviceAddr = (bb: number, s: number) => `${PUBLIC_HOST}:${servicePort(bb, s)}`;
 export const hillUrl = (tt: number, h: number) => `http://${PUBLIC_HOST}:${hillPort(tt, h)}`;
 
+// vpn box is 10.60.TT.2
+export const vpnBoxAddr = (tt: number) => `10.60.${tt}.2`;
+
 // vpn hills live at 10.60.210.1H:710H
 export const vpnHillAddr = (h: number) => `10.60.210.1${h}:710${h}`;
 export function hillFromVpnUrl(url: string): number | null {
