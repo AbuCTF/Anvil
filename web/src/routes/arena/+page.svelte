@@ -128,14 +128,7 @@
 		UNKNOWN: { color: '#3a3735', label: 'No data' }
 	};
 	const slaStyle = (s: string) => SLA[s] ?? SLA.UNKNOWN;
-	const CAT: Record<string, string> = {
-		pwn: '#a15a52',
-		web: '#5a7a92',
-		crypto: '#7d6f9c',
-		rev: '#a1774a',
-		forensics: '#5a8060',
-		misc: '#6b6560'
-	};
+	const LEGEND = ['OK', 'DOWN', 'FAULTY', 'RECOVERING', 'FLAG_NOT_FOUND'];
 
 	async function load() {
 		if (inFlight) return;
@@ -348,6 +341,7 @@
 		return `${Math.floor(m / 60)}h`;
 	}
 	const upCount = (r: MatrixRow) => r.cells.filter((c) => c.status === 'OK').length;
+	$: hasUnknown = matrixRows.some((r) => r.cells.some((c) => slaStyle(c.status) === SLA.UNKNOWN));
 	const bd = { attack: '#9e574f', defense: '#57748c', sla: '#57805f', koth: '#b0862f' };
 
 	// A/D-only panels (service status, captures, atk/def/sla) render only when there's
@@ -492,64 +486,79 @@
 				<div class="px-4 py-3 border-b border-stone-800 flex items-center gap-2">
 					<h2 class="text-[0.95rem] font-semibold text-stone-200">Service status</h2>
 				</div>
-				<div class="overflow-x-auto">
-					{#if matrixRows.length === 0}
-						<div class="px-4 py-8 text-center text-stone-500 text-sm">No service checks yet.</div>
-					{:else}
-						<table class="w-full min-w-[560px] border-separate border-spacing-0">
+				{#if matrixRows.length === 0}
+					<div class="px-4 py-8 text-center text-stone-500 text-sm">No service checks yet.</div>
+				{:else}
+					<div class="overflow-x-auto">
+						<table class="w-full min-w-[21rem] table-fixed border-separate border-spacing-0">
+							<colgroup>
+								<col class="w-36 sm:w-56" />
+								{#each matrixServices as s (s.service_id)}<col />{/each}
+								<col class="w-12 sm:w-16" />
+							</colgroup>
 							<thead>
 								<tr>
-									<th class="metadata-label sticky left-0 z-10 bg-stone-900/40 px-4 py-2 text-left text-stone-500">
-										Team
-									</th>
-									{#each matrixServices as s}
-										<th class="metadata-label px-2 py-2 text-center text-stone-400">
-											<span class="inline-flex items-center gap-1.5 leading-none">
-												<span class="w-1.5 h-1.5 rounded-full" style="background: {CAT[s.category] ?? '#6b6560'};"></span>
-												<span class="optical-label">{s.name}</span>
-											</span>
+									<th class="metadata-label solid-cell sticky left-0 z-10 px-3 sm:px-4 py-2.5 text-left text-stone-500">Team</th>
+									{#each matrixServices as s, i (s.service_id)}
+										<th class="px-1 py-2.5 text-center text-xs font-semibold leading-none tabular-nums text-stone-400" title={s.name}>
+											<span class="optical-label">{i + 1}</span>
 										</th>
 									{/each}
-									<th class="metadata-label px-3 py-2 text-right text-stone-600">Up</th>
+									<th class="metadata-label px-3 sm:px-4 py-2.5 text-right text-stone-500">Up</th>
 								</tr>
 							</thead>
 							<tbody>
 								{#each matrixRows as r (r.team_id)}
 									{@const tc = teamColor(r.team_id)}
+									{@const up = upCount(r)}
 									<tr>
-										<td class="sticky left-0 z-10 bg-stone-950/70 px-4 py-1.5 whitespace-nowrap border-t border-stone-800/60">
-											<div class="flex items-center gap-2 leading-none">
-												<span class="optical-label text-stone-600 text-xs tabular-nums w-5 text-right">{r.rank ?? '-'}</span>
+										<td class="solid-cell sticky left-0 z-10 px-3 sm:px-4 py-1 border-t border-stone-800/60">
+											<div class="flex min-w-0 items-center gap-2 leading-none">
+												<span class="optical-label w-5 shrink-0 text-right text-xs tabular-nums text-stone-600">{r.rank ?? '-'}</span>
 												<span class="w-2 h-2 rounded-full shrink-0" style="background: {tc.dot};"></span>
-												<a href="/scoreboard" class="optical-label text-stone-300 text-sm truncate max-w-[140px] hover:text-amber-400 transition">{r.team}</a>
+												<a href="/scoreboard" class="optical-label min-w-0 truncate text-xs sm:text-sm text-stone-300 hover:text-amber-400 transition" title={r.team}>{r.team}</a>
 											</div>
 										</td>
-										{#each r.cells as cell}
+										{#each r.cells as cell, i}
 											{@const st = slaStyle(cell.status)}
-											<td class="px-2 py-1.5 text-center border-t border-stone-800/60">
+											<td class="px-1 py-1 border-t border-stone-800/60">
 												<span
-													class="block w-6 h-6 rounded-sm mx-auto"
-													style="background: {st.color};"
-													title="{r.team} · {st.label}{cell.latency_ms != null ? ` · ${cell.latency_ms}ms` : ''}"
+													class="mx-auto block h-5 w-full max-w-16 rounded-[3px] {st === SLA.UNKNOWN ? 'bg-stone-800' : ''}"
+													style={st === SLA.UNKNOWN ? undefined : `background: ${st.color};`}
+													title="{r.team} · {matrixServices[i]?.name ?? ''} · {st.label}{cell.latency_ms != null ? ` · ${cell.latency_ms}ms` : ''}"
 												></span>
 											</td>
 										{/each}
-										<td class="px-3 py-1.5 text-right text-xs tabular-nums text-stone-500 border-t border-stone-800/60">
-											{upCount(r)}/{r.cells.length}
+										<td class="px-3 sm:px-4 py-1 text-right text-xs tabular-nums border-t border-stone-800/60 {up < r.cells.length ? 'text-stone-300' : 'text-stone-500'}">
+											{up}/{r.cells.length}
 										</td>
 									</tr>
 								{/each}
 							</tbody>
 						</table>
-					{/if}
-				</div>
-					<div class="px-4 py-2.5 border-t border-stone-800 flex flex-wrap gap-x-4 gap-y-1.5">
-						{#each ['OK', 'DOWN', 'FAULTY', 'RECOVERING', 'FLAG_NOT_FOUND'] as s}
-							<span class="inline-flex items-center gap-1.5 text-[0.7rem] leading-none text-stone-500">
-								<span class="w-2.5 h-2.5 rounded-sm" style="background: {slaStyle(s).color};"></span><span class="optical-label">{slaStyle(s).label}</span>
-							</span>
-						{/each}
-				</div>
+					</div>
+					<div class="px-4 py-3 border-t border-stone-800 space-y-2.5 text-[0.7rem] leading-none text-stone-500">
+						<div class="flex flex-wrap gap-x-4 gap-y-2">
+							{#each matrixServices as s, i (s.service_id)}
+								<span class="inline-flex items-center gap-1.5">
+									<span class="tabular-nums font-semibold text-stone-300">{i + 1}</span><span class="optical-label">{s.name}</span>
+								</span>
+							{/each}
+						</div>
+						<div class="flex flex-wrap gap-x-4 gap-y-2">
+							{#each LEGEND as s}
+								<span class="inline-flex items-center gap-1.5">
+									<span class="w-2.5 h-2.5 rounded-[2px]" style="background: {SLA[s].color};"></span><span class="optical-label">{SLA[s].label}</span>
+								</span>
+							{/each}
+							{#if hasUnknown}
+								<span class="inline-flex items-center gap-1.5">
+									<span class="w-2.5 h-2.5 rounded-[2px] bg-stone-800"></span><span class="optical-label">{SLA.UNKNOWN.label}</span>
+								</span>
+							{/if}
+						</div>
+					</div>
+				{/if}
 			</div>
 
 			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden flex flex-col">
@@ -557,29 +566,32 @@
 					<h2 class="text-[0.95rem] font-semibold text-stone-200">Captures</h2>
 					<span class="text-stone-600 text-xs ml-auto tabular-nums">{events.length}</span>
 				</div>
-				<div class="p-1.5 overflow-y-auto max-h-[21rem]">
-					{#if events.length === 0}
-						<div class="px-4 py-8 text-center text-stone-500 text-sm">No captures yet.</div>
-					{:else}
-						<ul>
-							{#each events as e (eventKey(e))}
-								{@const ac = teamColor(e.attacker)}
-								<li
-									class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm leading-none transition-colors {flashEvents.has(eventKey(e))
-										? 'bg-amber-500/5'
-										: ''}"
-								>
-									<div class="min-w-0 flex-1 truncate" title="tick {e.tick}">
-										<span style="color: {ac.text};">{e.attacker}</span>
-										<span class="text-stone-700 px-0.5">→</span>
-										<span class="text-stone-500">{e.victim}</span>
-									</div>
-									<span class="text-[0.6rem] px-1.5 py-0.5 rounded bg-stone-800/80 text-stone-500 shrink-0">{e.service}</span>
-									<span class="text-[0.6rem] tabular-nums text-stone-700 w-7 text-right shrink-0">{ago(e.at)}</span>
-								</li>
-							{/each}
-						</ul>
-					{/if}
+				<!-- desktop: the list fills the row the status card sets and scrolls inside it -->
+				<div class="relative lg:flex-1 lg:min-h-[12rem]">
+					<div class="p-1.5 overflow-y-auto max-h-[21rem] lg:max-h-none lg:absolute lg:inset-0">
+						{#if events.length === 0}
+							<div class="px-4 py-8 text-center text-stone-500 text-sm">No captures yet.</div>
+						{:else}
+							<ul>
+								{#each events as e (eventKey(e))}
+									{@const ac = teamColor(e.attacker)}
+									<li
+										class="flex items-center gap-2 rounded-md px-2.5 py-1.5 text-sm leading-none transition-colors {flashEvents.has(eventKey(e))
+											? 'bg-amber-500/5'
+											: ''}"
+									>
+										<div class="min-w-0 flex-1 truncate" title="tick {e.tick}">
+											<span style="color: {ac.text};">{e.attacker}</span>
+											<span class="text-stone-700 px-0.5">→</span>
+											<span class="text-stone-500">{e.victim}</span>
+										</div>
+										<span class="text-[0.6rem] px-1.5 py-0.5 rounded bg-stone-800/80 text-stone-500 shrink-0">{e.service}</span>
+										<span class="text-[0.6rem] tabular-nums text-stone-700 w-7 text-right shrink-0">{ago(e.at)}</span>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
 				</div>
 			</div>
 		</div>
@@ -670,6 +682,10 @@
 <style>
 	.fade-in {
 		animation: fadeIn 0.4s ease-out;
+	}
+	/* sticky cells: the card's own colour, opaque, so scrolled tiles don't show through */
+	.solid-cell {
+		background: linear-gradient(rgb(var(--st-900) / 0.4), rgb(var(--st-900) / 0.4)), rgb(var(--st-950));
 	}
 	@keyframes fadeIn {
 		from {
