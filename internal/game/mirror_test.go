@@ -382,3 +382,18 @@ func TestSharesAddUpToTotal(t *testing.T) {
 		}
 	}
 }
+
+func TestSharesJeopardyRemainderIgnoresStoredRounding(t *testing.T) {
+	ad, koth := []float64{0, 50, 100}, []float64{0, 0, 10}
+	for _, d := range []float64{0.0004, -0.0004} {
+		_, _, je := Shares(0.65, 0.3, ad, koth, []float64{-650 + d, d, 950 + d})
+		for i, v := range je {
+			if v != 0 || math.Signbit(v) {
+				t.Fatalf("residue %v: jeopardy share[%d] = %v, want 0", d, i, v)
+			}
+		}
+	}
+	if _, _, je := Shares(0.65, 0.3, ad, koth, []float64{-650, 0, 950.01}); !near(je[2], 0.01) {
+		t.Fatalf("a real jeopardy share was snapped: %v", je[2])
+	}
+}

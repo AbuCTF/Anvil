@@ -380,9 +380,8 @@
 
 <svelte:head><title>Operations - Anvil</title></svelte:head>
 
-{#if !isFinalsMode}
-	<script>window.location.replace('/team');</script>
-{:else}
+<!-- the layout guard bounces this page while operations is off -->
+{#if isFinalsMode}
 
 <div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-6">
 	<PageHeader title={me.name || 'Operations'} subtitle={tt ? `Team ${pad2(tt)}` : 'Team number not assigned yet'} compact>

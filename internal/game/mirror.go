@@ -369,6 +369,10 @@ func Shares(wAD, wKoth float64, ad, koth, total []float64) (adShare, kothShare, 
 		adShare[i] = 1000 * wAD * relative(ad[i], adMed, adTop)
 		kothShare[i] = 1000 * wKoth * relative(koth[i], koMed, koTop)
 		jeShare[i] = total[i] - adShare[i] - kothShare[i]
+		// total is stored to 3 decimals: a team on the jeopardy median reads 0, not +-0.0004
+		if math.Abs(jeShare[i]) < 1e-3 {
+			jeShare[i] = 0
+		}
 	}
 	return adShare, kothShare, jeShare
 }
