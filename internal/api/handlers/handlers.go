@@ -1103,11 +1103,20 @@ func (h *SettingsHandler) Update(c *gin.Context) {
 			return
 		}
 
-		result, updateErr := tx.Exec(c.Request.Context(), `
+		query := `
 			UPDATE platform_settings
 			SET value = $2::jsonb, updated_at = NOW(), updated_by = $3
 			WHERE key = $1
-		`, key, string(valueJSON), uid)
+		`
+		// no seed migration for this one (keeps rollback to older images safe), so create the row on first write
+		if key == "finals.operations_enabled" {
+			query = `
+			INSERT INTO platform_settings (key, value, description, category, updated_by)
+			VALUES ($1, $2::jsonb, 'Show the team Operations page', 'arena', $3)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW(), updated_by = EXCLUDED.updated_by
+		`
+		}
+		result, updateErr := tx.Exec(c.Request.Context(), query, key, string(valueJSON), uid)
 		if updateErr != nil {
 			h.logger.Error("Failed to update setting", zap.String("key", key), zap.Error(updateErr))
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update setting: " + key})
