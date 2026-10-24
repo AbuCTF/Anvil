@@ -260,7 +260,6 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 		{method: "GET", path: "/api/v1/scoreboard/matrix", who: &p1},
 		{method: "GET", path: "/api/v1/profile/p1", who: &p1},
 		{method: "GET", path: "/api/v1/teams/" + teamA.String(), who: &p1},
-		{method: "GET", path: "/api/v1/stats", who: &p1},
 		{method: "GET", path: "/api/v1/user/me/rank", who: &p1},
 		{method: "GET", path: "/api/v1/user/me/stats", who: &p1},
 		{method: "GET", path: "/api/v1/user/me/solves", who: &p1},
@@ -272,6 +271,10 @@ func TestEconomyGatingAndStaffTeams(t *testing.T) {
 		if code, body, _ := call(route.method, route.path, route.who, ""); code != http.StatusForbidden {
 			t.Errorf("pre-release %s %s = %d %v, want 403", route.method, route.path, code, body)
 		}
+	}
+	// the landing totals are counts only and stay public before the release
+	if code, body, _ := call("GET", "/api/v1/stats", nil, ""); code != http.StatusOK {
+		t.Errorf("pre-release public stats = %d %v, want 200", code, body)
 	}
 	exec(`DELETE FROM platform_settings WHERE key IN ('event.start_at', 'event.end_at')`)
 	if code, body, _ := call("GET", "/api/v1/challenges", &p1, ""); code != http.StatusServiceUnavailable {

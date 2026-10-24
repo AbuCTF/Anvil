@@ -184,7 +184,7 @@ func (s *Server) setupRouter() {
 
 			stats := public.Group("")
 			stats.Use(middleware.OptionalAuth(s.config, s.db))
-			stats.Use(handlers.ChallengeReleaseGate(s.db, s.logger))
+			// counts only, so the public landing page shows live totals before the release
 			stats.GET("/stats", handlers.NewStatsHandler(s.db, s.logger).Get)
 
 			// arena (attack-defense + koth) read endpoints. OptionalAuth so a logged-in
