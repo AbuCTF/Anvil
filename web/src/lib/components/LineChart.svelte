@@ -24,9 +24,14 @@
   $: allY = series.flatMap((s) => s.points.map((p) => p.y));
   $: xMin = allX.length ? Math.min(...allX) : 0;
   $: xMax = allX.length ? Math.max(...allX) : 1;
-  $: yMax = niceMax(allY.length ? Math.max(...allY) : 1);
+  // the axis always holds 0; below zero it grows down in the same step
+  $: lo = Math.min(0, ...allY);
+  $: hi = Math.max(0, ...allY);
+  $: step = niceMax(Math.max(hi, -lo)) / 4;
+  $: yMin = Math.floor(lo / step) * step;
+  $: yMax = lo < 0 ? Math.max(step, Math.ceil(hi / step) * step) : step * 4;
   $: sx = linear(xMin, xMax === xMin ? xMin + 1 : xMax, padL, width - padR);
-  $: sy = linear(0, yMax, height - padB, padT);
+  $: sy = linear(yMin, yMax, height - padB, padT);
   $: paths = series.map((s, i) => ({
     color: s.color,
     label: s.label,
@@ -34,7 +39,11 @@
     dim: emphasize >= 0 && i !== emphasize,
   }));
   $: yTicks = [
-    ...new Set([0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(f * yMax))),
+    ...new Set(
+      Array.from({ length: Math.round((yMax - yMin) / step) + 1 }, (_, i) =>
+        Math.round(yMin + i * step),
+      ),
+    ),
   ];
   $: tickCount = width < 480 ? 3 : 4;
   $: xTicks = xFormat

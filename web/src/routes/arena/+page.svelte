@@ -73,6 +73,7 @@
 		rows: MatrixRow[];
 		events: GameEvent[];
 		history: HistorySeries[];
+		koth_history?: HistorySeries[];
 		weights?: ScoreWeights;
 	}
 
@@ -96,6 +97,8 @@
 	let hills: Hill[] = [];
 	let status: GameStatus | null = null;
 	let raceSeries: Series[] = [];
+	let kothSeries: Series[] = [];
+	let chartMode: 'koth' | 'score' = 'koth';
 	let matrixServices: MatrixService[] = [];
 	let matrixRows: MatrixRow[] = [];
 	let events: GameEvent[] = [];
@@ -205,6 +208,7 @@
 		matrixRows = [];
 		events = [];
 		raceSeries = [];
+		kothSeries = [];
 		prevControllers = {};
 		seenEvents = new Set();
 		flash = new Set();
@@ -227,11 +231,13 @@
 		matrixServices = s.services ?? [];
 		matrixRows = s.rows ?? [];
 		applyEvents(s.events ?? []);
-		raceSeries = (s.history ?? []).map((h) => ({
-			label: h.team,
-			color: seriesColor(h.team_id),
-			points: h.points
-		}));
+		const toSeries = (h: HistorySeries) => ({ label: h.team, color: seriesColor(h.team_id), points: h.points });
+		raceSeries = (s.history ?? []).map(toSeries);
+		// koth lines start from 0 one round before the first close
+		kothSeries = (s.koth_history ?? []).map((h) => {
+			const p = h.points;
+			return toSeries({ ...h, points: p.length ? [{ x: p[0].x - 1, y: 0 }, ...p] : [] });
+		});
 		hasLiveBaseline = true;
 		initialized = true;
 		error = '';
@@ -355,6 +361,11 @@
 	}
 	const upCount = (r: MatrixRow) => r.cells.filter((c) => c.status === 'OK').length;
 	$: leaderIdx = standings.length ? raceSeries.findIndex((s) => s.label === standings[0].team) : -1;
+	const lastY = (s: Series) => s.points[s.points.length - 1]?.y ?? 0;
+	$: kothTop = Math.max(0, ...kothSeries.map(lastY));
+	$: kothLeadIdx = kothTop > 0 ? kothSeries.findIndex((s) => lastY(s) === kothTop) : -1;
+	$: chartKoth = chartMode === 'koth';
+	$: chartSeries = chartKoth ? kothSeries : raceSeries;
 	const bd = { attack: '#9e574f', defense: '#57748c', sla: '#57805f', koth: '#b0862f' };
 
 	// A/D-only panels (service status, captures, atk/def/sla) render only when there's
@@ -592,13 +603,36 @@
 		</div>
 		{/if}
 
-		{#if raceSeries.length}
+		{#if raceSeries.length || kothSeries.length}
 			<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden mb-6">
-				<div class="px-4 py-3 border-b border-stone-800">
-					<h2 class="text-[0.95rem] font-semibold text-stone-200">Score over time</h2>
+				<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between gap-3">
+					<h2 class="text-[0.95rem] font-semibold text-stone-200">{chartKoth ? 'King of the Hill points' : 'Score over time'}</h2>
+					<div class="flex overflow-hidden rounded-md border border-stone-800 text-xs shrink-0">
+						{#each [['koth', 'KotH points'], ['score', 'Score']] as [mode, label], i}
+							<button
+								type="button"
+								class="px-2.5 py-1 transition-colors {i ? 'border-l border-stone-800' : ''} {chartMode === mode
+									? 'bg-stone-800 text-stone-200'
+									: 'text-stone-500 hover:text-stone-300'}"
+								aria-pressed={chartMode === mode}
+								on:click={() => (chartMode = mode === 'koth' ? 'koth' : 'score')}>{label}</button
+							>
+						{/each}
+					</div>
 				</div>
 				<div class="p-4">
-					<LineChart series={raceSeries} height={280} curve="step" emphasize={leaderIdx} xFormat={(x) => 't' + Math.round(x)} />
+					{#if !chartSeries.some((s) => s.points.length)}
+						<p class="py-10 text-center text-xs text-stone-500">{chartKoth ? 'No closed rounds yet.' : 'No scores yet.'}</p>
+					{:else}
+						<LineChart
+							series={chartSeries}
+							height={280}
+							curve="step"
+							emphasize={chartKoth ? kothLeadIdx : leaderIdx}
+							ariaLabel={chartKoth ? 'King of the Hill points' : 'Score over time'}
+							xFormat={(x) => (chartKoth ? 'r' : 't') + Math.round(x)}
+						/>
+					{/if}
 				</div>
 			</div>
 		{/if}
