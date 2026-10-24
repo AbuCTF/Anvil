@@ -13,6 +13,8 @@
 	import { confirmDialog, alertDialog } from '$lib/stores/dialog';
 	import { eventClock, kickoffDelay, platformInfo } from '$lib/stores/platform';
 	import KickoffCountdown from '$lib/components/KickoffCountdown.svelte';
+	import CopyText from '$lib/components/CopyText.svelte';
+	import { hillFromVpnUrl, hillUrl } from '$lib/finals-access';
 
 	let challenge: any = null;
 	let instance: any = null;
@@ -317,6 +319,8 @@
 	let kothProtocol = '';
 	let kothEntering = false;
 	let kothError = '';
+	let kothTeamNumber: number | null = null;
+	$: kothHill = hillFromVpnUrl(kothConnectUrl);
 	$: isKoth = challenge?.arena_mode === 'shared';
 	// poller-scored (WebVerse Labs): no local flag to submit; solves sync from the partner platform
 	$: isExternal = !!challenge?.poller_scored;
@@ -334,6 +338,9 @@
 			kothSecret = r.rpc_secret ?? '';
 			kothHolder = r.holder ?? '';
 			kothProtocol = r.protocol ?? 'koth-v1-http';
+			if (hillFromVpnUrl(kothConnectUrl)) {
+				kothTeamNumber = await api.getArenaMe().then(m => m.team_number, () => null);
+			}
 		} catch (e) {
 			kothError = e instanceof Error ? e.message : 'Could not enter the arena';
 		} finally {
@@ -1585,7 +1592,17 @@
 										<div>
 											<p class="metadata-label text-stone-500 mb-1.5">Target</p>
 											{#if kothConnectUrl}
-												<code class="block w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-stone-200 text-sm font-mono break-all">{kothConnectUrl}</code>
+												{#if kothHill && kothTeamNumber}
+													<div class="w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-sm">
+														<CopyText text={hillUrl(kothTeamNumber, kothHill)} className="text-stone-200" />
+													</div>
+													<p class="mt-1.5 text-xs text-stone-600 font-mono break-all">via VPN: {kothConnectUrl}</p>
+												{:else}
+													<code class="block w-full px-3 py-2 bg-stone-950 border border-stone-800 rounded-md text-stone-200 text-sm font-mono break-all">{kothConnectUrl}</code>
+													{#if kothHill}
+														<p class="mt-1.5 text-xs text-stone-500">Public: see the <a href="/team/finals" class="text-stone-300 underline hover:text-stone-100">Operations</a> page.</p>
+													{/if}
+												{/if}
 											{:else}
 												<p class="text-xs text-stone-500">The arena is not open yet. Check back once it goes live.</p>
 											{/if}
