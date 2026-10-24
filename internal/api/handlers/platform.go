@@ -297,13 +297,13 @@ func challengeReleaseGate(load eventWindowLoader, logger *zap.Logger) gin.Handle
 			if err != nil {
 				logger.Error("challenge release gate: event window", zap.Error(err))
 			}
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "challenge catalog unavailable"})
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "the event schedule is not published yet"})
 			return
 		}
 		if status == http.StatusUnauthorized {
 			c.AbortWithStatusJSON(status, gin.H{"error": "authentication required"})
 		} else {
-			c.AbortWithStatusJSON(status, gin.H{"error": "challenge catalog has not been released"})
+			c.AbortWithStatusJSON(status, gin.H{"error": "the event has not started yet"})
 		}
 	}
 }
