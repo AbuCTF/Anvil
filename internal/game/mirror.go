@@ -356,3 +356,19 @@ func medianTop(xs []float64) (float64, float64) {
 func relative(x, med, top float64) float64 {
 	return (x - med) / math.Max(top-med, 1)
 }
+
+// Shares cuts finals totals into what each board earned, 1000 x weight x relative
+// over one field. jeopardy is the rest, so the three parts always add up to total.
+func Shares(wAD, wKoth float64, ad, koth, total []float64) (adShare, kothShare, jeShare []float64) {
+	adMed, adTop := medianTop(ad)
+	koMed, koTop := medianTop(koth)
+	adShare = make([]float64, len(ad))
+	kothShare = make([]float64, len(ad))
+	jeShare = make([]float64, len(ad))
+	for i := range ad {
+		adShare[i] = 1000 * wAD * relative(ad[i], adMed, adTop)
+		kothShare[i] = 1000 * wKoth * relative(koth[i], koMed, koTop)
+		jeShare[i] = total[i] - adShare[i] - kothShare[i]
+	}
+	return adShare, kothShare, jeShare
+}

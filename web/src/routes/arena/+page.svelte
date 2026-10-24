@@ -9,6 +9,7 @@
 	import { teamColor as seriesColor } from '$lib/rank';
 	import { platformInfo } from '$lib/stores/platform';
 	import type { Series } from '$lib/chart/path';
+	import { fullShare, pts, weightsLabel, type ScoreShare, type ScoreWeights } from '$lib/scoring';
 
 	interface Standing {
 		rank: number | null;
@@ -18,7 +19,9 @@
 		defense: number;
 		sla: number;
 		koth: number;
+		jeopardy?: number;
 		total: number;
+		share?: ScoreShare;
 	}
 	interface Hill {
 		hill_id: string;
@@ -68,6 +71,7 @@
 		rows: MatrixRow[];
 		events: GameEvent[];
 		history: HistorySeries[];
+		weights?: ScoreWeights;
 	}
 
 	const POLL_MS = 5000;
@@ -75,6 +79,7 @@
 	const REQUEST_TIMEOUT_MS = 10000;
 
 	let standings: Standing[] = [];
+	let weights: ScoreWeights | null = null;
 	let hills: Hill[] = [];
 	let status: GameStatus | null = null;
 	let raceSeries: Series[] = [];
@@ -178,6 +183,7 @@
 		active = false;
 		status = null;
 		standings = [];
+		weights = null;
 		hills = [];
 		matrixServices = [];
 		matrixRows = [];
@@ -201,6 +207,7 @@
 		status = s.status ?? status;
 		applyHills(s.hills ?? []);
 		standings = s.standings ?? [];
+		weights = s.weights ?? null;
 		matrixServices = s.services ?? [];
 		matrixRows = s.rows ?? [];
 		applyEvents(s.events ?? []);
@@ -319,6 +326,17 @@
 	// actual attack-defense activity - i.e. services are registered. A KotH-only event
 	// has hills but no services, so it shows a clean KotH board (hills + koth + rounds).
 	$: hasAD = matrixServices.length > 0;
+	// finals blend: the score's parts as columns, raw points underneath
+	$: parts = weights
+		? ([
+				...(hasAD ? [{ key: 'ad', label: 'Attack-Defense', short: 'AD' }] : []),
+				{ key: 'koth', label: 'King of the Hill', short: 'KotH' },
+				...(weights.jeopardy ? [{ key: 'jeopardy', label: 'Jeopardy', short: 'Jeopardy' }] : [])
+			] as { key: keyof ScoreWeights; label: string; short: string }[])
+		: [];
+	const raw = (t: Standing, key: keyof ScoreWeights) =>
+		key === 'ad' ? t.attack + t.defense + t.sla : key === 'koth' ? t.koth : t.jeopardy;
+	const signed = (n: number | undefined) => (typeof n === 'number' && n > 0 ? `+${pts(n)}` : pts(n));
 </script>
 
 <svelte:head>
@@ -514,6 +532,9 @@
 		<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden">
 			<div class="px-4 py-3 border-b border-stone-800">
 				<h2 class="text-[0.95rem] font-semibold text-stone-200">Standings</h2>
+				{#if weights}
+					<p class="mt-1 text-xs text-stone-500">{weightsLabel(weights)}</p>
+				{/if}
 			</div>
 			<div class="overflow-x-auto">
 				<table class="w-full min-w-[720px] text-sm">
@@ -521,6 +542,12 @@
 						<tr class="metadata-label text-stone-500">
 							<th class="px-4 py-2.5 text-left w-12">#</th>
 							<th class="px-4 py-2.5 text-left">Team</th>
+							{#if weights}
+							<th class="px-4 py-2.5 text-right text-stone-200">Score</th>
+							{#each parts as part (part.key)}
+							<th class="px-4 py-2.5 text-right whitespace-nowrap">{part.label}<span class="mt-1 block font-normal normal-case tracking-normal text-stone-600">max {fullShare(weights[part.key])}</span></th>
+							{/each}
+							{:else}
 							{#if hasAD}
 							<th class="px-4 py-2.5 text-left hidden lg:table-cell w-36">Breakdown</th>
 							<th class="px-4 py-2.5 text-right">Atk</th>
@@ -529,6 +556,7 @@
 							{/if}
 							<th class="px-4 py-2.5 text-right">KotH</th>
 							<th class="px-4 py-2.5 text-right">Total</th>
+							{/if}
 						</tr>
 					</thead>
 					<tbody>
@@ -543,6 +571,18 @@
 										<span class="optical-label text-stone-200 truncate max-w-[220px]">{team.team}</span>
 									</div>
 								</td>
+								{#if weights}
+								<td class="px-4 py-2.5 whitespace-nowrap text-right text-amber-500/90 font-semibold tabular-nums">{pts(team.total)}</td>
+								{#each parts as part (part.key)}
+								<td
+									class="px-4 py-2.5 whitespace-nowrap text-right tabular-nums"
+									title={part.key === 'ad' ? `Steal ${pts(team.attack)} + hold ${pts(team.defense)} + up ${pts(team.sla)}` : undefined}
+								>
+									<span class="text-stone-300">{signed(team.share?.[part.key])}</span>
+									<span class="block text-[11px] text-stone-500">{part.short} {pts(raw(team, part.key))} pts</span>
+								</td>
+								{/each}
+								{:else}
 								{#if hasAD}
 								<td class="px-4 py-2.5 hidden lg:table-cell">
 									<div class="flex h-1.5 w-32 overflow-hidden rounded-full bg-stone-800/80">
@@ -558,6 +598,7 @@
 								{/if}
 								<td class="px-4 py-2.5 whitespace-nowrap text-right text-stone-400 tabular-nums">{fmt(team.koth)}</td>
 								<td class="px-4 py-2.5 whitespace-nowrap text-right text-amber-500/90 font-semibold tabular-nums">{fmt(team.total)}</td>
+								{/if}
 							</tr>
 						{/each}
 						{#if standings.length === 0}

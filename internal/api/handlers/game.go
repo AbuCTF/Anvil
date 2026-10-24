@@ -236,8 +236,9 @@ type gameStanding struct {
 	SLA     float64 `json:"sla"`
 	Koth    float64 `json:"koth"`
 	// live jeopardy points, only while weight_jeopardy folds them into total
-	Jeopardy *float64 `json:"jeopardy,omitempty"`
-	Total    float64  `json:"total"`
+	Jeopardy *float64    `json:"jeopardy,omitempty"`
+	Total    float64     `json:"total"`
+	Share    *scoreShare `json:"share,omitempty"`
 }
 
 // jeopardyColumn is a game team's jeopardy score as the teams board ranks it (the
@@ -767,6 +768,9 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 	if err != nil {
 		return nil, "", fmt.Errorf("standings: %w", err)
 	}
+	if err := h.attachShares(ctx, tx, standings); err != nil {
+		return nil, "", fmt.Errorf("shares: %w", err)
+	}
 	hills, err := h.hillsData(ctx, tx, includeHidden)
 	if err != nil {
 		return nil, "", fmt.Errorf("hills: %w", err)
@@ -805,7 +809,7 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 		return nil, "", fmt.Errorf("commit snapshot: %w", err)
 	}
 
-	return encodeGameState(gin.H{
+	payload := gin.H{
 		"active":    true,
 		"status":    status,
 		"hills":     hills,
@@ -815,7 +819,11 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 		"events":    events,
 		"history":   history,
 		"frozen":    frozen,
-	})
+	}
+	if w := h.scoreWeights(); w != nil {
+		payload["weights"] = w
+	}
+	return encodeGameState(payload)
 }
 
 // returns the whole arena snapshot in one response, so each viewer polls

@@ -313,3 +313,28 @@ func TestStandingsJeopardyOnlyWhileWeighted(t *testing.T) {
 		t.Fatalf("weighted standing drops a zero jeopardy score: %s", raw)
 	}
 }
+
+func TestScoreWeightsOnlyForMirror(t *testing.T) {
+	legacy := NewGameHandler(&config.Config{}, nil, zap.NewNop())
+	if w := legacy.scoreWeights(); w != nil || legacy.shares([]float64{1}, []float64{1}, []float64{1}) != nil {
+		t.Fatalf("legacy formula serves weights %+v", w)
+	}
+
+	sc := config.ScoringConfig{Formula: "mirror", WeightAD: 0.7, WeightKoth: 0.3}
+	mirror := NewGameHandler(&config.Config{Game: config.GameConfig{Scoring: sc}}, nil, zap.NewNop())
+	raw, _ := json.Marshal(mirror.scoreWeights())
+	if string(raw) != `{"ad":0.7,"koth":0.3,"jeopardy":0}` {
+		t.Fatalf("weights = %s", raw)
+	}
+	// ad 0/50/100 median 50, koth 10/0/0 median 0: leader takes the full share
+	shares := mirror.shares([]float64{0, 50, 100}, []float64{10, 0, 0}, []float64{-400, 0, 700})
+	if shares[2].AD != 700 || shares[0].Koth != 300 || shares[0].AD != -700 || shares[0].Jeopardy != nil {
+		t.Fatalf("shares = %+v", shares)
+	}
+
+	sc.WeightJeopardy = 0.05
+	withJ := NewGameHandler(&config.Config{Game: config.GameConfig{Scoring: sc}}, nil, zap.NewNop())
+	if s := withJ.shares([]float64{0, 50, 100}, []float64{10, 0, 0}, []float64{-350, 0, 700}); s[0].Jeopardy == nil || *s[0].Jeopardy != 50 {
+		t.Fatalf("jeopardy share = %+v", s[0])
+	}
+}

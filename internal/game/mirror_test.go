@@ -354,3 +354,31 @@ func TestMirrorJeopardyWeightZeroIsUnchanged(t *testing.T) {
 		}
 	}
 }
+
+func TestSharesAddUpToTotal(t *testing.T) {
+	w := newWorld(t)
+	w.in.WeightAD, w.in.WeightKoth, w.in.WeightJeopardy = 0.6, 0.25, 0.15
+	w.in.Jeopardy = map[uuid.UUID]float64{}
+	for i, id := range w.teams {
+		w.in.Steal[teamStore{id, w.service, 0}] = float64(i * 10)
+		w.in.Koth[id] = float64((14 - i) * 2)
+		w.in.Jeopardy[id] = float64(i * 100)
+	}
+	r := scoreMirror(w.in)
+	ids := make([]uuid.UUID, 0, len(r.Teams))
+	ad, ko, total := []float64{}, []float64{}, []float64{}
+	for id, s := range r.Teams {
+		ids = append(ids, id)
+		ad, ko, total = append(ad, s.AD), append(ko, s.Koth), append(total, s.Total)
+	}
+	adS, koS, jeS := Shares(0.6, 0.25, ad, ko, total)
+	for i, id := range ids {
+		s := r.Teams[id]
+		if !near(adS[i], 600*(s.AD-70)/70) || !near(koS[i], 250*(s.Koth-14)/14) || !near(jeS[i], 150*(s.Jeopardy-700)/700) {
+			t.Fatalf("shares %.3f %.3f %.3f for ad %.0f koth %.0f jeopardy %.0f", adS[i], koS[i], jeS[i], s.AD, s.Koth, s.Jeopardy)
+		}
+		if !near(adS[i]+koS[i]+jeS[i], s.Total) {
+			t.Fatalf("shares sum %.3f, total %.3f", adS[i]+koS[i]+jeS[i], s.Total)
+		}
+	}
+}

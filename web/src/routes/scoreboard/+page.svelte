@@ -16,6 +16,13 @@
   import { teamColor, rankAccent } from "$lib/rank";
   import { downloadRankCard } from "$lib/share";
   import type { Series } from "$lib/chart/path";
+  import {
+    fullShare,
+    pts,
+    weightsLabel,
+    type ScoreShare,
+    type ScoreWeights,
+  } from "$lib/scoring";
 
   interface Entry {
     rank: number;
@@ -74,7 +81,9 @@
     up: number;
     ad: number;
     koth: number;
+    jeopardy?: number;
     total: number;
+    share?: ScoreShare;
     services: FinalsServiceBreakdown[];
   }
   interface KothEntry {
@@ -111,7 +120,7 @@
   let finalsRows: FinalsRow[] = [];
   let finalsKoth: KothEntry[] = [];
   let finalsExpanded: string | null = null;
-  let finalsDefense = false;
+  let finalsWeights: ScoreWeights | null = null;
   let finalsBusy = false;
   let finalsError = 0;
   let finalsStale = false;
@@ -427,6 +436,16 @@
   $: matrixPages = Math.max(1, Math.ceil(matrixMatching / MATRIX_PAGE_SIZE));
   $: anyLoaded = loaded.standings || loaded.matrix;
   $: isFinalsMode = !!$platformInfo?.game_state;
+  // the score's parts as columns: what each board added, raw points underneath
+  $: finalsParts = [
+    { key: "ad", label: "Attack-Defense", short: "AD", color: "text-[#e08a85]" },
+    { key: "koth", label: "King of the Hill", short: "KotH", color: "text-amber-400" },
+    ...(finalsWeights?.jeopardy
+      ? [{ key: "jeopardy", label: "Jeopardy", short: "Jeopardy", color: "text-sky-400" }]
+      : []),
+  ] as { key: keyof ScoreWeights; label: string; short: string; color: string }[];
+  const signed = (n: number | undefined) =>
+    typeof n === "number" && n > 0 ? `+${pts(n)}` : pts(n);
 
   async function loadFinals() {
     if (!isFinalsMode) return;
@@ -451,6 +470,7 @@
       ]);
       finalsRows = Array.isArray(scoreboard.rows) ? scoreboard.rows : [];
       finalsKoth = Array.isArray(koth.hills) ? koth.hills : [];
+      finalsWeights = scoreboard.weights ?? null;
       frozen = !!scoreboard.frozen;
       loaded.finals = true;
       finalsError = 0;
@@ -765,29 +785,15 @@
           </div>
         {/if}
         <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
-          <span class="text-stone-500">AD 60% + KotH 25% + Jeopardy 15%, median-relative</span>
+          {#if finalsWeights}
+            <span class="text-stone-500">{weightsLabel(finalsWeights)}</span>
+          {/if}
           {#if frozen}
             <span
               class="rounded bg-amber-500/10 px-2 py-0.5 text-amber-400 border border-amber-500/30"
               >FROZEN</span
             >
           {/if}
-          <div
-            class="ml-auto flex overflow-hidden rounded-md border border-stone-800"
-          >
-            <button
-              class="px-2.5 py-1.5 transition-colors {!finalsDefense
-                ? 'bg-stone-800 text-stone-200'
-                : 'text-stone-500 hover:text-stone-300'}"
-              on:click={() => (finalsDefense = false)}>Mirror</button
-            >
-            <button
-              class="border-l border-stone-800 px-2.5 py-1.5 transition-colors {finalsDefense
-                ? 'bg-stone-800 text-stone-200'
-                : 'text-stone-500 hover:text-stone-300'}"
-              on:click={() => (finalsDefense = true)}>Defense</button
-            >
-          </div>
         </div>
 
         <Card title="Finals standings" bodyClass="p-0">
@@ -808,33 +814,21 @@
                   >
                     <th class="w-10 py-2.5 pl-3 pr-2 text-left">#</th>
                     <th class="px-3 py-2.5 text-left">Team</th>
-                    {#if !finalsDefense}
-                      <th class="px-3 py-2.5 text-right text-[#e08a85]"
-                        >STEAL</th
-                      >
-                      <th class="px-3 py-2.5 text-right text-[#9bcea8]">HOLD</th
-                      >
-                      <th class="px-3 py-2.5 text-right text-stone-400">UP</th>
-                      <th class="hidden px-3 py-2.5 text-right sm:table-cell"
-                        >AD</th
-                      >
-                      <th
-                        class="hidden px-3 py-2.5 text-right text-amber-400 sm:table-cell"
-                        >KotH</th
-                      >
-                    {/if}
-                    {#if finalsDefense}
-                      <th class="px-3 py-2.5 text-right text-[#9bcea8]">HOLD</th
-                      >
-                      <th class="px-3 py-2.5 text-right text-stone-400">UP</th>
-                      <th class="hidden px-3 py-2.5 text-right sm:table-cell"
-                        >AD</th
-                      >
-                    {/if}
                     <th
                       class="px-3 py-2.5 text-right font-semibold text-stone-100"
-                      >TOTAL</th
+                      >Score</th
                     >
+                    {#each finalsParts as part (part.key)}
+                      <th class="px-3 py-2.5 text-right whitespace-nowrap {part.color}"
+                        >{part.label}
+                        {#if finalsWeights}
+                          <span
+                            class="mt-1 block font-normal normal-case tracking-normal text-stone-600"
+                            >max {fullShare(finalsWeights[part.key])}</span
+                          >
+                        {/if}
+                      </th>
+                    {/each}
                     <th class="w-8 py-2.5 pr-2"></th>
                   </tr>
                 </thead>
@@ -849,46 +843,25 @@
                         class="px-3 py-2.5 font-medium text-stone-200 truncate max-w-[8rem]"
                         >{row.team_name}</td
                       >
-                      {#if !finalsDefense}
-                        <td
-                          class="px-3 py-2.5 text-right tabular-nums text-[#e08a85]"
-                          >{row.steal.toLocaleString()}</td
-                        >
-                        <td
-                          class="px-3 py-2.5 text-right tabular-nums text-[#9bcea8]"
-                          >{row.hold.toLocaleString()}</td
-                        >
-                        <td
-                          class="px-3 py-2.5 text-right tabular-nums text-stone-400"
-                          >{row.up.toLocaleString()}</td
-                        >
-                        <td
-                          class="hidden px-3 py-2.5 text-right tabular-nums text-stone-300 sm:table-cell"
-                          >{row.ad.toLocaleString()}</td
-                        >
-                        <td
-                          class="hidden px-3 py-2.5 text-right tabular-nums text-amber-400 sm:table-cell"
-                          >{row.koth.toLocaleString()}</td
-                        >
-                      {/if}
-                      {#if finalsDefense}
-                        <td
-                          class="px-3 py-2.5 text-right tabular-nums text-[#9bcea8]"
-                          >{row.hold.toLocaleString()}</td
-                        >
-                        <td
-                          class="px-3 py-2.5 text-right tabular-nums text-stone-400"
-                          >{row.up.toLocaleString()}</td
-                        >
-                        <td
-                          class="hidden px-3 py-2.5 text-right tabular-nums text-stone-300 sm:table-cell"
-                          >{row.ad.toLocaleString()}</td
-                        >
-                      {/if}
                       <td
                         class="px-3 py-2.5 text-right font-semibold tabular-nums text-amber-500"
-                        >{row.total.toLocaleString()}</td
+                        >{pts(row.total)}</td
                       >
+                      {#each finalsParts as part (part.key)}
+                        <td
+                          class="px-3 py-2.5 text-right tabular-nums whitespace-nowrap"
+                          title={part.key === "ad"
+                            ? `Steal ${pts(row.steal)} + hold ${pts(row.hold)} + up ${pts(row.up)}`
+                            : undefined}
+                        >
+                          <span class="text-stone-300"
+                            >{signed(row.share?.[part.key])}</span
+                          >
+                          <span class="block text-[11px] text-stone-500"
+                            >{part.short} {pts(row[part.key])} pts</span
+                          >
+                        </td>
+                      {/each}
                       <td class="pr-2 py-2.5">
                         <button
                           class="text-stone-600 hover:text-stone-400 transition-colors"
@@ -897,7 +870,7 @@
                               finalsExpanded === row.team_id
                                 ? null
                                 : row.team_id)}
-                          aria-label="Expand service breakdown"
+                          aria-label="Expand attack-defense breakdown"
                           aria-expanded={finalsExpanded === row.team_id}
                         >
                           <Icon
@@ -911,49 +884,63 @@
                     </tr>
                     {#if finalsExpanded === row.team_id}
                       <tr>
-                        <td colspan="9" class="bg-stone-900/60 px-4 py-2">
-                          <div class="overflow-x-auto">
-                            <table class="w-full text-xs">
-                              <thead>
-                                <tr class="text-stone-600">
-                                  <th class="py-1 pr-3 text-left">Service</th>
-                                  <th
-                                    class="px-3 py-1 text-right text-[#e08a85]"
-                                    >STEAL</th
-                                  >
-                                  <th
-                                    class="px-3 py-1 text-right text-[#9bcea8]"
-                                    >HOLD</th
-                                  >
-                                  <th
-                                    class="px-3 py-1 text-right text-stone-500"
-                                    >UP</th
-                                  >
-                                </tr>
-                              </thead>
-                              <tbody class="divide-y divide-stone-800/30">
-                                {#each row.services as svc}
-                                  <tr>
-                                    <td class="py-1 pr-3 text-stone-400"
-                                      >{svc.name}</td
+                        <td
+                          colspan={4 + finalsParts.length}
+                          class="bg-stone-900/60 px-4 py-2"
+                        >
+                          <p class="py-1 text-xs text-stone-500">
+                            AD {pts(row.ad)} pts = <span class="text-[#e08a85]"
+                              >steal {pts(row.steal)}</span
+                            >
+                            + <span class="text-[#9bcea8]"
+                              >hold {pts(row.hold)}</span
+                            >
+                            + <span class="text-stone-400">up {pts(row.up)}</span>
+                          </p>
+                          {#if row.services.length}
+                            <div class="overflow-x-auto">
+                              <table class="w-full text-xs">
+                                <thead>
+                                  <tr class="text-stone-600">
+                                    <th class="py-1 pr-3 text-left">Service</th>
+                                    <th
+                                      class="px-3 py-1 text-right text-[#e08a85]"
+                                      >Steal</th
                                     >
-                                    <td
-                                      class="px-3 py-1 text-right tabular-nums text-[#e08a85]"
-                                      >{svc.steal}</td
+                                    <th
+                                      class="px-3 py-1 text-right text-[#9bcea8]"
+                                      >Hold</th
                                     >
-                                    <td
-                                      class="px-3 py-1 text-right tabular-nums text-[#9bcea8]"
-                                      >{svc.hold}</td
-                                    >
-                                    <td
-                                      class="px-3 py-1 text-right tabular-nums text-stone-500"
-                                      >{svc.up}</td
+                                    <th
+                                      class="px-3 py-1 text-right text-stone-500"
+                                      >Up</th
                                     >
                                   </tr>
-                                {/each}
-                              </tbody>
-                            </table>
-                          </div>
+                                </thead>
+                                <tbody class="divide-y divide-stone-800/30">
+                                  {#each row.services as svc}
+                                    <tr>
+                                      <td class="py-1 pr-3 text-stone-400"
+                                        >{svc.name}</td
+                                      >
+                                      <td
+                                        class="px-3 py-1 text-right tabular-nums text-[#e08a85]"
+                                        >{pts(svc.steal)}</td
+                                      >
+                                      <td
+                                        class="px-3 py-1 text-right tabular-nums text-[#9bcea8]"
+                                        >{pts(svc.hold)}</td
+                                      >
+                                      <td
+                                        class="px-3 py-1 text-right tabular-nums text-stone-500"
+                                        >{pts(svc.up)}</td
+                                      >
+                                    </tr>
+                                  {/each}
+                                </tbody>
+                              </table>
+                            </div>
+                          {/if}
                         </td>
                       </tr>
                     {/if}
@@ -991,8 +978,8 @@
                       <span class="tabular-nums text-stone-500 text-xs"
                         >{h.held_ticks} ticks</span
                       >
-                      <span class="tabular-nums text-amber-500 font-semibold"
-                        >{h.score.toLocaleString()}</span
+                      <span class="tabular-nums text-stone-400"
+                        >{pts(h.score)} pts</span
                       >
                     {:else}
                       <span class="text-stone-600 italic text-xs"
