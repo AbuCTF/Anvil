@@ -33,12 +33,17 @@
 	$: kothLeadIdx = kothTop > 0 ? kothSeries.findIndex((s) => lastY(s) === kothTop) : -1;
 	$: chartKoth = chartMode === 'koth';
 	$: chartSeries = chartKoth ? kothSeries : raceSeries;
+	// legend: top 8 by whatever the chart shows now
+	$: ranked = chartSeries.filter((s) => s.points.length).sort((a, b) => lastY(b) - lastY(a));
+	$: legend = ranked.slice(0, 8);
 </script>
 
 {#if raceSeries.length || kothSeries.length}
 	<div class="bg-stone-900/40 rounded-lg border border-stone-800 overflow-hidden {className}">
 		<div class="px-4 py-3 border-b border-stone-800 flex items-center justify-between gap-3">
-			<h2 class="text-[0.95rem] font-semibold text-stone-200">{chartKoth ? 'King of the Hill points' : 'Score over time'}</h2>
+			<h2 class="min-w-0 truncate text-[0.95rem] font-semibold text-stone-200">
+				{#if chartKoth}<span class="sm:hidden">KotH points</span><span class="hidden sm:inline">King of the Hill points</span>{:else}Score over time{/if}
+			</h2>
 			<div class="flex overflow-hidden rounded-md border border-stone-800 text-xs shrink-0">
 				{#each [['koth', 'KotH points'], ['score', 'Score']] as [mode, label], i}
 					<button
@@ -63,7 +68,17 @@
 					emphasize={chartKoth ? kothLeadIdx : leaderIdx}
 					ariaLabel={chartKoth ? 'King of the Hill points' : 'Score over time'}
 					xFormat={(x) => (chartKoth ? 'r' : 't') + Math.round(x)}
+					integerX
 				/>
+				<div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] leading-none text-stone-500">
+					{#each legend as s}
+						<span class="inline-flex items-center gap-1">
+							<span class="h-1.5 w-1.5 shrink-0 rounded-full" style="background: {s.color};"></span>
+							<span class="optical-label max-w-32 truncate" title={s.label}>{s.label}</span>
+						</span>
+					{/each}
+					{#if ranked.length > legend.length}<span class="optical-label text-stone-600">+{ranked.length - legend.length} more</span>{/if}
+				</div>
 			{/if}
 		</div>
 	</div>

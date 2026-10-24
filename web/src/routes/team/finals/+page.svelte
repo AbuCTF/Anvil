@@ -125,6 +125,13 @@
 	let pollInterval: ReturnType<typeof setInterval>;
 
 	$: isFinalsMode = $platformInfo?.arena_enabled === true && $platformInfo?.operations_enabled === true;
+	// first load waits for platform info, not the 30s poll
+	let mounted = false;
+	let primed = false;
+	$: if (mounted && isFinalsMode && !primed) {
+		primed = true;
+		refresh();
+	}
 	$: tickEndsIn = Math.max(0, Math.round((Date.parse(tickInfo.ends_at) - now) / 1000));
 	$: fmtCountdown = `${String(Math.floor(tickEndsIn / 60)).padStart(2, '0')}:${String(tickEndsIn % 60).padStart(2, '0')}`;
 	$: refreshedAgo = lastUpdatedAt === null ? 'waiting for live data' : `updated ${Math.max(0, Math.round((now - lastUpdatedAt) / 1000))}s ago`;
@@ -260,7 +267,9 @@
 					throw error;
 				}
 			}
-			submitResult = results.map((r, index) => `Flag ${index + 1}: ${r.status} (${r.message})`).join('\n');
+			submitResult = results
+				.map((r, index) => `Flag ${index + 1}: ${r.status}${r.message && r.message.toLowerCase() !== r.status.toLowerCase() ? ` (${r.message})` : ''}`)
+				.join('\n');
 			if (results.every(r => r.status === 'accepted' || r.status === 'duplicate')) submitFlag = '';
 		} catch (e: any) {
 			submitResult = e?.message ?? 'submit failed';
@@ -370,7 +379,7 @@
 	onMount(() => {
 		clockInterval = setInterval(() => { now = Date.now(); }, 1000);
 		pollInterval = setInterval(refresh, 30000);
-		refresh();
+		mounted = true;
 	});
 	onDestroy(() => {
 		clearInterval(clockInterval);
