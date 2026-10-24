@@ -408,7 +408,7 @@
 									{/each}
 									<div class="border-t border-stone-800 px-4 py-3">
 										<p class="metadata-label mb-2 text-stone-600">Appearance</p>
-										<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+										<div class="grid grid-cols-2 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
 											{#each themeOptions as option}
 												<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
 											{/each}
@@ -495,7 +495,7 @@
 							{/each}
 							<div class="mx-3 my-2 border-y border-stone-800 py-3">
 								<p class="metadata-label mb-2 text-stone-600">Appearance</p>
-								<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+								<div class="grid grid-cols-2 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
 									{#each themeOptions as option}
 										<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
 									{/each}
@@ -513,7 +513,7 @@
 						<div class="mt-3 border-t border-stone-800 pt-3">
 							<div class="mb-3">
 								<p class="metadata-label mb-2 text-stone-600">Appearance</p>
-								<div class="grid grid-cols-3 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
+								<div class="grid grid-cols-2 gap-1 rounded-md bg-stone-900 p-1" role="group" aria-label="Theme preference">
 									{#each themeOptions as option}
 										<button type="button" on:click={() => setThemePreference(option)} class="rounded px-2 py-1.5 text-[11px] capitalize transition-colors {themePreference === option ? 'bg-stone-700 text-stone-100' : 'text-stone-500 hover:text-stone-300'}">{option}</button>
 									{/each}

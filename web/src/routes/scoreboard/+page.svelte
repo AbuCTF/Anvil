@@ -497,7 +497,12 @@
     boardTeams ??
     !!($platformInfo?.teams_mode || $platformInfo?.economy_enabled);
   $: noun = teamsBoard ? "team" : "player";
-  $: subtitle = !anyLoaded
+  $: subtitle =
+    view === "finals" && isFinalsMode
+      ? finalsRows.length
+        ? `${finalsRows.length} teams on the board`
+        : ""
+      : !anyLoaded
     ? ""
     : teamsBoard
       ? total === 0
