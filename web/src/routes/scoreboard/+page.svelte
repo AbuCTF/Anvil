@@ -452,10 +452,10 @@
   $: isFinalsMode = !!$platformInfo?.game_state;
   // the score's parts as columns: what each board added, raw points underneath
   $: finalsParts = [
-    { key: "ad", label: "Attack-Defense", short: "AD", color: "text-[#e08a85]" },
-    { key: "koth", label: "King of the Hill", short: "KotH", color: "text-amber-400" },
+    { key: "ad", label: "Attack-Defense", short: "AD", color: "tone-attack" },
+    { key: "koth", label: "King of the Hill", short: "KotH", color: "tone-koth" },
     ...(finalsWeights?.jeopardy
-      ? [{ key: "jeopardy", label: "Jeopardy", short: "Jeopardy", color: "text-sky-400" }]
+      ? [{ key: "jeopardy", label: "Jeopardy", short: "Jeopardy", color: "tone-jeopardy" }]
       : []),
   ] as { key: keyof ScoreWeights; label: string; short: string; color: string }[];
   const signed = (n: number | undefined) =>
@@ -865,12 +865,19 @@
                         class="py-2.5 pl-3 pr-2 tabular-nums text-stone-500 text-xs"
                         >{row.rank}</td
                       >
+                      <td class="px-3 py-2.5 font-medium text-stone-200">
+                        <span class="flex items-center gap-2 leading-none">
+                          <span
+                            class="h-2 w-2 shrink-0 rounded-full"
+                            style="background: {teamColor(row.team_id)};"
+                          ></span>
+                          <span class="optical-label truncate max-w-[8rem]"
+                            >{row.team_name}</span
+                          >
+                        </span>
+                      </td>
                       <td
-                        class="px-3 py-2.5 font-medium text-stone-200 truncate max-w-[8rem]"
-                        >{row.team_name}</td
-                      >
-                      <td
-                        class="px-3 py-2.5 text-right font-semibold tabular-nums text-amber-500"
+                        class="px-3 py-2.5 text-right font-semibold tabular-nums tone-score"
                         >{pts(row.total)}</td
                       >
                       {#each finalsParts as part (part.key)}
@@ -915,10 +922,10 @@
                           class="bg-stone-900/60 px-4 py-2"
                         >
                           <p class="py-1 text-xs text-stone-500">
-                            <span class="text-[#e08a85]"
+                            <span class="tone-attack"
                               >attack {pts(row.steal)}</span
                             >
-                            · <span class="text-[#9bcea8]"
+                            · <span class="tone-defense"
                               >defense {pts(row.hold)}</span
                             >
                             · <span class="text-stone-400"
@@ -932,11 +939,11 @@
                                   <tr class="text-stone-600">
                                     <th class="py-1 pr-3 text-left">Service</th>
                                     <th
-                                      class="px-3 py-1 text-right text-[#e08a85]"
+                                      class="px-3 py-1 text-right tone-attack"
                                       >Attack</th
                                     >
                                     <th
-                                      class="px-3 py-1 text-right text-[#9bcea8]"
+                                      class="px-3 py-1 text-right tone-defense"
                                       >Defense</th
                                     >
                                     <th
@@ -952,11 +959,11 @@
                                         >{svc.name}</td
                                       >
                                       <td
-                                        class="px-3 py-1 text-right tabular-nums text-[#e08a85]"
+                                        class="px-3 py-1 text-right tabular-nums tone-attack"
                                         >{pts(svc.steal)}</td
                                       >
                                       <td
-                                        class="px-3 py-1 text-right tabular-nums text-[#9bcea8]"
+                                        class="px-3 py-1 text-right tabular-nums tone-defense"
                                         >{pts(svc.hold)}</td
                                       >
                                       <td

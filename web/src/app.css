@@ -151,6 +151,18 @@
   color: rgb(var(--brand-accent-strong));
 }
 
+/* Finals board tones - the dark pastels wash out on cream, so light gets deeper ones. */
+.tone-attack { color: #e08a85; }
+.tone-defense { color: #9bcea8; }
+.tone-koth { color: #fbbf24; }
+.tone-jeopardy { color: #38bdf8; }
+.tone-score { color: #f59e0b; }
+:root[data-theme="light"] .tone-attack { color: #a8423a; }
+:root[data-theme="light"] .tone-defense { color: #2f6b3f; }
+:root[data-theme="light"] .tone-koth { color: #a16207; }
+:root[data-theme="light"] .tone-jeopardy { color: #0369a1; }
+:root[data-theme="light"] .tone-score { color: #b45309; }
+
 :root[data-accent="amber"] {
   --brand-accent: 245 158 11;
   --brand-accent-strong: 180 83 9;
