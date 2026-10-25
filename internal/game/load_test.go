@@ -109,8 +109,8 @@ func enoFakeHung(t *testing.T) (*httptest.Server, *atomic.Int64) {
 		calls.Add(1)
 		<-release // block until test cleanup closes this channel
 	}))
-	t.Cleanup(srv.Close)                      // registered 1st → runs 2nd (LIFO)
-	t.Cleanup(func() { close(release) })      // registered 2nd → runs 1st
+	t.Cleanup(srv.Close)                 // registered 1st → runs 2nd (LIFO)
+	t.Cleanup(func() { close(release) }) // registered 2nd → runs 1st
 	return srv, &calls
 }
 
@@ -252,6 +252,74 @@ func TestEngineLoad(t *testing.T) {
 		countLoad(t, db, `SELECT COUNT(*) FROM game_sla_checks`))
 	t.Logf("total flags planted after 2 ticks: %d",
 		countLoad(t, db, `SELECT COUNT(*) FROM game_flags`))
+}
+
+func TestSignTargetConcurrencySerializesEachTargetNotTheField(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+	setFinals(t, db)
+
+	const nTargets = 16
+	teams := seedLoadTeams(t, db, nTargets)
+	if _, err := db.Pool.Exec(ctx, `UPDATE game_teams SET is_nop = TRUE WHERE id = $1`, teams[nTargets-1]); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	activeByTarget := make(map[string]int)
+	maxByTarget := make(map[string]int)
+	globalActive := 0
+	globalMax := 0
+	checker, calls := enoFake(t, func(task enoTaskMessage) enoResultMessage {
+		mu.Lock()
+		activeByTarget[task.Address]++
+		globalActive++
+		maxByTarget[task.Address] = max(maxByTarget[task.Address], activeByTarget[task.Address])
+		globalMax = max(globalMax, globalActive)
+		mu.Unlock()
+
+		time.Sleep(25 * time.Millisecond)
+
+		mu.Lock()
+		activeByTarget[task.Address]--
+		globalActive--
+		mu.Unlock()
+		return enoResult("OK", "")
+	})
+	seedVariantService(t, db, "sign-me-in", checker.URL, 2, 1, 5)
+
+	runTickOK(t, loadController(db, 3*time.Second), ctx, 1)
+
+	if got, want := calls.Load(), int64(nTargets*11); got != want {
+		t.Fatalf("checker tasks = %d, want %d", got, want)
+	}
+	if got, want := countLoad(t, db, `SELECT COUNT(*) FROM game_checker_tasks WHERE status = 'OK'`), nTargets*11; got != want {
+		t.Fatalf("OK checker task rows = %d, want %d", got, want)
+	}
+	if got := countLoad(t, db, `SELECT COUNT(*) FROM game_sla_checks WHERE status = 'OK'`); got != nTargets {
+		t.Fatalf("OK SLA rows = %d, want %d", got, nTargets)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(maxByTarget) != nTargets {
+		t.Fatalf("checker reached %d targets, want %d", len(maxByTarget), nTargets)
+	}
+	if globalActive != 0 {
+		t.Fatalf("global active checker tasks = %d after tick, want 0", globalActive)
+	}
+	for target, peak := range maxByTarget {
+		if activeByTarget[target] != 0 {
+			t.Errorf("target %s still has %d active checker tasks", target, activeByTarget[target])
+		}
+		if peak != 1 {
+			t.Errorf("target %s peak concurrency = %d, want 1", target, peak)
+		}
+	}
+	if globalMax <= 1 || globalMax > nTargets {
+		t.Fatalf("global peak concurrency = %d, want 2..%d", globalMax, nTargets)
+	}
 }
 
 // TestEngineConcurrentGateUnderLiveTick fires 15 simultaneous GateRunner calls

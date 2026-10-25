@@ -44,6 +44,7 @@ type job struct {
 	noiseVariants int
 	havocVariants int
 	sem           chan struct{}
+	targetSem     chan struct{}
 }
 
 // tickPlan places tasks inside the tick the way enowars does: putflag/putnoise in the
@@ -243,6 +244,14 @@ func (d *Dispatcher) runTask(ctx context.Context, p tickPlan, j job, task Task, 
 	if !sleepUntil(ctx, at) {
 		return Result{Status: models.SLAError, Message: "tick cancelled"}
 	}
+	if j.targetSem != nil {
+		select {
+		case j.targetSem <- struct{}{}:
+			defer func() { <-j.targetSem }()
+		case <-ctx.Done():
+			return Result{Status: models.SLAError, Message: "tick cancelled"}
+		}
+	}
 	select {
 	case j.sem <- struct{}{}:
 		defer func() { <-j.sem }()
@@ -344,6 +353,7 @@ func aggregate(current, old []Result) (Result, bool) {
 
 type serviceTarget struct {
 	id            uuid.UUID
+	slug          string
 	port          int
 	checker       string
 	flagVariants  int
@@ -390,6 +400,10 @@ func (d *Dispatcher) buildJobs(ctx context.Context, tick int, started time.Time)
 			if completed[jobKey{team: t.id, service: s.id}] {
 				continue
 			}
+			var targetSem chan struct{}
+			if s.slug == "sign-me-in" {
+				targetSem = make(chan struct{}, 1)
+			}
 			jobs = append(jobs, job{
 				team:          t.id,
 				teamNumber:    t.number,
@@ -401,6 +415,7 @@ func (d *Dispatcher) buildJobs(ctx context.Context, tick int, started time.Time)
 				noiseVariants: s.noiseVariants,
 				havocVariants: s.havocVariants,
 				sem:           sem,
+				targetSem:     targetSem,
 			})
 		}
 	}
@@ -429,7 +444,7 @@ func (d *Dispatcher) completedJobs(ctx context.Context, tick int) (map[jobKey]bo
 func (d *Dispatcher) releasedServices(ctx context.Context, at time.Time) ([]serviceTarget, error) {
 	nightStart, night := ServiceReleaseWindow(d.koth, at)
 	rows, err := d.db.Pool.Query(ctx,
-		`SELECT id, port, checker_ref, GREATEST(flag_stores, 1), noise_variants, havoc_variants
+		`SELECT id, slug, port, checker_ref, GREATEST(flag_stores, 1), noise_variants, havoc_variants
 		 FROM game_services
 		 WHERE enabled = TRUE AND port IS NOT NULL AND checker_ref IS NOT NULL AND checker_ref <> ''
 		   AND (release_at IS NULL OR
@@ -442,7 +457,7 @@ func (d *Dispatcher) releasedServices(ctx context.Context, at time.Time) ([]serv
 	var out []serviceTarget
 	for rows.Next() {
 		var s serviceTarget
-		if err := rows.Scan(&s.id, &s.port, &s.checker, &s.flagVariants, &s.noiseVariants, &s.havocVariants); err != nil {
+		if err := rows.Scan(&s.id, &s.slug, &s.port, &s.checker, &s.flagVariants, &s.noiseVariants, &s.havocVariants); err != nil {
 			return nil, err
 		}
 		out = append(out, s)
