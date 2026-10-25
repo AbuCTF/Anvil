@@ -391,6 +391,67 @@ func TestEngineConcurrentGateUnderLiveTick(t *testing.T) {
 	t.Logf("concurrent gate test: %d OK live checks, %d gate runs completed", ok, nGates)
 }
 
+func TestConcurrentGateRunsUseDistinctStableChainIDs(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	defer db.Close()
+	setFinals(t, db)
+
+	putStarted := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var state sync.Map
+	checker, _ := enoFake(t, func(task enoTaskMessage) enoResultMessage {
+		switch task.Method {
+		case MethodPutFlag, MethodPutNoise:
+			state.Store(task.TaskChainID, task.Address)
+		case MethodGetFlag, MethodGetNoise:
+			address, ok := state.Load(task.TaskChainID)
+			if !ok || address != task.Address {
+				return enoResult("MUMBLE", "cross-target chain collision")
+			}
+		case MethodHavoc:
+			address, loaded := state.LoadOrStore(task.TaskChainID, task.Address)
+			if loaded && address != task.Address {
+				return enoResult("MUMBLE", "cross-target chain collision")
+			}
+		}
+		if task.Method == MethodPutFlag {
+			putStarted <- struct{}{}
+			<-release
+		}
+		return enoResult("OK", "")
+	})
+	seedVariantService(t, db, "gate-chain", checker.URL, 1, 1, 1)
+	gate := NewGateRunner(db, 16, "H7CTF")
+	addresses := []string{"10.60.1.2", "10.60.2.2"}
+
+	results := make([]GateResult, len(addresses))
+	errs := make([]error, len(addresses))
+	var wg sync.WaitGroup
+	for i, address := range addresses {
+		wg.Add(1)
+		go func(i int, address string) {
+			defer wg.Done()
+			results[i], errs[i] = gate.RunGate(ctx, "gate-chain", address, 1, time.Second)
+		}(i, address)
+	}
+	for range addresses {
+		select {
+		case <-putStarted:
+		case <-time.After(time.Second):
+			t.Fatal("concurrent gate runs did not overlap")
+		}
+	}
+	close(release)
+	wg.Wait()
+
+	for i := range addresses {
+		if errs[i] != nil || !results[i].OK || len(results[i].Tasks) != 5 {
+			t.Fatalf("gate %s result = %+v, err = %v", addresses[i], results[i], errs[i])
+		}
+	}
+}
+
 // newGateRunnerForTest creates a GateRunner wired to the test DB.
 func newGateRunnerForTest(db *database.DB, concurrency int) *GateRunner {
 	return NewGateRunner(db, concurrency, "H7CTF")

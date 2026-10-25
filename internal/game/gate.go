@@ -104,6 +104,7 @@ func (g *GateRunner) lookupService(ctx context.Context, slug string) (gateServic
 // timeout is per-task.
 func (g *GateRunner) RunGate(ctx context.Context, slug, address string, rounds int, taskTimeout time.Duration) (GateResult, error) {
 	start := time.Now()
+	runID := uuid.NewString()
 	if rounds < 1 {
 		rounds = 1
 	}
@@ -138,7 +139,7 @@ func (g *GateRunner) RunGate(ctx context.Context, slug, address string, rounds i
 		// flag variants: putflag then getflag
 		for v := 0; v < svc.flagVariants; v++ {
 			flag := gateFlag(g.flagPrefix, round, v)
-			chainID := fmt.Sprintf("gate_s%s_r%d_i%d", svc.id, round, v)
+			chainID := fmt.Sprintf("gate_s%s_u%s_r%d_i%d", svc.id, runID, round, v)
 			baseTask := Task{
 				ID:          0,
 				Tick:        round,
@@ -179,7 +180,7 @@ func (g *GateRunner) RunGate(ctx context.Context, slug, address string, rounds i
 
 		// noise variants: putnoise then getnoise
 		for v := 0; v < svc.noiseVariants; v++ {
-			chainID := fmt.Sprintf("gate_noise_s%s_r%d_i%d", svc.id, round, v)
+			chainID := fmt.Sprintf("gate_noise_s%s_u%s_r%d_i%d", svc.id, runID, round, v)
 			base := Task{
 				Tick:        round,
 				RelatedTick: round,
@@ -210,7 +211,7 @@ func (g *GateRunner) RunGate(ctx context.Context, slug, address string, rounds i
 
 		// havoc variants
 		for v := 0; v < svc.havocVariants; v++ {
-			chainID := fmt.Sprintf("gate_havoc_s%s_r%d_i%d", svc.id, round, v)
+			chainID := fmt.Sprintf("gate_havoc_s%s_u%s_r%d_i%d", svc.id, runID, round, v)
 			base := Task{
 				Tick:        round,
 				RelatedTick: round,
