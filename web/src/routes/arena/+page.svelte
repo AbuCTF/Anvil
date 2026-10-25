@@ -2,6 +2,7 @@
 	import Icon from '@iconify/svelte';
 	import { onMount } from 'svelte';
 	import { API_BASE } from '$lib/config';
+	import { auth } from '$stores/auth';
 	import ArenaChart, { type HistorySeries } from '$lib/components/ArenaChart.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -59,6 +60,7 @@
 	}
 	interface ArenaState {
 		active: boolean;
+		frozen?: boolean;
 		status: GameStatus;
 		hills: Hill[];
 		standings: Standing[];
@@ -103,6 +105,7 @@
 	let error = '';
 	let refreshError = '';
 	let active = false;
+	let frozen = false;
 
 	let initialized = false;
 	let hasLiveBaseline = false;
@@ -185,6 +188,7 @@
 
 	function applyInactiveState() {
 		active = false;
+		frozen = false;
 		status = null;
 		standings = [];
 		weights = null;
@@ -209,6 +213,7 @@
 	function applyState(s: ArenaState) {
 		now = Date.now();
 		active = true;
+		frozen = !!s.frozen;
 		status = s.status ?? status;
 		applyHills(s.hills ?? []);
 		standings = s.standings ?? [];
@@ -347,6 +352,8 @@
 	// actual attack-defense activity - i.e. services are registered. A KotH-only event
 	// has hills but no services, so it shows a clean KotH board (hills + koth + rounds).
 	$: hasAD = matrixServices.length > 0;
+	$: isAdmin = $auth.user?.role === 'admin';
+	$: showBreakdown = !frozen || isAdmin;
 	// finals blend: the score's parts as columns, raw points underneath
 	$: parts = weights
 		? ([
@@ -358,6 +365,7 @@
 	const raw = (t: Standing, key: keyof ScoreWeights) =>
 		key === 'ad' ? t.attack + t.defense + t.sla : key === 'koth' ? t.koth : t.jeopardy;
 	const signed = (n: number | undefined) => (typeof n === 'number' && n > 0 ? `+${pts(n)}` : pts(n));
+	$: standingsColumns = !showBreakdown ? 3 : weights ? 3 + parts.length : 4 + (hasAD ? 4 : 0);
 	$: myBox = myTeam?.vulnbox_ip ?? (myTeam?.team_number ? vpnBoxAddr(myTeam.team_number) : null);
 </script>
 
@@ -397,6 +405,25 @@
 				{/if}
 			</div>
 		</PageHeader>
+
+		{#if frozen && !isAdmin}
+			<div class="mb-4 overflow-hidden rounded-xl border border-sky-400/15 bg-gradient-to-r from-sky-500/[0.10] via-sky-400/[0.05] to-transparent">
+				<div class="flex items-center gap-3 px-4 py-3">
+					<div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-400/10 ring-1 ring-sky-400/25">
+						<Icon icon="mdi:snowflake" class="h-5 w-5 text-sky-300" />
+					</div>
+					<div class="min-w-0">
+						<p class="text-sm font-semibold tracking-tight text-sky-100">Scoreboard frozen</p>
+						<p class="text-xs text-sky-200/60">Standings are locked at the freeze. Final results reveal after prize distribution.</p>
+					</div>
+				</div>
+			</div>
+		{:else if frozen && isAdmin}
+			<div class="mb-4 inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs font-medium text-emerald-300">
+				<span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+				Live view (admin)
+			</div>
+		{/if}
 
 		{#if !active}
 			<EmptyState icon="mdi:sword-cross" text="No live arena round is running." />
@@ -513,7 +540,7 @@
 									<tr>
 										<td class="solid-cell sticky left-0 z-10 px-3 sm:px-4 py-1 border-t border-stone-800/60">
 											<div class="flex min-w-0 items-center gap-2 leading-none">
-												<span class="optical-label w-5 shrink-0 text-right text-xs tabular-nums text-stone-600">{r.rank ?? '-'}</span>
+												<span class="optical-label w-5 shrink-0 text-right text-xs tabular-nums text-stone-600">{showBreakdown ? (r.rank ?? '-') : '-'}</span>
 												<span class="w-2 h-2 rounded-full shrink-0" style="background: {tc.dot};"></span>
 												<a href="/scoreboard" class="optical-label min-w-0 truncate text-xs sm:text-sm text-stone-300 hover:text-amber-400 transition" title={r.team}>{r.team}</a>
 											</div>
@@ -603,12 +630,14 @@
 				<h2 class="text-[0.95rem] font-semibold text-stone-200">Standings</h2>
 			</div>
 			<div class="overflow-x-auto">
-				<table class="w-full min-w-[720px] text-sm">
+				<table class="w-full text-sm {showBreakdown ? 'min-w-[720px]' : 'min-w-[24rem]'}">
 					<thead>
 						<tr class="metadata-label text-stone-500">
 							<th class="px-4 py-2.5 text-left w-12">#</th>
 							<th class="px-4 py-2.5 text-left">Team</th>
-							{#if weights}
+							{#if !showBreakdown}
+							<th class="px-4 py-2.5 text-right text-stone-200">Total</th>
+							{:else if weights}
 							<th class="px-4 py-2.5 text-right text-stone-200">Score</th>
 							{#each parts as part (part.key)}
 							<th class="px-4 py-2.5 text-right whitespace-nowrap">{part.label}</th>
@@ -637,7 +666,9 @@
 										<span class="optical-label text-stone-200 truncate max-w-[220px]">{team.team}</span>
 									</div>
 								</td>
-								{#if weights}
+								{#if !showBreakdown}
+								<td class="px-4 py-2.5 whitespace-nowrap text-right text-amber-500/90 font-semibold tabular-nums">{pts(team.total)}</td>
+								{:else if weights}
 								<td class="px-4 py-2.5 whitespace-nowrap text-right text-amber-500/90 font-semibold tabular-nums">{pts(team.total)}</td>
 								{#each parts as part (part.key)}
 								<td
@@ -668,7 +699,7 @@
 							</tr>
 						{/each}
 						{#if standings.length === 0}
-							<tr><td colspan="8" class="px-4 py-8 text-center text-stone-500">No standings yet.</td></tr>
+							<tr><td colspan={standingsColumns} class="px-4 py-8 text-center text-stone-500">No standings yet.</td></tr>
 						{/if}
 					</tbody>
 				</table>

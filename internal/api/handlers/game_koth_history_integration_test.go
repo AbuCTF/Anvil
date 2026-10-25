@@ -17,7 +17,7 @@ import (
 )
 
 // koth_history is the running koth total per closed round, every non-nop team
-// (zero teams too), and it blinds at the freeze like history.
+// (zero teams too), and freezes at the last round closed by the cutoff.
 func TestArenaStateKothHistory(t *testing.T) {
 	name := os.Getenv("ANVIL_TEST_DB_NAME")
 	if !strings.HasSuffix(name, "_test") {
@@ -51,7 +51,10 @@ func TestArenaStateKothHistory(t *testing.T) {
 	exec(`INSERT INTO game_koth_hills (id, name, slug, port) VALUES ($1, $2, $3, 7191), ($4, $5, $6, 7192)`,
 		h1, "kh1 "+sfx, "kh1-"+sfx, h2, "kh2 "+sfx, "kh2-"+sfx)
 	const r1, r2, r3 = 9101, 9102, 9103
-	exec(`INSERT INTO game_koth_rounds (round_number, status) VALUES ($1, 'closed'), ($2, 'closed'), ($3, 'running')`, r1, r2, r3)
+	exec(`INSERT INTO game_koth_rounds (round_number, status, ends_at)
+	      VALUES ($1, 'closed', NOW() - interval '3 minutes'),
+	             ($2, 'closed', NOW() - interval '1 minute'),
+	             ($3, 'running', NULL)`, r1, r2, r3)
 	// r1: a wins hill 1. r2: a wins hill 1 with a bounty and places on hill 2.
 	// r3 is still running, so its row must not count.
 	exec(`INSERT INTO game_koth_results (round_number, hill_id, team_id, held_ticks, rank, points, bounty) VALUES
@@ -75,7 +78,7 @@ func TestArenaStateKothHistory(t *testing.T) {
 
 	load := func() (map[string][]historyPoint, bool) {
 		t.Helper()
-		body, _, err := h.loadLiveState(ctx, false)
+		body, _, err := h.loadLiveState(ctx, gameStatePublic)
 		if err != nil {
 			t.Fatalf("load state: %v", err)
 		}
@@ -124,9 +127,14 @@ func TestArenaStateKothHistory(t *testing.T) {
 		t.Fatal("nop team charted")
 	}
 
-	exec(`INSERT INTO platform_settings (key, value) VALUES ('event.freeze_at', to_jsonb((NOW() - interval '1 minute')::text))
+	exec(`INSERT INTO platform_settings (key, value) VALUES ('event.freeze_at',
+	      to_jsonb(to_char((NOW() - interval '2 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')))
 	      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
-	if got, _ := load(); len(got) != 0 {
-		t.Fatalf("koth_history leaked during freeze: %+v", got)
+	got, _ = load()
+	for _, id := range []string{a.String(), b.String()} {
+		points := got[id]
+		if len(points) != 1 || points[0].Tick != r1 {
+			t.Fatalf("team %s frozen points %+v, want only round %d", id, points, r1)
+		}
 	}
 }

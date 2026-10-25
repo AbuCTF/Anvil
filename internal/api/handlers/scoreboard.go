@@ -347,6 +347,63 @@ var teamScoreboardQuery = `
 	ORDER BY CASE WHEN $4 = 'name' THEN LOWER(pt.name) END, pt.rank
 `
 
+var frozenTeamRankedCTE = `team_firsts AS MATERIALIZED (
+		SELECT DISTINCT ON (u.team_id, s.flag_id)
+			u.team_id, s.flag_id, f.challenge_id, s.points_awarded, s.solved_at
+		FROM solves s
+		JOIN users u ON u.id = s.user_id
+		JOIN flags f ON f.id = s.flag_id
+		WHERE u.team_id IS NOT NULL AND s.solved_at <= %s
+		ORDER BY u.team_id, s.flag_id, s.solved_at, s.id
+	), scores AS MATERIALIZED (
+		SELECT t.id, t.name, COALESCE(SUM(tf.points_awarded), 0)::int AS total_score,
+			MAX(tf.solved_at) AS last_solve
+		FROM teams t
+		LEFT JOIN team_firsts tf ON tf.team_id = t.id
+		WHERE ` + publicTeamSQL("t") + `
+		GROUP BY t.id, t.name
+	), ranked AS MATERIALIZED (
+		SELECT id, name, total_score, last_solve,
+			ROW_NUMBER() OVER (
+				ORDER BY total_score DESC, last_solve ASC NULLS LAST, id ASC
+			) AS rank
+		FROM scores WHERE last_solve IS NOT NULL OR total_score <> 0
+	)`
+
+var frozenTeamCountQuery = `WITH ` + fmt.Sprintf(frozenTeamRankedCTE, "$2::timestamptz") + `
+	SELECT COUNT(*), COUNT(*) FILTER (WHERE $1 = '' OR name ILIKE '%' || $1 || '%' ESCAPE '\')
+	FROM ranked`
+
+var frozenTeamScoreboardQuery = `
+	WITH ` + fmt.Sprintf(frozenTeamRankedCTE, "$5::timestamptz") + `, flag_totals AS (
+		SELECT f.challenge_id, COUNT(*)::int AS total_flags
+		FROM flags f JOIN challenges c ON c.id = f.challenge_id
+		WHERE c.status = 'published' AND (c.release_date IS NULL OR c.release_date <= $5)
+		GROUP BY f.challenge_id
+	), team_flags AS (
+		SELECT team_id, COUNT(*)::int AS flags_solved FROM team_firsts GROUP BY team_id
+	), team_completed AS (
+		SELECT team_id, COUNT(*)::int AS challenges_solved FROM (
+			SELECT tf.team_id, tf.challenge_id
+			FROM team_firsts tf JOIN flag_totals ft ON ft.challenge_id = tf.challenge_id
+			GROUP BY tf.team_id, tf.challenge_id, ft.total_flags
+			HAVING COUNT(DISTINCT tf.flag_id) >= ft.total_flags
+		) fully GROUP BY team_id
+	), page_teams AS (
+		SELECT * FROM ranked
+		WHERE $3 = '' OR name ILIKE '%' || $3 || '%' ESCAPE '\'
+		ORDER BY CASE WHEN $4 = 'name' THEN LOWER(name) END, rank
+		LIMIT $1 OFFSET $2
+	)
+	SELECT pt.id, pt.name, NULL::text, pt.total_score,
+		COALESCE(tc.challenges_solved, 0), COALESCE(tf.flags_solved, 0),
+		pt.last_solve, pt.rank
+	FROM page_teams pt
+	LEFT JOIN team_completed tc ON tc.team_id = pt.id
+	LEFT JOIN team_flags tf ON tf.team_id = pt.id
+	ORDER BY CASE WHEN $4 = 'name' THEN LOWER(pt.name) END, pt.rank
+`
+
 // teamEconomyRankedCTE is the economy board's ranking: economy points plus the
 // capped KotH hold-time (koth_score is points-only, never convertible).
 var teamEconomyRankedCTE = `scores AS (
@@ -452,6 +509,62 @@ var userScoreboardQuery = `
 		pu.rank
 `
 
+var frozenUserScoreboardQuery = `
+	WITH score_events AS (
+		SELECT user_id, points_awarded AS points, solved_at AS event_at
+		FROM solves WHERE solved_at <= $5
+		UNION ALL
+		SELECT user_id, -points_deducted AS points, unlocked_at AS event_at
+		FROM hint_unlocks WHERE unlocked_at <= $5
+	), last_solves AS (
+		SELECT user_id, MAX(solved_at) AS last_solve FROM solves
+		WHERE solved_at <= $5 GROUP BY user_id
+	), ranked AS MATERIALIZED (
+		SELECT u.id, u.username, u.display_name, COALESCE(SUM(se.points), 0)::int AS total_score,
+			u.created_at, ls.last_solve,
+			ROW_NUMBER() OVER (
+				ORDER BY COALESCE(SUM(se.points), 0) DESC, ls.last_solve ASC NULLS LAST,
+					u.created_at ASC, u.id ASC
+			) AS rank
+		FROM users u
+		LEFT JOIN score_events se ON se.user_id = u.id
+		LEFT JOIN last_solves ls ON ls.user_id = u.id
+		WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active'
+		GROUP BY u.id, u.username, u.display_name, u.created_at, ls.last_solve
+	), page_users AS MATERIALIZED (
+		SELECT * FROM ranked
+		WHERE $3 = '' OR username ILIKE '%' || $3 || '%' ESCAPE '\'
+		   OR COALESCE(display_name, '') ILIKE '%' || $3 || '%' ESCAPE '\'
+		ORDER BY CASE WHEN $4 = 'name' THEN LOWER(COALESCE(display_name, username)) END,
+			CASE WHEN $4 = 'name' THEN rank END, rank
+		LIMIT $1 OFFSET $2
+	), flag_totals AS (
+		SELECT f.challenge_id, COUNT(*)::int AS total_flags
+		FROM flags f JOIN challenges c ON c.id = f.challenge_id
+		WHERE c.status = 'published' AND (c.release_date IS NULL OR c.release_date <= $5)
+		GROUP BY f.challenge_id
+	), completed AS (
+		SELECT s.user_id, f.challenge_id
+		FROM solves s JOIN page_users pu ON pu.id = s.user_id
+		JOIN flags f ON f.id = s.flag_id JOIN flag_totals ft ON ft.challenge_id = f.challenge_id
+		WHERE s.solved_at <= $5
+		GROUP BY s.user_id, f.challenge_id, ft.total_flags
+		HAVING ft.total_flags > 0 AND COUNT(DISTINCT s.flag_id) >= ft.total_flags
+	), completed_counts AS (
+		SELECT user_id, COUNT(*)::int AS challenges_solved FROM completed GROUP BY user_id
+	), solve_stats AS (
+		SELECT s.user_id, COUNT(DISTINCT s.flag_id)::int AS flags_solved
+		FROM solves s JOIN page_users pu ON pu.id = s.user_id
+		WHERE s.solved_at <= $5 GROUP BY s.user_id
+	)
+	SELECT pu.id, pu.username, pu.display_name, pu.total_score,
+		COALESCE(cc.challenges_solved, 0), COALESCE(ss.flags_solved, 0), pu.last_solve, pu.rank
+	FROM page_users pu
+	LEFT JOIN completed_counts cc ON cc.user_id = pu.id
+	LEFT JOIN solve_stats ss ON ss.user_id = pu.id
+	ORDER BY CASE WHEN $4 = 'name' THEN LOWER(COALESCE(pu.display_name, pu.username)) END, pu.rank
+`
+
 // boardParams reads page/limit/q/sort, writing the 400 itself when invalid.
 func boardParams(c *gin.Context, defaultLimit, maxLimit int) (page, limit int, queryText, sortBy string, ok bool) {
 	page = 1
@@ -511,10 +624,26 @@ func (h *ScoreboardHandler) boardMode(ctx context.Context) (teamRanked, ledgerSc
 	return teamsMode || economyMode || ledgerScore, ledgerScore, frozen, nil
 }
 
+func scoreboardFreezeAt(ctx context.Context, q scoreboardQuerier) (*time.Time, error) {
+	var raw string
+	if err := q.QueryRow(ctx, `SELECT COALESCE(
+		(SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.freeze_at'), '')`).Scan(&raw); err != nil {
+		return nil, err
+	}
+	freezeAt, err := parseOptionalRFC3339(raw)
+	if err != nil {
+		return nil, err
+	}
+	if freezeAt == nil {
+		return nil, errors.New("scoreboard is frozen without event.freeze_at")
+	}
+	return freezeAt, nil
+}
+
 // standingsPage is one page of the public board plus its (total, matching) counts;
 // team boards hold only teams that have scored.
 func standingsPage(ctx context.Context, q scoreboardQuerier, teamRanked, economy bool,
-	limit, offset int, pattern, sortBy string) ([]ScoreboardEntry, int, int, error) {
+	limit, offset int, pattern, sortBy string, cutoff *time.Time) ([]ScoreboardEntry, int, int, error) {
 	countQuery, query := userCountQuery, userScoreboardQuery
 	if economy {
 		countQuery, query = teamEconomyCountQuery, teamEconomyScoreboardQuery
@@ -522,14 +651,24 @@ func standingsPage(ctx context.Context, q scoreboardQuerier, teamRanked, economy
 		countQuery, query = teamCountQuery, teamScoreboardQuery
 	}
 	var total, matching int
-	if err := q.QueryRow(ctx, countQuery, pattern).Scan(&total, &matching); err != nil {
+	countArgs := []any{pattern}
+	pageArgs := []any{limit, offset, pattern, sortBy}
+	if cutoff != nil {
+		query = frozenUserScoreboardQuery
+		if teamRanked {
+			countQuery, query = frozenTeamCountQuery, frozenTeamScoreboardQuery
+		}
+		countArgs = append(countArgs, *cutoff)
+		pageArgs = append(pageArgs, *cutoff)
+	}
+	if err := q.QueryRow(ctx, countQuery, countArgs...).Scan(&total, &matching); err != nil {
 		return nil, 0, 0, fmt.Errorf("count scoreboard rows: %w", err)
 	}
 	entries := []ScoreboardEntry{}
 	if offset >= matching {
 		return entries, total, matching, nil
 	}
-	rows, err := q.Query(ctx, query, limit, offset, pattern, sortBy)
+	rows, err := q.Query(ctx, query, pageArgs...)
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("scoreboard page: %w", err)
 	}
@@ -553,6 +692,54 @@ func standingsPage(ctx context.Context, q scoreboardQuerier, teamRanked, economy
 	return entries, total, matching, nil
 }
 
+func frozenSnapshotStandingsPage(ctx context.Context, q scoreboardQuerier, tick, limit, offset int,
+	pattern, sortBy string) ([]gin.H, int, int, error) {
+	var total, matching int
+	if err := q.QueryRow(ctx, `
+		SELECT COUNT(*), COUNT(*) FILTER (
+			WHERE $1 = '' OR gt.name ILIKE '%' || $1 || '%' ESCAPE '\'
+		)
+		FROM game_score_snapshots s
+		JOIN game_teams gt ON gt.id = s.team_id
+		WHERE s.tick_number = $2 AND gt.is_nop = false AND gt.status = 'active'
+		  AND `+publicGameTeamSQL("gt"), pattern, tick).Scan(&total, &matching); err != nil {
+		return nil, 0, 0, fmt.Errorf("count frozen scoreboard rows: %w", err)
+	}
+	entries := []gin.H{}
+	if offset >= matching {
+		return entries, total, matching, nil
+	}
+	rows, err := q.Query(ctx, `
+		SELECT COALESCE(s.rank, 0), gt.id::text, gt.name, s.total::float8
+		FROM game_score_snapshots s
+		JOIN game_teams gt ON gt.id = s.team_id
+		WHERE s.tick_number = $5 AND gt.is_nop = false AND gt.status = 'active'
+		  AND `+publicGameTeamSQL("gt")+`
+		  AND ($3 = '' OR gt.name ILIKE '%' || $3 || '%' ESCAPE '\')
+		ORDER BY CASE WHEN $4 = 'name' THEN LOWER(gt.name) END,
+		         s.rank ASC NULLS LAST, gt.id
+		LIMIT $1 OFFSET $2`, limit, offset, pattern, sortBy, tick)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("frozen scoreboard page: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rank int
+		var id, name string
+		var totalScore float64
+		if err := rows.Scan(&rank, &id, &name, &totalScore); err != nil {
+			return nil, 0, 0, fmt.Errorf("scan frozen scoreboard row: %w", err)
+		}
+		entries = append(entries, gin.H{
+			"rank": rank, "user_id": id, "username": name, "total_score": totalScore,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, 0, fmt.Errorf("read frozen scoreboard rows: %w", err)
+	}
+	return entries, total, matching, nil
+}
+
 func (h *ScoreboardHandler) Get(c *gin.Context) {
 	cancel := limitScoreboardRequest(c)
 	defer cancel()
@@ -565,19 +752,30 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	}
 	offset := (page - 1) * limit
 	queryPattern := escapeScoreboardSearch(queryText)
-	cacheKey := "scoreboard:" + strconv.Itoa(page) + ":" + strconv.Itoa(limit) + ":" + sortBy + ":" + queryText
-	if h.serveCachedJSON(c, cacheKey) {
-		return
-	}
-	if !h.beginCacheFill(c, cacheKey) {
-		return
-	}
-	defer h.finishCacheFill(cacheKey)
 	// teams and economy mode rank teams instead of users (trends skipped)
 	teamRanked, economyMode, frozen, err := h.boardMode(c.Request.Context())
 	if err != nil {
 		h.respondQueryError(c, "failed to read scoreboard mode", err)
 		return
+	}
+	adminFrozen := frozen && c.GetString("role") == "admin"
+	publicFrozen := frozen && !adminFrozen
+	view := "live"
+	if publicFrozen {
+		view = "frozen"
+	} else if adminFrozen {
+		view = "admin"
+		c.Set(scoreboardPrivateCacheKey, true)
+	}
+	cacheKey := "scoreboard:" + view + ":" + strconv.Itoa(page) + ":" + strconv.Itoa(limit) + ":" + sortBy + ":" + queryText
+	if !adminFrozen {
+		if h.serveCachedJSON(c, cacheKey) {
+			return
+		}
+		if !h.beginCacheFill(c, cacheKey) {
+			return
+		}
+		defer h.finishCacheFill(cacheKey)
 	}
 
 	tx, ok := h.beginReadSnapshot(c)
@@ -586,35 +784,51 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 	}
 	defer tx.Rollback(c.Request.Context())
 
-	entries, totalUsers, matchingUsers, err := standingsPage(c.Request.Context(), tx,
-		teamRanked, economyMode, limit, offset, queryPattern, sortBy)
-	if err != nil {
-		h.respondQueryError(c, "failed to get scoreboard", err)
-		return
-	}
-
-	// while the board is frozen the standings are blinded: withhold the rows so live
-	// ranks can't be read (the frozen flag still drives the "hidden" banner). the
-	// count stays so the UI can say how many are competing; rows return at the reveal.
-	if frozen {
-		entries = []ScoreboardEntry{}
-		matchingUsers = 0
-	}
-
-	// trends (spark + rank delta) key on user_id; team boards skip them (team trends are a follow-up)
-	if !teamRanked && !frozen {
-		if err := h.attachTrends(c.Request.Context(), tx, entries); err != nil {
-			h.respondQueryError(c, "failed to attach scoreboard trends", err)
+	var cutoff *time.Time
+	if publicFrozen {
+		cutoff, err = scoreboardFreezeAt(c.Request.Context(), tx)
+		if err != nil {
+			h.respondQueryError(c, "failed to read scoreboard freeze time", err)
 			return
 		}
+	}
+	var leaderboard any
+	var totalUsers, matchingUsers int
+	if publicFrozen && teamRanked {
+		snapshot, snapshotErr := loadArenaFreezeSnapshot(c.Request.Context(), tx)
+		if snapshotErr != nil {
+			h.respondQueryError(c, "failed to read scoreboard freeze snapshot", snapshotErr)
+			return
+		}
+		entries, total, matching, snapshotErr := frozenSnapshotStandingsPage(c.Request.Context(), tx,
+			snapshot.Tick, limit, offset, queryPattern, sortBy)
+		if snapshotErr != nil {
+			h.respondQueryError(c, "failed to get frozen scoreboard", snapshotErr)
+			return
+		}
+		leaderboard, totalUsers, matchingUsers = entries, total, matching
+	} else {
+		entries, total, matching, pageErr := standingsPage(c.Request.Context(), tx,
+			teamRanked, economyMode, limit, offset, queryPattern, sortBy, cutoff)
+		if pageErr != nil {
+			h.respondQueryError(c, "failed to get scoreboard", pageErr)
+			return
+		}
+		if !teamRanked && !publicFrozen {
+			if err := h.attachTrends(c.Request.Context(), tx, entries); err != nil {
+				h.respondQueryError(c, "failed to attach scoreboard trends", err)
+				return
+			}
+		}
+		leaderboard, totalUsers, matchingUsers = entries, total, matching
 	}
 	if err := tx.Commit(c.Request.Context()); err != nil {
 		h.respondQueryError(c, "failed to commit scoreboard snapshot", err)
 		return
 	}
 
-	h.respondCacheableJSON(c, cacheKey, 2*time.Second, gin.H{
-		"leaderboard":    entries,
+	payload := gin.H{
+		"leaderboard":    leaderboard,
 		"total_users":    totalUsers,
 		"matching_users": matchingUsers,
 		"page":           page,
@@ -622,7 +836,14 @@ func (h *ScoreboardHandler) Get(c *gin.Context) {
 		"frozen":         frozen,
 		"economy":        economyMode,
 		"teams":          teamRanked,
-	})
+	}
+	if adminFrozen {
+		c.Header("Cache-Control", "no-store")
+		c.Header("Vary", "Authorization")
+		c.JSON(http.StatusOK, payload)
+		return
+	}
+	h.respondCacheableJSON(c, cacheKey, 2*time.Second, payload)
 }
 
 func escapeScoreboardSearch(value string) string {
@@ -767,23 +988,47 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 	if !h.scoreboardAvailable(c) {
 		return
 	}
-	if h.serveCachedJSON(c, "history") {
-		return
-	}
-	if !h.beginCacheFill(c, "history") {
-		return
-	}
-	defer h.finishCacheFill("history")
 	ctx := c.Request.Context()
-	teamRanked, economyMode, _, err := h.boardMode(ctx)
+	teamRanked, economyMode, frozen, err := h.boardMode(ctx)
 	if err != nil {
 		h.respondQueryError(c, "failed to read scoreboard mode", err)
 		return
+	}
+	adminFrozen := frozen && c.GetString("role") == "admin"
+	publicFrozen := frozen && !adminFrozen
+	view := "live"
+	if publicFrozen {
+		view = "frozen"
+	} else if adminFrozen {
+		view = "admin"
+		c.Set(scoreboardPrivateCacheKey, true)
+	}
+	cacheKey := "history:" + view
+	if !adminFrozen {
+		if h.serveCachedJSON(c, cacheKey) {
+			return
+		}
+		if !h.beginCacheFill(c, cacheKey) {
+			return
+		}
+		defer h.finishCacheFill(cacheKey)
 	}
 	historyEnd, err := scoreboardHistoryEnd(ctx, h.db)
 	if err != nil {
 		h.respondQueryError(c, "failed to read scoreboard history cutoff", err)
 		return
+	}
+	if adminFrozen {
+		historyEnd = nil
+	} else if publicFrozen {
+		freezeAt, freezeErr := scoreboardFreezeAt(ctx, h.db.Pool)
+		if freezeErr != nil {
+			h.respondQueryError(c, "failed to read scoreboard freeze time", freezeErr)
+			return
+		}
+		if historyEnd == nil || freezeAt.Before(*historyEnd) {
+			historyEnd = freezeAt
+		}
 	}
 
 	var series []*sbSeries
@@ -791,19 +1036,27 @@ func (h *ScoreboardHandler) History(c *gin.Context) {
 	case economyMode:
 		series, err = h.economyHistory(ctx, historyEnd)
 	case teamRanked:
-		series, err = h.cumulativeHistory(ctx, teamHistoryQuery)
+		series, err = h.cumulativeHistory(ctx, teamHistoryQuery, historyEnd)
 	default:
-		series, err = h.cumulativeHistory(ctx, userHistoryQuery)
+		series, err = h.cumulativeHistory(ctx, userHistoryQuery, historyEnd)
 	}
 	if err != nil {
 		h.respondQueryError(c, "failed to fetch history", err)
 		return
 	}
-	h.respondCacheableJSON(c, "history", 5*time.Second, gin.H{
+	payload := gin.H{
 		"series": series,
 		"teams":  teamRanked,
 		"end_at": historyEnd,
-	})
+		"frozen": frozen,
+	}
+	if adminFrozen {
+		c.Header("Cache-Control", "no-store")
+		c.Header("Vary", "Authorization")
+		c.JSON(http.StatusOK, payload)
+		return
+	}
+	h.respondCacheableJSON(c, cacheKey, 5*time.Second, payload)
 }
 
 // scoreboardHistoryEnd decouples a historical chart from the active event
@@ -846,23 +1099,20 @@ func parseOptionalRFC3339(raw string) (*time.Time, error) {
 }
 
 var userHistoryQuery = `
-	WITH leaders AS MATERIALIZED (
-		SELECT u.id, u.username, u.display_name
-		FROM users u
-		LEFT JOIN LATERAL (
-			SELECT solved_at AS last_solve
-			FROM solves WHERE user_id = u.id
-			ORDER BY solved_at DESC LIMIT 1
-		) ls ON true
-		WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active' AND u.total_score > 0
-		ORDER BY u.total_score DESC, ls.last_solve ASC NULLS LAST, u.created_at ASC, u.id ASC
-		LIMIT 10
-	), events AS (
+	WITH events AS MATERIALIZED (
 		SELECT s.user_id, s.solved_at AS event_at, s.points_awarded AS points, s.id
-		FROM solves s JOIN leaders l ON l.id = s.user_id
+		FROM solves s WHERE $1::timestamptz IS NULL OR s.solved_at <= $1
 		UNION ALL
 		SELECT hu.user_id, hu.unlocked_at AS event_at, -hu.points_deducted AS points, hu.id
-		FROM hint_unlocks hu JOIN leaders l ON l.id = hu.user_id
+		FROM hint_unlocks hu WHERE $1::timestamptz IS NULL OR hu.unlocked_at <= $1
+	), totals AS MATERIALIZED (
+		SELECT user_id, SUM(points) AS total, MAX(event_at) AS last_event FROM events GROUP BY user_id
+	), leaders AS MATERIALIZED (
+		SELECT u.id, u.username, u.display_name
+		FROM users u JOIN totals t ON t.user_id = u.id
+		WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active' AND t.total > 0
+		ORDER BY t.total DESC, t.last_event ASC NULLS LAST, u.created_at ASC, u.id ASC
+		LIMIT 10
 	)
 	SELECT l.id, COALESCE(NULLIF(l.display_name, ''), l.username), e.event_at, e.points
 	FROM leaders l
@@ -872,14 +1122,22 @@ var userHistoryQuery = `
 
 // top 10 teams; a flag scores once per team, on its first capture by any member
 var teamHistoryQuery = `
-	WITH ` + teamRankedCTE + `, leaders AS MATERIALIZED (
-		SELECT id, name, rank FROM ranked ORDER BY rank LIMIT 10
-	), firsts AS (
+	WITH firsts AS MATERIALIZED (
 		SELECT DISTINCT ON (u.team_id, s.flag_id) u.team_id, s.solved_at, s.points_awarded, s.id
 		FROM solves s
 		JOIN users u ON u.id = s.user_id
-		JOIN leaders l ON l.id = u.team_id
+		JOIN teams t ON t.id = u.team_id
+		WHERE ` + publicTeamSQL("t") + ` AND ($1::timestamptz IS NULL OR s.solved_at <= $1)
 		ORDER BY u.team_id, s.flag_id, s.solved_at, s.id
+	), totals AS MATERIALIZED (
+		SELECT team_id, SUM(points_awarded) AS total, MAX(solved_at) AS last_solve
+		FROM firsts GROUP BY team_id
+	), leaders AS MATERIALIZED (
+		SELECT t.id, t.name,
+			ROW_NUMBER() OVER (ORDER BY totals.total DESC, totals.last_solve ASC NULLS LAST, t.id) AS rank
+		FROM totals JOIN teams t ON t.id = totals.team_id
+		WHERE totals.total <> 0
+		ORDER BY rank LIMIT 10
 	)
 	SELECT l.id, l.name, f.solved_at, f.points_awarded
 	FROM leaders l
@@ -888,8 +1146,8 @@ var teamHistoryQuery = `
 `
 
 // cumulativeHistory runs a (id, label, at, points) event query into running totals, one series per id in first-seen order.
-func (h *ScoreboardHandler) cumulativeHistory(ctx context.Context, query string) ([]*sbSeries, error) {
-	rows, err := h.db.Pool.Query(ctx, query)
+func (h *ScoreboardHandler) cumulativeHistory(ctx context.Context, query string, historyEnd *time.Time) ([]*sbSeries, error) {
+	rows, err := h.db.Pool.Query(ctx, query, historyEnd)
 	if err != nil {
 		return nil, fmt.Errorf("history query: %w", err)
 	}
@@ -1029,30 +1287,50 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "player not found"})
 		return
 	}
+	_, _, frozen, err := h.boardMode(c.Request.Context())
+	if err != nil {
+		h.respondQueryError(c, "failed to read scoreboard mode", err)
+		return
+	}
+	adminFrozen := frozen && c.GetString("role") == "admin"
+	publicFrozen := frozen && !adminFrozen
 	privateView := c.GetString("token_type") == "user" &&
 		(c.GetString("username") == username || c.GetString("role") == "admin")
 	profileCacheKey := "profile:public:" + username
+	if publicFrozen {
+		profileCacheKey = "profile:frozen:" + username
+	}
 	if privateView {
-		profileCacheKey = "profile:private:" + username
+		profileCacheKey = "profile:private:" + profileCacheKey
 		c.Set(scoreboardPrivateCacheKey, true)
 	}
-	if h.serveCachedJSON(c, profileCacheKey) {
-		return
+	if !adminFrozen {
+		if h.serveCachedJSON(c, profileCacheKey) {
+			return
+		}
+		if !h.beginCacheFill(c, profileCacheKey) {
+			return
+		}
+		defer h.finishCacheFill(profileCacheKey)
 	}
-	if !h.beginCacheFill(c, profileCacheKey) {
-		return
-	}
-	defer h.finishCacheFill(profileCacheKey)
 	tx, ok := h.beginReadSnapshot(c)
 	if !ok {
 		return
 	}
 	defer tx.Rollback(c.Request.Context())
+	var cutoff *time.Time
+	if publicFrozen {
+		cutoff, err = scoreboardFreezeAt(c.Request.Context(), tx)
+		if err != nil {
+			h.respondQueryError(c, "profile freeze time", err)
+			return
+		}
+	}
 
 	var userID uuid.UUID
 	var totalScore, globalRank int
 	var displayName *string
-	err := tx.QueryRow(c.Request.Context(),
+	err = tx.QueryRow(c.Request.Context(),
 		`SELECT id, display_name, total_score, global_rank
 		 FROM (
 			SELECT u.id, u.username, u.display_name, u.total_score,
@@ -1089,6 +1367,22 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 	if role, ok := c.Get("role"); ok && role == "admin" {
 		showPartialProgress = true
 	}
+	if publicFrozen {
+		if err := tx.Commit(c.Request.Context()); err != nil {
+			h.respondQueryError(c, "failed to commit frozen profile snapshot", err)
+			return
+		}
+		h.respondCacheableJSON(c, profileCacheKey, 2*time.Second, gin.H{
+			"user": gin.H{
+				"username":     username,
+				"display_name": displayName,
+			},
+			"solves":     []profileSolve{},
+			"challenges": []profileChallenge{},
+			"frozen":     true,
+		})
+		return
+	}
 
 	rows, err := tx.Query(c.Request.Context(), `
 		WITH completed AS (
@@ -1096,6 +1390,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 			FROM solves solved
 			JOIN flags f ON f.id = solved.flag_id
 			WHERE solved.user_id = $1
+			  AND ($3::timestamptz IS NULL OR solved.solved_at <= $3)
 			GROUP BY f.challenge_id
 			HAVING COUNT(DISTINCT solved.flag_id) > 0
 			   AND COUNT(DISTINCT solved.flag_id) = (
@@ -1109,10 +1404,11 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 		LEFT JOIN categories cat ON cat.id = c.category_id
 		WHERE s.user_id = $1
 		  AND c.status = 'published'
-		  AND (c.release_date IS NULL OR c.release_date <= NOW())
+		  AND (c.release_date IS NULL OR c.release_date <= COALESCE($3::timestamptz, NOW()))
+		  AND ($3::timestamptz IS NULL OR s.solved_at <= $3)
 		  AND ($2 OR c.id IN (SELECT challenge_id FROM completed))
 		ORDER BY s.solved_at
-	`, userID, showPartialProgress)
+	`, userID, showPartialProgress, cutoff)
 	if err != nil {
 		h.respondQueryError(c, "profile solves query", err)
 		return
@@ -1145,7 +1441,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 			FROM challenges c
 			LEFT JOIN categories cat ON cat.id = c.category_id
 			WHERE c.status = 'published'
-			  AND (c.release_date IS NULL OR c.release_date <= NOW())
+			  AND (c.release_date IS NULL OR c.release_date <= COALESCE($2::timestamptz, NOW()))
 		),
 		flag_totals AS (
 			SELECT f.challenge_id, COUNT(*)::int AS total_flags
@@ -1160,7 +1456,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 			FROM solves s
 			JOIN flags f ON f.id = s.flag_id
 			JOIN published p ON p.id = f.challenge_id
-			WHERE s.user_id = $1
+			WHERE s.user_id = $1 AND ($2::timestamptz IS NULL OR s.solved_at <= $2)
 			GROUP BY f.challenge_id
 		),
 		completion_candidates AS (
@@ -1170,6 +1466,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 			JOIN flag_totals ft ON ft.challenge_id = f.challenge_id
 			JOIN users u ON u.id = s.user_id
 			WHERE u.role NOT IN ('admin', 'author') AND u.status = 'active'
+			  AND ($2::timestamptz IS NULL OR s.solved_at <= $2)
 			GROUP BY f.challenge_id, s.user_id, ft.total_flags
 			HAVING ft.total_flags > 0 AND COUNT(DISTINCT s.flag_id) >= ft.total_flags
 		),
@@ -1196,7 +1493,7 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 		LEFT JOIN user_progress up ON up.challenge_id = p.id
 		LEFT JOIN ranked_completions rc ON rc.challenge_id = p.id AND rc.user_id = $1
 		ORDER BY p.category_order, p.category, p.base_points, p.name
-	`, userID)
+	`, userID, cutoff)
 	if err != nil {
 		h.respondQueryError(c, "profile challenge progress query", err)
 		return
@@ -1244,17 +1541,28 @@ func (h *ScoreboardHandler) Profile(c *gin.Context) {
 		return
 	}
 
-	h.respondCacheableJSON(c, profileCacheKey, 2*time.Second, gin.H{
-		"user": gin.H{
-			"username":          username,
-			"display_name":      displayName,
-			"total_score":       totalScore,
-			"challenges_solved": challengesSolved,
-			"global_rank":       globalRank,
-		},
+	user := gin.H{
+		"username":          username,
+		"display_name":      displayName,
+		"challenges_solved": challengesSolved,
+	}
+	if !publicFrozen {
+		user["total_score"] = totalScore
+		user["global_rank"] = globalRank
+	}
+	payload := gin.H{
+		"user":       user,
 		"solves":     solves,
 		"challenges": challenges,
-	})
+		"frozen":     frozen,
+	}
+	if adminFrozen {
+		c.Header("Cache-Control", "no-store")
+		c.Header("Vary", "Authorization")
+		c.JSON(http.StatusOK, payload)
+		return
+	}
+	h.respondCacheableJSON(c, profileCacheKey, 2*time.Second, payload)
 }
 
 type matrixChallenge struct {
@@ -1368,23 +1676,26 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 	}
 	cacheKey := "matrix:" + strconv.Itoa(page) + ":" + strconv.Itoa(limit) + ":" + sortBy + ":" + queryText
 	staff := isStaff(c)
-	if staff {
-		// staff preview the slate before the start, so their copy never goes public
-		cacheKey = "staff:" + cacheKey
-		c.Set(scoreboardPrivateCacheKey, true)
-	}
-	if h.serveCachedJSON(c, cacheKey) {
-		return
-	}
-	if !h.beginCacheFill(c, cacheKey) {
-		return
-	}
-	defer h.finishCacheFill(cacheKey)
 	ctx := c.Request.Context()
 	teamRanked, economyMode, frozen, err := h.boardMode(ctx)
 	if err != nil {
 		h.respondQueryError(c, "failed to read scoreboard mode", err)
 		return
+	}
+	adminFrozen := frozen && c.GetString("role") == "admin"
+	if staff {
+		// staff preview the slate before the start, so their copy never goes public
+		cacheKey = "staff:" + cacheKey
+		c.Set(scoreboardPrivateCacheKey, true)
+	}
+	if !adminFrozen {
+		if h.serveCachedJSON(c, cacheKey) {
+			return
+		}
+		if !h.beginCacheFill(c, cacheKey) {
+			return
+		}
+		defer h.finishCacheFill(cacheKey)
 	}
 	// nothing before the start, same as the challenge list
 	phase, _ := eventPlayState(c, h.db)
@@ -1432,7 +1743,7 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 	entries, total, matching := []ScoreboardEntry{}, 0, 0
 	if !hidden {
 		entries, total, matching, err = standingsPage(ctx, tx, teamRanked, economyMode,
-			limit, (page-1)*limit, escapeScoreboardSearch(queryText), sortBy)
+			limit, (page-1)*limit, escapeScoreboardSearch(queryText), sortBy, nil)
 		if err != nil {
 			h.respondQueryError(c, "matrix rows", err)
 			return
@@ -1440,7 +1751,7 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 	}
 	// blind the matrix rows while frozen too: the team rows carry ranks and per-team
 	// solve cells, so leaving them would leak the standings the freeze is meant to hide.
-	if frozen {
+	if frozen && !adminFrozen {
 		entries, matching = []ScoreboardEntry{}, 0
 	}
 	ids := make([]uuid.UUID, 0, len(entries))
@@ -1545,7 +1856,7 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 		return
 	}
 
-	h.respondCacheableJSON(c, cacheKey, 5*time.Second, gin.H{
+	payload := gin.H{
 		"challenges":     challenges,
 		"rows":           rows,
 		"total_users":    total,
@@ -1555,5 +1866,12 @@ func (h *ScoreboardHandler) Matrix(c *gin.Context) {
 		"frozen":         frozen,
 		"economy":        economyMode,
 		"teams":          teamRanked,
-	})
+	}
+	if adminFrozen {
+		c.Header("Cache-Control", "no-store")
+		c.Header("Vary", "Authorization")
+		c.JSON(http.StatusOK, payload)
+		return
+	}
+	h.respondCacheableJSON(c, cacheKey, 5*time.Second, payload)
 }

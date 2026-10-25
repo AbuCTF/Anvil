@@ -450,6 +450,8 @@
   $: matrixPages = Math.max(1, Math.ceil(matrixMatching / MATRIX_PAGE_SIZE));
   $: anyLoaded = loaded.standings || loaded.matrix;
   $: isFinalsMode = !!$platformInfo?.game_state;
+  $: isAdmin = $auth.user?.role === "admin";
+  $: showFinalsBreakdown = !frozen || isAdmin;
   // the score's parts as columns: what each board added, raw points underneath
   $: finalsParts = [
     { key: "ad", label: "Attack-Defense", short: "AD", color: "tone-attack" },
@@ -566,12 +568,22 @@
 </svelte:head>
 
 <div class="w-full px-4 sm:px-6 lg:px-8 2xl:px-10 py-8">
-  {#if frozen}
-    <div
-      class="mb-4 flex items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2 text-sm text-amber-500"
-    >
-      <Icon icon="mdi:snowflake" class="h-4 w-4 shrink-0" />
-      Scoreboard frozen - final standings are hidden until the results are published.
+  {#if frozen && !isAdmin}
+    <div class="mb-4 overflow-hidden rounded-xl border border-sky-400/15 bg-gradient-to-r from-sky-500/[0.10] via-sky-400/[0.05] to-transparent">
+      <div class="flex items-center gap-3 px-4 py-3">
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-400/10 ring-1 ring-sky-400/25">
+          <Icon icon="mdi:snowflake" class="h-5 w-5 text-sky-300" />
+        </div>
+        <div class="min-w-0">
+          <p class="text-sm font-semibold tracking-tight text-sky-100">Scoreboard frozen</p>
+          <p class="text-xs text-sky-200/60">Standings are locked at the freeze. Final results reveal after prize distribution.</p>
+        </div>
+      </div>
+    </div>
+  {:else if frozen && isAdmin}
+    <div class="mb-4 inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs font-medium text-emerald-300">
+      <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+      Live view (admin)
     </div>
   {/if}
   <PageHeader title="Scoreboard" {subtitle}>
@@ -820,14 +832,12 @@
             Finals update delayed; showing the last successful result.
           </div>
         {/if}
-        {#if !frozen}
-          <ArenaChart
-            history={finalsHistory}
-            kothHistory={finalsKothHistory}
-            leader={finalsRows[0]?.team_name ?? null}
-            className="mb-4"
-          />
-        {/if}
+        <ArenaChart
+          history={finalsHistory}
+          kothHistory={finalsKothHistory}
+          leader={finalsRows[0]?.team_name ?? null}
+          className="mb-4"
+        />
         <Card title="Finals standings" bodyClass="p-0">
           <span slot="meta" class="metadata-label text-stone-500"
             >{finalsRows.length} teams</span
@@ -850,12 +860,14 @@
                       class="px-3 py-2.5 text-right font-semibold text-stone-100"
                       >Score</th
                     >
-                    {#each finalsParts as part (part.key)}
-                      <th class="px-3 py-2.5 text-right whitespace-nowrap {part.color}"
-                        >{part.label}</th
-                      >
-                    {/each}
-                    <th class="w-8 py-2.5 pr-2"></th>
+                    {#if showFinalsBreakdown}
+                      {#each finalsParts as part (part.key)}
+                        <th class="px-3 py-2.5 text-right whitespace-nowrap {part.color}"
+                          >{part.label}</th
+                        >
+                      {/each}
+                      <th class="w-8 py-2.5 pr-2"></th>
+                    {/if}
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-stone-800/50">
@@ -880,42 +892,44 @@
                         class="px-3 py-2.5 text-right font-semibold tabular-nums tone-score"
                         >{pts(row.total)}</td
                       >
-                      {#each finalsParts as part (part.key)}
-                        <td
-                          class="px-3 py-2.5 text-right tabular-nums whitespace-nowrap"
-                          title={part.key === "ad"
-                            ? `Attack ${pts(row.steal)}, defense ${pts(row.hold)}, uptime ${pts(row.up)}`
-                            : undefined}
-                        >
-                          <span class="text-stone-300"
-                            >{signed(row.share?.[part.key])}</span
+                      {#if showFinalsBreakdown}
+                        {#each finalsParts as part (part.key)}
+                          <td
+                            class="px-3 py-2.5 text-right tabular-nums whitespace-nowrap"
+                            title={part.key === "ad"
+                              ? `Attack ${pts(row.steal)}, defense ${pts(row.hold)}, uptime ${pts(row.up)}`
+                              : undefined}
                           >
-                          <span class="block text-[11px] text-stone-500"
-                            >{part.short} {pts(row[part.key])} pts</span
+                            <span class="text-stone-300"
+                              >{signed(row.share?.[part.key])}</span
+                            >
+                            <span class="block text-[11px] text-stone-500"
+                              >{part.short} {pts(row[part.key])} pts</span
+                            >
+                          </td>
+                        {/each}
+                        <td class="pr-2 py-2.5">
+                          <button
+                            class="text-stone-600 hover:text-stone-400 transition-colors"
+                            on:click={() =>
+                              (finalsExpanded =
+                                finalsExpanded === row.team_id
+                                  ? null
+                                  : row.team_id)}
+                            aria-label="Expand attack-defense breakdown"
+                            aria-expanded={finalsExpanded === row.team_id}
                           >
+                            <Icon
+                              icon={finalsExpanded === row.team_id
+                                ? "mdi:chevron-up"
+                                : "mdi:chevron-down"}
+                              class="h-4 w-4"
+                            />
+                          </button>
                         </td>
-                      {/each}
-                      <td class="pr-2 py-2.5">
-                        <button
-                          class="text-stone-600 hover:text-stone-400 transition-colors"
-                          on:click={() =>
-                            (finalsExpanded =
-                              finalsExpanded === row.team_id
-                                ? null
-                                : row.team_id)}
-                          aria-label="Expand attack-defense breakdown"
-                          aria-expanded={finalsExpanded === row.team_id}
-                        >
-                          <Icon
-                            icon={finalsExpanded === row.team_id
-                              ? "mdi:chevron-up"
-                              : "mdi:chevron-down"}
-                            class="h-4 w-4"
-                          />
-                        </button>
-                      </td>
+                      {/if}
                     </tr>
-                    {#if finalsExpanded === row.team_id}
+                    {#if showFinalsBreakdown && finalsExpanded === row.team_id}
                       <tr>
                         <td
                           colspan={4 + finalsParts.length}

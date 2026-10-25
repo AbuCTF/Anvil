@@ -350,6 +350,13 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
+	snapshot, err := loadArenaFreezeSnapshot(ctx, h.db.Pool)
+	if err != nil {
+		h.logger.Error("failed to read team freeze", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
+		return
+	}
+	publicFrozen := snapshot.Frozen && c.GetString("role") != "admin"
 
 	teamID, err := resolveTeamID(ctx, h.db, uid)
 	if err != nil {
@@ -385,7 +392,7 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 		 FROM users u
 		 WHERE u.team_id = $1
 		 ORDER BY u.username ASC`
-	if challengeDataReleased {
+	if challengeDataReleased && !publicFrozen {
 		membersQuery = `SELECT u.id, u.username, u.display_name,
 		        COALESCE((SELECT COUNT(*) FROM solves s WHERE s.user_id = u.id), 0) AS solve_count
 		 FROM users u
@@ -415,7 +422,7 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 			return
 		}
 		member := gin.H{"id": mid.String(), "username": mname, "display_name": mdisplay}
-		if challengeDataReleased {
+		if challengeDataReleased && !publicFrozen {
 			member["solve_count"] = solves
 		}
 		members = append(members, member)
@@ -434,7 +441,18 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 		"join_expires_at": expiresAt,
 		"members":         members,
 	}
-	if challengeDataReleased {
+	if publicFrozen {
+		standing, found, freezeErr := frozenTeamStanding(ctx, h.db.Pool, *teamID)
+		if freezeErr != nil {
+			h.logger.Error("failed to load frozen team score", zap.Error(freezeErr))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load team"})
+			return
+		}
+		if found {
+			team["total_score"] = standing.Total
+			team["global_rank"] = standing.Rank
+		}
+	} else if challengeDataReleased {
 		economyMode, err := isEconomyMode(ctx, h.db)
 		if err != nil {
 			h.logger.Error("failed to read economy_mode", zap.Error(err))
@@ -456,5 +474,5 @@ func (h *TeamsHandler) GetMine(c *gin.Context) {
 		team["total_score"] = totalScore
 	}
 
-	c.JSON(http.StatusOK, gin.H{"team": team})
+	c.JSON(http.StatusOK, gin.H{"team": team, "frozen": snapshot.Frozen})
 }

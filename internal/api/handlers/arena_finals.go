@@ -122,21 +122,24 @@ type finalsServiceBreakdown struct {
 func (h *GameHandler) FinalsScoreboard(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	frozen, err := game.IsFrozen(ctx, h.db)
+	snapshot, err := loadArenaFreezeSnapshot(ctx, h.db.Pool)
 	if err != nil {
-		h.logger.Error("finals scoreboard: IsFrozen", zap.Error(err))
+		h.logger.Error("finals scoreboard: freeze", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
 
-	// A freeze is only useful if direct API callers are blinded too. Keep the
-	// exact board available to authenticated organizers for the reveal console,
-	// but never send it to players or anonymous clients during the freeze.
-	if frozen && c.GetString("role") != "admin" {
+	if snapshot.Frozen && c.GetString("role") != "admin" {
+		rows, err := h.finalsScoreboardSnapshotRows(ctx, snapshot.Tick)
+		if err != nil {
+			h.logger.Error("finals scoreboard: snapshot query", zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+			return
+		}
 		c.Header("Cache-Control", "private, no-store")
 		c.JSON(http.StatusOK, gin.H{
 			"frozen":  true,
-			"rows":    []finalsScoreRow{},
+			"rows":    rows,
 			"weights": h.scoreWeights(),
 		})
 		return
@@ -149,14 +152,38 @@ func (h *GameHandler) FinalsScoreboard(c *gin.Context) {
 		return
 	}
 
-	if frozen {
+	if snapshot.Frozen {
 		c.Header("Cache-Control", "private, no-store")
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"frozen":  frozen,
+		"frozen":  snapshot.Frozen,
 		"rows":    rows,
 		"weights": h.scoreWeights(),
 	})
+}
+
+func (h *GameHandler) finalsScoreboardSnapshotRows(ctx context.Context, tick int) ([]finalsScoreRow, error) {
+	rows, err := h.db.Pool.Query(ctx,
+		`SELECT COALESCE(s.rank, 0), gt.id::text, gt.name, s.total
+		 FROM game_score_snapshots s
+		 JOIN game_teams gt ON gt.id = s.team_id
+		 WHERE s.tick_number = $1 AND gt.is_nop = false AND gt.status = 'active'
+		   AND `+publicGameTeamSQL("gt")+`
+		 ORDER BY s.rank ASC NULLS LAST, gt.id`, tick)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []finalsScoreRow{}
+	for rows.Next() {
+		var row finalsScoreRow
+		if err := rows.Scan(&row.Rank, &row.TeamID, &row.TeamName, &row.Total); err != nil {
+			return nil, err
+		}
+		row.Services = []finalsServiceBreakdown{}
+		result = append(result, row)
+	}
+	return result, rows.Err()
 }
 
 func (h *GameHandler) finalsScoreboardRows(ctx context.Context) ([]finalsScoreRow, error) {
@@ -166,7 +193,7 @@ func (h *GameHandler) finalsScoreboardRows(ctx context.Context) ([]finalsScoreRo
 		        gs.attack, gs.defense, gs.sla, gs.ad, gs.koth, `+h.jeopardyColumn("gt")+`, gs.total
 		 FROM game_standings gs
 		 JOIN game_teams gt ON gt.id = gs.team_id
-		 WHERE gt.is_nop = false AND gt.status = 'active'
+		 WHERE gt.is_nop = false AND gt.status = 'active' AND `+publicGameTeamSQL("gt")+`
 		 ORDER BY gs.rank ASC NULLS LAST, gt.id`)
 	if err != nil {
 		return nil, err

@@ -106,6 +106,35 @@ func (h *UserHandler) GetRank(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	snapshot, err := loadArenaFreezeSnapshot(c.Request.Context(), h.db.Pool)
+	if err != nil {
+		h.logger.Error("failed to read scoreboard freeze", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch rank"})
+		return
+	}
+	if snapshot.Frozen && c.GetString("role") != "admin" {
+		standing, found, err := frozenUserTeamStanding(c.Request.Context(), h.db.Pool, uid)
+		if err != nil {
+			h.logger.Error("failed to get frozen team rank", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch rank"})
+			return
+		}
+		var rank any
+		etag := `"rank-frozen-` + strconv.Itoa(snapshot.Tick) + `-none"`
+		if found {
+			rank = standing.Rank
+			etag = `"rank-frozen-` + strconv.Itoa(snapshot.Tick) + `-` + strconv.Itoa(standing.Rank) + `"`
+		}
+		c.Header("Cache-Control", "private, no-cache")
+		c.Header("ETag", etag)
+		c.Header("Vary", "Authorization")
+		if c.GetHeader("If-None-Match") == etag {
+			c.Status(http.StatusNotModified)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"rank": rank, "frozen": true})
+		return
+	}
 
 	rank, err := currentUserRank(c.Request.Context(), h.db, uid)
 	if err != nil {
@@ -190,11 +219,52 @@ func (h *UserHandler) GetProfile(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	snapshot, err := loadArenaFreezeSnapshot(c.Request.Context(), h.db.Pool)
+	if err != nil {
+		h.logger.Error("failed to read scoreboard freeze", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch profile"})
+		return
+	}
+	if snapshot.Frozen && c.GetString("role") != "admin" {
+		var id, username, role string
+		var email, displayName, bio *string
+		var createdAt time.Time
+		err := h.db.Pool.QueryRow(c.Request.Context(), `
+			SELECT id, username, email, display_name, role, bio, created_at
+			FROM users WHERE id = $1`, uid,
+		).Scan(&id, &username, &email, &displayName, &role, &bio, &createdAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+			return
+		}
+		if err != nil {
+			h.logger.Error("failed to get frozen user profile", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch profile"})
+			return
+		}
+		payload := gin.H{
+			"id": id, "username": username, "email": email, "display_name": displayName,
+			"role": role, "bio": bio, "joined_at": createdAt.Unix(),
+			"score_scope": "team", "frozen": true,
+		}
+		standing, found, err := frozenUserTeamStanding(c.Request.Context(), h.db.Pool, uid)
+		if err != nil {
+			h.logger.Error("failed to get frozen team standing", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch profile"})
+			return
+		}
+		if found {
+			payload["total_score"] = standing.Total
+			payload["rank"] = standing.Rank
+		}
+		c.JSON(http.StatusOK, payload)
+		return
+	}
 
 	var profile UserProfileResponse
 	var createdAt time.Time
 
-	err := h.db.Pool.QueryRow(c.Request.Context(),
+	err = h.db.Pool.QueryRow(c.Request.Context(),
 		`SELECT u.id,
 			u.username,
 			u.email,
@@ -358,13 +428,34 @@ func (h *UserHandler) GetStats(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 		return
 	}
+	snapshot, err := loadArenaFreezeSnapshot(c.Request.Context(), h.db.Pool)
+	if err != nil {
+		h.logger.Error("failed to read scoreboard freeze", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+		return
+	}
+	if snapshot.Frozen && c.GetString("role") != "admin" {
+		payload := gin.H{"score_scope": "team", "frozen": true}
+		standing, found, err := frozenUserTeamStanding(c.Request.Context(), h.db.Pool, uid)
+		if err != nil {
+			h.logger.Error("failed to get frozen team stats", zap.String("user_id", uid.String()), zap.Error(err))
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch user stats"})
+			return
+		}
+		if found {
+			payload["total_score"] = standing.Total
+			payload["rank"] = standing.Rank
+		}
+		c.JSON(http.StatusOK, payload)
+		return
+	}
 
 	var stats UserStatsResponse
 	stats.ScoreScope = "user"
 	stats.SolvesByDifficulty = make(map[string]int)
 	stats.SolvesByCategory = make(map[string]int)
 
-	err := h.db.Pool.QueryRow(c.Request.Context(), `
+	err = h.db.Pool.QueryRow(c.Request.Context(), `
 		SELECT COALESCE(u.total_score, 0),
 			COALESCE((
 				SELECT ranked.position FROM (
@@ -546,6 +637,16 @@ func (h *UserHandler) GetSolves(c *gin.Context) {
 	}
 	if !userExists {
 		c.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		return
+	}
+	snapshot, err := loadArenaFreezeSnapshot(c.Request.Context(), h.db.Pool)
+	if err != nil {
+		h.logger.Error("failed to read scoreboard freeze", zap.String("user_id", uid.String()), zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch solves"})
+		return
+	}
+	if snapshot.Frozen && c.GetString("role") != "admin" {
+		c.JSON(http.StatusOK, gin.H{"solves": []SolveResponse{}, "total": 0, "frozen": true})
 		return
 	}
 

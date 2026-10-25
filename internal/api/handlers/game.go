@@ -30,7 +30,7 @@ type GameHandler struct {
 	stateCache gameStateCacheEntry
 	flightMu   sync.Mutex
 	flight     *gameStateFlight
-	stateLoad  func(context.Context, bool) ([]byte, string, error)
+	stateLoad  func(context.Context, gameStateMode) ([]byte, string, error)
 	arenaOpen  func(context.Context) (bool, error)
 
 	attackMu      sync.Mutex
@@ -49,6 +49,7 @@ type gameStateCacheEntry struct {
 	body      []byte
 	etag      string
 	expiresAt time.Time
+	frozen    bool
 }
 
 type gameStateFlight struct {
@@ -64,6 +65,20 @@ type warRoomFlight struct {
 type gameStateQuerier interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+type gameStateMode uint8
+
+const (
+	gameStatePublic gameStateMode = iota
+	gameStateAdmin
+	gameStatePreview
+)
+
+type arenaFreezeSnapshot struct {
+	Frozen bool
+	Tick   int
+	Round  int
 }
 
 const (
@@ -94,6 +109,68 @@ func gameTeamVisibilitySQL(alias string, includeHidden bool) string {
 		return "TRUE"
 	}
 	return publicGameTeamSQL(alias)
+}
+
+func loadArenaFreezeSnapshot(ctx context.Context, query gameStateQuerier) (arenaFreezeSnapshot, error) {
+	var raw string
+	if err := query.QueryRow(ctx, `SELECT COALESCE(
+		(SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.freeze_at'), '')`).Scan(&raw); err != nil {
+		return arenaFreezeSnapshot{}, err
+	}
+	freezeAt, err := parseOptionalRFC3339(raw)
+	if err != nil || freezeAt == nil {
+		return arenaFreezeSnapshot{}, err
+	}
+	var frozen bool
+	if err := query.QueryRow(ctx, `SELECT NOW() >= $1`, *freezeAt).Scan(&frozen); err != nil || !frozen {
+		return arenaFreezeSnapshot{Frozen: frozen}, err
+	}
+	var snapshot arenaFreezeSnapshot
+	snapshot.Frozen = true
+	if err := query.QueryRow(ctx,
+		`SELECT COALESCE(MAX(tick_number), 0) FROM game_ticks WHERE started_at < $1`, *freezeAt,
+	).Scan(&snapshot.Tick); err != nil {
+		return arenaFreezeSnapshot{}, err
+	}
+	if err := query.QueryRow(ctx,
+		`SELECT COALESCE(MAX(round_number), 0) FROM game_koth_rounds
+		 WHERE status = 'closed' AND COALESCE(planned_end, ends_at) <= $1`, *freezeAt,
+	).Scan(&snapshot.Round); err != nil {
+		return arenaFreezeSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+type frozenStanding struct {
+	Total float64
+	Rank  int
+}
+
+func frozenTeamStanding(ctx context.Context, query gameStateQuerier, teamID uuid.UUID) (standing frozenStanding, found bool, err error) {
+	snapshot, err := loadArenaFreezeSnapshot(ctx, query)
+	if err != nil || !snapshot.Frozen {
+		return frozenStanding{}, false, err
+	}
+	err = query.QueryRow(ctx,
+		`SELECT total::float8, COALESCE(rank, 0)
+		 FROM game_score_snapshots WHERE tick_number = $1 AND team_id = $2`,
+		snapshot.Tick, teamID,
+	).Scan(&standing.Total, &standing.Rank)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return frozenStanding{}, false, nil
+	}
+	return standing, err == nil, err
+}
+
+func frozenUserTeamStanding(ctx context.Context, query gameStateQuerier, userID uuid.UUID) (standing frozenStanding, found bool, err error) {
+	var teamID *uuid.UUID
+	if err := query.QueryRow(ctx, `SELECT team_id FROM users WHERE id = $1`, userID).Scan(&teamID); err != nil {
+		return frozenStanding{}, false, err
+	}
+	if teamID == nil {
+		return frozenStanding{}, false, nil
+	}
+	return frozenTeamStanding(ctx, query, *teamID)
 }
 
 func writeGameState(c *gin.Context, body []byte, etag string, ttl time.Duration, cacheStatus string) {
@@ -276,6 +353,31 @@ func (h *GameHandler) standingsData(ctx context.Context, query gameStateQuerier,
 	return standings, rows.Err()
 }
 
+func (h *GameHandler) snapshotStandingsData(ctx context.Context, query gameStateQuerier, tick int) ([]gameStanding, error) {
+	rows, err := query.Query(ctx,
+		`SELECT t.id, t.name, s.total, s.rank
+		 FROM game_score_snapshots s JOIN game_teams t ON t.id = s.team_id
+		 WHERE s.tick_number = $1 AND t.is_nop = false AND t.status = 'active'
+		   AND `+publicGameTeamSQL("t")+`
+		 ORDER BY s.rank ASC NULLS LAST, t.id`, tick)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	standings := []gameStanding{}
+	for rows.Next() {
+		var e gameStanding
+		var id uuid.UUID
+		if err := rows.Scan(&id, &e.Team, &e.Total, &e.Rank); err != nil {
+			return nil, err
+		}
+		e.TeamID = id.String()
+		standings = append(standings, e)
+	}
+	return standings, rows.Err()
+}
+
 func (h *GameHandler) Scoreboard(c *gin.Context) {
 	if h.off(c) {
 		return
@@ -426,14 +528,18 @@ type historySeries struct {
 	Points []historyPoint `json:"points"`
 }
 
-func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]*historySeries, error) {
+func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier, includeHidden bool, maxTick *int) ([]*historySeries, error) {
 	rows, err := query.Query(ctx,
 		// every team, so mirror totals below zero still get a line
-		`SELECT t.id, t.name, s.tick_number, s.total
+		`WITH cutoff AS (
+		   SELECT COALESCE($2::int, (SELECT MAX(tick_number) FROM game_score_snapshots), 0) AS tick
+		 )
+		 SELECT t.id, t.name, s.tick_number, s.total
 		 FROM game_score_snapshots s JOIN game_teams t ON t.id = s.team_id
+		 CROSS JOIN cutoff c
 		 WHERE t.is_nop = false AND t.status = 'active' AND `+gameTeamVisibilitySQL("t", includeHidden)+`
-		   AND s.tick_number > (SELECT COALESCE(MAX(tick_number), 0) - $1 FROM game_score_snapshots)
-		 ORDER BY t.name, t.id, s.tick_number`, arenaHistoryTickLimit)
+		   AND s.tick_number <= c.tick AND s.tick_number > c.tick - $1
+		 ORDER BY t.name, t.id, s.tick_number`, arenaHistoryTickLimit, maxTick)
 	if err != nil {
 		return nil, err
 	}
@@ -473,14 +579,15 @@ func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier, i
 // (x = round, y = total). per round it adds points + bounty + koth_hold * held_ticks,
 // the same terms accumulateKoth sums into game_standings.koth (round events are
 // points + bounty, hold is koth_hold per controlled tick). uncapped like that column.
-func (h *GameHandler) kothHistoryData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]*historySeries, error) {
+func (h *GameHandler) kothHistoryData(ctx context.Context, query gameStateQuerier, includeHidden bool, maxRound *int) ([]*historySeries, error) {
 	hold := 0.0
 	if h.config != nil {
 		hold = h.config.Game.Scoring.KothHold
 	}
 	rows, err := query.Query(ctx,
 		`WITH rounds AS (
-		   SELECT round_number FROM game_koth_rounds WHERE status = 'closed'
+		   SELECT round_number FROM game_koth_rounds
+		   WHERE status = 'closed' AND ($2::int IS NULL OR round_number <= $2)
 		 ), per AS (
 		   SELECT k.team_id, k.round_number, SUM(k.points + k.bounty + $1::numeric * k.held_ticks) AS pts
 		   FROM game_koth_results k JOIN rounds r ON r.round_number = k.round_number
@@ -492,7 +599,7 @@ func (h *GameHandler) kothHistoryData(ctx context.Context, query gameStateQuerie
 		 LEFT JOIN rounds r ON TRUE
 		 LEFT JOIN per p ON p.team_id = t.id AND p.round_number = r.round_number
 		 WHERE t.is_nop = false AND t.status = 'active' AND `+gameTeamVisibilitySQL("t", includeHidden)+`
-		 ORDER BY t.name, t.id, r.round_number`, hold)
+		 ORDER BY t.name, t.id, r.round_number`, hold, maxRound)
 	if err != nil {
 		return nil, err
 	}
@@ -537,18 +644,26 @@ func (h *GameHandler) History(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	if h.scoresBlinded(c) {
-		c.Header("Cache-Control", "private, no-store")
-		c.JSON(http.StatusOK, gin.H{"series": []*historySeries{}, "frozen": true})
+	snapshot, err := loadArenaFreezeSnapshot(c.Request.Context(), h.db.Pool)
+	if err != nil {
+		h.logger.Error("history freeze", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	series, err := h.historyData(c.Request.Context(), h.db.Pool, false)
+	var maxTick *int
+	if snapshot.Frozen && c.GetString("role") != "admin" {
+		maxTick = &snapshot.Tick
+	}
+	if snapshot.Frozen {
+		c.Header("Cache-Control", "private, no-store")
+	}
+	series, err := h.historyData(c.Request.Context(), h.db.Pool, false, maxTick)
 	if err != nil {
 		h.logger.Error("history query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"series": series})
+	c.JSON(http.StatusOK, gin.H{"series": series, "frozen": snapshot.Frozen})
 }
 
 type matrixService struct {
@@ -570,7 +685,7 @@ type matrixRow struct {
 	Cells  []matrixCell `json:"cells"`
 }
 
-func (h *GameHandler) matrixData(ctx context.Context, query gameStateQuerier, includeHidden bool) ([]matrixService, []matrixRow, error) {
+func (h *GameHandler) matrixData(ctx context.Context, query gameStateQuerier, includeHidden bool, rankTick *int) ([]matrixService, []matrixRow, error) {
 	var at time.Time
 	if err := query.QueryRow(ctx,
 		`SELECT COALESCE((SELECT started_at FROM game_ticks ORDER BY tick_number DESC LIMIT 1), NOW())`).Scan(&at); err != nil {
@@ -625,10 +740,12 @@ func (h *GameHandler) matrixData(ctx context.Context, query gameStateQuerier, in
 	slaRows.Close()
 
 	teamRows, err := query.Query(ctx,
-		`SELECT t.id, t.name, s.rank FROM game_teams t
+		`SELECT t.id, t.name, CASE WHEN $1::int IS NULL THEN s.rank ELSE snap.rank END
+		 FROM game_teams t
 		 JOIN game_standings s ON s.team_id = t.id
+		 LEFT JOIN game_score_snapshots snap ON snap.team_id = t.id AND snap.tick_number = $1
 		 WHERE t.is_nop = false AND t.status = 'active' AND `+gameTeamVisibilitySQL("t", includeHidden)+`
-		 ORDER BY s.rank ASC NULLS LAST, t.id`)
+		 ORDER BY CASE WHEN $1::int IS NULL THEN s.rank ELSE snap.rank END ASC NULLS LAST, t.id`, rankTick)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -659,18 +776,23 @@ func (h *GameHandler) Services(c *gin.Context) {
 	if h.off(c) {
 		return
 	}
-	services, rows, err := h.matrixData(c.Request.Context(), h.db.Pool, false)
-	if err == nil && h.scoresBlinded(c) {
-		for i := range rows {
-			rows[i].Rank = nil
-		}
+	snapshot, err := loadArenaFreezeSnapshot(c.Request.Context(), h.db.Pool)
+	if err != nil {
+		h.logger.Error("matrix freeze", zap.Error(err))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
+		return
 	}
+	var rankTick *int
+	if snapshot.Frozen && c.GetString("role") != "admin" {
+		rankTick = &snapshot.Tick
+	}
+	services, rows, err := h.matrixData(c.Request.Context(), h.db.Pool, false, rankTick)
 	if err != nil {
 		h.logger.Error("matrix query", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "internal error"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"services": services, "rows": rows})
+	c.JSON(http.StatusOK, gin.H{"services": services, "rows": rows, "frozen": snapshot.Frozen})
 }
 
 type gameEvent struct {
@@ -724,19 +846,19 @@ func (h *GameHandler) Events(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"events": events})
 }
 
-func (h *GameHandler) cachedState(now time.Time, allowExpired bool) (gameStateCacheEntry, bool) {
+func (h *GameHandler) cachedState(now time.Time, allowExpired, frozen bool) (gameStateCacheEntry, bool) {
 	h.stateMu.Lock()
 	entry := h.stateCache
 	h.stateMu.Unlock()
-	if len(entry.body) == 0 || (!allowExpired && !now.Before(entry.expiresAt)) ||
+	if len(entry.body) == 0 || entry.frozen != frozen || (!allowExpired && !now.Before(entry.expiresAt)) ||
 		(allowExpired && !now.Before(entry.expiresAt.Add(arenaStaleTTL))) {
 		return gameStateCacheEntry{}, false
 	}
 	return entry, true
 }
 
-func (h *GameHandler) serveStaleState(c *gin.Context) bool {
-	entry, ok := h.cachedState(time.Now(), true)
+func (h *GameHandler) serveStaleState(c *gin.Context, frozen bool) bool {
+	entry, ok := h.cachedState(time.Now(), true, frozen)
 	if !ok {
 		return false
 	}
@@ -752,9 +874,9 @@ func respondGameStateError(c *gin.Context, err error) {
 	c.JSON(http.StatusServiceUnavailable, gin.H{"error": "failed to load arena state"})
 }
 
-func (h *GameHandler) serveCachedState(c *gin.Context) bool {
+func (h *GameHandler) serveCachedState(c *gin.Context, frozen bool) bool {
 	now := time.Now()
-	entry, ok := h.cachedState(now, false)
+	entry, ok := h.cachedState(now, false, frozen)
 	if !ok {
 		return false
 	}
@@ -764,7 +886,7 @@ func (h *GameHandler) serveCachedState(c *gin.Context) bool {
 
 // beginStateFill makes one request refresh the snapshot while concurrent
 // viewers wait on a context-aware channel instead of a response-wide mutex.
-func (h *GameHandler) beginStateFill(c *gin.Context) bool {
+func (h *GameHandler) beginStateFill(c *gin.Context, frozen bool) bool {
 	for {
 		h.flightMu.Lock()
 		if h.flight == nil {
@@ -778,10 +900,10 @@ func (h *GameHandler) beginStateFill(c *gin.Context) bool {
 
 		select {
 		case <-done:
-			if h.serveCachedState(c) {
+			if h.serveCachedState(c, frozen) {
 				return false
 			}
-			if h.serveStaleState(c) {
+			if h.serveStaleState(c, frozen) {
 				return false
 			}
 			if flight.err != nil {
@@ -806,9 +928,9 @@ func (h *GameHandler) finishStateFill(err error) {
 	h.flightMu.Unlock()
 }
 
-func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]byte, string, error) {
+func (h *GameHandler) loadLiveState(ctx context.Context, mode gameStateMode) ([]byte, string, error) {
 	if h.stateLoad != nil {
-		return h.stateLoad(ctx, includeHidden)
+		return h.stateLoad(ctx, mode)
 	}
 	tx, err := h.db.Pool.BeginTx(ctx, pgx.TxOptions{
 		IsoLevel:   pgx.RepeatableRead,
@@ -819,26 +941,41 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
-	standings, err := h.standingsData(ctx, tx, includeHidden)
+	includeHidden := mode == gameStatePreview
+	snapshot, err := loadArenaFreezeSnapshot(ctx, tx)
+	if err != nil {
+		return nil, "", fmt.Errorf("freeze: %w", err)
+	}
+	publicFrozen := snapshot.Frozen && mode == gameStatePublic
+	var standings []gameStanding
+	if publicFrozen {
+		standings, err = h.snapshotStandingsData(ctx, tx, snapshot.Tick)
+	} else {
+		standings, err = h.standingsData(ctx, tx, includeHidden)
+		if err == nil {
+			err = h.attachShares(ctx, tx, standings)
+		}
+	}
 	if err != nil {
 		return nil, "", fmt.Errorf("standings: %w", err)
-	}
-	if err := h.attachShares(ctx, tx, standings); err != nil {
-		return nil, "", fmt.Errorf("shares: %w", err)
 	}
 	hills, err := h.hillsData(ctx, tx, includeHidden)
 	if err != nil {
 		return nil, "", fmt.Errorf("hills: %w", err)
 	}
-	history, err := h.historyData(ctx, tx, includeHidden)
+	var maxTick, maxRound *int
+	if publicFrozen {
+		maxTick, maxRound = &snapshot.Tick, &snapshot.Round
+	}
+	history, err := h.historyData(ctx, tx, includeHidden, maxTick)
 	if err != nil {
 		return nil, "", fmt.Errorf("history: %w", err)
 	}
-	kothHistory, err := h.kothHistoryData(ctx, tx, includeHidden)
+	kothHistory, err := h.kothHistoryData(ctx, tx, includeHidden, maxRound)
 	if err != nil {
 		return nil, "", fmt.Errorf("koth history: %w", err)
 	}
-	services, rows, err := h.matrixData(ctx, tx, includeHidden)
+	services, rows, err := h.matrixData(ctx, tx, includeHidden, maxTick)
 	if err != nil {
 		return nil, "", fmt.Errorf("matrix: %w", err)
 	}
@@ -849,20 +986,6 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 	status, err := h.statusPayload(ctx, tx)
 	if err != nil {
 		return nil, "", fmt.Errorf("status: %w", err)
-	}
-	// the public snapshot is shared by every non-admin viewer: blind it at the freeze
-	frozen := false
-	if !includeHidden {
-		if err := tx.QueryRow(ctx, `SELECT COALESCE(NOW() >= NULLIF(
-			(SELECT value #>> '{}' FROM platform_settings WHERE key = 'event.freeze_at'), '')::timestamptz, FALSE)`).Scan(&frozen); err != nil {
-			return nil, "", fmt.Errorf("freeze: %w", err)
-		}
-	}
-	if frozen {
-		standings, history, kothHistory = []gameStanding{}, []*historySeries{}, []*historySeries{}
-		for i := range rows {
-			rows[i].Rank = nil
-		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, "", fmt.Errorf("commit snapshot: %w", err)
@@ -878,7 +1001,7 @@ func (h *GameHandler) loadLiveState(ctx context.Context, includeHidden bool) ([]
 		"events":       events,
 		"history":      history,
 		"koth_history": kothHistory,
-		"frozen":       frozen,
+		"frozen":       snapshot.Frozen,
 	}
 	if w := h.scoreWeights(); w != nil {
 		payload["weights"] = w
@@ -914,12 +1037,22 @@ func (h *GameHandler) State(c *gin.Context) {
 		writeGameState(c, body, etag, arenaIdleCacheTTL, "IDLE")
 		return
 	}
+	frozen := false
+	if h.db != nil {
+		var err error
+		frozen, err = game.IsFrozen(c.Request.Context(), h.db)
+		if err != nil {
+			h.logger.Error("read arena freeze", zap.Error(err))
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "failed to load arena state"})
+			return
+		}
+	}
 	if staffPreview {
 		// Preview data includes organizer QA teams, but it must never enter the
 		// shared public cache or be served as a stale public fallback.
 		ctx, cancel := context.WithTimeout(c.Request.Context(), arenaQueryTimeout)
 		defer cancel()
-		body, etag, err := h.loadLiveState(ctx, true)
+		body, etag, err := h.loadLiveState(ctx, gameStatePreview)
 		if err != nil {
 			h.logger.Error("load arena staff preview", zap.Error(err))
 			respondGameStateError(c, err)
@@ -935,7 +1068,26 @@ func (h *GameHandler) State(c *gin.Context) {
 		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 		return
 	}
-	if h.serveCachedState(c) || !h.beginStateFill(c) {
+	if frozen && c.GetString("role") == "admin" {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), arenaQueryTimeout)
+		defer cancel()
+		body, etag, err := h.loadLiveState(ctx, gameStateAdmin)
+		if err != nil {
+			h.logger.Error("load arena admin state", zap.Error(err))
+			respondGameStateError(c, err)
+			return
+		}
+		c.Header("Cache-Control", "no-store")
+		c.Header("ETag", etag)
+		c.Header("X-Anvil-Cache", "ADMIN")
+		if c.GetHeader("If-None-Match") == etag {
+			c.Status(http.StatusNotModified)
+			return
+		}
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
+	if h.serveCachedState(c, frozen) || !h.beginStateFill(c, frozen) {
 		return
 	}
 	fillOpen := true
@@ -947,19 +1099,19 @@ func (h *GameHandler) State(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), arenaQueryTimeout)
 	defer cancel()
-	body, etag, err := h.loadLiveState(ctx, false)
+	body, etag, err := h.loadLiveState(ctx, gameStatePublic)
 	if err != nil {
 		h.logger.Error("load arena state", zap.Error(err))
 		h.finishStateFill(err)
 		fillOpen = false
-		if h.serveStaleState(c) {
+		if h.serveStaleState(c, frozen) {
 			return
 		}
 		respondGameStateError(c, err)
 		return
 	}
 
-	entry := gameStateCacheEntry{body: body, etag: etag, expiresAt: time.Now().Add(arenaLiveCacheTTL)}
+	entry := gameStateCacheEntry{body: body, etag: etag, expiresAt: time.Now().Add(arenaLiveCacheTTL), frozen: frozen}
 	h.stateMu.Lock()
 	h.stateCache = entry
 	h.stateMu.Unlock()

@@ -43,9 +43,9 @@ func TestStaffPreviewIncludesHiddenTeamsWithoutPopulatingPublicCache(t *testing.
 	var loads atomic.Int32
 	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
 	handler.arenaOpen = func(context.Context) (bool, error) { return false, nil }
-	handler.stateLoad = func(_ context.Context, include bool) ([]byte, string, error) {
+	handler.stateLoad = func(_ context.Context, mode gameStateMode) ([]byte, string, error) {
 		loads.Add(1)
-		includeHidden = include
+		includeHidden = mode == gameStatePreview
 		return encodeGameState(gin.H{
 			"active":    true,
 			"standings": []gameStanding{{TeamID: "qa", Team: "zz-qa-codex", Koth: 12, Total: 12}},
@@ -89,8 +89,8 @@ func TestOpenArenaAdminUsesFilteredPublicCache(t *testing.T) {
 	var includeHidden bool
 	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
 	handler.arenaOpen = func(context.Context) (bool, error) { return true, nil }
-	handler.stateLoad = func(_ context.Context, include bool) ([]byte, string, error) {
-		includeHidden = include
+	handler.stateLoad = func(_ context.Context, mode gameStateMode) ([]byte, string, error) {
+		includeHidden = mode == gameStatePreview
 		return encodeGameState(gin.H{"active": true, "standings": []gameStanding{}})
 	}
 
@@ -183,7 +183,7 @@ func TestLiveGameStateMissHitRevalidateAndRefresh(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var loads atomic.Int32
 	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
-	handler.stateLoad = func(context.Context, bool) ([]byte, string, error) {
+	handler.stateLoad = func(context.Context, gameStateMode) ([]byte, string, error) {
 		body, etag := liveStateBody(t, int(loads.Add(1)))
 		return body, etag, nil
 	}
@@ -220,6 +220,24 @@ func TestLiveGameStateMissHitRevalidateAndRefresh(t *testing.T) {
 	}
 }
 
+func TestGameStateCacheDoesNotCrossFreezeBoundary(t *testing.T) {
+	body, etag := liveStateBody(t, 1)
+	handler := NewGameHandler(&config.Config{}, nil, zap.NewNop())
+	handler.stateCache = gameStateCacheEntry{
+		body: body, etag: etag, expiresAt: time.Now().Add(time.Minute), frozen: false,
+	}
+	if _, ok := handler.cachedState(time.Now(), false, true); ok {
+		t.Fatal("live cache was accepted for a frozen request")
+	}
+	handler.stateCache.frozen = true
+	if _, ok := handler.cachedState(time.Now(), false, false); ok {
+		t.Fatal("frozen cache was accepted for a live request")
+	}
+	if _, ok := handler.cachedState(time.Now(), false, true); !ok {
+		t.Fatal("frozen cache was rejected for a frozen request")
+	}
+}
+
 func TestLiveGameStateCoalescesConcurrentMisses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var loads atomic.Int32
@@ -227,7 +245,7 @@ func TestLiveGameStateCoalescesConcurrentMisses(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
-	handler.stateLoad = func(context.Context, bool) ([]byte, string, error) {
+	handler.stateLoad = func(context.Context, gameStateMode) ([]byte, string, error) {
 		loads.Add(1)
 		once.Do(func() { close(entered) })
 		<-release
@@ -268,7 +286,7 @@ func TestLiveGameStateBoundsAndSurfacesStaleFallback(t *testing.T) {
 	body, etag := liveStateBody(t, 7)
 	loadErr := errors.New("database unavailable")
 	handler := NewGameHandler(&config.Config{Game: config.GameConfig{Enabled: true}}, nil, zap.NewNop())
-	handler.stateLoad = func(context.Context, bool) ([]byte, string, error) { return nil, "", loadErr }
+	handler.stateLoad = func(context.Context, gameStateMode) ([]byte, string, error) { return nil, "", loadErr }
 	handler.stateCache = gameStateCacheEntry{
 		body:      body,
 		etag:      etag,

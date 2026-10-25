@@ -30,7 +30,7 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "team not found"})
 		return
 	}
-	teamRanked, economyMode, _, err := h.boardMode(c.Request.Context())
+	teamRanked, economyMode, frozen, err := h.boardMode(c.Request.Context())
 	if err != nil {
 		h.respondQueryError(c, "failed to read scoreboard mode", err)
 		return
@@ -40,6 +40,8 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 		return
 	}
 
+	adminFrozen := frozen && c.GetString("role") == "admin"
+	publicFrozen := frozen && !adminFrozen
 	privateView := c.GetString("role") == "admin"
 	if !privateView {
 		if viewerID, ok := c.Get("user_id"); ok {
@@ -55,17 +57,22 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 		}
 	}
 	cacheKey := "team-profile:public:" + teamID.String()
+	if publicFrozen {
+		cacheKey = "team-profile:frozen:" + teamID.String()
+	}
 	if privateView {
 		cacheKey = "team-profile:private:" + teamID.String()
 		c.Set(scoreboardPrivateCacheKey, true)
 	}
-	if h.serveCachedJSON(c, cacheKey) {
-		return
+	if !adminFrozen {
+		if h.serveCachedJSON(c, cacheKey) {
+			return
+		}
+		if !h.beginCacheFill(c, cacheKey) {
+			return
+		}
+		defer h.finishCacheFill(cacheKey)
 	}
-	if !h.beginCacheFill(c, cacheKey) {
-		return
-	}
-	defer h.finishCacheFill(cacheKey)
 
 	tx, ok := h.beginReadSnapshot(c)
 	if !ok {
@@ -74,16 +81,35 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 	defer tx.Rollback(c.Request.Context())
 
 	var name string
-	var totalScore, rank int
+	var totalScore float64
+	var rank int
+	var hasStanding bool
 	var lastSolve *time.Time
-	rankQuery := `WITH ` + teamRankedCTE + `
-		SELECT name, total_score, rank, last_solve FROM ranked WHERE id = $1`
-	if economyMode {
-		rankQuery = `WITH ` + teamEconomyRankedCTE + `
-			SELECT name, ROUND(points)::int, rank, last_solve FROM ranked WHERE id = $1`
+	var cutoff *time.Time
+	if publicFrozen {
+		err = tx.QueryRow(c.Request.Context(),
+			`SELECT t.name FROM teams t WHERE t.id = $1 AND `+publicTeamSQL("t"), teamID,
+		).Scan(&name)
+		if err == nil {
+			standing, found, freezeErr := frozenTeamStanding(c.Request.Context(), tx, teamID)
+			if freezeErr != nil {
+				h.respondQueryError(c, "team profile freeze snapshot", freezeErr)
+				return
+			}
+			if found {
+				totalScore, rank, hasStanding = standing.Total, standing.Rank, true
+			}
+		}
+	} else {
+		rankQuery := `WITH ` + teamRankedCTE + `
+			SELECT name, total_score::float8, rank, last_solve FROM ranked WHERE id = $1`
+		if economyMode {
+			rankQuery = `WITH ` + teamEconomyRankedCTE + `
+			SELECT name, points::float8, rank, last_solve FROM ranked WHERE id = $1`
+		}
+		err = tx.QueryRow(c.Request.Context(), rankQuery, teamID).
+			Scan(&name, &totalScore, &rank, &lastSolve)
 	}
-	err = tx.QueryRow(c.Request.Context(), rankQuery, teamID).
-		Scan(&name, &totalScore, &rank, &lastSolve)
 	if errors.Is(err, pgx.ErrNoRows) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "team not found"})
 		return
@@ -120,6 +146,25 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 		return
 	}
 	memberRows.Close()
+	if publicFrozen {
+		if err := tx.Commit(c.Request.Context()); err != nil {
+			h.respondQueryError(c, "failed to commit frozen team profile snapshot", err)
+			return
+		}
+		team := gin.H{"id": teamID.String(), "name": name, "members": members}
+		if hasStanding {
+			team["total_score"] = totalScore
+			team["global_rank"] = rank
+		}
+		h.respondCacheableJSON(c, cacheKey, 2*time.Second, gin.H{
+			"team":       team,
+			"economy":    economyMode,
+			"solves":     []profileSolve{},
+			"challenges": []profileChallenge{},
+			"frozen":     true,
+		})
+		return
+	}
 
 	challengeRows, err := tx.Query(c.Request.Context(), `
 		WITH published AS (
@@ -130,7 +175,7 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 			FROM challenges c
 			LEFT JOIN categories cat ON cat.id = c.category_id
 			WHERE c.status = 'published'
-			  AND (c.release_date IS NULL OR c.release_date <= NOW())
+			  AND (c.release_date IS NULL OR c.release_date <= COALESCE($3::timestamptz, NOW()))
 		),
 		flag_totals AS (
 			SELECT f.challenge_id, COUNT(*)::int AS total_flags
@@ -148,6 +193,7 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 			JOIN public_teams pt ON pt.id = u.team_id
 			JOIN flags f ON f.id = s.flag_id
 			JOIN published p ON p.id = f.challenge_id
+			WHERE $3::timestamptz IS NULL OR s.solved_at <= $3
 			ORDER BY u.team_id, s.flag_id, s.solved_at, s.id
 		),
 		team_progress AS (
@@ -186,7 +232,8 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 		            THEN COALESCE(tp.completed_at, (
 		                SELECT MIN(epe.created_at)
 		                FROM economy_point_events epe
-		                WHERE epe.team_id = $1 AND epe.challenge_id = p.id
+			                WHERE epe.team_id = $1 AND epe.challenge_id = p.id
+			                  AND ($3::timestamptz IS NULL OR epe.created_at <= $3)
 		            ))
 		            WHEN NOT $2
 		             AND COALESCE(ft.total_flags, 0) > 0
@@ -201,7 +248,7 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 		LEFT JOIN ranked_completions rc
 		       ON rc.team_id = $1 AND rc.challenge_id = p.id
 		ORDER BY p.category_order, p.category, p.base_points, p.name
-	`, teamID, economyMode)
+	`, teamID, economyMode && !publicFrozen, cutoff)
 	if err != nil {
 		h.respondQueryError(c, "team profile challenge progress query", err)
 		return
@@ -267,7 +314,7 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 		unix := lastSolve.Unix()
 		lastSolveAt = &unix
 	}
-	h.respondCacheableJSON(c, cacheKey, 2*time.Second, gin.H{
+	payload := gin.H{
 		"team": gin.H{
 			"id":                teamID.String(),
 			"name":              name,
@@ -280,5 +327,13 @@ func (h *ScoreboardHandler) TeamProfile(c *gin.Context) {
 		"economy":    economyMode,
 		"solves":     solves,
 		"challenges": challenges,
-	})
+		"frozen":     frozen,
+	}
+	if adminFrozen {
+		c.Header("Cache-Control", "no-store")
+		c.Header("Vary", "Authorization")
+		c.JSON(http.StatusOK, payload)
+		return
+	}
+	h.respondCacheableJSON(c, cacheKey, 2*time.Second, payload)
 }
