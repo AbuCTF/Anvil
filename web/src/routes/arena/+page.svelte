@@ -407,15 +407,22 @@
 		</PageHeader>
 
 		{#if frozen && !isAdmin}
-			<div class="mb-4 overflow-hidden rounded-xl border border-sky-400/15 bg-gradient-to-r from-sky-500/[0.10] via-sky-400/[0.05] to-transparent">
-				<div class="flex items-center gap-3 px-4 py-3">
-					<div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sky-400/10 ring-1 ring-sky-400/25">
-						<Icon icon="mdi:snowflake" class="h-5 w-5 text-sky-300" />
-					</div>
-					<div class="min-w-0">
-						<p class="text-sm font-semibold tracking-tight text-sky-100">Scoreboard frozen</p>
-						<p class="text-xs text-sky-200/60">Standings are locked at the freeze. Final results reveal after prize distribution.</p>
-					</div>
+			<div
+				class="relative mb-4 flex items-center gap-3 overflow-hidden rounded-xl border border-amber-500/20 px-4 py-3"
+				style="background:
+					radial-gradient(120px 80px at 26px 50%, rgba(245,158,11,.10), transparent 70%),
+					linear-gradient(90deg, rgba(245,158,11,.09), rgba(245,158,11,.025) 52%, transparent);
+					box-shadow: inset 0 1px 0 rgba(253,230,138,.08);"
+			>
+				<div
+					class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-300"
+					style="box-shadow: inset 0 0 0 1px rgba(245,158,11,.28), 0 0 14px rgba(245,158,11,.18);"
+				>
+					<Icon icon="mdi:snowflake" class="h-5 w-5" />
+				</div>
+				<div class="min-w-0">
+					<p class="text-sm font-semibold tracking-tight text-amber-100">Scoreboard frozen</p>
+					<p class="text-xs text-amber-200/60">Standings are locked at the freeze. Final results reveal after prize distribution.</p>
 				</div>
 			</div>
 		{:else if frozen && isAdmin}
