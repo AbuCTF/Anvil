@@ -8,16 +8,16 @@
 
 		<script>
 			try {
-				const savedTheme = localStorage.getItem('theme');
-				if (savedTheme === 'light' || (savedTheme !== 'dark' && matchMedia('(prefers-color-scheme: light)').matches))
-					document.documentElement.setAttribute('data-theme', 'light');
-			} catch {}
+				if (localStorage.getItem('theme') !== 'dark') document.documentElement.setAttribute('data-theme', 'light');
+			} catch {
+				document.documentElement.setAttribute('data-theme', 'light');
+			}
 		</script>
 
 		<!-- Optimize for mobile -->
 		<meta name="mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-capable" content="yes" />
-		<meta name="theme-color" content="#000000" />
+		<meta name="theme-color" content="#faf9f6" />
 
 		%sveltekit.head%
 	</head>

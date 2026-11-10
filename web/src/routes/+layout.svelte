@@ -80,10 +80,10 @@
 		return iconMetrics[icon] ?? { size: 14 };
 	}
 
-	type ThemePreference = 'system' | 'dark' | 'light';
+	type ThemePreference = 'dark' | 'light';
 	const themeOptions: ThemePreference[] = ['light', 'dark'];
-	let themePreference: ThemePreference = 'dark';
-	let theme: 'dark' | 'light' = 'dark';
+	let themePreference: ThemePreference = 'light';
+	let theme: ThemePreference = 'light';
 	let credits: number | null = null;
 	let notificationUnread = 0;
 	let notificationsCheckedFor = '';
@@ -224,18 +224,12 @@
 	onMount(() => {
 		auth.checkAuth().finally(() => { authReady = true; });
 		loadPlatformInfo();
-		const systemTheme = window.matchMedia('(prefers-color-scheme: light)');
 		try {
-			const saved = localStorage.getItem('theme');
-			themePreference = saved === 'light' ? 'light' : 'dark';
+			themePreference = localStorage.getItem('theme') === 'dark' ? 'dark' : 'light';
 		} catch {
-			themePreference = 'dark';
+			themePreference = 'light';
 		}
-		applyTheme(themePreference, systemTheme.matches);
-		const handleSystemThemeChange = (event: MediaQueryListEvent) => {
-			if (themePreference === 'system') applyTheme('system', event.matches);
-		};
-		systemTheme.addEventListener('change', handleSystemThemeChange);
+		applyTheme(themePreference);
 		try {
 			teamBannerDismissed = sessionStorage.getItem('teamBannerDismissed') === '1';
 		} catch {
@@ -265,12 +259,11 @@
 			window.removeEventListener('keydown', primeSound);
 			window.removeEventListener('focus', refreshVisibleRank);
 			window.removeEventListener('notifications:changed', refreshNotifications);
-			systemTheme.removeEventListener('change', handleSystemThemeChange);
 		};
 	});
 
-	function applyTheme(preference: ThemePreference, systemLight = window.matchMedia('(prefers-color-scheme: light)').matches) {
-		theme = preference === 'system' ? (systemLight ? 'light' : 'dark') : preference;
+	function applyTheme(preference: ThemePreference) {
+		theme = preference;
 		if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
 		else document.documentElement.removeAttribute('data-theme');
 		const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
@@ -281,8 +274,7 @@
 		themePreference = preference;
 		applyTheme(preference);
 		try {
-			if (preference === 'system') localStorage.removeItem('theme');
-			else localStorage.setItem('theme', preference);
+			localStorage.setItem('theme', preference);
 		} catch {
 			return;
 		}
@@ -344,11 +336,11 @@
 					<div class="hidden items-center gap-0.5 lg:flex">
 						<button
 							on:click={toggleTheme}
-							aria-label={`Theme: ${themePreference === 'system' ? `${theme}, following system` : theme}`}
-							title={themePreference === 'system' ? `Following system theme (${theme})` : `Using ${theme} theme`}
+							aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+							title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
 							class="rounded-md p-1.5 text-stone-400 transition-colors hover:bg-stone-800/40 hover:text-stone-100"
 						>
-							<Icon icon={themePreference === 'system' ? 'mdi:theme-light-dark' : theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="h-5 w-5" />
+							<Icon icon={theme === 'dark' ? 'mdi:weather-sunny' : 'mdi:weather-night'} class="h-5 w-5" />
 						</button>
 						{#if $auth.isAuthenticated}
 							<a
