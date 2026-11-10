@@ -1,10 +1,10 @@
 [Unit]
-Description=Refresh Anvil Docker registry credentials every 30 minutes
+Description=Refresh Anvil Docker registry credentials every 5 minutes
 
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=30min
-RandomizedDelaySec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30s
 Persistent=true
 
 [Install]
