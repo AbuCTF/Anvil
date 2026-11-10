@@ -16,6 +16,7 @@ import (
 	"github.com/anvil-lab/anvil/internal/services/upload"
 	"github.com/anvil-lab/anvil/internal/services/vm"
 	"github.com/anvil-lab/anvil/internal/services/vpn"
+	"github.com/anvil-lab/anvil/internal/version"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -661,8 +662,11 @@ func (s *Server) healthCheck(c *gin.Context) {
 		dbStatus = "disconnected"
 	}
 
+	buildVersion, buildCommit := version.Info()
 	c.JSON(httpStatus, gin.H{
 		"status":    status,
+		"version":   buildVersion,
+		"commit":    buildCommit,
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 		"services": gin.H{
 			"database":  dbStatus,

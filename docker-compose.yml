@@ -30,6 +30,9 @@ services:
     build:
       context: .
       dockerfile: deployments/docker/Dockerfile.api
+      args:
+        ANVIL_VERSION: ${ANVIL_VERSION:-dev}
+        ANVIL_COMMIT: ${ANVIL_COMMIT:-}
     container_name: anvil-api
     privileged: true
     pid: "host"
