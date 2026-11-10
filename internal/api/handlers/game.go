@@ -576,9 +576,10 @@ func (h *GameHandler) historyData(ctx context.Context, query gameStateQuerier, i
 }
 
 // kothHistoryData is each team's cumulative koth points after every closed round
-// (x = round, y = total). per round it adds points + bounty + koth_hold * held_ticks,
-// the same terms accumulateKoth sums into game_standings.koth (round events are
-// points + bounty, hold is koth_hold per controlled tick). uncapped like that column.
+// (x = round, y = total). it reads the same sources accumulateKoth sums into
+// game_standings.koth: koth_hold per controlled tick (game_koth_control) plus the
+// round's KOTH score events. game_koth_results is only written by finals rounds, so
+// charting from it left tick-hold events flat at zero. uncapped like that column.
 func (h *GameHandler) kothHistoryData(ctx context.Context, query gameStateQuerier, includeHidden bool, maxRound *int) ([]*historySeries, error) {
 	hold := 0.0
 	if h.config != nil {
@@ -588,10 +589,20 @@ func (h *GameHandler) kothHistoryData(ctx context.Context, query gameStateQuerie
 		`WITH rounds AS (
 		   SELECT round_number FROM game_koth_rounds
 		   WHERE status = 'closed' AND ($2::int IS NULL OR round_number <= $2)
+		 ), held AS (
+		   SELECT kc.controller_team_id AS team_id, kc.round_number, $1::numeric * COUNT(*) AS pts
+		   FROM game_koth_control kc JOIN rounds r ON r.round_number = kc.round_number
+		   WHERE kc.controller_team_id IS NOT NULL
+		   GROUP BY kc.controller_team_id, kc.round_number
+		 ), earned AS (
+		   SELECT e.team_id, e.round_number, SUM(e.points) AS pts
+		   FROM game_score_events e JOIN rounds r ON r.round_number = e.round_number
+		   WHERE e.stream = 'KOTH'
+		   GROUP BY e.team_id, e.round_number
 		 ), per AS (
-		   SELECT k.team_id, k.round_number, SUM(k.points + k.bounty + $1::numeric * k.held_ticks) AS pts
-		   FROM game_koth_results k JOIN rounds r ON r.round_number = k.round_number
-		   GROUP BY k.team_id, k.round_number
+		   SELECT team_id, round_number, SUM(pts) AS pts
+		   FROM (SELECT * FROM held UNION ALL SELECT * FROM earned) x
+		   GROUP BY team_id, round_number
 		 )
 		 SELECT t.id, t.name, r.round_number,
 		        (SUM(COALESCE(p.pts, 0)) OVER (PARTITION BY t.id ORDER BY r.round_number))::float8

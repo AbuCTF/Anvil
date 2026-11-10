@@ -55,25 +55,41 @@ func TestArenaStateKothHistory(t *testing.T) {
 	      VALUES ($1, 'closed', NOW() - interval '3 minutes'),
 	             ($2, 'closed', NOW() - interval '1 minute'),
 	             ($3, 'running', NULL)`, r1, r2, r3)
-	// r1: a wins hill 1. r2: a wins hill 1 with a bounty and places on hill 2.
-	// r3 is still running, so its row must not count.
-	exec(`INSERT INTO game_koth_results (round_number, hill_id, team_id, held_ticks, rank, points, bounty) VALUES
-	      ($1, $4, $5, 3, 1, 12, 0),
-	      ($2, $4, $5, 2, 1, 7, 2),
-	      ($2, $6, $5, 1, 3, 4, 0),
-	      ($2, $4, $7, 5, 1, 12, 0),
-	      ($3, $4, $5, 4, 1, 12, 0)`, r1, r2, r3, h1, a, h2, nop)
+	// the history must chart the same sources standings sum: hold per controlled tick
+	// (game_koth_control) plus KOTH score events per round.
+	// r1: a holds hill 1 for 3 ticks and earns 12.
+	// r2: a holds hill 1 for 2 ticks and hill 2 for 1 tick, earning 7+2 and 4;
+	//     b holds hill 2 for 2 ticks with no round event (tick-hold only, the case
+	//     that charted flat at zero when history read game_koth_results);
+	//     the nop team holds and earns too but must never be charted.
+	// r3 is still running, so none of its ticks or events count.
+	const t0 = 9101000
+	exec(`INSERT INTO game_ticks (tick_number, status) SELECT g, 'closed' FROM generate_series($1::int, $1::int + 11) g`, t0)
+	exec(`INSERT INTO game_koth_control (tick_number, round_number, hill_id, controller_team_id) VALUES
+	      ($1, $2, $5, $7), ($1 + 1, $2, $5, $7), ($1 + 2, $2, $5, $7),
+	      ($1 + 3, $3, $5, $7), ($1 + 4, $3, $5, $7), ($1 + 3, $3, $6, $7),
+	      ($1 + 4, $3, $6, $8), ($1 + 5, $3, $6, $8),
+	      ($1 + 5, $3, $5, $9), ($1 + 6, $3, $5, $9),
+	      ($1 + 7, $4, $5, $7), ($1 + 8, $4, $5, $7), ($1 + 9, $4, $5, $7), ($1 + 10, $4, $5, $7)`,
+		t0, r1, r2, r3, h1, h2, a, b, nop)
+	exec(`INSERT INTO game_score_events (team_id, round_number, stream, points, source) VALUES
+	      ($4, $1, 'KOTH', 12, 'koth:test'),
+	      ($4, $2, 'KOTH', 9, 'koth:test'), ($4, $2, 'KOTH', 4, 'koth:test'),
+	      ($5, $2, 'KOTH', 12, 'koth:test'),
+	      ($4, $3, 'KOTH', 12, 'koth:test')`, r1, r2, r3, a, nop)
 	defer func() {
-		_, _ = db.Pool.Exec(ctx, `DELETE FROM game_koth_results WHERE round_number IN ($1, $2, $3)`, r1, r2, r3)
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM game_score_events WHERE round_number IN ($1, $2, $3)`, r1, r2, r3)
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM game_koth_control WHERE round_number IN ($1, $2, $3)`, r1, r2, r3)
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM game_koth_rounds WHERE round_number IN ($1, $2, $3)`, r1, r2, r3)
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM game_koth_hills WHERE id IN ($1, $2)`, h1, h2)
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM game_teams WHERE id IN ($1, $2, $3)`, a, b, nop)
+		_, _ = db.Pool.Exec(ctx, `DELETE FROM game_ticks WHERE tick_number BETWEEN $1 AND $1 + 11`, t0)
 		_, _ = db.Pool.Exec(ctx, `DELETE FROM platform_settings WHERE key = 'event.freeze_at'`)
 	}()
 
 	cfg := &config.Config{}
 	cfg.Game.Enabled = true
-	cfg.Game.Scoring.KothHold = 0.5 // hold term rides on held_ticks, as in accumulateKoth
+	cfg.Game.Scoring.KothHold = 0.5 // hold per controlled tick, as in accumulateKoth
 	h := NewGameHandler(cfg, db, zap.NewNop())
 
 	load := func() (map[string][]historyPoint, bool) {
@@ -106,8 +122,8 @@ func TestArenaStateKothHistory(t *testing.T) {
 		t.Fatal("koth_history missing from payload")
 	}
 	want := map[string][]historyPoint{
-		a.String(): {{Tick: r1, Total: 12 + 1.5}, {Tick: r2, Total: 13.5 + 9 + 1 + 4 + 0.5}},
-		b.String(): {{Tick: r1, Total: 0}, {Tick: r2, Total: 0}},
+		a.String(): {{Tick: r1, Total: 12 + 1.5}, {Tick: r2, Total: 13.5 + 9 + 4 + 1.5}},
+		b.String(): {{Tick: r1, Total: 0}, {Tick: r2, Total: 1}},
 	}
 	for id, w := range want {
 		g, ok := got[id]

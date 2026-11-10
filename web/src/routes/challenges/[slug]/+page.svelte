@@ -1536,9 +1536,9 @@
 									</button>
 									{#if creatingInstance}
 										<div class="mt-3 overflow-hidden rounded-full bg-stone-900"><div class="h-1 w-2/3 animate-pulse rounded-full bg-amber-500/70"></div></div>
-										<p class="mt-2 text-xs text-stone-500">Allocating an isolated network and starting the service. This does not spend credits.</p>
-									{:else}
-										<p class="mt-2 text-xs text-stone-600">Starting and stopping the runtime is free. Challenge opening and paid solve-window extensions are Ledger actions.</p>
+										<p class="mt-2 text-xs text-stone-500">Starting your isolated instance.</p>
+									{:else if economyOn}
+										<p class="mt-2 text-xs text-stone-600">Instances are free. Opening and extensions cost credits.</p>
 									{/if}
 								</div>
 							{/if}
@@ -1639,7 +1639,7 @@
 									class="w-full px-3 py-2.5 bg-stone-950 border border-stone-800 rounded-md text-stone-100 text-sm font-mono placeholder-stone-600 focus:outline-none focus:border-stone-600"
 								/>
 								<button type="submit" disabled={submitting || confirmingFlag || !flagInput.trim()} class="w-full py-2.5 bg-stone-100 text-stone-950 text-sm font-medium rounded-md hover:bg-stone-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-									{submitting ? 'Checking…' : confirmingFlag ? 'Reviewing…' : 'Review and submit'}
+									{submitting ? 'Checking…' : 'Submit'}
 								</button>
 							</form>
 

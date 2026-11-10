@@ -1600,7 +1600,7 @@
 
 	const TABS = [
 		{ id: 'overview', label: 'Dashboard', icon: 'mdi:view-dashboard-outline' },
-		{ id: 'arena', label: 'Arena ops', icon: 'mdi:sword-cross' },
+		{ id: 'arena', label: 'Arena', icon: 'mdi:sword-cross' },
 		{ id: 'event', label: 'Event', icon: 'mdi:calendar-star' },
 		{ id: 'data', label: 'Data', icon: 'mdi:database-export-outline' },
 		{ id: 'challenges', label: 'Challenges', icon: 'mdi:flag-variant-outline' },
